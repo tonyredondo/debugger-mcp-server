@@ -1,0 +1,144 @@
+services:
+  debugger-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: debugger-mcp-server:latest
+    container_name: debugger-mcp-server
+    platform: linux/arm64
+    ports:
+      - "5000:5000"
+    volumes:
+      # Mount directories for dump, symbol, log, and session files
+      - ./dumps:/app/dumps
+      - ./symbols:/app/symbols
+      - ./logs:/app/logs
+      # SHARED sessions volume - enables session migration between servers
+      - ./sessions:/app/sessions
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - PORT=5000
+      - DUMP_STORAGE_PATH=/app/dumps
+      - SYMBOL_STORAGE_PATH=/app/symbols
+      - LOG_STORAGE_PATH=/app/logs
+      - SESSION_STORAGE_PATH=/app/sessions
+      # Uncomment to enable API key authentication:
+      # - API_KEY=your-secret-key-here
+      # Uncomment to configure CORS:
+      # - CORS_ALLOWED_ORIGINS=http://localhost:3000,https://your-app.com
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  debugger-mcp-server-alpine:
+    build:
+      context: .
+      dockerfile: Dockerfile-alpine
+    image: debugger-mcp-server-alpine:latest
+    container_name: debugger-mcp-server-alpine
+    platform: linux/arm64
+    ports:
+      - "5001:5000"
+    volumes:
+      # Mount directories for dump, symbol, log, and session files
+      - ./dumps:/app/dumps
+      - ./symbols:/app/symbols
+      - ./logs-alpine:/app/logs
+      # SHARED sessions volume - enables session migration between servers
+      - ./sessions:/app/sessions
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - PORT=5000
+      - DUMP_STORAGE_PATH=/app/dumps
+      - SYMBOL_STORAGE_PATH=/app/symbols
+      - LOG_STORAGE_PATH=/app/logs
+      - SESSION_STORAGE_PATH=/app/sessions
+      # Uncomment to enable API key authentication:
+      # - API_KEY=your-secret-key-here
+      # Uncomment to configure CORS:
+      # - CORS_ALLOWED_ORIGINS=http://localhost:3000,https://your-app.com
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # x64 (amd64) services
+  # On Apple Silicon Macs: Enable "Use Rosetta for x86_64/amd64 emulation" in Docker Desktop settings for better performance
+  # On other arm64 hosts: Uses QEMU emulation
+  # On x64 hosts: Runs natively
+  debugger-mcp-server-x64:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: debugger-mcp-server-x64:latest
+    container_name: debugger-mcp-server-x64
+    platform: linux/amd64
+    ports:
+      - "5002:5000"
+    volumes:
+      # Mount directories for dump, symbol, log, and session files
+      - ./dumps:/app/dumps
+      - ./symbols:/app/symbols
+      - ./logs-x64:/app/logs
+      # SHARED sessions volume - enables session migration between servers
+      - ./sessions:/app/sessions
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - PORT=5000
+      - DUMP_STORAGE_PATH=/app/dumps
+      - SYMBOL_STORAGE_PATH=/app/symbols
+      - LOG_STORAGE_PATH=/app/logs
+      - SESSION_STORAGE_PATH=/app/sessions
+      # Uncomment to enable API key authentication:
+      # - API_KEY=your-secret-key-here
+      # Uncomment to configure CORS:
+      # - CORS_ALLOWED_ORIGINS=http://localhost:3000,https://your-app.com
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  debugger-mcp-server-alpine-x64:
+    build:
+      context: .
+      dockerfile: Dockerfile-alpine
+    image: debugger-mcp-server-alpine-x64:latest
+    container_name: debugger-mcp-server-alpine-x64
+    platform: linux/amd64
+    ports:
+      - "5003:5000"
+    volumes:
+      # Mount directories for dump, symbol, log, and session files
+      - ./dumps:/app/dumps
+      - ./symbols:/app/symbols
+      - ./logs-alpine-x64:/app/logs
+      # SHARED sessions volume - enables session migration between servers
+      - ./sessions:/app/sessions
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - PORT=5000
+      - DUMP_STORAGE_PATH=/app/dumps
+      - SYMBOL_STORAGE_PATH=/app/symbols
+      - LOG_STORAGE_PATH=/app/logs
+      - SESSION_STORAGE_PATH=/app/sessions
+      # Uncomment to enable API key authentication:
+      # - API_KEY=your-secret-key-here
+      # Uncomment to configure CORS:
+      # - CORS_ALLOWED_ORIGINS=http://localhost:3000,https://your-app.com
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s

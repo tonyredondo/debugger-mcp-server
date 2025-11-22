@@ -1,0 +1,104 @@
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio cache/options
+.vs/
+.vscode/
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Mono auto generated files
+mono_crash.*
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+# .NET
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# NuGet
+*.nupkg
+*.snupkg
+**/packages/*
+!**/packages/build/
+*.nuget.props
+*.nuget.targets
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+*.sap
+
+# Rider
+.idea/
+*.sln.iml
+
+# User-specific files
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+CODE_REVIEW.md
+
+# Test Results and Coverage
+TestResults/
+**/TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Dump files, symbols, logs, and sessions (runtime data)
+dumps/
+symbols/
+logs/
+logs-*/
+sessions/
+*.dmp
+*.mdmp
+*.log
+
+# Generated reports
+report.html
+report.md
+report.json
+myreport.*
+myreport*.json
+
+# CLI history files
+*_history.txt
+
+.DS_Store

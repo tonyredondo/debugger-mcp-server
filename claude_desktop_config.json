@@ -1,0 +1,23 @@
+{
+  "mcpServers": {
+    "debugger-local": {
+      "comment": "Local mode - MCP via stdio (for local debugging)",
+      "command": "C:\\path\\to\\DebuggerMcp.exe",
+      "args": []
+    },
+    "debugger-remote": {
+      "comment": "Remote mode - MCP via HTTP/SSE (for remote servers or Docker)",
+      "transport": {
+        "type": "http",
+        "url": "http://localhost:5000/mcp"
+      }
+    },
+    "debugger-docker": {
+      "comment": "Docker mode - MCP via HTTP/SSE to Docker container",
+      "transport": {
+        "type": "http",
+        "url": "http://localhost:5000/mcp"
+      }
+    }
+  }
+}

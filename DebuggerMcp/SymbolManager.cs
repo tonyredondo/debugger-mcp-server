@@ -1,0 +1,711 @@
+using System.Collections.Concurrent;
+using System.Runtime.InteropServices;
+using DebuggerMcp.Configuration;
+using DebuggerMcp.Controllers;
+
+namespace DebuggerMcp;
+
+/// <summary>
+/// Manages symbol files and symbol server paths for debugging sessions.
+/// </summary>
+/// <remarks>
+/// This class handles:
+/// - Storage of uploaded symbol files organized by dumpId (.pdb, .so, .dylib, .dwarf)
+/// - Management of symbol server paths (Microsoft, custom servers)
+/// - Automatic symbol path configuration when opening dumps
+/// - Symbol file validation and organization
+/// 
+/// Symbols are stored in the dump directory as .symbols_{dumpId}/ to:
+/// - Keep symbols isolated per dump
+/// - Share symbols with dotnet-symbol downloads
+/// - Automatically clean up when dump is deleted
+/// </remarks>
+public class SymbolManager
+{
+    /// <summary>
+    /// Gets the default base directory for storing dump files.
+    /// Symbols are stored next to dumps in .symbols_{dumpId}/ folders.
+    /// </summary>
+    /// <returns>Platform-appropriate default dump storage path from <see cref="EnvironmentConfig"/>.</returns>
+    private static string GetDefaultDumpStoragePath() => EnvironmentConfig.GetDumpStoragePath();
+
+    /// <summary>
+    /// Gets the default base directory for storing uploaded symbol files (legacy, for fallback).
+    /// </summary>
+    /// <returns>Platform-appropriate default symbol storage path from <see cref="EnvironmentConfig"/>.</returns>
+    private static string GetDefaultSymbolStorageBasePath() => EnvironmentConfig.GetSymbolStoragePath();
+
+    /// <summary>
+    /// Maximum size for a symbol file (500 MB).
+    /// </summary>
+    private const long MaxSymbolFileSize = 500 * 1024 * 1024;
+
+    /// <summary>
+    /// Microsoft public symbol server URL.
+    /// </summary>
+    public const string MicrosoftSymbolServer = "https://msdl.microsoft.com/download/symbols";
+
+    /// <summary>
+    /// NuGet symbol server URL.
+    /// </summary>
+    public const string NuGetSymbolServer = "https://symbols.nuget.org/download/symbols";
+
+
+
+    /// <summary>
+    /// Thread-safe dictionary mapping dumpId to symbol directory path.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, string> _dumpSymbolDirectories = new();
+
+    /// <summary>
+    /// Thread-safe dictionary mapping sessionId to configured symbol paths.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, List<string>> _sessionSymbolPaths = new();
+
+    /// <summary>
+    /// Base directory for storing uploaded symbol files (legacy, for fallback).
+    /// </summary>
+    private readonly string _symbolStorageBasePath;
+
+    /// <summary>
+    /// Base directory for storing dump files.
+    /// Symbols are stored as .symbols_{dumpId}/ next to dumps.
+    /// </summary>
+    private readonly string _dumpStorageBasePath;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="SymbolManager"/> class.
+    /// </summary>
+    /// <param name="symbolStorageBasePath">Optional base path for symbol storage (legacy). Uses platform-appropriate default if not specified.</param>
+    /// <param name="dumpStorageBasePath">Optional base path for dump storage. Used to locate .symbols_ folders.</param>
+    public SymbolManager(string? symbolStorageBasePath = null, string? dumpStorageBasePath = null)
+    {
+        // Use provided path or platform-appropriate default
+        _symbolStorageBasePath = symbolStorageBasePath ?? GetDefaultSymbolStorageBasePath();
+        _dumpStorageBasePath = dumpStorageBasePath ?? GetDefaultDumpStoragePath();
+
+        // Ensure directories exist
+        if (!Directory.Exists(_symbolStorageBasePath))
+        {
+            Directory.CreateDirectory(_symbolStorageBasePath);
+        }
+        
+        if (!Directory.Exists(_dumpStorageBasePath))
+        {
+            Directory.CreateDirectory(_dumpStorageBasePath);
+        }
+    }
+
+
+
+    /// <summary>
+    /// Stores an uploaded symbol file for a specific dump.
+    /// </summary>
+    /// <param name="dumpId">Dump ID to associate the symbol file with.</param>
+    /// <param name="fileName">Original file name of the symbol file.</param>
+    /// <param name="fileStream">Stream containing the symbol file data.</param>
+    /// <returns>The file path where the symbol was stored.</returns>
+    /// <exception cref="ArgumentException">Thrown when parameters are invalid.</exception>
+    /// <exception cref="InvalidOperationException">Thrown when file size exceeds limit.</exception>
+    public async Task<string> StoreSymbolFileAsync(string dumpId, string fileName, Stream fileStream)
+    {
+        // Validate parameters
+        if (string.IsNullOrWhiteSpace(dumpId))
+        {
+            throw new ArgumentException("Dump ID cannot be null or empty.", nameof(dumpId));
+        }
+
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            throw new ArgumentException("File name cannot be null or empty.", nameof(fileName));
+        }
+
+        if (fileStream == null || !fileStream.CanRead)
+        {
+            throw new ArgumentException("File stream must be readable.", nameof(fileStream));
+        }
+
+        // Validate file extension
+        var extension = Path.GetExtension(fileName).ToLowerInvariant();
+        if (!IsValidSymbolFileExtension(extension))
+        {
+            throw new ArgumentException($"Invalid symbol file extension: {extension}. Supported: .pdb, .so, .dylib, .dwarf, .sym, .debug, .dbg, .dsym", nameof(fileName));
+        }
+
+        // Check file size
+        if (fileStream.Length > MaxSymbolFileSize)
+        {
+            throw new InvalidOperationException($"Symbol file size ({fileStream.Length} bytes) exceeds maximum allowed size ({MaxSymbolFileSize} bytes).");
+        }
+
+        // Create dump-specific symbol directory
+        var dumpSymbolDir = GetOrCreateDumpSymbolDirectory(dumpId);
+
+        // Store file with original name (allow overwrite if same file uploaded again)
+        var storagePath = Path.Combine(dumpSymbolDir, fileName);
+
+        // Copy stream to file
+        using (var fileStreamOut = File.Create(storagePath))
+        {
+            await fileStream.CopyToAsync(fileStreamOut);
+        }
+
+        return storagePath;
+    }
+
+    /// <summary>
+    /// Stores multiple symbol files for a specific dump (batch upload).
+    /// </summary>
+    /// <param name="dumpId">Dump ID to associate the symbol files with.</param>
+    /// <param name="files">Dictionary of fileName -> fileStream pairs.</param>
+    /// <returns>List of file paths where symbols were stored.</returns>
+    public async Task<List<string>> StoreSymbolFilesAsync(string dumpId, Dictionary<string, Stream> files)
+    {
+        if (string.IsNullOrWhiteSpace(dumpId))
+        {
+            throw new ArgumentException("Dump ID cannot be null or empty.", nameof(dumpId));
+        }
+
+        if (files == null || files.Count == 0)
+        {
+            throw new ArgumentException("Files dictionary cannot be null or empty.", nameof(files));
+        }
+
+        var storedPaths = new List<string>();
+
+        foreach (var (fileName, fileStream) in files)
+        {
+            var path = await StoreSymbolFileAsync(dumpId, fileName, fileStream);
+            storedPaths.Add(path);
+        }
+
+        return storedPaths;
+    }
+    
+    /// <summary>
+    /// Stores a ZIP file containing multiple symbol files for a specific dump.
+    /// The ZIP is extracted preserving its directory structure.
+    /// </summary>
+    /// <param name="dumpId">Dump ID to associate the symbols with.</param>
+    /// <param name="zipStream">Stream containing the ZIP file data.</param>
+    /// <returns>Result containing extracted files count and directory paths.</returns>
+    public async Task<SymbolZipExtractionResult> StoreSymbolZipAsync(string dumpId, Stream zipStream)
+    {
+        if (string.IsNullOrWhiteSpace(dumpId))
+        {
+            throw new ArgumentException("Dump ID cannot be null or empty.", nameof(dumpId));
+        }
+
+        if (zipStream == null || !zipStream.CanRead)
+        {
+            throw new ArgumentException("ZIP stream must be readable.", nameof(zipStream));
+        }
+
+        // Create dump-specific symbol directory
+        var dumpSymbolDir = GetOrCreateDumpSymbolDirectory(dumpId);
+        var extractedFiles = new List<string>();
+        var extractedDirs = new HashSet<string>();
+
+        using var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Read);
+        
+        foreach (var entry in archive.Entries)
+        {
+            // Skip directory entries (they have empty names or end with /)
+            if (string.IsNullOrEmpty(entry.Name))
+                continue;
+
+            // Sanitize the entry path to prevent path traversal
+            var relativePath = entry.FullName.Replace('\\', '/');
+            
+            // Check for path traversal attempts
+            if (relativePath.Contains("..") || Path.IsPathRooted(relativePath))
+            {
+                continue; // Skip potentially malicious entries
+            }
+
+            // Skip macOS metadata folders (__MACOSX contains resource forks and extended attributes)
+            if (relativePath.StartsWith("__MACOSX/", StringComparison.OrdinalIgnoreCase) ||
+                relativePath.Contains("/__MACOSX/", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Build the full destination path
+            var destPath = Path.Combine(dumpSymbolDir, relativePath);
+            var destDir = Path.GetDirectoryName(destPath);
+            
+            // Ensure destination directory exists
+            if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
+            {
+                Directory.CreateDirectory(destDir);
+            }
+
+            // Track the directory for symbol paths
+            if (!string.IsNullOrEmpty(destDir))
+            {
+                extractedDirs.Add(destDir);
+            }
+
+            // Extract the file
+            using var entryStream = entry.Open();
+            using var fileStream = File.Create(destPath);
+            await entryStream.CopyToAsync(fileStream);
+            
+            extractedFiles.Add(relativePath);
+        }
+
+        // Also track the root symbol directory
+        extractedDirs.Add(dumpSymbolDir);
+
+        return new SymbolZipExtractionResult
+        {
+            DumpId = dumpId,
+            ExtractedFilesCount = extractedFiles.Count,
+            ExtractedFiles = extractedFiles,
+            SymbolDirectories = extractedDirs.OrderBy(d => d).ToList(),
+            RootSymbolDirectory = dumpSymbolDir
+        };
+    }
+    
+    /// <summary>
+    /// Gets all symbol files from a directory and its subdirectories.
+    /// </summary>
+    /// <param name="directory">The directory to search.</param>
+    /// <param name="lldbOnly">If true, returns only files that LLDB can load (.dbg, .debug). If false, includes all symbol types.</param>
+    /// <returns>List of full paths to symbol files.</returns>
+    public static List<string> GetSymbolFilesInDirectory(string directory, bool lldbOnly = false)
+    {
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            return new List<string>();
+
+        // For LLDB, only .dbg and .debug files can be loaded with "target symbols add"
+        // PDB files are Windows-specific and not supported by LLDB
+        var symbolExtensions = lldbOnly 
+            ? new[] { ".dbg", ".debug" }
+            : new[] { ".dbg", ".debug", ".pdb", ".sym", ".dwarf" };
+        
+        var result = new List<string>();
+        
+        foreach (var file in Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
+        {
+            var ext = Path.GetExtension(file).ToLowerInvariant();
+            // Check for extensions like .dbg, .debug, or compound like .so.dbg
+            if (symbolExtensions.Contains(ext) || file.EndsWith(".so.dbg", StringComparison.OrdinalIgnoreCase))
+            {
+                result.Add(file);
+            }
+        }
+        
+        return result;
+    }
+    
+    /// <summary>
+    /// Gets all subdirectories in a directory, including the directory itself.
+    /// </summary>
+    /// <param name="directory">The root directory.</param>
+    /// <returns>List of all directories.</returns>
+    public static List<string> GetAllSubdirectories(string directory)
+    {
+        if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+            return new List<string>();
+
+        var result = new List<string> { directory };
+        result.AddRange(Directory.GetDirectories(directory, "*", SearchOption.AllDirectories));
+        return result;
+    }
+
+    /// <summary>
+    /// Gets the symbol directory path for a dump ID.
+    /// </summary>
+    /// <param name="dumpId">The dump ID to look up.</param>
+    /// <returns>The directory path containing symbols for the dump, or null if not found.</returns>
+    /// <remarks>
+    /// Looks for symbols in the following locations (in order):
+    /// 1. {dumpStoragePath}/{userId}/.symbols_{dumpId}/ - Same location as dotnet-symbol downloads
+    /// 2. {symbolStoragePath}/dump_{dumpId}/ - Legacy location for uploaded symbols
+    /// </remarks>
+    public string? GetDumpSymbolDirectory(string dumpId)
+    {
+        if (string.IsNullOrWhiteSpace(dumpId))
+        {
+            return null;
+        }
+
+        // Remove any file extension from dumpId (in case it was passed with .dmp)
+        var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
+        if (string.IsNullOrWhiteSpace(cleanDumpId))
+        {
+            cleanDumpId = dumpId;
+        }
+
+        // 1. Check in user subdirectories: {dumpStoragePath}/{userId}/.symbols_{dumpId}/
+        // Dumps are always stored per-user, so symbols are next to the dump file
+        if (Directory.Exists(_dumpStorageBasePath))
+        {
+            foreach (var userDir in Directory.GetDirectories(_dumpStorageBasePath))
+            {
+                var symbolDirInUserDir = Path.Combine(userDir, $".symbols_{cleanDumpId}");
+                if (Directory.Exists(symbolDirInUserDir) && HasSymbolFiles(symbolDirInUserDir))
+                {
+                    return symbolDirInUserDir;
+                }
+            }
+        }
+
+        // 2. Legacy: Check in old symbol storage path: {symbolStoragePath}/dump_{dumpId}/
+        var legacySymbolDir = Path.Combine(_symbolStorageBasePath, $"dump_{cleanDumpId}");
+        if (Directory.Exists(legacySymbolDir) && HasSymbolFiles(legacySymbolDir))
+        {
+            return legacySymbolDir;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Checks if a directory contains any symbol files.
+    /// </summary>
+    private static bool HasSymbolFiles(string directory)
+    {
+        if (!Directory.Exists(directory))
+            return false;
+
+        // Check for any files (symbols can have various extensions)
+        return Directory.GetFiles(directory, "*", SearchOption.AllDirectories).Length > 0;
+    }
+
+    /// <summary>
+    /// Checks if a dump has associated symbol files.
+    /// </summary>
+    /// <param name="dumpId">The dump ID to check.</param>
+    /// <returns>True if the dump has symbol files, false otherwise.</returns>
+    public bool HasSymbols(string dumpId)
+    {
+        return GetDumpSymbolDirectory(dumpId) != null;
+    }
+
+    /// <summary>
+    /// Lists all symbol files for a specific dump, including files in subdirectories.
+    /// Returns relative paths from the symbol directory root.
+    /// </summary>
+    /// <param name="dumpId">The dump ID to list symbols for.</param>
+    /// <returns>List of symbol file relative paths.</returns>
+    public List<string> ListDumpSymbols(string dumpId)
+    {
+        var symbolDir = GetDumpSymbolDirectory(dumpId);
+        if (symbolDir == null)
+        {
+            return new List<string>();
+        }
+
+        // Get all files recursively and return relative paths
+        return Directory.GetFiles(symbolDir, "*", SearchOption.AllDirectories)
+            .Select(f => Path.GetRelativePath(symbolDir, f))
+            .OrderBy(f => f)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Deletes all symbol files for a specific dump.
+    /// </summary>
+    /// <param name="dumpId">The dump ID to delete symbols for.</param>
+    public void DeleteDumpSymbols(string dumpId)
+    {
+        if (string.IsNullOrWhiteSpace(dumpId))
+        {
+            return;
+        }
+
+        var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
+        if (string.IsNullOrWhiteSpace(cleanDumpId))
+        {
+            cleanDumpId = dumpId;
+        }
+
+        // Find and delete the symbol directory (could be in multiple locations)
+        var symbolDir = GetDumpSymbolDirectory(cleanDumpId);
+        if (symbolDir != null && Directory.Exists(symbolDir))
+        {
+            Directory.Delete(symbolDir, true);
+        }
+
+        // Also try legacy location
+        var legacySymbolDir = Path.Combine(_symbolStorageBasePath, $"dump_{cleanDumpId}");
+        if (Directory.Exists(legacySymbolDir))
+        {
+            Directory.Delete(legacySymbolDir, true);
+        }
+
+        _dumpSymbolDirectories.TryRemove(dumpId, out _);
+        _dumpSymbolDirectories.TryRemove(cleanDumpId, out _);
+    }
+
+    /// <summary>
+    /// Configures symbol paths for a session, including dump-specific symbols and remote servers.
+    /// </summary>
+    /// <param name="sessionId">Session ID to configure symbols for.</param>
+    /// <param name="dumpId">Dump ID to include symbols from (optional).</param>
+    /// <param name="additionalPaths">Additional symbol server URLs or paths (optional).</param>
+    /// <param name="includeMicrosoftSymbols">Whether to include Microsoft Symbol Server (default: true).</param>
+    public void ConfigureSessionSymbolPaths(string sessionId, string? dumpId = null, string? additionalPaths = null, bool includeMicrosoftSymbols = true)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            throw new ArgumentException("Session ID cannot be null or empty.", nameof(sessionId));
+        }
+
+        var paths = new List<string>();
+
+        // Add Microsoft Symbol Server if requested
+        if (includeMicrosoftSymbols)
+        {
+            paths.Add(MicrosoftSymbolServer);
+        }
+
+        // Add ALL dump-specific symbol directories that exist
+        // This includes both new location (.symbols_{dumpId}/) and legacy location (dump_{dumpId}/)
+        if (!string.IsNullOrWhiteSpace(dumpId))
+        {
+            var allSymbolDirs = GetAllDumpSymbolDirectories(dumpId);
+            paths.AddRange(allSymbolDirs);
+        }
+
+        // Add additional paths if provided
+        if (!string.IsNullOrWhiteSpace(additionalPaths))
+        {
+            var additionalPathList = additionalPaths.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => p.Trim())
+                .Where(p => !string.IsNullOrWhiteSpace(p));
+            
+            paths.AddRange(additionalPathList);
+        }
+
+        // Store paths for session
+        _sessionSymbolPaths[sessionId] = paths;
+    }
+
+    /// <summary>
+    /// Gets ALL symbol directories for a dump ID (both new and legacy locations).
+    /// </summary>
+    /// <param name="dumpId">The dump ID to look up.</param>
+    /// <returns>List of all symbol directories that exist for the dump.</returns>
+    private List<string> GetAllDumpSymbolDirectories(string dumpId)
+    {
+        var directories = new List<string>();
+
+        if (string.IsNullOrWhiteSpace(dumpId))
+        {
+            return directories;
+        }
+
+        // Remove any file extension from dumpId
+        var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
+        if (string.IsNullOrWhiteSpace(cleanDumpId))
+        {
+            cleanDumpId = dumpId;
+        }
+
+        // 1. Check in user subdirectories: {dumpStoragePath}/{userId}/.symbols_{dumpId}/
+        // This is where dotnet-symbol downloads symbols
+        if (Directory.Exists(_dumpStorageBasePath))
+        {
+            foreach (var userDir in Directory.GetDirectories(_dumpStorageBasePath))
+            {
+                var symbolDirInUserDir = Path.Combine(userDir, $".symbols_{cleanDumpId}");
+                if (Directory.Exists(symbolDirInUserDir) && HasSymbolFiles(symbolDirInUserDir))
+                {
+                    directories.Add(symbolDirInUserDir);
+                }
+            }
+        }
+
+        // 2. Legacy: Check in old symbol storage path: {symbolStoragePath}/dump_{dumpId}/
+        // This is where uploaded symbols used to be stored
+        var legacySymbolDir = Path.Combine(_symbolStorageBasePath, $"dump_{cleanDumpId}");
+        if (Directory.Exists(legacySymbolDir) && HasSymbolFiles(legacySymbolDir))
+        {
+            directories.Add(legacySymbolDir);
+        }
+
+        return directories;
+    }
+
+    /// <summary>
+    /// Gets the configured symbol paths for a session.
+    /// </summary>
+    /// <param name="sessionId">Session ID to get paths for.</param>
+    /// <returns>List of symbol paths, or empty list if not configured.</returns>
+    public List<string> GetSessionSymbolPaths(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            return new List<string>();
+        }
+
+        return _sessionSymbolPaths.TryGetValue(sessionId, out var paths) ? paths : new List<string>();
+    }
+
+    /// <summary>
+    /// Builds a WinDbg-compatible symbol path string for a session.
+    /// </summary>
+    /// <param name="sessionId">Session ID to build path for.</param>
+    /// <param name="includeLocalCache">Whether to include local cache directory (default: true).</param>
+    /// <returns>WinDbg symbol path string (e.g., "srv*cache*https://...; C:\symbols").</returns>
+    public string BuildWinDbgSymbolPath(string sessionId, bool includeLocalCache = true)
+    {
+        var paths = GetSessionSymbolPaths(sessionId);
+        if (paths.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        var pathParts = new List<string>();
+
+        // Add cache directive if requested
+        if (includeLocalCache)
+        {
+            var cacheDir = Path.Combine(_symbolStorageBasePath, "cache");
+            if (!Directory.Exists(cacheDir))
+            {
+                Directory.CreateDirectory(cacheDir);
+            }
+
+            // Add remote symbol servers with cache
+            var remoteServers = paths.Where(p => p.StartsWith("http://") || p.StartsWith("https://"));
+            foreach (var server in remoteServers)
+            {
+                pathParts.Add($"srv*{cacheDir}*{server}");
+            }
+        }
+        else
+        {
+            // Add remote servers without cache
+            var remoteServers = paths.Where(p => p.StartsWith("http://") || p.StartsWith("https://"));
+            pathParts.AddRange(remoteServers.Select(s => $"srv*{s}"));
+        }
+
+        // Add local directories
+        var localDirs = paths.Where(p => !p.StartsWith("http://") && !p.StartsWith("https://"));
+        pathParts.AddRange(localDirs);
+
+        return string.Join(";", pathParts);
+    }
+
+    /// <summary>
+    /// Builds an LLDB-compatible symbol path string for a session.
+    /// </summary>
+    /// <param name="sessionId">Session ID to build path for.</param>
+    /// <returns>LLDB symbol path string (space-separated local directories).</returns>
+    /// <remarks>
+    /// LLDB does not support remote symbol servers, so only local directories are included.
+    /// </remarks>
+    public string BuildLldbSymbolPath(string sessionId)
+    {
+        var paths = GetSessionSymbolPaths(sessionId);
+        if (paths.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        // LLDB only supports local directories, filter out URLs
+        var localDirs = paths.Where(p => !p.StartsWith("http://") && !p.StartsWith("https://"));
+        
+        return string.Join(" ", localDirs);
+    }
+
+    /// <summary>
+    /// Clears symbol path configuration for a session.
+    /// </summary>
+    /// <param name="sessionId">Session ID to clear paths for.</param>
+    public void ClearSessionSymbolPaths(string sessionId)
+    {
+        if (!string.IsNullOrWhiteSpace(sessionId))
+        {
+            _sessionSymbolPaths.TryRemove(sessionId, out _);
+        }
+    }
+
+
+
+    /// <summary>
+    /// Gets or creates the symbol directory for a dump.
+    /// </summary>
+    /// <param name="dumpId">Dump ID to get directory for.</param>
+    /// <returns>Path to the dump's symbol directory.</returns>
+    /// <remarks>
+    /// Creates the symbol directory as .symbols_{dumpId}/ next to the dump file.
+    /// Falls back to {symbolStoragePath}/dump_{dumpId}/ if dump file is not found.
+    /// </remarks>
+    private string GetOrCreateDumpSymbolDirectory(string dumpId)
+    {
+        return _dumpSymbolDirectories.GetOrAdd(dumpId, id =>
+        {
+            // Remove any file extension from dumpId
+            var cleanDumpId = Path.GetFileNameWithoutExtension(id);
+            if (string.IsNullOrWhiteSpace(cleanDumpId))
+            {
+                cleanDumpId = id;
+            }
+
+            // Try to find the dump file and create symbols directory next to it
+            var dumpFilePath = FindDumpFile(cleanDumpId);
+            if (dumpFilePath != null)
+            {
+                var dumpDir = Path.GetDirectoryName(dumpFilePath);
+                if (dumpDir != null)
+                {
+                    var symbolDir = Path.Combine(dumpDir, $".symbols_{cleanDumpId}");
+                    if (!Directory.Exists(symbolDir))
+                    {
+                        Directory.CreateDirectory(symbolDir);
+                    }
+                    return symbolDir;
+                }
+            }
+
+            // Fallback to legacy location
+            var legacySymbolDir = Path.Combine(_symbolStorageBasePath, $"dump_{cleanDumpId}");
+            if (!Directory.Exists(legacySymbolDir))
+            {
+                Directory.CreateDirectory(legacySymbolDir);
+            }
+            return legacySymbolDir;
+        });
+            }
+
+    /// <summary>
+    /// Finds the dump file path for a given dump ID.
+    /// </summary>
+    /// <param name="dumpId">The dump ID to find.</param>
+    /// <returns>The full path to the dump file, or null if not found.</returns>
+    private string? FindDumpFile(string dumpId)
+    {
+        if (!Directory.Exists(_dumpStorageBasePath))
+            return null;
+
+        // Search for {dumpId}.dmp in user subdirectories
+        // Dumps are always stored per-user: {dumpStoragePath}/{userId}/{dumpId}.dmp
+        var dumpFileName = $"{dumpId}.dmp";
+
+        foreach (var userDir in Directory.GetDirectories(_dumpStorageBasePath))
+        {
+            var userPath = Path.Combine(userDir, dumpFileName);
+            if (File.Exists(userPath))
+                return userPath;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Validates if a file extension is a valid symbol file extension.
+    /// </summary>
+    /// <param name="extension">File extension to validate (including the dot).</param>
+    /// <returns>True if valid, false otherwise.</returns>
+    private static bool IsValidSymbolFileExtension(string extension)
+    {
+        var validExtensions = new[] { ".pdb", ".so", ".dylib", ".dwarf", ".sym", ".debug", ".dbg", ".dsym" };
+        return validExtensions.Contains(extension.ToLowerInvariant());
+    }
+
+}

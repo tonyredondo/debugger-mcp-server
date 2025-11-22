@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="utf-8" ?>
+<RunSettings>
+  <DataCollectionRunSettings>
+    <DataCollectors>
+      <DataCollector friendlyName="XPlat Code Coverage">
+        <Configuration>
+          <!-- Coverage output formats: cobertura for CI, opencover for tools, lcov for editors -->
+          <Format>cobertura,opencover,lcov</Format>
+          
+          <!-- Include only the main project -->
+          <Include>[DebuggerMcp]*</Include>
+          
+          <!-- Exclude test project and generated code -->
+          <Exclude>
+            [DebuggerMcp.Tests]*,
+            [*]*.DbgEngInterop,
+            [*]DbgEng
+          </Exclude>
+          
+          <!-- Exclude specific attributes -->
+          <ExcludeByAttribute>
+            Obsolete,
+            GeneratedCodeAttribute,
+            CompilerGeneratedAttribute,
+            ExcludeFromCodeCoverage
+          </ExcludeByAttribute>
+          
+          <!-- Exclude specific files -->
+          <ExcludeByFile>
+            **/DbgEngInterop.cs
+          </ExcludeByFile>
+          
+          <!-- Include test assemblies -->
+          <IncludeTestAssembly>false</IncludeTestAssembly>
+          
+          <!-- Single hit coverage (faster) -->
+          <SingleHit>false</SingleHit>
+          
+          <!-- Use source link for proper file paths -->
+          <UseSourceLink>true</UseSourceLink>
+          
+          <!-- Skip auto-generated code -->
+          <SkipAutoProps>true</SkipAutoProps>
+          
+          <!-- Deterministic report (for CI reproducibility) -->
+          <DeterministicReport>true</DeterministicReport>
+        </Configuration>
+      </DataCollector>
+    </DataCollectors>
+  </DataCollectionRunSettings>
+  
+  <InProcDataCollectionRunSettings>
+    <InProcDataCollectors>
+      <InProcDataCollector
+        assemblyQualifiedName="Coverlet.Collector.DataCollection.CoverletInProcDataCollector, coverlet.collector, Version=6.0.0.0, Culture=neutral, PublicKeyToken=null"
+        friendlyName="XPlat Code Coverage"
+        enabled="True"
+        codebase="coverlet.collector.dll" />
+    </InProcDataCollectors>
+  </InProcDataCollectionRunSettings>
+</RunSettings>
+
