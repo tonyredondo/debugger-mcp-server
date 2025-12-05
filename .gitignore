@@ -102,3 +102,6 @@ myreport*.json
 *_history.txt
 
 .DS_Store
+
+# Planning documents (local working files)
+PLAN_*.md
