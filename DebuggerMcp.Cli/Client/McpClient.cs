@@ -931,6 +931,71 @@ public class McpClient : IMcpClient
 
     #endregion
 
+    #region Datadog Symbols
+
+    /// <inheritdoc/>
+    public async Task<string> DownloadDatadogSymbolsAsync(
+        string sessionId,
+        string userId,
+        string commitSha,
+        string? targetFramework = null,
+        bool loadIntoDebugger = true,
+        int? buildId = null,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["commitSha"] = commitSha,
+            ["loadIntoDebugger"] = loadIntoDebugger
+        };
+
+        if (!string.IsNullOrEmpty(targetFramework))
+        {
+            args["targetFramework"] = targetFramework;
+        }
+
+        if (buildId.HasValue)
+        {
+            args["buildId"] = buildId.Value;
+        }
+
+        return await CallToolAsync("download_datadog_symbols", args, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<string> ListDatadogArtifactsAsync(string commitSha, CancellationToken cancellationToken = default)
+    {
+        return await CallToolAsync("list_datadog_artifacts", new Dictionary<string, object?>
+        {
+            ["commitSha"] = commitSha
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<string> GetDatadogSymbolsConfigAsync(CancellationToken cancellationToken = default)
+    {
+        return await CallToolAsync("get_datadog_symbols_config", new Dictionary<string, object?>(), cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<string> PrepareDatadogSymbolsAsync(
+        string sessionId,
+        string userId,
+        bool loadIntoDebugger = true,
+        CancellationToken cancellationToken = default)
+    {
+        return await CallToolAsync("prepare_datadog_symbols", new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["loadIntoDebugger"] = loadIntoDebugger
+        }, cancellationToken);
+    }
+
+    #endregion
+
     #region Generic Tool Invocation
 
     /// <inheritdoc/>

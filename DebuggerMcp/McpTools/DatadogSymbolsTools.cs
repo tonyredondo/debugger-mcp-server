@@ -52,26 +52,27 @@ public class DatadogSymbolsTools(
     /// 
     /// After download, symbols are automatically loaded into LLDB for improved stack traces.
     /// </remarks>
-    [McpServerTool, Description("Download Datadog.Trace symbols from Azure Pipelines for a specific commit SHA")]
+    [McpServerTool, Description("Download Datadog.Trace symbols from Azure Pipelines for a specific commit SHA or build ID")]
     public async Task<string> DownloadDatadogSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
         [Description("Commit SHA from the Datadog.Trace assembly (from InformationalVersion)")] string commitSha,
         [Description("Target framework (e.g., net6.0, netcoreapp3.1). Auto-detected if not specified.")] string? targetFramework = null,
-        [Description("Whether to load symbols into the debugger after download (default: true)")] bool loadIntoDebugger = true)
+        [Description("Whether to load symbols into the debugger after download (default: true)")] bool loadIntoDebugger = true,
+        [Description("Optional: Azure Pipelines build ID to use directly (bypasses commit SHA lookup). Use this if the automatic lookup returns the wrong build.")] int? buildId = null)
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
         var sanitizedUserId = SanitizeUserId(userId);
 
-        // Validate commitSha
-        if (string.IsNullOrWhiteSpace(commitSha))
+        // Validate commitSha (or buildId must be provided)
+        if (string.IsNullOrWhiteSpace(commitSha) && buildId == null)
         {
-            throw new ArgumentException("commitSha cannot be null or empty", nameof(commitSha));
+            throw new ArgumentException("Either commitSha or buildId must be provided");
         }
 
-        // Must be at least 7 characters for a short SHA
-        if (commitSha.Length < 7)
+        // Must be at least 7 characters for a short SHA (if provided)
+        if (!string.IsNullOrWhiteSpace(commitSha) && commitSha.Length < 7)
         {
             throw new ArgumentException("commitSha must be at least 7 characters", nameof(commitSha));
         }
@@ -90,12 +91,16 @@ public class DatadogSymbolsTools(
         var session = GetSessionInfo(sessionId, sanitizedUserId);
         var debuggerManager = GetSessionManager(sessionId, sanitizedUserId);
 
-        // Detect platform from the dump
+        // Detect platform from the dump using image list (includes native modules with arch info)
         PlatformInfo platform;
         try
         {
-            var platformOutput = debuggerManager.ExecuteCommand("clrmodules");
-            platform = DetectPlatformFromSession(session, platformOutput);
+            // Use 'image list' to get native module paths which include architecture info
+            // e.g., /lib/ld-musl-aarch64.so.1 tells us it's musl (Alpine) and aarch64 (ARM64)
+            var imageListOutput = debuggerManager.ExecuteCommand("image list");
+            platform = DetectPlatformFromSession(session, imageListOutput);
+            Logger.LogInformation("[DatadogSymbols] Detected platform: {Os} {Arch} (Alpine: {IsAlpine})", 
+                platform.Os, platform.Architecture, platform.IsAlpine);
         }
         catch (Exception ex)
         {
@@ -125,7 +130,9 @@ public class DatadogSymbolsTools(
             commitSha,
             platform,
             symbolsDir,
-            tfm);
+            tfm,
+            version: null,  // Version is extracted from dump in auto-detect mode
+            overrideBuildId: buildId);
 
         // Load symbols if requested and download succeeded
         SymbolLoadResult? loadResult = null;
@@ -135,6 +142,14 @@ public class DatadogSymbolsTools(
             loadResult = await loader.LoadSymbolsAsync(
                 downloadResult.MergeResult,
                 cmd => debuggerManager.ExecuteCommand(cmd));
+            
+            // Clear command cache after loading new symbols so subsequent commands
+            // (like clrstack) will re-run and show improved stack traces
+            if (loadResult.Success)
+            {
+                debuggerManager.ClearCommandCache();
+                Logger.LogInformation("[DatadogSymbols] Cleared command cache after loading symbols");
+            }
         }
 
         // Build response
@@ -149,6 +164,8 @@ public class DatadogSymbolsTools(
             nativeSymbolsDirectory = downloadResult.MergeResult?.NativeSymbolDirectory,
             managedSymbolsDirectory = downloadResult.MergeResult?.ManagedSymbolDirectory,
             filesExtracted = downloadResult.MergeResult?.TotalFilesExtracted ?? 0,
+            shaMismatch = downloadResult.ShaMismatch,
+            source = downloadResult.Source,
             platform = new
             {
                 os = platform.Os,
@@ -168,6 +185,126 @@ public class DatadogSymbolsTools(
         };
 
         resolver.SaveCache();
+
+        return JsonSerializer.Serialize(response, JsonOptions);
+    }
+
+    /// <summary>
+    /// Automatically downloads Datadog.Trace symbols by scanning the dump for assemblies.
+    /// </summary>
+    /// <param name="sessionId">The session ID.</param>
+    /// <param name="userId">The user ID that owns the session.</param>
+    /// <param name="loadIntoDebugger">Whether to load symbols into the debugger (default: true).</param>
+    /// <returns>JSON result with download status and loaded symbols.</returns>
+    /// <remarks>
+    /// This tool automatically scans the dump for Datadog assemblies, extracts the commit SHA
+    /// from InformationalVersion, and downloads the appropriate symbols from Azure Pipelines.
+    /// 
+    /// This is the recommended way to download Datadog symbols when you have a dump open,
+    /// as it handles all the detection automatically.
+    /// </remarks>
+    [McpServerTool, Description("Auto-detect and download Datadog.Trace symbols from the opened dump")]
+    public async Task<string> PrepareDatadogSymbols(
+        [Description("Session ID from CreateSession")] string sessionId,
+        [Description("User ID that owns the session")] string userId,
+        [Description("Whether to load symbols into the debugger after download (default: true)")] bool loadIntoDebugger = true)
+    {
+        // Validate input parameters
+        ValidateSessionId(sessionId);
+        var sanitizedUserId = SanitizeUserId(userId);
+
+        // Check if feature is enabled
+        if (!DatadogTraceSymbolsConfig.IsEnabled())
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = "Datadog symbol download is disabled. Set DATADOG_TRACE_SYMBOLS_ENABLED=true to enable."
+            }, JsonOptions);
+        }
+
+        // Get the session and debugger manager
+        var session = GetSessionInfo(sessionId, sanitizedUserId);
+        var debuggerManager = GetSessionManager(sessionId, sanitizedUserId);
+
+        // Detect platform from the dump using image list (includes native modules with arch info)
+        PlatformInfo platform;
+        try
+        {
+            // Use 'image list' to get native module paths which include architecture info
+            // e.g., /lib/ld-musl-aarch64.so.1 tells us it's musl (Alpine) and aarch64 (ARM64)
+            var imageListOutput = debuggerManager.ExecuteCommand("image list");
+            platform = DetectPlatformFromSession(session, imageListOutput);
+            Logger.LogInformation("[DatadogSymbols] Detected platform: {Os} {Arch} (Alpine: {IsAlpine})", 
+                platform.Os, platform.Architecture, platform.IsAlpine);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to detect platform, using defaults");
+            platform = new PlatformInfo
+            {
+                Os = Environment.OSVersion.Platform == PlatformID.Win32NT ? "Windows" : "Linux",
+                Architecture = Environment.Is64BitProcess ? "x64" : "x86"
+            };
+        }
+
+        // Build output directory
+        var dumpStorage = SessionManager.GetDumpStoragePath();
+        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}");
+
+        // Create the symbol service
+        var symbolService = new DatadogSymbolService(session.ClrMdAnalyzer, Logger);
+
+        // Prepare symbols (this handles scanning, downloading, and loading)
+        var prepResult = await symbolService.PrepareSymbolsAsync(
+            platform,
+            symbolsDir,
+            debuggerManager.ExecuteCommand,
+            loadIntoDebugger);
+
+        // Clear command cache after loading new symbols so subsequent commands
+        // (like clrstack) will re-run and show improved stack traces
+        if (prepResult.Success && prepResult.LoadResult?.Success == true)
+        {
+            debuggerManager.ClearCommandCache();
+            Logger.LogInformation("[DatadogSymbols] Cleared command cache after loading symbols");
+        }
+
+        // Build response
+        var response = new
+        {
+            success = prepResult.Success,
+            message = prepResult.Message,
+            datadogAssemblies = prepResult.DatadogAssemblies.Select(a => new
+            {
+                name = a.Name,
+                informationalVersion = a.InformationalVersion,
+                commitSha = a.CommitSha != null ? DatadogTraceSymbolsConfig.GetShortSha(a.CommitSha) : null,
+                targetFramework = a.TargetFramework
+            }).ToList(),
+            downloadResult = prepResult.DownloadResult != null ? new
+            {
+                buildId = prepResult.DownloadResult.BuildId,
+                buildNumber = prepResult.DownloadResult.BuildNumber,
+                buildUrl = prepResult.DownloadResult.BuildUrl,
+                downloadedArtifacts = prepResult.DownloadResult.DownloadedArtifacts,
+                filesExtracted = prepResult.DownloadResult.MergeResult?.TotalFilesExtracted ?? 0,
+                shaMismatch = prepResult.DownloadResult.ShaMismatch,
+                source = prepResult.DownloadResult.Source
+            } : null,
+            symbolsLoaded = prepResult.LoadResult != null ? new
+            {
+                nativeSymbolsLoaded = prepResult.LoadResult.NativeSymbolsLoaded.Count,
+                managedSymbolPaths = prepResult.LoadResult.ManagedSymbolPaths.Count,
+                commandsExecuted = prepResult.LoadResult.CommandsExecuted.Count
+            } : null,
+            platform = new
+            {
+                os = platform.Os,
+                architecture = platform.Architecture,
+                isAlpine = platform.IsAlpine
+            }
+        };
 
         return JsonSerializer.Serialize(response, JsonOptions);
     }
@@ -313,54 +450,58 @@ public class DatadogSymbolsTools(
 
     /// <summary>
     /// Detects platform information from the session and debugger output.
+    /// Uses 'image list' output which contains native module paths like /lib/ld-musl-aarch64.so.1
     /// </summary>
     private PlatformInfo DetectPlatformFromSession(DebuggerSession session, string debuggerOutput)
     {
         var platform = new PlatformInfo
         {
-            Os = Environment.OSVersion.Platform == PlatformID.Win32NT ? "Windows" : "Linux",
-            Architecture = Environment.Is64BitProcess ? "x64" : "x86"
+            Os = "Linux",  // Default to Linux since most dumps will be Linux
+            Architecture = "x64"  // Default, will be overridden if detected
         };
 
         // Try to detect from debugger output
         var outputLower = debuggerOutput.ToLowerInvariant();
 
-        // Detect OS
-        if (outputLower.Contains("linux") || outputLower.Contains(".so"))
-        {
-            platform.Os = "Linux";
-        }
-        else if (outputLower.Contains("windows") || outputLower.Contains(".dll"))
-        {
-            platform.Os = "Windows";
-        }
-        else if (outputLower.Contains("darwin") || outputLower.Contains("macos") || outputLower.Contains(".dylib"))
-        {
-            platform.Os = "macOS";
-        }
-
-        // Detect architecture
-        if (outputLower.Contains("arm64") || outputLower.Contains("aarch64"))
+        // Detect architecture first - look for specific patterns in module paths
+        // Common patterns: /lib/ld-musl-aarch64.so, /lib64/ld-linux-x86-64.so.2
+        if (outputLower.Contains("aarch64") || outputLower.Contains("-arm64"))
         {
             platform.Architecture = "arm64";
         }
-        else if (outputLower.Contains("x64") || outputLower.Contains("amd64") || outputLower.Contains("x86_64"))
+        else if (outputLower.Contains("x86_64") || outputLower.Contains("x86-64") || outputLower.Contains("amd64"))
         {
             platform.Architecture = "x64";
         }
-        else if (outputLower.Contains("x86") || outputLower.Contains("i386") || outputLower.Contains("i686"))
+        else if (outputLower.Contains("i386") || outputLower.Contains("i686") || outputLower.Contains("x86"))
         {
             platform.Architecture = "x86";
         }
 
-        // Detect Alpine/musl
-        if (outputLower.Contains("musl") || outputLower.Contains("alpine"))
+        // Detect OS from module extensions and paths
+        if (outputLower.Contains(".dylib") || outputLower.Contains("/usr/lib/dyld"))
+        {
+            platform.Os = "macOS";
+        }
+        else if (outputLower.Contains(".dll") || outputLower.Contains("\\windows\\"))
+        {
+            platform.Os = "Windows";
+        }
+        else if (outputLower.Contains(".so") || outputLower.Contains("/lib/") || outputLower.Contains("/usr/"))
+        {
+            platform.Os = "Linux";
+        }
+
+        // Detect Alpine/musl - look for ld-musl in the loader path
+        // e.g., /lib/ld-musl-aarch64.so.1 or /lib/ld-musl-x86_64.so.1
+        if (outputLower.Contains("ld-musl") || outputLower.Contains("musl-"))
         {
             platform.IsAlpine = true;
             platform.LibcType = "musl";
         }
         else if (platform.Os == "Linux")
         {
+            // Default to glibc for Linux if musl not detected
             platform.IsAlpine = false;
             platform.LibcType = "glibc";
         }

@@ -32,6 +32,38 @@ public class DatadogAssemblyInfo
     /// Gets or sets the repository URL from metadata.
     /// </summary>
     public string? RepositoryUrl { get; set; }
+    
+    /// <summary>
+    /// Extracts the version part from InformationalVersion (e.g., "3.31.0" from "3.31.0+14fd3a2f...").
+    /// </summary>
+    public string? Version
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(InformationalVersion))
+                return null;
+            
+            // Handle formats like "3.31.0+14fd3a2f..." or "3.31.0.14fd3a2f..."
+            var plusIndex = InformationalVersion.IndexOf('+');
+            if (plusIndex > 0)
+                return InformationalVersion[..plusIndex];
+            
+            // If no +, check for pattern like "3.31.0.abc123..." where last part is SHA
+            var parts = InformationalVersion.Split('.');
+            if (parts.Length >= 3)
+            {
+                // Check if last part looks like a SHA (all hex chars, length >= 7)
+                var lastPart = parts[^1];
+                if (lastPart.Length >= 7 && lastPart.All(c => "0123456789abcdefABCDEF".Contains(c)))
+                {
+                    // Return version without the SHA part
+                    return string.Join(".", parts[..^1]);
+                }
+            }
+            
+            return InformationalVersion;
+        }
+    }
 }
 
 /// <summary>
@@ -106,9 +138,17 @@ public class DatadogSymbolService
     {
         var result = new List<DatadogAssemblyInfo>();
         
-        if (_clrMdAnalyzer == null || !_clrMdAnalyzer.IsOpen)
+        _logger?.LogInformation("[DatadogSymbols] Scanning for Datadog assemblies...");
+        
+        if (_clrMdAnalyzer == null)
         {
-            _logger?.LogDebug("ClrMD analyzer not available, skipping Datadog assembly scan");
+            _logger?.LogWarning("[DatadogSymbols] ClrMD analyzer is null, cannot scan for Datadog assemblies");
+            return result;
+        }
+        
+        if (!_clrMdAnalyzer.IsOpen)
+        {
+            _logger?.LogWarning("[DatadogSymbols] ClrMD analyzer is not open, cannot scan for Datadog assemblies");
             return result;
         }
         
@@ -116,6 +156,10 @@ public class DatadogSymbolService
         {
             // Get all modules with attributes in one pass
             var modules = _clrMdAnalyzer.GetAllModulesWithAttributes();
+            _logger?.LogInformation("[DatadogSymbols] ClrMD found {Count} modules in dump", modules.Count);
+            
+            var datadogModulesFound = 0;
+            var datadogModulesWithCommit = 0;
             
             foreach (var module in modules)
             {
@@ -123,37 +167,60 @@ public class DatadogSymbolService
                 if (!IsDatadogAssembly(module.Name))
                     continue;
                 
+                datadogModulesFound++;
+                _logger?.LogDebug("Found Datadog module: {Name}, Attributes: {AttrCount}", 
+                    module.Name, module.Attributes?.Count ?? 0);
+                
                 var info = new DatadogAssemblyInfo
                 {
                     Name = module.Name
                 };
                 
                 // Extract metadata from attributes
-                foreach (var attr in module.Attributes)
+                // Attribute types are stored with full namespace (e.g., "System.Reflection.AssemblyInformationalVersionAttribute")
+                if (module.Attributes != null)
                 {
-                    switch (attr.AttributeType)
+                    foreach (var attr in module.Attributes)
                     {
-                        case "AssemblyInformationalVersionAttribute":
+                        _logger?.LogDebug("  Attribute: {Type} = {Value}", attr.AttributeType, attr.Value);
+                        
+                        // Match by suffix since full type name includes namespace
+                        var attrType = attr.AttributeType ?? "";
+                        
+                        if (attrType.EndsWith("AssemblyInformationalVersionAttribute"))
+                        {
                             info.InformationalVersion = attr.Value;
                             info.CommitSha = ExtractCommitSha(attr.Value);
-                            break;
-                        case "AssemblyMetadataAttribute" when attr.Key == "RepositoryUrl":
+                            _logger?.LogDebug("  Extracted commit SHA: {Sha}", info.CommitSha ?? "(null)");
+                        }
+                        else if (attrType.EndsWith("AssemblyMetadataAttribute") && attr.Key == "RepositoryUrl")
+                        {
                             info.RepositoryUrl = attr.Value;
-                            break;
-                        case "TargetFrameworkAttribute":
+                        }
+                        else if (attrType.EndsWith("TargetFrameworkAttribute"))
+                        {
                             info.TargetFramework = attr.Value;
-                            break;
+                        }
                     }
                 }
                 
                 // Only add if we have a commit SHA (needed for download)
                 if (!string.IsNullOrEmpty(info.CommitSha))
                 {
+                    datadogModulesWithCommit++;
                     result.Add(info);
-                    _logger?.LogDebug("Found Datadog assembly: {Name} commit={Commit}", 
-                        info.Name, DatadogTraceSymbolsConfig.GetShortSha(info.CommitSha));
+                    _logger?.LogInformation("[DatadogSymbols] Found: {Name} commit={Commit} (from: {Version})", 
+                        info.Name, DatadogTraceSymbolsConfig.GetShortSha(info.CommitSha), info.InformationalVersion);
+                }
+                else
+                {
+                    _logger?.LogWarning("[DatadogSymbols] Module {Name} has no commit SHA - InformationalVersion: '{Version}' (attrs: {AttrCount})", 
+                        module.Name, info.InformationalVersion ?? "(null)", module.Attributes?.Count ?? 0);
                 }
             }
+            
+            _logger?.LogInformation("[DatadogSymbols] Scan complete: {Found} Datadog modules found, {WithCommit} with commit SHA", 
+                datadogModulesFound, datadogModulesWithCommit);
         }
         catch (Exception ex)
         {
@@ -169,12 +236,14 @@ public class DatadogSymbolService
     /// <param name="platform">Platform information from the dump.</param>
     /// <param name="symbolsOutputDirectory">Directory to store downloaded symbols.</param>
     /// <param name="executeCommand">Function to execute debugger commands.</param>
+    /// <param name="loadIntoDebugger">Whether to load symbols into the debugger after download.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Preparation result.</returns>
     public async Task<DatadogSymbolPreparationResult> PrepareSymbolsAsync(
         PlatformInfo platform,
         string symbolsOutputDirectory,
         Func<string, string> executeCommand,
+        bool loadIntoDebugger = true,
         CancellationToken ct = default)
     {
         var result = new DatadogSymbolPreparationResult();
@@ -214,21 +283,20 @@ public class DatadogSymbolService
         var targetTfm = DatadogArtifactMapper.GetTargetTfmFolder(
             primaryAssembly.TargetFramework ?? platform.RuntimeVersion ?? ".NET 6.0");
         
-        // Phase B: Download symbols
+        // Phase B: Download symbols using 4-step lookup:
+        // 1. Azure Pipelines with SHA
+        // 2. GitHub Releases with SHA
+        // 3. Azure Pipelines with version/tag
+        // 4. GitHub Releases with version/tag
         try
         {
-            using var resolver = new AzurePipelinesResolver(
-                DatadogTraceSymbolsConfig.GetCacheDirectory(),
-                _logger);
-            
-            result.DownloadResult = await resolver.DownloadDatadogSymbolsAsync(
-                primaryAssembly.CommitSha,
+            result.DownloadResult = await TryDownloadSymbolsAsync(
+                primaryAssembly.CommitSha!,
+                primaryAssembly.Version,
                 platform,
                 symbolsOutputDirectory,
                 targetTfm,
                 ct);
-            
-            resolver.SaveCache();
             
             if (!result.DownloadResult.Success)
             {
@@ -247,7 +315,7 @@ public class DatadogSymbolService
         }
         
         // Phase C: Load symbols into debugger
-        if (result.DownloadResult?.MergeResult != null)
+        if (loadIntoDebugger && result.DownloadResult?.MergeResult != null)
         {
             try
             {
@@ -269,6 +337,10 @@ public class DatadogSymbolService
                 result.Message = $"Symbol loading error: {ex.Message}";
                 // Continue - download succeeded even if loading failed
             }
+        }
+        else if (!loadIntoDebugger)
+        {
+            _logger?.LogDebug("Skipping symbol loading as requested");
         }
         
         result.Success = result.DownloadResult?.Success == true;
@@ -341,6 +413,157 @@ public class DatadogSymbolService
         }
         
         return null;
+    }
+    
+    /// <summary>
+    /// Tries to download symbols using the 4-step lookup order:
+    /// 1. Azure Pipelines with SHA
+    /// 2. GitHub Releases with SHA
+    /// 3. Azure Pipelines with version/tag
+    /// 4. GitHub Releases with version/tag
+    /// </summary>
+    private async Task<DatadogSymbolDownloadResult> TryDownloadSymbolsAsync(
+        string commitSha,
+        string? version,
+        PlatformInfo platform,
+        string outputDirectory,
+        string targetTfm,
+        CancellationToken ct)
+    {
+        var errors = new List<string>();
+        
+        // Step 1: Azure Pipelines with SHA
+        _logger?.LogInformation("[DatadogSymbols] Step 1: Trying Azure Pipelines with commit SHA {Sha}", DatadogTraceSymbolsConfig.GetShortSha(commitSha));
+        using (var azureResolver = new AzurePipelinesResolver(DatadogTraceSymbolsConfig.GetCacheDirectory(), _logger))
+        {
+            var azureResult = await azureResolver.DownloadDatadogSymbolsAsync(
+                commitSha,
+                platform,
+                outputDirectory,
+                targetTfm,
+                version: null,  // Don't use version fallback in Azure resolver - we'll do it ourselves
+                overrideBuildId: null,
+                ct);
+            
+            azureResolver.SaveCache();
+            
+            if (azureResult.Success)
+            {
+                _logger?.LogInformation("[DatadogSymbols] Success: Downloaded from Azure Pipelines (build {Build})", azureResult.BuildNumber);
+                azureResult.Source = "AzurePipelines";
+                azureResult.ShaMismatch = false;  // Exact SHA match
+                return azureResult;
+            }
+            
+            errors.Add($"Azure Pipelines (SHA): {azureResult.ErrorMessage}");
+        }
+        
+        // Step 2: GitHub Releases with SHA
+        _logger?.LogInformation("[DatadogSymbols] Step 2: Trying GitHub Releases with commit SHA {Sha}", DatadogTraceSymbolsConfig.GetShortSha(commitSha));
+        using (var githubResolver = new GitHubReleasesResolver(DatadogTraceSymbolsConfig.GetCacheDirectory(), logger: _logger))
+        {
+            var release = await githubResolver.FindReleaseByCommitAsync(commitSha, ct);
+            if (release != null)
+            {
+                var githubResult = await githubResolver.DownloadSymbolsAsync(release, platform, outputDirectory, targetTfm, ct);
+                if (githubResult.Success)
+                {
+                    _logger?.LogInformation("[DatadogSymbols] Success: Downloaded from GitHub Releases ({Tag})", release.TagName);
+                    githubResolver.SaveCache();
+                    var result = ConvertToDatadogResult(githubResult);
+                    result.Source = "GitHubReleases";
+                    result.ShaMismatch = false;  // Exact SHA match
+                    return result;
+                }
+                errors.Add($"GitHub Releases (SHA): {githubResult.ErrorMessage}");
+            }
+            else
+            {
+                errors.Add("GitHub Releases (SHA): No release found for commit");
+            }
+            githubResolver.SaveCache();
+        }
+        
+        // Step 3: Azure Pipelines with version/tag (only if we have a version)
+        if (!string.IsNullOrEmpty(version))
+        {
+            _logger?.LogInformation("[DatadogSymbols] Step 3: Trying Azure Pipelines with version tag v{Version}", version);
+            using (var azureResolver = new AzurePipelinesResolver(DatadogTraceSymbolsConfig.GetCacheDirectory(), _logger))
+            {
+                var azureResult = await azureResolver.DownloadDatadogSymbolsAsync(
+                    commitSha,
+                    platform,
+                    outputDirectory,
+                    targetTfm,
+                    version: version,  // Use version for tag lookup
+                    overrideBuildId: null,
+                    ct);
+                
+                azureResolver.SaveCache();
+                
+                if (azureResult.Success)
+                {
+                    _logger?.LogInformation("[DatadogSymbols] Success: Downloaded from Azure Pipelines via version tag (build {Build})", azureResult.BuildNumber);
+                    azureResult.Source = "AzurePipelines";
+                    azureResult.ShaMismatch = true;  // Used version tag instead of exact SHA
+                    return azureResult;
+                }
+                
+                errors.Add($"Azure Pipelines (version): {azureResult.ErrorMessage}");
+            }
+            
+            // Step 4: GitHub Releases with version/tag
+            _logger?.LogInformation("[DatadogSymbols] Step 4: Trying GitHub Releases with version tag v{Version}", version);
+            using (var githubResolver = new GitHubReleasesResolver(DatadogTraceSymbolsConfig.GetCacheDirectory(), logger: _logger))
+            {
+                var release = await githubResolver.FindReleaseByVersionAsync(version, ct);
+                if (release != null)
+                {
+                    var githubResult = await githubResolver.DownloadSymbolsAsync(release, platform, outputDirectory, targetTfm, ct);
+                    if (githubResult.Success)
+                    {
+                        _logger?.LogInformation("[DatadogSymbols] Success: Downloaded from GitHub Releases ({Tag})", release.TagName);
+                        githubResolver.SaveCache();
+                        var result = ConvertToDatadogResult(githubResult);
+                        result.Source = "GitHubReleases";
+                        result.ShaMismatch = true;  // Used version tag instead of exact SHA
+                        return result;
+                    }
+                    errors.Add($"GitHub Releases (version): {githubResult.ErrorMessage}");
+                }
+                else
+                {
+                    errors.Add($"GitHub Releases (version): No release found for v{version}");
+                }
+                githubResolver.SaveCache();
+            }
+        }
+        
+        // All steps failed
+        var combinedError = $"All symbol sources exhausted. Tried:\n" + string.Join("\n", errors.Select(e => $"  - {e}"));
+        _logger?.LogWarning("[DatadogSymbols] {Error}", combinedError);
+        
+        return new DatadogSymbolDownloadResult
+        {
+            Success = false,
+            ErrorMessage = combinedError
+        };
+    }
+    
+    /// <summary>
+    /// Converts a GitHub result to a Datadog result for consistent return type.
+    /// </summary>
+    private static DatadogSymbolDownloadResult ConvertToDatadogResult(GitHubSymbolDownloadResult githubResult)
+    {
+        return new DatadogSymbolDownloadResult
+        {
+            Success = githubResult.Success,
+            BuildNumber = githubResult.Release?.TagName ?? "",
+            BuildUrl = githubResult.Release?.HtmlUrl ?? "",
+            DownloadedArtifacts = githubResult.DownloadedAssets,
+            MergeResult = githubResult.MergeResult,
+            ErrorMessage = githubResult.ErrorMessage
+        };
     }
 }
 

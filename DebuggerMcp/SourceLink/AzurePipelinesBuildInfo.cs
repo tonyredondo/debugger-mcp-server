@@ -139,4 +139,15 @@ public class DatadogSymbolDownloadResult
     /// Gets or sets the error message if download failed.
     /// </summary>
     public string? ErrorMessage { get; set; }
+    
+    /// <summary>
+    /// Gets or sets whether symbols were downloaded using version tag instead of exact commit SHA.
+    /// True when the exact commit wasn't found and we fell back to version-based lookup.
+    /// </summary>
+    public bool ShaMismatch { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the source type (e.g., "AzurePipelines", "GitHubReleases").
+    /// </summary>
+    public string? Source { get; set; }
 }

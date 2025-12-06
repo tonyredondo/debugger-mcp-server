@@ -325,6 +325,63 @@ public interface IMcpClient : IAsyncDisposable
 
     #endregion
 
+    #region Datadog Symbols
+
+    /// <summary>
+    /// Downloads Datadog.Trace symbols from Azure Pipelines for a specific commit.
+    /// </summary>
+    /// <param name="sessionId">The session ID.</param>
+    /// <param name="userId">The user ID that owns the session.</param>
+    /// <param name="commitSha">The commit SHA from the Datadog.Trace assembly.</param>
+    /// <param name="targetFramework">Optional target framework (auto-detected if not specified).</param>
+    /// <param name="loadIntoDebugger">Whether to load symbols into the debugger after download.</param>
+    /// <param name="buildId">Optional build ID to use directly (bypasses commit SHA lookup).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>JSON result with download status and loaded symbols.</returns>
+    Task<string> DownloadDatadogSymbolsAsync(
+        string sessionId,
+        string userId,
+        string commitSha,
+        string? targetFramework = null,
+        bool loadIntoDebugger = true,
+        int? buildId = null,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Lists available Datadog.Trace artifacts from Azure Pipelines for a commit.
+    /// </summary>
+    /// <param name="commitSha">The commit SHA to find the build for.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>JSON result with build info and available artifacts.</returns>
+    Task<string> ListDatadogArtifactsAsync(string commitSha, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the Datadog symbol download configuration and status.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>JSON with configuration information.</returns>
+    Task<string> GetDatadogSymbolsConfigAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Auto-detect and download Datadog.Trace symbols from the opened dump.
+    /// </summary>
+    /// <param name="sessionId">The session ID.</param>
+    /// <param name="userId">The user ID that owns the session.</param>
+    /// <param name="loadIntoDebugger">Whether to load symbols into the debugger after download.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>JSON result with download status and loaded symbols.</returns>
+    /// <remarks>
+    /// Scans the dump for Datadog assemblies, extracts commit SHA from InformationalVersion,
+    /// and downloads appropriate symbols from Azure Pipelines automatically.
+    /// </remarks>
+    Task<string> PrepareDatadogSymbolsAsync(
+        string sessionId,
+        string userId,
+        bool loadIntoDebugger = true,
+        CancellationToken cancellationToken = default);
+
+    #endregion
+
     #region Generic Tool Invocation
 
     /// <summary>

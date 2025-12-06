@@ -44,7 +44,7 @@ public static class HelpSystem
         ],
         ["files"] = [
             new("dumps", "<subcommand>", "Manage dump files (upload, list, info, delete)", ["dumps upload ./crash.dmp", "dumps list", "dumps info abc123", "dumps delete abc123"]),
-            new("symbols", "<subcommand>", "Manage symbol files (upload, list, servers, add, reload, clear)", ["symbols upload ./app.pdb", "symbols upload ./symbols.zip", "symbols list", "symbols reload", "symbols clear"]),
+            new("symbols", "<subcommand>", "Manage symbol files (upload, list, servers, add, reload, clear, datadog)", ["symbols upload ./app.pdb", "symbols upload ./symbols.zip", "symbols list", "symbols reload", "symbols datadog download"]),
             new("stats", "", "Show server statistics", ["stats"])
         ],
         ["session"] = [

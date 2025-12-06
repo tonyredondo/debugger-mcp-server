@@ -4,12 +4,49 @@ using System.Text.Json.Serialization;
 namespace DebuggerMcp.SourceLink;
 
 /// <summary>
+/// Cache entry for a build lookup.
+/// </summary>
+public class CachedBuildEntry
+{
+    /// <summary>
+    /// Gets or sets when this entry was cached.
+    /// </summary>
+    [JsonPropertyName("cachedAt")]
+    public DateTime CachedAt { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the build info (null if not found).
+    /// </summary>
+    [JsonPropertyName("build")]
+    public AzurePipelinesBuildInfo? Build { get; set; }
+}
+
+/// <summary>
+/// Cache entry for artifacts lookup.
+/// </summary>
+public class CachedArtifactsEntry
+{
+    /// <summary>
+    /// Gets or sets when this entry was cached.
+    /// </summary>
+    [JsonPropertyName("cachedAt")]
+    public DateTime CachedAt { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the artifacts list.
+    /// </summary>
+    [JsonPropertyName("artifacts")]
+    public List<AzurePipelinesArtifact> Artifacts { get; set; } = new();
+}
+
+/// <summary>
 /// Cache for Azure Pipelines build and artifact information.
 /// Persists to disk to avoid redundant API calls across sessions.
 /// </summary>
 public class AzurePipelinesCache
 {
     private const string CacheFileName = "azure_pipelines_cache.json";
+    private const int CacheExpirationHours = 1; // Cache entries expire after 1 hour
     
     /// <summary>
     /// Gets or sets when the cache was last updated.
@@ -18,18 +55,18 @@ public class AzurePipelinesCache
     public DateTime LastUpdated { get; set; }
     
     /// <summary>
-    /// Maps commit SHA to build info.
+    /// Maps commit SHA to build info with timestamp.
     /// Key format: "{organization}/{project}/{commitSha}"
     /// </summary>
     [JsonPropertyName("builds")]
-    public Dictionary<string, AzurePipelinesBuildInfo?> Builds { get; set; } = new();
+    public Dictionary<string, CachedBuildEntry>? Builds { get; set; } = new();
     
     /// <summary>
-    /// Maps build ID to artifact list.
+    /// Maps build ID to artifact list with timestamp.
     /// Key format: "{organization}/{project}/{buildId}"
     /// </summary>
     [JsonPropertyName("artifacts")]
-    public Dictionary<string, List<AzurePipelinesArtifact>> Artifacts { get; set; } = new();
+    public Dictionary<string, CachedArtifactsEntry>? Artifacts { get; set; } = new();
     
     /// <summary>
     /// Tracks which symbols have been downloaded.
@@ -37,7 +74,7 @@ public class AzurePipelinesCache
     /// Value: local directory path
     /// </summary>
     [JsonPropertyName("downloadedSymbols")]
-    public Dictionary<string, string> DownloadedSymbols { get; set; } = new();
+    public Dictionary<string, string>? DownloadedSymbols { get; set; } = new();
     
     /// <summary>
     /// Gets the cache key for a build lookup.
@@ -114,8 +151,26 @@ public class AzurePipelinesCache
     /// </summary>
     public bool TryGetBuild(string organization, string project, string commitSha, out AzurePipelinesBuildInfo? build)
     {
+        build = null;
+        
+        // Ensure dictionary exists (old cache format might not have it)
+        Builds ??= new();
+        
         var key = GetBuildCacheKey(organization, project, commitSha);
-        return Builds.TryGetValue(key, out build);
+        if (Builds.TryGetValue(key, out var entry) && entry != null)
+        {
+            // Check if entry is expired (default DateTime means corrupt/old cache format)
+            if (entry.CachedAt == default || entry.CachedAt.AddHours(CacheExpirationHours) < DateTime.UtcNow)
+            {
+                Builds.Remove(key);
+                return false;
+            }
+            
+            build = entry.Build;
+            return true;
+        }
+        
+        return false;
     }
     
     /// <summary>
@@ -123,8 +178,15 @@ public class AzurePipelinesCache
     /// </summary>
     public void SetBuild(string organization, string project, string commitSha, AzurePipelinesBuildInfo? build)
     {
+        // Ensure dictionary exists
+        Builds ??= new();
+        
         var key = GetBuildCacheKey(organization, project, commitSha);
-        Builds[key] = build;
+        Builds[key] = new CachedBuildEntry
+        {
+            CachedAt = DateTime.UtcNow,
+            Build = build
+        };
     }
     
     /// <summary>
@@ -132,8 +194,26 @@ public class AzurePipelinesCache
     /// </summary>
     public bool TryGetArtifacts(string organization, string project, int buildId, out List<AzurePipelinesArtifact>? artifacts)
     {
+        artifacts = null;
+        
+        // Ensure dictionary exists (old cache format might not have it)
+        Artifacts ??= new();
+        
         var key = GetArtifactCacheKey(organization, project, buildId);
-        return Artifacts.TryGetValue(key, out artifacts);
+        if (Artifacts.TryGetValue(key, out var entry) && entry != null)
+        {
+            // Check if entry is expired (default DateTime means corrupt/old cache format)
+            if (entry.CachedAt == default || entry.CachedAt.AddHours(CacheExpirationHours) < DateTime.UtcNow)
+            {
+                Artifacts.Remove(key);
+                return false;
+            }
+            
+            artifacts = entry.Artifacts;
+            return true;
+        }
+        
+        return false;
     }
     
     /// <summary>
@@ -141,8 +221,15 @@ public class AzurePipelinesCache
     /// </summary>
     public void SetArtifacts(string organization, string project, int buildId, List<AzurePipelinesArtifact> artifacts)
     {
+        // Ensure dictionary exists
+        Artifacts ??= new();
+        
         var key = GetArtifactCacheKey(organization, project, buildId);
-        Artifacts[key] = artifacts;
+        Artifacts[key] = new CachedArtifactsEntry
+        {
+            CachedAt = DateTime.UtcNow,
+            Artifacts = artifacts
+        };
     }
     
     /// <summary>
@@ -150,6 +237,11 @@ public class AzurePipelinesCache
     /// </summary>
     public bool HasDownloadedSymbols(string commitSha, string platformSuffix, out string? symbolDirectory)
     {
+        symbolDirectory = null;
+        
+        // Ensure dictionary exists
+        DownloadedSymbols ??= new();
+        
         var key = GetSymbolsCacheKey(commitSha, platformSuffix);
         if (DownloadedSymbols.TryGetValue(key, out symbolDirectory))
         {
@@ -170,6 +262,9 @@ public class AzurePipelinesCache
     /// </summary>
     public void SetDownloadedSymbols(string commitSha, string platformSuffix, string symbolDirectory)
     {
+        // Ensure dictionary exists
+        DownloadedSymbols ??= new();
+        
         var key = GetSymbolsCacheKey(commitSha, platformSuffix);
         DownloadedSymbols[key] = symbolDirectory;
     }
