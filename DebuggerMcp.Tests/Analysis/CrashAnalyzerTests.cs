@@ -597,7 +597,7 @@ STATUS_ACCESS_VIOLATION");
 
         // Assert
         Assert.True(result.Threads!.All!.Count >= 2);
-
+        
         var thread1 = result.Threads!.All!.FirstOrDefault(t => t.ThreadId.Contains("1 (tid: 0x1234)"));
         Assert.NotNull(thread1);
         Assert.Contains("main", thread1.ThreadId);

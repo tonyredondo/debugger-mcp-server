@@ -132,7 +132,7 @@ public class ReportTools(
         if (manager.IsSosLoaded)
         {
             Logger.LogInformation("[ReportTools] SOS is loaded, using .NET crash analyzer");
-            var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer);
+            var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
             result = await dotNetAnalyzer.AnalyzeDotNetCrashAsync();
         }
         else
@@ -271,7 +271,7 @@ public class ReportTools(
         if (manager.IsSosLoaded)
         {
             Logger.LogInformation("[ReportTools] SOS is loaded, using .NET crash analyzer for summary");
-            var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer);
+            var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
             result = await dotNetAnalyzer.AnalyzeDotNetCrashAsync();
         }
         else

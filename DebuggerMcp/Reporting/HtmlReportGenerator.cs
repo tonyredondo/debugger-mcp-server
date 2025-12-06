@@ -1026,7 +1026,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine("<div class=\"alert alert-warning\">⚠️ Analysis was aborted due to timeout</div>");
             }
         }
-        
+
         sb.AppendLine("</div>");
     }
 

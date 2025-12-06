@@ -337,9 +337,9 @@ ExceptionMessage: Object reference not set to an instance of an object";
     {
         var result = CreateInitializedResult();
         result.Exception = new ExceptionDetails
-        {
-            Type = "System.NullReferenceException",
-            Message = "Object reference not set"
+            {
+                Type = "System.NullReferenceException",
+                Message = "Object reference not set"
         };
 
         _analyzer.TestGenerateSummary(result);
@@ -373,11 +373,11 @@ ExceptionMessage: Object reference not set to an instance of an object";
     {
         var result = CreateInitializedResult();
         result.Memory!.LeakAnalysis = new LeakAnalysis
-        {
-            Detected = true,
-            TopConsumers = new List<MemoryConsumer>
             {
-                new() { TypeName = "System.String", Count = 1000, TotalSize = 50000 }
+                Detected = true,
+                TopConsumers = new List<MemoryConsumer>
+                {
+                    new() { TypeName = "System.String", Count = 1000, TotalSize = 50000 }
             }
         };
 
@@ -391,9 +391,9 @@ ExceptionMessage: Object reference not set to an instance of an object";
     {
         var result = CreateInitializedResult();
         result.Threads!.Deadlock = new DeadlockInfo
-        {
-            Detected = true,
-            InvolvedThreads = new List<string> { "Thread 1", "Thread 2" }
+            {
+                Detected = true,
+                InvolvedThreads = new List<string> { "Thread 1", "Thread 2" }
         };
 
         _analyzer.TestGenerateSummary(result);

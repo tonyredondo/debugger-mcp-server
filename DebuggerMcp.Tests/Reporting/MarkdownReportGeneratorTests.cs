@@ -281,9 +281,9 @@ public class MarkdownReportGeneratorTests
         analysis.Threads = new ThreadsInfo
         {
             All = new List<ThreadInfo>
-            {
-                new ThreadInfo { ThreadId = "1", State = "Running", TopFunction = "Main" },
-                new ThreadInfo { ThreadId = "2", State = "Waiting", TopFunction = "Sleep" }
+        {
+            new ThreadInfo { ThreadId = "1", State = "Running", TopFunction = "Main" },
+            new ThreadInfo { ThreadId = "2", State = "Waiting", TopFunction = "Sleep" }
             }
         };
         var options = new ReportOptions { IncludeThreadInfo = true, IncludeCharts = true };
@@ -305,7 +305,7 @@ public class MarkdownReportGeneratorTests
         analysis.Threads = new ThreadsInfo
         {
             All = Enumerable.Range(0, 50)
-                .Select(i => new ThreadInfo { ThreadId = i.ToString(), State = "Running" })
+            .Select(i => new ThreadInfo { ThreadId = i.ToString(), State = "Running" })
                 .ToList()
         };
         var options = new ReportOptions { IncludeThreadInfo = true, MaxThreadsToShow = 10 };
@@ -403,12 +403,12 @@ public class MarkdownReportGeneratorTests
         analysis.Memory = new MemoryInfo
         {
             LeakAnalysis = new LeakAnalysis
+        {
+            Detected = true,
+            EstimatedLeakedBytes = 10 * 1024 * 1024,
+            TopConsumers = new List<MemoryConsumer>
             {
-                Detected = true,
-                EstimatedLeakedBytes = 10 * 1024 * 1024,
-                TopConsumers = new List<MemoryConsumer>
-                {
-                    new MemoryConsumer { TypeName = "LeakyClass", Count = 1000, TotalSize = 5 * 1024 * 1024 }
+                new MemoryConsumer { TypeName = "LeakyClass", Count = 1000, TotalSize = 5 * 1024 * 1024 }
                 }
             }
         };
@@ -435,13 +435,13 @@ public class MarkdownReportGeneratorTests
         {
             All = new List<ThreadInfo>(),
             Deadlock = new DeadlockInfo
+        {
+            Detected = true,
+            InvolvedThreads = new List<string> { "1", "2" },
+            Locks = new List<LockInfo>
             {
-                Detected = true,
-                InvolvedThreads = new List<string> { "1", "2" },
-                Locks = new List<LockInfo>
-                {
-                    new LockInfo { Address = "0x12345678" },
-                    new LockInfo { Address = "0x87654321" }
+                new LockInfo { Address = "0x12345678" },
+                new LockInfo { Address = "0x87654321" }
                 }
             }
         };
@@ -604,9 +604,9 @@ public class MarkdownReportGeneratorTests
         analysis.Summary = new AnalysisSummary
         {
             Recommendations = new List<string>
-            {
-                "Check for null references",
-                "Review memory allocation"
+        {
+            "Check for null references",
+            "Review memory allocation"
             }
         };
         var options = new ReportOptions { IncludeRecommendations = true };

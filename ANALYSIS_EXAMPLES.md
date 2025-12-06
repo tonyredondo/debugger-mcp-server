@@ -89,7 +89,7 @@ analyze_crash(sessionId="session-123", userId="user1", includeWatches=true)
     "message": "The thread tried to read from or write to a virtual address for which it does not have the appropriate access.",
     "address": "0x00007ff812345678",
     "stackTrace": [
-      {
+    {
         "frameNumber": 0,
         "module": "MyApp",
         "function": "CrashingFunction",
@@ -143,7 +143,7 @@ analyze_crash(sessionId="session-123", userId="user1", includeWatches=true)
         "isFaulting": true,
         "topFunction": "MyApp!CrashingFunction+0x42",
         "callStack": [
-          {
+    {
             "frameNumber": 0,
             "instructionPointer": "0x00007ff812345678",
             "module": "MyApp",
@@ -154,8 +154,8 @@ analyze_crash(sessionId="session-123", userId="user1", includeWatches=true)
             "sourceUrl": "https://github.com/myorg/myapp/blob/v1.2.3/processor.cpp#L42",
             "sourceProvider": "GitHub",
             "isManaged": false
-          }
-        ],
+    }
+  ],
         "managedThreadId": null,
         "osThreadId": "1234",
         "gcMode": null
@@ -307,7 +307,7 @@ analyze_dot_net_crash(sessionId="session-123", userId="user1", deepAnalysis=true
     "hasInnerException": false,
     "nestedExceptionCount": 0,
     "stackTrace": [
-      {
+    {
         "frameNumber": 0,
         "module": "MyApp",
         "function": "MyApp.Services.UserService.GetUser(Int32)",
@@ -373,7 +373,7 @@ analyze_dot_net_crash(sessionId="session-123", userId="user1", deepAnalysis=true
       "hasJitCompiler": true,
       "indicators": []
     }
-  },
+    },
   "threads": {
     "summary": {
       "total": 15,
@@ -382,7 +382,7 @@ analyze_dot_net_crash(sessionId="session-123", userId="user1", deepAnalysis=true
       "pending": 0,
       "dead": 0,
       "finalizerQueueLength": 150
-    },
+  },
     "all": [
       {
         "threadId": "0 (1234)",

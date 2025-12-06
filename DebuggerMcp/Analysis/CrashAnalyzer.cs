@@ -36,7 +36,7 @@ public class CrashAnalyzer
     public virtual async Task<CrashAnalysisResult> AnalyzeCrashAsync()
     {
         var result = new CrashAnalysisResult();
-        
+
         // Initialize new hierarchical structures
         InitializeNewStructures(result);
 
@@ -1377,7 +1377,7 @@ public class CrashAnalyzer
         result.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>(), Summary = new ThreadSummary() };
         result.Threads.All ??= new List<ThreadInfo>();
         result.Threads.Summary ??= new ThreadSummary();
-        
+
         // Count total frames across all threads
         var threads = result.Threads.All;
         var totalFrames = threads.Sum(t => t.CallStack.Count);

@@ -355,11 +355,11 @@ public class ClrMdAnalyzer : IDisposable
     /// Decodes AssemblyMetadataAttribute which has two string params (key, value).
     /// </summary>
     private (string? Value, string? Key) DecodeKeyValueString(ref BlobReader blob)
-    {
-        var key = ReadString(ref blob);
-        var value = ReadString(ref blob);
-        return (value, key);
-    }
+            {
+                var key = ReadString(ref blob);
+                var value = ReadString(ref blob);
+                return (value, key);
+            }
 
     /// <summary>
     /// Decodes DebuggableAttribute(DebuggingModes modes) - int32 enum flags.
@@ -375,7 +375,7 @@ public class ClrMdAnalyzer : IDisposable
     }
 
     private (string? Value, string? Key) DecodeDebuggable(ref BlobReader blob)
-    {
+            {
         // DebuggableAttribute has two constructors:
         // 1. DebuggableAttribute(DebuggingModes modes) - 4 bytes (int32 enum) - modern, handled here
         // 2. DebuggableAttribute(bool, bool) - 2 bytes - legacy (.NET Framework), returns <binary>
@@ -529,8 +529,8 @@ public class ClrMdAnalyzer : IDisposable
     /// </summary>
     private (string? Value, string? Key) DecodeStringAttribute(ref BlobReader blob)
     {
-        var value = ReadString(ref blob);
-        return (value, null);
+                var value = ReadString(ref blob);
+                return (value, null);
     }
 
     /// <summary>
@@ -556,10 +556,10 @@ public class ClrMdAnalyzer : IDisposable
                         var displayName = ReadString(ref blob);
                         if (!string.IsNullOrEmpty(displayName))
                             return ($"{frameworkName} ({displayName})", null);
-                    }
-                }
-                catch
-                {
+            }
+        }
+        catch
+        {
                     // Ignore parsing errors for optional part
                 }
             }

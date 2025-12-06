@@ -17,7 +17,7 @@ public class CrashAnalysisResult
     [JsonPropertyName("metadata")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CrashReportMetadata? Metadata { get; set; }
-
+    
     /// <summary>
     /// Analysis summary with crash type, severity, and recommendations.
     /// </summary>
@@ -932,6 +932,43 @@ public class AssemblyVersionInfo
     [JsonPropertyName("commitMessage")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CommitMessage { get; set; }
+    
+    // === Azure Pipelines metadata (for Datadog assemblies) ===
+    
+    /// <summary>
+    /// Gets or sets the Azure Pipelines build ID that produced this assembly.
+    /// </summary>
+    [JsonPropertyName("azurePipelinesBuildId")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? AzurePipelinesBuildId { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the Azure Pipelines build number (version string).
+    /// </summary>
+    [JsonPropertyName("azurePipelinesBuildNumber")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AzurePipelinesBuildNumber { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the URL to the Azure Pipelines build.
+    /// </summary>
+    [JsonPropertyName("azurePipelinesBuildUrl")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? AzurePipelinesBuildUrl { get; set; }
+    
+    /// <summary>
+    /// Gets or sets whether symbols were downloaded for this assembly.
+    /// </summary>
+    [JsonPropertyName("symbolsDownloaded")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SymbolsDownloaded { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the local directory where symbols were downloaded.
+    /// </summary>
+    [JsonPropertyName("symbolsDirectory")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SymbolsDirectory { get; set; }
 }
 
 /// <summary>

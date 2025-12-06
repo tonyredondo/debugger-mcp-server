@@ -307,8 +307,8 @@ Ready for finalization 10 objects";
         result.Memory!.LeakAnalysis!.Severity = "High";
         result.Memory!.LeakAnalysis!.TotalHeapBytes = 500000;
         result.Memory!.LeakAnalysis!.TopConsumers = new List<MemoryConsumer>
-        {
-            new() { TypeName = "System.String", Count = 10000, TotalSize = 500000 }
+                {
+                    new() { TypeName = "System.String", Count = 10000, TotalSize = 500000 }
         };
 
         _analyzer.TestUpdateDotNetSummary(result);
@@ -343,7 +343,7 @@ Ready for finalization 10 objects";
     {
         var result = CreateInitializedResult();
         // All hierarchical properties are initialized by CreateInitializedResult()
-        
+
         _analyzer.TestUpdateDotNetSummary(result);
     }
 }

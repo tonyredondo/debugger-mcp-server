@@ -4,6 +4,7 @@ using System.Linq;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using DebuggerMcp.SourceLink;
+using Microsoft.Extensions.Logging;
 
 namespace DebuggerMcp.Analysis;
 
@@ -14,6 +15,7 @@ namespace DebuggerMcp.Analysis;
 public class DotNetCrashAnalyzer : CrashAnalyzer
 {
     private readonly ClrMdAnalyzer? _clrMdAnalyzer;
+    private readonly ILogger? _logger;
     
     /// <summary>
     /// Initializes a new instance of the <see cref="DotNetCrashAnalyzer"/> class.
@@ -21,13 +23,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <param name="debuggerManager">The debugger manager to use.</param>
     /// <param name="sourceLinkResolver">Optional Source Link resolver for resolving source URLs.</param>
     /// <param name="clrMdAnalyzer">Optional ClrMD analyzer for assembly metadata enrichment.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
     public DotNetCrashAnalyzer(
         IDebuggerManager debuggerManager, 
         SourceLinkResolver? sourceLinkResolver = null,
-        ClrMdAnalyzer? clrMdAnalyzer = null) 
+        ClrMdAnalyzer? clrMdAnalyzer = null,
+        ILogger? logger = null) 
         : base(debuggerManager, sourceLinkResolver)
     {
         _clrMdAnalyzer = clrMdAnalyzer;
+        _logger = logger;
     }
 
     /// <summary>
@@ -79,6 +84,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <returns>A crash analysis result with .NET specific information.</returns>
     public async Task<CrashAnalysisResult> AnalyzeDotNetCrashAsync()
     {
+        return await AnalyzeDotNetCrashAsync(symbolsOutputDirectory: null);
+    }
+    
+    /// <summary>
+    /// Performs .NET specific crash analysis with optional Datadog symbol download.
+    /// </summary>
+    /// <param name="symbolsOutputDirectory">Optional directory for storing downloaded symbols.</param>
+    /// <returns>A crash analysis result with .NET specific information.</returns>
+    public async Task<CrashAnalysisResult> AnalyzeDotNetCrashAsync(string? symbolsOutputDirectory)
+    {
         // Command caching is automatically enabled when dump is opened
         // All commands benefit from caching for the entire session
         
@@ -86,6 +101,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         try
         {
             result = await AnalyzeCrashAsync(); // Base analysis first (caching already enabled)
+            
+            // === Datadog Symbol Download ===
+            // Download Datadog.Trace symbols BEFORE detailed stack analysis for best stack traces.
+            // This uses the platform info from base analysis to download correct artifacts.
+            await TryDownloadDatadogSymbolsAsync(result, symbolsOutputDirectory);
             
             // Continue with .NET specific analysis
             // Get CLR version
@@ -4639,6 +4659,120 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         var dumpStoragePath = Configuration.EnvironmentConfig.GetDumpStoragePath();
         return Path.Combine(dumpStoragePath, ".github_cache");
+    }
+    
+    /// <summary>
+    /// Attempts to download and load Datadog.Trace symbols from Azure Pipelines.
+    /// This is called early in analysis to ensure best stack traces.
+    /// Non-fatal: failures are logged but don't stop analysis.
+    /// </summary>
+    /// <param name="result">The crash analysis result with platform info.</param>
+    /// <param name="symbolsOutputDirectory">Optional output directory, defaults to dump symbols folder.</param>
+    private async Task TryDownloadDatadogSymbolsAsync(CrashAnalysisResult result, string? symbolsOutputDirectory)
+    {
+        // Check if feature is enabled
+        if (!DatadogTraceSymbolsConfig.IsEnabled())
+        {
+            _logger?.LogDebug("Datadog symbol download is disabled");
+            return;
+        }
+        
+        // Check if we have platform info and ClrMD analyzer
+        var platform = result.Environment?.Platform;
+        if (platform == null || _clrMdAnalyzer == null || !_clrMdAnalyzer.IsOpen)
+        {
+            _logger?.LogDebug("Skipping Datadog symbol download: platform={Platform}, clrMdOpen={ClrMdOpen}",
+                platform?.Os ?? "null", _clrMdAnalyzer?.IsOpen ?? false);
+            return;
+        }
+        
+        _logger?.LogInformation("Starting Datadog symbol download for {Os}/{Arch}{Alpine}",
+            platform.Os, platform.Architecture, platform.IsAlpine == true ? " (Alpine)" : "");
+        
+        try
+        {
+            // Create service and prepare symbols with logger
+            var symbolService = new DatadogSymbolService(_clrMdAnalyzer, _logger);
+            
+            // Default output directory to dump storage
+            var outputDir = symbolsOutputDirectory;
+            if (string.IsNullOrEmpty(outputDir))
+            {
+                outputDir = Configuration.EnvironmentConfig.GetDumpStoragePath();
+            }
+            
+            var prepResult = await symbolService.PrepareSymbolsAsync(
+                platform,
+                outputDir,
+                cmd => _debuggerManager.ExecuteCommand(cmd));
+            
+            // Store result in analysis for reference
+            if (prepResult.Success && prepResult.DatadogAssemblies.Count > 0)
+            {
+                _logger?.LogInformation("Datadog symbols prepared: {Message}", prepResult.Message);
+                
+                // Add metadata to the result indicating symbols were loaded
+                result.RawCommands ??= new Dictionary<string, string>();
+                result.RawCommands["__datadog_symbols_status"] = prepResult.Message ?? "Datadog symbols loaded";
+                
+                // Add build URL if available
+                if (prepResult.DownloadResult?.BuildUrl != null)
+                {
+                    result.RawCommands["__datadog_build_url"] = prepResult.DownloadResult.BuildUrl;
+                }
+                
+                // Mark Datadog assemblies with symbol download info
+                EnrichDatadogAssembliesWithSymbolInfo(result, prepResult);
+            }
+            else if (!string.IsNullOrEmpty(prepResult.Message))
+            {
+                _logger?.LogDebug("Datadog symbol preparation: {Message}", prepResult.Message);
+            }
+        }
+        catch (Exception ex)
+        {
+            // Log but don't fail - symbol download is optional
+            _logger?.LogWarning(ex, "Failed to download Datadog symbols (continuing without)");
+        }
+    }
+    
+    /// <summary>
+    /// Enriches Datadog assemblies in the result with Azure Pipelines build and symbol info.
+    /// </summary>
+    /// <param name="result">The crash analysis result containing assemblies.</param>
+    /// <param name="prepResult">The symbol preparation result with build info.</param>
+    private static void EnrichDatadogAssembliesWithSymbolInfo(
+        CrashAnalysisResult result, 
+        DatadogSymbolPreparationResult prepResult)
+    {
+        var assemblies = result.Assemblies?.Items;
+        if (assemblies == null || assemblies.Count == 0)
+            return;
+        
+        // Get build info from download result
+        var downloadResult = prepResult.DownloadResult;
+        var buildId = downloadResult?.BuildId;
+        var buildNumber = downloadResult?.BuildNumber;
+        var buildUrl = downloadResult?.BuildUrl;
+        var symbolDirectory = downloadResult?.MergeResult?.SymbolDirectory;
+        
+        // Get the set of Datadog assembly names that were found
+        var datadogAssemblyNames = new HashSet<string>(
+            prepResult.DatadogAssemblies.Select(a => a.Name),
+            StringComparer.OrdinalIgnoreCase);
+        
+        // Enrich matching assemblies
+        foreach (var assembly in assemblies)
+        {
+            if (!datadogAssemblyNames.Contains(assembly.Name))
+                continue;
+            
+            assembly.AzurePipelinesBuildId = buildId;
+            assembly.AzurePipelinesBuildNumber = buildNumber;
+            assembly.AzurePipelinesBuildUrl = buildUrl;
+            assembly.SymbolsDownloaded = prepResult.SymbolsLoaded;
+            assembly.SymbolsDirectory = symbolDirectory;
+        }
     }
     
     /// <summary>

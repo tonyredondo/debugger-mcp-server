@@ -13,7 +13,7 @@ public class ReportGeneratorTests
         {
             Summary = new AnalysisSummary
             {
-                CrashType = "Access Violation",
+            CrashType = "Access Violation",
                 Description = "The application crashed due to a null pointer dereference.",
                 Recommendations = new List<string>
                 {
@@ -31,22 +31,22 @@ public class ReportGeneratorTests
             Threads = new ThreadsInfo
             {
                 All = new List<ThreadInfo>
-                {
-                    new() 
-                    { 
-                        ThreadId = "1", 
-                        State = "Running", 
-                        TopFunction = "myapp!DoSomething",
-                        IsFaulting = true,
-                        CallStack = new List<StackFrame>
-                        {
-                            new() { Module = "myapp", Function = "DoSomething" },
-                            new() { Module = "myapp", Function = "ProcessData" },
-                            new() { Module = "ntdll", Function = "RtlUserThreadStart" }
-                        }
-                    },
-                    new() { ThreadId = "2", State = "Waiting", TopFunction = "ntdll!NtWaitForSingleObject" },
-                    new() { ThreadId = "3", State = "Waiting", TopFunction = "kernel32!SleepEx" }
+            {
+                new() 
+                { 
+                    ThreadId = "1", 
+                    State = "Running", 
+                    TopFunction = "myapp!DoSomething",
+                    IsFaulting = true,
+            CallStack = new List<StackFrame>
+            {
+                new() { Module = "myapp", Function = "DoSomething" },
+                new() { Module = "myapp", Function = "ProcessData" },
+                new() { Module = "ntdll", Function = "RtlUserThreadStart" }
+                    }
+            },
+                new() { ThreadId = "2", State = "Waiting", TopFunction = "ntdll!NtWaitForSingleObject" },
+                new() { ThreadId = "3", State = "Waiting", TopFunction = "kernel32!SleepEx" }
                 },
                 Summary = new ThreadSummary { FinalizerQueueLength = 150 }
             },
@@ -58,15 +58,15 @@ public class ReportGeneratorTests
             Memory = new MemoryInfo
             {
                 LeakAnalysis = new LeakAnalysis
+            {
+                Detected = true,
+                EstimatedLeakedBytes = 1024 * 1024 * 50, // 50 MB
+                TopConsumers = new List<MemoryConsumer>
                 {
-                    Detected = true,
-                    EstimatedLeakedBytes = 1024 * 1024 * 50, // 50 MB
-                    TopConsumers = new List<MemoryConsumer>
-                    {
-                        new() { TypeName = "System.String", Count = 10000, TotalSize = 1024 * 1024 * 20 },
-                        new() { TypeName = "System.Byte[]", Count = 500, TotalSize = 1024 * 1024 * 15 },
-                        new() { TypeName = "MyApp.DataObject", Count = 1000, TotalSize = 1024 * 1024 * 10 }
-                    }
+                    new() { TypeName = "System.String", Count = 10000, TotalSize = 1024 * 1024 * 20 },
+                    new() { TypeName = "System.Byte[]", Count = 500, TotalSize = 1024 * 1024 * 15 },
+                    new() { TypeName = "MyApp.DataObject", Count = 1000, TotalSize = 1024 * 1024 * 10 }
+                }
                 }
             },
             Environment = new EnvironmentInfo

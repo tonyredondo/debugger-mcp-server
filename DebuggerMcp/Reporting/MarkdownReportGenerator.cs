@@ -918,7 +918,7 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine("> ⚠️ Analysis was aborted due to timeout");
             }
         }
-        
+
         sb.AppendLine();
     }
 

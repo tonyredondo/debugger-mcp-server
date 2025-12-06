@@ -96,7 +96,7 @@ public class AnalysisTools(
 
         // Use DotNetCrashAnalyzer for more complete analysis (CLR info, managed exceptions,
         // heap stats, interleaved call stacks from clrstack -f -r -all, async deadlock detection)
-        var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer);
+        var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
         var result = await analyzer.AnalyzeDotNetCrashAsync();
         
         // Run security analysis and include in results
@@ -200,7 +200,7 @@ public class AnalysisTools(
         }
 
         // Create .NET analyzer and perform analysis
-        var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer);
+        var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
         var result = await analyzer.AnalyzeDotNetCrashAsync();
         
         // Run security analysis and include in results
