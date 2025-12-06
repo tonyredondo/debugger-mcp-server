@@ -169,12 +169,14 @@ public class DatadogSymbolService
     /// <param name="platform">Platform information from the dump.</param>
     /// <param name="symbolsOutputDirectory">Directory to store downloaded symbols.</param>
     /// <param name="executeCommand">Function to execute debugger commands.</param>
+    /// <param name="loadIntoDebugger">Whether to load symbols into the debugger after download.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Preparation result.</returns>
     public async Task<DatadogSymbolPreparationResult> PrepareSymbolsAsync(
         PlatformInfo platform,
         string symbolsOutputDirectory,
         Func<string, string> executeCommand,
+        bool loadIntoDebugger = true,
         CancellationToken ct = default)
     {
         var result = new DatadogSymbolPreparationResult();
@@ -247,7 +249,7 @@ public class DatadogSymbolService
         }
         
         // Phase C: Load symbols into debugger
-        if (result.DownloadResult?.MergeResult != null)
+        if (loadIntoDebugger && result.DownloadResult?.MergeResult != null)
         {
             try
             {
@@ -269,6 +271,10 @@ public class DatadogSymbolService
                 result.Message = $"Symbol loading error: {ex.Message}";
                 // Continue - download succeeded even if loading failed
             }
+        }
+        else if (!loadIntoDebugger)
+        {
+            _logger?.LogDebug("Skipping symbol loading as requested");
         }
         
         result.Success = result.DownloadResult?.Success == true;

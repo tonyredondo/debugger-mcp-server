@@ -173,6 +173,112 @@ public class DatadogSymbolsTools(
     }
 
     /// <summary>
+    /// Automatically downloads Datadog.Trace symbols by scanning the dump for assemblies.
+    /// </summary>
+    /// <param name="sessionId">The session ID.</param>
+    /// <param name="userId">The user ID that owns the session.</param>
+    /// <param name="loadIntoDebugger">Whether to load symbols into the debugger (default: true).</param>
+    /// <returns>JSON result with download status and loaded symbols.</returns>
+    /// <remarks>
+    /// This tool automatically scans the dump for Datadog assemblies, extracts the commit SHA
+    /// from InformationalVersion, and downloads the appropriate symbols from Azure Pipelines.
+    /// 
+    /// This is the recommended way to download Datadog symbols when you have a dump open,
+    /// as it handles all the detection automatically.
+    /// </remarks>
+    [McpServerTool, Description("Auto-detect and download Datadog.Trace symbols from the opened dump")]
+    public async Task<string> PrepareDatadogSymbols(
+        [Description("Session ID from CreateSession")] string sessionId,
+        [Description("User ID that owns the session")] string userId,
+        [Description("Whether to load symbols into the debugger after download (default: true)")] bool loadIntoDebugger = true)
+    {
+        // Validate input parameters
+        ValidateSessionId(sessionId);
+        var sanitizedUserId = SanitizeUserId(userId);
+
+        // Check if feature is enabled
+        if (!DatadogTraceSymbolsConfig.IsEnabled())
+        {
+            return JsonSerializer.Serialize(new
+            {
+                success = false,
+                error = "Datadog symbol download is disabled. Set DATADOG_TRACE_SYMBOLS_ENABLED=true to enable."
+            }, JsonOptions);
+        }
+
+        // Get the session and debugger manager
+        var session = GetSessionInfo(sessionId, sanitizedUserId);
+        var debuggerManager = GetSessionManager(sessionId, sanitizedUserId);
+
+        // Detect platform from the dump
+        PlatformInfo platform;
+        try
+        {
+            var platformOutput = debuggerManager.ExecuteCommand("clrmodules");
+            platform = DetectPlatformFromSession(session, platformOutput);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Failed to detect platform, using defaults");
+            platform = new PlatformInfo
+            {
+                Os = Environment.OSVersion.Platform == PlatformID.Win32NT ? "Windows" : "Linux",
+                Architecture = Environment.Is64BitProcess ? "x64" : "x86"
+            };
+        }
+
+        // Build output directory
+        var dumpStorage = SessionManager.GetDumpStoragePath();
+        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}");
+
+        // Create the symbol service
+        var symbolService = new DatadogSymbolService(session.ClrMdAnalyzer, Logger);
+
+        // Prepare symbols (this handles scanning, downloading, and loading)
+        var prepResult = await symbolService.PrepareSymbolsAsync(
+            platform,
+            symbolsDir,
+            debuggerManager.ExecuteCommand,
+            loadIntoDebugger);
+
+        // Build response
+        var response = new
+        {
+            success = prepResult.Success,
+            message = prepResult.Message,
+            datadogAssemblies = prepResult.DatadogAssemblies.Select(a => new
+            {
+                name = a.Name,
+                informationalVersion = a.InformationalVersion,
+                commitSha = a.CommitSha != null ? DatadogTraceSymbolsConfig.GetShortSha(a.CommitSha) : null,
+                targetFramework = a.TargetFramework
+            }).ToList(),
+            downloadResult = prepResult.DownloadResult != null ? new
+            {
+                buildId = prepResult.DownloadResult.BuildId,
+                buildNumber = prepResult.DownloadResult.BuildNumber,
+                buildUrl = prepResult.DownloadResult.BuildUrl,
+                downloadedArtifacts = prepResult.DownloadResult.DownloadedArtifacts,
+                filesExtracted = prepResult.DownloadResult.MergeResult?.TotalFilesExtracted ?? 0
+            } : null,
+            symbolsLoaded = prepResult.LoadResult != null ? new
+            {
+                nativeSymbolsLoaded = prepResult.LoadResult.NativeSymbolsLoaded.Count,
+                managedSymbolPaths = prepResult.LoadResult.ManagedSymbolPaths.Count,
+                commandsExecuted = prepResult.LoadResult.CommandsExecuted.Count
+            } : null,
+            platform = new
+            {
+                os = platform.Os,
+                architecture = platform.Architecture,
+                isAlpine = platform.IsAlpine
+            }
+        };
+
+        return JsonSerializer.Serialize(response, JsonOptions);
+    }
+
+    /// <summary>
     /// Lists available artifacts from an Azure Pipelines build for Datadog.Trace.
     /// </summary>
     /// <param name="commitSha">The commit SHA to find the build for.</param>

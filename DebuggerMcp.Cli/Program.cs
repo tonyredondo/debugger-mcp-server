@@ -1129,6 +1129,15 @@ public class Program
                     output.Markup("  [green]add[/] <url>             Add symbol server URL to session");
                     output.Markup("  [green]reload[/]               Reload symbols into running debugger");
                     output.Markup("  [green]clear[/] [[<dumpId>]]     Clear symbol cache for a dump");
+                    output.Markup("  [green]datadog[/] <subcommand>  Download Datadog.Trace symbols from Azure Pipelines");
+                    output.WriteLine();
+                    output.Markup("[bold]DATADOG SYMBOLS[/] (for datadog)");
+                    output.Markup("  [dim]Download debug symbols for Datadog.Trace assemblies from Azure Pipelines.[/]");
+                    output.Markup("  [dim]When no SHA is provided, assemblies are auto-detected from the opened dump.[/]");
+                    output.Markup("  [cyan]datadog download[/]          Auto-detect and download symbols from dump");
+                    output.Markup("  [cyan]datadog download <sha>[/]    Download symbols for a specific commit");
+                    output.Markup("  [cyan]datadog list <sha>[/]        List available artifacts for a commit");
+                    output.Markup("  [cyan]datadog config[/]            Show configuration and status");
                     output.WriteLine();
                     output.Markup("[bold]ZIP ARCHIVE SUPPORT[/] (for upload)");
                     output.Markup("  [dim]Upload a .zip file to extract symbols preserving directory structure.[/]");
@@ -1162,6 +1171,10 @@ public class Program
                     output.Markup("  [yellow]symbols reload[/]                  Reload symbols into debugger");
                     output.Markup("  [yellow]symbols clear[/]                   Clear cache for current dump");
                     output.Markup("  [yellow]symbols clear abc123[/]            Clear cache for specific dump");
+                    output.Markup("  [yellow]symbols datadog download[/]            Auto-detect and download");
+                    output.Markup("  [yellow]symbols datadog download 14fd3a2f[/]  Download for specific commit");
+                    output.Markup("  [yellow]symbols datadog list 14fd3a2f[/]      List available artifacts");
+                    output.Markup("  [yellow]symbols datadog config[/]             Show configuration");
                     break;
 
                 case "stats":
@@ -2601,9 +2614,14 @@ public class Program
                 await HandleSymbolReloadAsync(output, state, mcpClient);
                 break;
 
+            case "datadog":
+            case "dd":
+                await HandleDatadogSymbolsAsync(subArgs, output, state, mcpClient);
+                break;
+
             default:
                 output.Error($"Unknown subcommand: {subcommand}");
-                output.Dim("Available subcommands: upload, list, servers, add, clear, reload");
+                output.Dim("Available subcommands: upload, list, servers, add, clear, reload, datadog");
                 break;
         }
     }
@@ -3277,6 +3295,427 @@ public class Program
         catch (Exception ex)
         {
             output.Error($"Failed to reload symbols: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles the symbols datadog subcommand for downloading Datadog.Trace symbols.
+    /// </summary>
+    private static async Task HandleDatadogSymbolsAsync(
+        string[] args,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient? mcpClient)
+    {
+        if (mcpClient == null || !mcpClient.IsConnected)
+        {
+            output.Error("MCP not connected. Connect to a server first.");
+            return;
+        }
+
+        // Parse subcommand
+        var subcommand = args.Length > 0 ? args[0].ToLowerInvariant() : "download";
+        var subArgs = args.Skip(1).ToArray();
+
+        switch (subcommand)
+        {
+            case "download":
+            case "dl":
+                await HandleDatadogDownloadAsync(subArgs, output, state, mcpClient);
+                break;
+
+            case "list":
+            case "ls":
+                await HandleDatadogListAsync(subArgs, output, mcpClient);
+                break;
+
+            case "config":
+            case "status":
+                await HandleDatadogConfigAsync(output, mcpClient);
+                break;
+
+            default:
+                // If it looks like a commit SHA, treat it as download
+                if (subcommand.Length >= 7 && subcommand.All(c => "0123456789abcdef".Contains(c)))
+                {
+                    await HandleDatadogDownloadAsync(new[] { subcommand }.Concat(subArgs).ToArray(), output, state, mcpClient);
+                }
+                else
+                {
+                    output.Error($"Unknown datadog subcommand: {subcommand}");
+                    output.Dim("Available: download, list, config");
+                    output.Dim("Usage: symbols datadog download <commitSha>");
+                    output.Dim("       symbols datadog list <commitSha>");
+                    output.Dim("       symbols datadog config");
+                }
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Handles downloading Datadog symbols for a specific commit.
+    /// </summary>
+    private static async Task HandleDatadogDownloadAsync(
+        string[] args,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        if (string.IsNullOrEmpty(state.SessionId))
+        {
+            output.Error("No active session. Open a dump first with 'open <dumpId>'.");
+            return;
+        }
+
+        // Parse arguments
+        string? commitSha = null;
+        string? targetFramework = null;
+        var loadIntoDebugger = true;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--tfm" && i + 1 < args.Length)
+            {
+                targetFramework = args[++i];
+            }
+            else if (args[i] == "--no-load")
+            {
+                loadIntoDebugger = false;
+            }
+            else if (!args[i].StartsWith("-") && commitSha == null)
+            {
+                commitSha = args[i];
+            }
+        }
+
+        // If no commit SHA provided, use auto-detection from dump
+        if (string.IsNullOrEmpty(commitSha))
+        {
+            output.Info("Auto-detecting Datadog assemblies from dump...");
+
+            try
+            {
+                var result = await output.WithSpinnerAsync(
+                    "Scanning dump and downloading Datadog symbols...",
+                    () => mcpClient.PrepareDatadogSymbolsAsync(
+                        state.SessionId!,
+                        state.Settings.UserId,
+                        loadIntoDebugger));
+
+                if (IsErrorResult(result))
+                {
+                    output.Error(result);
+                    return;
+                }
+
+                // Pretty print the auto-detection result
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(result);
+                    var root = doc.RootElement;
+
+                    // Show detected assemblies
+                    if (root.TryGetProperty("datadogAssemblies", out var assemblies) && 
+                        assemblies.ValueKind == System.Text.Json.JsonValueKind.Array &&
+                        assemblies.GetArrayLength() > 0)
+                    {
+                        output.Success($"Found {assemblies.GetArrayLength()} Datadog assemblies");
+                        foreach (var asm in assemblies.EnumerateArray())
+                        {
+                            var name = asm.TryGetProperty("name", out var n) ? n.GetString() : "?";
+                            var sha = asm.TryGetProperty("commitSha", out var s) ? s.GetString() : null;
+                            output.Dim($"  {name} ({sha ?? "no commit SHA"})");
+                        }
+                    }
+                    else if (root.TryGetProperty("message", out var msg))
+                    {
+                        output.Info(msg.GetString() ?? "");
+                        return;
+                    }
+
+                    // Show download result
+                    if (root.TryGetProperty("downloadResult", out var dl) && 
+                        dl.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        output.Success("Symbols downloaded!");
+                        if (dl.TryGetProperty("buildNumber", out var buildNum))
+                            output.KeyValue("Build", buildNum.GetString() ?? "");
+                        if (dl.TryGetProperty("buildId", out var buildId))
+                            output.KeyValue("Build ID", buildId.GetInt32().ToString());
+                        if (dl.TryGetProperty("downloadedArtifacts", out var artifacts) && 
+                            artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
+                        if (dl.TryGetProperty("filesExtracted", out var files))
+                            output.KeyValue("Files Extracted", files.GetInt32().ToString());
+                        if (dl.TryGetProperty("buildUrl", out var url))
+                            output.Dim($"Build URL: {url.GetString()}");
+                    }
+
+                    // Show load result
+                    if (root.TryGetProperty("symbolsLoaded", out var loaded) && 
+                        loaded.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        if (loaded.TryGetProperty("nativeSymbolsLoaded", out var native))
+                            output.KeyValue("Native Symbols Loaded", native.GetInt32().ToString());
+                        if (loaded.TryGetProperty("managedSymbolPaths", out var managed))
+                            output.KeyValue("Managed Symbol Paths", managed.GetInt32().ToString());
+                    }
+                }
+                catch
+                {
+                    // Fall back to raw output
+                    Console.WriteLine(result);
+                }
+
+                return;
+            }
+            catch (McpClientException ex)
+            {
+                output.Error($"Failed to download Datadog symbols: {ex.Message}");
+                return;
+            }
+            catch (Exception ex)
+            {
+                output.Error($"Failed to download Datadog symbols: {ex.Message}");
+                return;
+            }
+        }
+
+        // Manual mode with explicit commit SHA
+        output.Info($"Downloading Datadog symbols for commit {commitSha[..Math.Min(8, commitSha.Length)]}...");
+        if (!string.IsNullOrEmpty(targetFramework))
+        {
+            output.Dim($"Target framework: {targetFramework}");
+        }
+
+        try
+        {
+            var result = await output.WithSpinnerAsync(
+                "Downloading Datadog symbols from Azure Pipelines...",
+                () => mcpClient.DownloadDatadogSymbolsAsync(
+                    state.SessionId!,
+                    state.Settings.UserId,
+                    commitSha,
+                    targetFramework,
+                    loadIntoDebugger));
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+            }
+            else
+            {
+                output.Success("Datadog symbols downloaded!");
+                
+                // Pretty print the JSON result
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(result);
+                    var root = doc.RootElement;
+                    
+                    if (root.TryGetProperty("buildNumber", out var buildNum))
+                        output.KeyValue("Build", buildNum.GetString() ?? "");
+                    if (root.TryGetProperty("buildId", out var buildId))
+                        output.KeyValue("Build ID", buildId.GetInt32().ToString());
+                    if (root.TryGetProperty("downloadedArtifacts", out var artifacts) && artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
+                        output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
+                    if (root.TryGetProperty("filesExtracted", out var files))
+                        output.KeyValue("Files Extracted", files.GetInt32().ToString());
+                    if (root.TryGetProperty("symbolsLoaded", out var loaded) && loaded.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        if (loaded.TryGetProperty("nativeSymbolsLoaded", out var native))
+                            output.KeyValue("Native Symbols", native.GetInt32().ToString());
+                        if (loaded.TryGetProperty("managedSymbolPaths", out var managed))
+                            output.KeyValue("Managed Paths", managed.GetInt32().ToString());
+                    }
+                    if (root.TryGetProperty("buildUrl", out var url))
+                    {
+                        output.Dim($"Build URL: {url.GetString()}");
+                    }
+                }
+                catch
+                {
+                    // Fall back to raw output
+                    Console.WriteLine(result);
+                }
+            }
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"Failed to download Datadog symbols: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to download Datadog symbols: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles listing available Datadog artifacts for a commit.
+    /// </summary>
+    private static async Task HandleDatadogListAsync(
+        string[] args,
+        ConsoleOutput output,
+        McpClient mcpClient)
+    {
+        if (args.Length == 0)
+        {
+            output.Error("Commit SHA required.");
+            output.Dim("Usage: symbols datadog list <commitSha>");
+            return;
+        }
+
+        var commitSha = args[0];
+
+        output.Info($"Listing Datadog artifacts for commit {commitSha[..Math.Min(8, commitSha.Length)]}...");
+
+        try
+        {
+            var result = await output.WithSpinnerAsync(
+                "Querying Azure Pipelines...",
+                () => mcpClient.ListDatadogArtifactsAsync(commitSha));
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+            }
+            else
+            {
+                // Pretty print the JSON result
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(result);
+                    var root = doc.RootElement;
+                    
+                    if (root.TryGetProperty("build", out var build))
+                    {
+                        output.Header("Build Information");
+                        if (build.TryGetProperty("number", out var num))
+                            output.KeyValue("Build Number", num.GetString() ?? "");
+                        if (build.TryGetProperty("id", out var id))
+                            output.KeyValue("Build ID", id.GetInt32().ToString());
+                        if (build.TryGetProperty("result", out var res))
+                            output.KeyValue("Result", res.GetString() ?? "");
+                        if (build.TryGetProperty("branch", out var branch))
+                            output.KeyValue("Branch", branch.GetString() ?? "");
+                    }
+
+                    if (root.TryGetProperty("artifactsByCategory", out var categories))
+                    {
+                        output.Header("Available Artifacts");
+                        
+                        void PrintCategory(string name, string propName)
+                        {
+                            if (categories.TryGetProperty(propName, out var items) && 
+                                items.ValueKind == System.Text.Json.JsonValueKind.Array &&
+                                items.GetArrayLength() > 0)
+                            {
+                                output.Markup($"[bold]{name}[/] ({items.GetArrayLength()})");
+                                foreach (var item in items.EnumerateArray().Take(5))
+                                {
+                                    output.Dim($"  {item.GetString()}");
+                                }
+                                if (items.GetArrayLength() > 5)
+                                    output.Dim($"  ... and {items.GetArrayLength() - 5} more");
+                            }
+                        }
+
+                        PrintCategory("Tracer Symbols", "tracerSymbols");
+                        PrintCategory("Profiler Symbols", "profilerSymbols");
+                        PrintCategory("Monitoring Home", "monitoringHome");
+                        PrintCategory("Universal Symbols", "universalSymbols");
+                    }
+
+                    if (root.TryGetProperty("totalArtifacts", out var total))
+                        output.Dim($"Total artifacts: {total.GetInt32()}");
+                }
+                catch
+                {
+                    // Fall back to raw output
+                    Console.WriteLine(result);
+                }
+            }
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"Failed to list Datadog artifacts: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to list Datadog artifacts: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles showing Datadog symbols configuration.
+    /// </summary>
+    private static async Task HandleDatadogConfigAsync(
+        ConsoleOutput output,
+        McpClient mcpClient)
+    {
+        try
+        {
+            var result = await output.WithSpinnerAsync(
+                "Getting configuration...",
+                () => mcpClient.GetDatadogSymbolsConfigAsync());
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+            }
+            else
+            {
+                output.Header("Datadog Symbol Download Configuration");
+                
+                try
+                {
+                    using var doc = System.Text.Json.JsonDocument.Parse(result);
+                    var root = doc.RootElement;
+                    
+                    if (root.TryGetProperty("enabled", out var enabled))
+                        output.KeyValue("Enabled", enabled.GetBoolean() ? "[green]Yes[/]" : "[red]No[/]");
+                    if (root.TryGetProperty("hasPatToken", out var hasPat))
+                        output.KeyValue("PAT Token", hasPat.GetBoolean() ? "[green]Configured[/]" : "[dim]Not set[/]");
+                    if (root.TryGetProperty("timeoutSeconds", out var timeout))
+                        output.KeyValue("Timeout", $"{timeout.GetInt32()} seconds");
+                    if (root.TryGetProperty("maxArtifactSizeMB", out var maxSize))
+                        output.KeyValue("Max Artifact Size", $"{maxSize.GetInt64()} MB");
+                    if (root.TryGetProperty("cacheDirectory", out var cache))
+                        output.KeyValue("Cache Directory", cache.GetString() ?? "");
+
+                    if (root.TryGetProperty("azureDevOps", out var azure))
+                    {
+                        output.Markup("");
+                        output.Markup("[bold]Azure DevOps[/]");
+                        if (azure.TryGetProperty("organization", out var org))
+                            output.KeyValue("Organization", org.GetString() ?? "");
+                        if (azure.TryGetProperty("project", out var proj))
+                            output.KeyValue("Project", proj.GetString() ?? "");
+                    }
+
+                    if (root.TryGetProperty("environmentVariables", out var envVars))
+                    {
+                        output.Markup("");
+                        output.Markup("[bold]Environment Variables[/]");
+                        foreach (var prop in envVars.EnumerateObject())
+                        {
+                            output.Dim($"  {prop.Name}: {prop.Value.GetString()}");
+                        }
+                    }
+                }
+                catch
+                {
+                    Console.WriteLine(result);
+                }
+            }
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"Failed to get configuration: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to get configuration: {ex.Message}");
         }
     }
 
