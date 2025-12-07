@@ -1271,6 +1271,13 @@ public class LldbManager : IDebuggerManager
             var success = process.ExitCode == 0;
             _logger.LogInformation("[dotnet-symbol] Completed with exit code {ExitCode}", process.ExitCode);
             
+            // Run a second pass to download PDBs (symbol files) for source link resolution
+            // This is separate from the module download to ensure we get both DLLs and PDBs
+            if (success)
+            {
+                DownloadPdbSymbols(dotnetSymbolPath, dumpFilePath, outputDirectory, timeoutMinutes);
+            }
+            
             // List what was downloaded for debugging
             LogDownloadedFiles(outputDirectory);
             
@@ -1286,6 +1293,96 @@ public class LldbManager : IDebuggerManager
         {
             _logger.LogWarning(ex, "[dotnet-symbol] Exception during symbol download");
             return false;
+        }
+    }
+    
+    /// <summary>
+    /// Downloads PDB symbol files using dotnet-symbol with the --symbols flag.
+    /// This is a separate pass from the module download to ensure we get both DLLs and PDBs.
+    /// PDBs are required for source link resolution in stack traces.
+    /// </summary>
+    /// <param name="dotnetSymbolPath">Path to the dotnet-symbol tool.</param>
+    /// <param name="dumpFilePath">Path to the dump file.</param>
+    /// <param name="outputDirectory">Directory to download symbols to.</param>
+    /// <param name="timeoutMinutes">Timeout in minutes.</param>
+    private void DownloadPdbSymbols(string dotnetSymbolPath, string dumpFilePath, string outputDirectory, int timeoutMinutes)
+    {
+        try
+        {
+            // Find all DLL files in the output directory
+            var dllFiles = Directory.GetFiles(outputDirectory, "*.dll", SearchOption.AllDirectories);
+            if (dllFiles.Length == 0)
+            {
+                _logger.LogInformation("[dotnet-symbol] No DLL files found in {Dir}, skipping PDB download", outputDirectory);
+                return;
+            }
+            
+            _logger.LogInformation("[dotnet-symbol] Starting PDB symbol download for {Count} DLLs...", dllFiles.Length);
+            
+            // Run dotnet-symbol with --symbols flag on the downloaded DLLs
+            // Pass each DLL file explicitly to ensure dotnet-symbol finds them
+            var dllList = string.Join("\" \"", dllFiles);
+            var arguments = $"--symbols -o \"{outputDirectory}\" --timeout {timeoutMinutes} " +
+                           $"--server-path {SymbolManager.MicrosoftSymbolServer} " +
+                           $"--server-path {SymbolManager.NuGetSymbolServer} " +
+                           $"\"{dllList}\"";
+            _logger.LogInformation("[dotnet-symbol] Running: {Tool} {Arguments}", dotnetSymbolPath, arguments);
+            
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = dotnetSymbolPath,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            using var process = new Process { StartInfo = startInfo };
+            
+            process.OutputDataReceived += (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    _logger.LogInformation("[dotnet-symbol-pdb] {Output}", e.Data);
+                }
+            };
+            
+            process.ErrorDataReceived += (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    _logger.LogWarning("[dotnet-symbol-pdb] {Error}", e.Data);
+                }
+            };
+            
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            var timeoutMs = timeoutMinutes * 60 * 1000;
+            var completed = process.WaitForExit(timeoutMs);
+
+            if (!completed)
+            {
+                _logger.LogWarning("[dotnet-symbol-pdb] PDB download timed out after {TimeoutMinutes} minutes", timeoutMinutes);
+                try 
+                { 
+                    process.Kill(); 
+                } 
+                catch (Exception ex) 
+                { 
+                    _logger.LogDebug(ex, "[dotnet-symbol-pdb] Exception while killing timed-out process"); 
+                }
+                return;
+            }
+
+            _logger.LogInformation("[dotnet-symbol-pdb] PDB download completed with exit code {ExitCode}", process.ExitCode);
+        }
+        catch (Exception ex)
+        {
+            // PDB download failure is not critical - SOS can still download on-demand via setsymbolserver
+            _logger.LogWarning(ex, "[dotnet-symbol-pdb] Exception during PDB symbol download (continuing without pre-downloaded PDBs)");
         }
     }
     
