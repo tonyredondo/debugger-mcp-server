@@ -33,17 +33,22 @@ public class DatadogSymbolsTools(
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
     /// <summary>
-    /// Downloads Datadog.Trace symbols from Azure Pipelines for a specific commit.
+    /// Downloads Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit.
     /// </summary>
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID that owns the session.</param>
     /// <param name="commitSha">The commit SHA from the Datadog.Trace assembly.</param>
     /// <param name="targetFramework">Optional target framework (auto-detected if not specified).</param>
     /// <param name="loadIntoDebugger">Whether to load symbols into the debugger (default: true).</param>
+    /// <param name="forceVersion">If true, falls back to version/tag lookup when SHA lookup fails (default: false).</param>
+    /// <param name="version">Optional version for fallback lookup (e.g., "3.31.0"). Extracted from SHA if not provided.</param>
     /// <returns>JSON result with download status and loaded symbols.</returns>
     /// <remarks>
-    /// This tool downloads Datadog.Trace symbols from Azure Pipelines builds.
+    /// This tool downloads Datadog.Trace symbols from Azure Pipelines builds or GitHub releases.
     /// The commit SHA can be found in the assembly's InformationalVersion attribute.
+    /// 
+    /// By default, only exact SHA matches are used (Azure Pipelines + GitHub SHA lookup).
+    /// If forceVersion is true, falls back to version-based lookup which may not exactly match your binary.
     /// 
     /// Symbols are downloaded for:
     /// - Native tracer symbols (.debug files)
@@ -52,27 +57,22 @@ public class DatadogSymbolsTools(
     /// 
     /// After download, symbols are automatically loaded into LLDB for improved stack traces.
     /// </remarks>
-    [McpServerTool, Description("Download Datadog.Trace symbols from Azure Pipelines for a specific commit SHA or build ID")]
+    [McpServerTool, Description("Download Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit SHA. Use forceVersion=true to enable version/tag fallback.")]
     public async Task<string> DownloadDatadogSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
         [Description("Commit SHA from the Datadog.Trace assembly (from InformationalVersion)")] string commitSha,
         [Description("Target framework (e.g., net6.0, netcoreapp3.1). Auto-detected if not specified.")] string? targetFramework = null,
         [Description("Whether to load symbols into the debugger after download (default: true)")] bool loadIntoDebugger = true,
-        [Description("Optional: Azure Pipelines build ID to use directly (bypasses commit SHA lookup). Use this if the automatic lookup returns the wrong build.")] int? buildId = null)
+        [Description("If true, falls back to version/tag lookup when SHA lookup fails (default: false)")] bool forceVersion = false,
+        [Description("Optional version for fallback lookup (e.g., '3.31.0'). If not provided and forceVersion=true, will try to extract from commitSha.")] string? version = null)
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
         var sanitizedUserId = SanitizeUserId(userId);
 
-        // Validate commitSha (or buildId must be provided)
-        if (string.IsNullOrWhiteSpace(commitSha) && buildId == null)
-        {
-            throw new ArgumentException("Either commitSha or buildId must be provided");
-        }
-
-        // Must be at least 7 characters for a short SHA (if provided)
-        if (!string.IsNullOrWhiteSpace(commitSha) && commitSha.Length < 7)
+        // Must be at least 7 characters for a short SHA
+        if (string.IsNullOrWhiteSpace(commitSha) || commitSha.Length < 7)
         {
             throw new ArgumentException("commitSha must be at least 7 characters", nameof(commitSha));
         }
@@ -121,18 +121,15 @@ public class DatadogSymbolsTools(
         var dumpStorage = SessionManager.GetDumpStoragePath();
         var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}");
 
-        // Create resolver and download
-        using var resolver = new AzurePipelinesResolver(
-            DatadogTraceSymbolsConfig.GetCacheDirectory(),
-            Logger);
-
-        var downloadResult = await resolver.DownloadDatadogSymbolsAsync(
+        // Create symbol service and download using the 4-step lookup
+        var symbolService = new DatadogSymbolService(session.ClrMdAnalyzer, Logger);
+        var downloadResult = await symbolService.DownloadSymbolsAsync(
             commitSha,
+            version,  // Pass the optional version for fallback
             platform,
             symbolsDir,
             tfm,
-            version: null,  // Version is extracted from dump in auto-detect mode
-            overrideBuildId: buildId);
+            forceVersion);
 
         // Load symbols if requested and download succeeded
         SymbolLoadResult? loadResult = null;
@@ -184,8 +181,6 @@ public class DatadogSymbolsTools(
             error = downloadResult.ErrorMessage ?? loadResult?.ErrorMessage
         };
 
-        resolver.SaveCache();
-
         return JsonSerializer.Serialize(response, JsonOptions);
     }
 
@@ -195,19 +190,24 @@ public class DatadogSymbolsTools(
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID that owns the session.</param>
     /// <param name="loadIntoDebugger">Whether to load symbols into the debugger (default: true).</param>
+    /// <param name="forceVersion">If true, falls back to version/tag lookup when SHA lookup fails (default: false).</param>
     /// <returns>JSON result with download status and loaded symbols.</returns>
     /// <remarks>
     /// This tool automatically scans the dump for Datadog assemblies, extracts the commit SHA
-    /// from InformationalVersion, and downloads the appropriate symbols from Azure Pipelines.
+    /// from InformationalVersion, and downloads the appropriate symbols from Azure Pipelines or GitHub.
+    /// 
+    /// By default, only exact SHA matches are used. If forceVersion is true, falls back to
+    /// version-based lookup which may not exactly match your binary.
     /// 
     /// This is the recommended way to download Datadog symbols when you have a dump open,
     /// as it handles all the detection automatically.
     /// </remarks>
-    [McpServerTool, Description("Auto-detect and download Datadog.Trace symbols from the opened dump")]
+    [McpServerTool, Description("Auto-detect and download Datadog.Trace symbols from the opened dump. Use forceVersion=true to enable version/tag fallback.")]
     public async Task<string> PrepareDatadogSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
-        [Description("Whether to load symbols into the debugger after download (default: true)")] bool loadIntoDebugger = true)
+        [Description("Whether to load symbols into the debugger after download (default: true)")] bool loadIntoDebugger = true,
+        [Description("If true, falls back to version/tag lookup when SHA lookup fails (default: false)")] bool forceVersion = false)
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
@@ -260,7 +260,8 @@ public class DatadogSymbolsTools(
             platform,
             symbolsDir,
             debuggerManager.ExecuteCommand,
-            loadIntoDebugger);
+            loadIntoDebugger,
+            forceVersion);
 
         // Clear command cache after loading new symbols so subsequent commands
         // (like clrstack) will re-run and show improved stack traces

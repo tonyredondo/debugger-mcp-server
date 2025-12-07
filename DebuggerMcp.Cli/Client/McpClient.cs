@@ -940,7 +940,8 @@ public class McpClient : IMcpClient
         string commitSha,
         string? targetFramework = null,
         bool loadIntoDebugger = true,
-        int? buildId = null,
+        bool forceVersion = false,
+        string? version = null,
         CancellationToken cancellationToken = default)
     {
         var args = new Dictionary<string, object?>
@@ -948,7 +949,8 @@ public class McpClient : IMcpClient
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["commitSha"] = commitSha,
-            ["loadIntoDebugger"] = loadIntoDebugger
+            ["loadIntoDebugger"] = loadIntoDebugger,
+            ["forceVersion"] = forceVersion
         };
 
         if (!string.IsNullOrEmpty(targetFramework))
@@ -956,9 +958,9 @@ public class McpClient : IMcpClient
             args["targetFramework"] = targetFramework;
         }
 
-        if (buildId.HasValue)
+        if (!string.IsNullOrEmpty(version))
         {
-            args["buildId"] = buildId.Value;
+            args["version"] = version;
         }
 
         return await CallToolAsync("download_datadog_symbols", args, cancellationToken);
@@ -984,13 +986,15 @@ public class McpClient : IMcpClient
         string sessionId,
         string userId,
         bool loadIntoDebugger = true,
+        bool forceVersion = false,
         CancellationToken cancellationToken = default)
     {
         return await CallToolAsync("prepare_datadog_symbols", new Dictionary<string, object?>
         {
             ["sessionId"] = sessionId,
             ["userId"] = userId,
-            ["loadIntoDebugger"] = loadIntoDebugger
+            ["loadIntoDebugger"] = loadIntoDebugger,
+            ["forceVersion"] = forceVersion
         }, cancellationToken);
     }
 

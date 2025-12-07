@@ -328,14 +328,15 @@ public interface IMcpClient : IAsyncDisposable
     #region Datadog Symbols
 
     /// <summary>
-    /// Downloads Datadog.Trace symbols from Azure Pipelines for a specific commit.
+    /// Downloads Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit.
     /// </summary>
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID that owns the session.</param>
     /// <param name="commitSha">The commit SHA from the Datadog.Trace assembly.</param>
     /// <param name="targetFramework">Optional target framework (auto-detected if not specified).</param>
     /// <param name="loadIntoDebugger">Whether to load symbols into the debugger after download.</param>
-    /// <param name="buildId">Optional build ID to use directly (bypasses commit SHA lookup).</param>
+    /// <param name="forceVersion">If true, falls back to version/tag lookup when SHA lookup fails.</param>
+    /// <param name="version">Optional version for fallback lookup (e.g., "3.31.0").</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>JSON result with download status and loaded symbols.</returns>
     Task<string> DownloadDatadogSymbolsAsync(
@@ -344,7 +345,8 @@ public interface IMcpClient : IAsyncDisposable
         string commitSha,
         string? targetFramework = null,
         bool loadIntoDebugger = true,
-        int? buildId = null,
+        bool forceVersion = false,
+        string? version = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -368,16 +370,19 @@ public interface IMcpClient : IAsyncDisposable
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID that owns the session.</param>
     /// <param name="loadIntoDebugger">Whether to load symbols into the debugger after download.</param>
+    /// <param name="forceVersion">If true, falls back to version/tag lookup when SHA lookup fails.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>JSON result with download status and loaded symbols.</returns>
     /// <remarks>
     /// Scans the dump for Datadog assemblies, extracts commit SHA from InformationalVersion,
-    /// and downloads appropriate symbols from Azure Pipelines automatically.
+    /// and downloads appropriate symbols from Azure Pipelines or GitHub automatically.
+    /// By default, only exact SHA matches are used. Use forceVersion=true to enable version-based fallback.
     /// </remarks>
     Task<string> PrepareDatadogSymbolsAsync(
         string sessionId,
         string userId,
         bool loadIntoDebugger = true,
+        bool forceVersion = false,
         CancellationToken cancellationToken = default);
 
     #endregion

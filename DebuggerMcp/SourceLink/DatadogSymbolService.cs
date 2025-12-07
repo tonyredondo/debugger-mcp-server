@@ -237,6 +237,7 @@ public class DatadogSymbolService
     /// <param name="symbolsOutputDirectory">Directory to store downloaded symbols.</param>
     /// <param name="executeCommand">Function to execute debugger commands.</param>
     /// <param name="loadIntoDebugger">Whether to load symbols into the debugger after download.</param>
+    /// <param name="forceVersion">If true, falls back to version/tag lookup when SHA lookup fails.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Preparation result.</returns>
     public async Task<DatadogSymbolPreparationResult> PrepareSymbolsAsync(
@@ -244,6 +245,7 @@ public class DatadogSymbolService
         string symbolsOutputDirectory,
         Func<string, string> executeCommand,
         bool loadIntoDebugger = true,
+        bool forceVersion = false,
         CancellationToken ct = default)
     {
         var result = new DatadogSymbolPreparationResult();
@@ -283,11 +285,9 @@ public class DatadogSymbolService
         var targetTfm = DatadogArtifactMapper.GetTargetTfmFolder(
             primaryAssembly.TargetFramework ?? platform.RuntimeVersion ?? ".NET 6.0");
         
-        // Phase B: Download symbols using 4-step lookup:
-        // 1. Azure Pipelines with SHA
-        // 2. GitHub Releases with SHA
-        // 3. Azure Pipelines with version/tag
-        // 4. GitHub Releases with version/tag
+        // Phase B: Download symbols using lookup strategy:
+        // Default (SHA only): 1. Azure Pipelines with SHA, 2. GitHub Releases with SHA
+        // With forceVersion: + 3. Azure Pipelines with version/tag, 4. GitHub Releases with version/tag
         try
         {
             result.DownloadResult = await TryDownloadSymbolsAsync(
@@ -296,6 +296,7 @@ public class DatadogSymbolService
                 platform,
                 symbolsOutputDirectory,
                 targetTfm,
+                forceVersion,
                 ct);
             
             if (!result.DownloadResult.Success)
@@ -416,18 +417,24 @@ public class DatadogSymbolService
     }
     
     /// <summary>
-    /// Tries to download symbols using the 4-step lookup order:
-    /// 1. Azure Pipelines with SHA
-    /// 2. GitHub Releases with SHA
-    /// 3. Azure Pipelines with version/tag
-    /// 4. GitHub Releases with version/tag
+    /// Tries to download symbols using the lookup strategy:
+    /// Default (SHA only): 1. Azure Pipelines with SHA, 2. GitHub Releases with SHA
+    /// With forceVersion: + 3. Azure Pipelines with version/tag, 4. GitHub Releases with version/tag
     /// </summary>
+    /// <param name="commitSha">The commit SHA to look up.</param>
+    /// <param name="version">The version for fallback lookup (e.g., "3.31.0").</param>
+    /// <param name="platform">Platform information.</param>
+    /// <param name="outputDirectory">Directory to store symbols.</param>
+    /// <param name="targetTfm">Target framework moniker.</param>
+    /// <param name="forceVersion">If true, falls back to version/tag lookup when SHA lookup fails.</param>
+    /// <param name="ct">Cancellation token.</param>
     private async Task<DatadogSymbolDownloadResult> TryDownloadSymbolsAsync(
         string commitSha,
         string? version,
         PlatformInfo platform,
         string outputDirectory,
         string targetTfm,
+        bool forceVersion,
         CancellationToken ct)
     {
         var errors = new List<string>();
@@ -484,7 +491,28 @@ public class DatadogSymbolService
             githubResolver.SaveCache();
         }
         
-        // Step 3: Azure Pipelines with version/tag (only if we have a version)
+        // If forceVersion is not enabled, stop here and suggest using --force-version
+        if (!forceVersion)
+        {
+            var shaOnlyError = $"No symbols found for commit SHA {DatadogTraceSymbolsConfig.GetShortSha(commitSha)}. Tried:\n" + 
+                string.Join("\n", errors.Select(e => $"  - {e}"));
+            
+            if (!string.IsNullOrEmpty(version))
+            {
+                shaOnlyError += $"\n\nTip: Use --force-version to try downloading symbols by version tag (v{version}) instead.\n" +
+                    "Note: Version-based symbols may not exactly match your binary.";
+            }
+            
+            _logger?.LogWarning("[DatadogSymbols] {Error}", shaOnlyError);
+            
+            return new DatadogSymbolDownloadResult
+            {
+                Success = false,
+                ErrorMessage = shaOnlyError
+            };
+        }
+        
+        // Step 3: Azure Pipelines with version/tag (only if we have a version and forceVersion is enabled)
         if (!string.IsNullOrEmpty(version))
         {
             _logger?.LogInformation("[DatadogSymbols] Step 3: Trying Azure Pipelines with version tag v{Version}", version);
@@ -548,6 +576,29 @@ public class DatadogSymbolService
             Success = false,
             ErrorMessage = combinedError
         };
+    }
+    
+    /// <summary>
+    /// Downloads symbols for a known commit SHA, with optional version fallback.
+    /// </summary>
+    /// <param name="commitSha">The commit SHA to look up.</param>
+    /// <param name="version">Optional version for fallback lookup (e.g., "3.31.0").</param>
+    /// <param name="platform">Platform information.</param>
+    /// <param name="outputDirectory">Directory to store symbols.</param>
+    /// <param name="targetTfm">Target framework moniker.</param>
+    /// <param name="forceVersion">If true, falls back to version/tag lookup when SHA lookup fails.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Download result.</returns>
+    public async Task<DatadogSymbolDownloadResult> DownloadSymbolsAsync(
+        string commitSha,
+        string? version,
+        PlatformInfo platform,
+        string outputDirectory,
+        string targetTfm,
+        bool forceVersion = false,
+        CancellationToken ct = default)
+    {
+        return await TryDownloadSymbolsAsync(commitSha, version, platform, outputDirectory, targetTfm, forceVersion, ct);
     }
     
     /// <summary>
