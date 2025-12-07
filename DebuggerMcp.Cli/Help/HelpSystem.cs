@@ -44,7 +44,16 @@ public static class HelpSystem
         ],
         ["files"] = [
             new("dumps", "<subcommand>", "Manage dump files (upload, list, info, delete)", ["dumps upload ./crash.dmp", "dumps list", "dumps info abc123", "dumps delete abc123"]),
-            new("symbols", "<subcommand>", "Manage symbol files (upload, list, servers, add, reload, clear, datadog)", ["symbols upload ./app.pdb", "symbols upload ./symbols.zip", "symbols list", "symbols reload", "symbols datadog download"]),
+            new("symbols", "<subcommand>", "Manage symbol files and Datadog symbols", [
+                "symbols upload ./app.pdb           Upload symbol file",
+                "symbols list                       List uploaded symbols",
+                "symbols reload                     Reload symbols into debugger",
+                "symbols clear                      Clear symbol cache",
+                "symbols datadog download           Auto-detect and download Datadog symbols",
+                "symbols datadog download -f        Download with version fallback",
+                "symbols datadog clear              Clear downloaded Datadog symbols",
+                "symbols datadog config             Show Datadog config"
+            ]),
             new("stats", "", "Show server statistics", ["stats"])
         ],
         ["session"] = [
@@ -235,14 +244,15 @@ public static class HelpSystem
                 break;
 
             case ShellStateLevel.DumpLoaded:
-                output.Markup("  [yellow]exec <cmd>[/]        Execute debugger command");
-                output.Markup("  [yellow]analyze crash[/]     Run crash analysis");
-                output.Markup("  [yellow]analyze dotnet[/]    Run .NET analysis");
-                output.Markup("  [yellow]exec !threads[/]     List all threads (.NET)");
-                output.Markup("  [yellow]exec k[/]            Show call stack");
-                output.Markup("  [yellow]watch add <expr>[/]  Add watch expression");
-                output.Markup("  [yellow]report[/]            Generate analysis report");
-                output.Markup("  [yellow]close[/]             Close current dump");
+                output.Markup("  [yellow]exec <cmd>[/]              Execute debugger command");
+                output.Markup("  [yellow]analyze crash[/]           Run crash analysis");
+                output.Markup("  [yellow]analyze dotnet[/]          Run .NET analysis");
+                output.Markup("  [yellow]symbols datadog download[/] Download Datadog symbols (if present)");
+                output.Markup("  [yellow]exec !threads[/]           List all threads (.NET)");
+                output.Markup("  [yellow]exec k[/]                  Show call stack");
+                output.Markup("  [yellow]watch add <expr>[/]        Add watch expression");
+                output.Markup("  [yellow]report[/]                  Generate analysis report");
+                output.Markup("  [yellow]close[/]                   Close current dump");
                 break;
         }
     }
