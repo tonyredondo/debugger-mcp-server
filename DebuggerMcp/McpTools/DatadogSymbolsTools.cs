@@ -132,6 +132,28 @@ public class DatadogSymbolsTools(
             tfm,
             forceVersion);
 
+        // If there's a SHA mismatch (using forceVersion), patch the PDBs to match the DLLs
+        // This allows SOS to load the symbols even when the exact build doesn't match
+        List<PdbPatcher.PatchResult>? patchResults = null;
+        Logger.LogInformation("[DatadogSymbols] Checking PDB patching conditions: Success={Success}, ShaMismatch={ShaMismatch}, ManagedDir={ManagedDir}",
+            downloadResult.Success, downloadResult.ShaMismatch, downloadResult.MergeResult?.ManagedSymbolDirectory ?? "(null)");
+        
+        if (downloadResult.Success && downloadResult.ShaMismatch && downloadResult.MergeResult?.ManagedSymbolDirectory != null)
+        {
+            Logger.LogInformation("[DatadogSymbols] SHA mismatch detected, patching PDBs to match DLL GUIDs in {Dir}...", 
+                downloadResult.MergeResult.ManagedSymbolDirectory);
+            var patcher = new PdbPatcher(Logger);
+            patchResults = patcher.PatchAllPdbsInDirectory(downloadResult.MergeResult.ManagedSymbolDirectory);
+            
+            var patchedCount = patchResults.Count(r => r.WasPatched);
+            var totalCount = patchResults.Count;
+            Logger.LogInformation("[DatadogSymbols] PDB patching complete: {Patched}/{Total} files patched", patchedCount, totalCount);
+        }
+        else
+        {
+            Logger.LogDebug("[DatadogSymbols] PDB patching skipped (conditions not met)");
+        }
+
         // Load symbols if requested and download succeeded
         SymbolLoadResult? loadResult = null;
         if (loadIntoDebugger && downloadResult.Success && downloadResult.MergeResult != null)
@@ -164,6 +186,20 @@ public class DatadogSymbolsTools(
             filesExtracted = downloadResult.MergeResult?.TotalFilesExtracted ?? 0,
             shaMismatch = downloadResult.ShaMismatch,
             source = downloadResult.Source,
+            pdbsPatched = patchResults != null ? new
+            {
+                total = patchResults.Count,
+                patched = patchResults.Count(r => r.WasPatched),
+                verified = patchResults.Count(r => r.WasPatched && r.Verified),
+                files = patchResults.Where(r => r.WasPatched).Select(r => new
+                {
+                    file = Path.GetFileName(r.PdbPath),
+                    originalGuid = r.OriginalGuid.ToString(),
+                    newGuid = r.NewGuid.ToString(),
+                    verified = r.Verified,
+                    verifiedGuid = r.VerifiedGuid?.ToString()
+                }).ToList()
+            } : null,
             platform = new
             {
                 os = platform.Os,
@@ -294,6 +330,20 @@ public class DatadogSymbolsTools(
                 filesExtracted = prepResult.DownloadResult.MergeResult?.TotalFilesExtracted ?? 0,
                 shaMismatch = prepResult.DownloadResult.ShaMismatch,
                 source = prepResult.DownloadResult.Source
+            } : null,
+            pdbsPatched = prepResult.PatchResults != null ? new
+            {
+                total = prepResult.PatchResults.Count,
+                patched = prepResult.PatchResults.Count(r => r.WasPatched),
+                verified = prepResult.PatchResults.Count(r => r.WasPatched && r.Verified),
+                files = prepResult.PatchResults.Where(r => r.WasPatched).Select(r => new
+                {
+                    file = Path.GetFileName(r.PdbPath),
+                    originalGuid = r.OriginalGuid.ToString(),
+                    newGuid = r.NewGuid.ToString(),
+                    verified = r.Verified,
+                    verifiedGuid = r.VerifiedGuid?.ToString()
+                }).ToList()
             } : null,
             symbolsLoaded = prepResult.LoadResult != null ? new
             {

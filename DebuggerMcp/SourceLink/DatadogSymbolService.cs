@@ -100,6 +100,11 @@ public class DatadogSymbolPreparationResult
     /// Gets or sets whether symbols were loaded into the debugger.
     /// </summary>
     public bool SymbolsLoaded => LoadResult?.Success == true;
+    
+    /// <summary>
+    /// Gets or sets the PDB patching results when SHA mismatch occurred.
+    /// </summary>
+    public List<PdbPatcher.PatchResult>? PatchResults { get; set; }
 }
 
 /// <summary>
@@ -315,6 +320,42 @@ public class DatadogSymbolService
             return result;
         }
         
+        // Phase B.5: If there's a SHA mismatch (using forceVersion), patch the PDBs to match the DLLs in the dump
+        // This allows SOS to load the symbols even when the exact build doesn't match
+        if (result.DownloadResult?.Success == true && 
+            result.DownloadResult.ShaMismatch && 
+            result.DownloadResult.MergeResult?.ManagedSymbolDirectory != null)
+        {
+            _logger?.LogInformation("[DatadogSymbols] SHA mismatch detected, extracting PDB GUIDs from dump modules...");
+            
+            // Extract PDB GUIDs from the Datadog modules in the dump
+            var moduleGuids = ExtractModuleGuidsFromDump(result.DatadogAssemblies);
+            
+            if (moduleGuids.Count > 0)
+            {
+                _logger?.LogInformation("[DatadogSymbols] Found {Count} module GUIDs from dump, patching PDBs in {Dir}...", 
+                    moduleGuids.Count, result.DownloadResult.MergeResult.ManagedSymbolDirectory);
+                
+                var patcher = new PdbPatcher(_logger);
+                result.PatchResults = patcher.PatchPdbsToMatchModuleGuids(
+                    result.DownloadResult.MergeResult.ManagedSymbolDirectory, 
+                    moduleGuids);
+                
+                var patchedCount = result.PatchResults.Count(r => r.WasPatched);
+                var totalCount = result.PatchResults.Count;
+                _logger?.LogInformation("[DatadogSymbols] PDB patching complete: {Patched}/{Total} files patched", patchedCount, totalCount);
+            }
+            else
+            {
+                _logger?.LogWarning("[DatadogSymbols] Could not extract any module GUIDs from dump, skipping PDB patching");
+            }
+        }
+        else
+        {
+            _logger?.LogDebug("[DatadogSymbols] PDB patching check: Success={Success}, ShaMismatch={ShaMismatch}, ManagedDir={ManagedDir}",
+                result.DownloadResult?.Success, result.DownloadResult?.ShaMismatch, result.DownloadResult?.MergeResult?.ManagedSymbolDirectory ?? "(null)");
+        }
+        
         // Phase C: Load symbols into debugger
         if (loadIntoDebugger && result.DownloadResult?.MergeResult != null)
         {
@@ -350,6 +391,23 @@ public class DatadogSymbolService
             : result.Message;
         
         return result;
+    }
+    
+    /// <summary>
+    /// Extracts PDB GUIDs from Datadog modules loaded in the dump.
+    /// </summary>
+    /// <param name="datadogAssemblies">List of Datadog assemblies found in the dump.</param>
+    /// <returns>Dictionary mapping module name (without extension) to its PDB GUID.</returns>
+    private Dictionary<string, Guid> ExtractModuleGuidsFromDump(List<DatadogAssemblyInfo> datadogAssemblies)
+    {
+        if (_clrMdAnalyzer == null)
+        {
+            _logger?.LogWarning("[DatadogSymbols] ClrMD analyzer not available, cannot extract module GUIDs");
+            return new Dictionary<string, Guid>();
+        }
+        
+        var moduleNames = datadogAssemblies.Select(a => a.Name).ToList();
+        return _clrMdAnalyzer.GetModulePdbGuids(moduleNames);
     }
     
     /// <summary>

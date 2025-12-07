@@ -1801,6 +1801,54 @@ public class ClrMdAnalyzer : IDisposable
             FragmentationRatio = fragmentationRatio
         };
     }
+    
+    /// <summary>
+    /// Gets PDB GUIDs for the specified module names from the dump.
+    /// </summary>
+    /// <param name="moduleNames">List of module names (without extension) to look up.</param>
+    /// <returns>Dictionary mapping module name to its PDB GUID.</returns>
+    public Dictionary<string, Guid> GetModulePdbGuids(IEnumerable<string> moduleNames)
+    {
+        var guids = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+        
+        lock (_lock)
+        {
+            if (_runtime == null)
+            {
+                _logger?.LogWarning("[ClrMD] Runtime not available, cannot extract PDB GUIDs");
+                return guids;
+            }
+            
+            var moduleNameSet = new HashSet<string>(moduleNames, StringComparer.OrdinalIgnoreCase);
+            
+            foreach (var module in _runtime.EnumerateModules())
+            {
+                try
+                {
+                    var moduleName = Path.GetFileNameWithoutExtension(module.Name);
+                    if (string.IsNullOrEmpty(moduleName) || !moduleNameSet.Contains(moduleName))
+                        continue;
+                    
+                    // Get PDB info from the module
+                    var pdbInfo = module.Pdb;
+                    if (pdbInfo == null || pdbInfo.Guid == Guid.Empty)
+                    {
+                        _logger?.LogDebug("[ClrMD] No PDB info for module: {Name}", moduleName);
+                        continue;
+                    }
+                    
+                    guids[moduleName] = pdbInfo.Guid;
+                    _logger?.LogInformation("[ClrMD] PDB GUID for {Name}: {Guid}", moduleName, pdbInfo.Guid);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "[ClrMD] Error getting PDB info for module: {Name}", module.Name);
+                }
+            }
+        }
+        
+        return guids;
+    }
 }
 
 /// <summary>

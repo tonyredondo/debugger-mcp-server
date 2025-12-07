@@ -3562,8 +3562,10 @@ public class Program
                             artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
                             output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
                         
+                        // Only show files extracted if > 0 (can be 0 when cached)
                         if (dl.TryGetProperty("filesExtracted", out var files) && 
-                            files.ValueKind == System.Text.Json.JsonValueKind.Number)
+                            files.ValueKind == System.Text.Json.JsonValueKind.Number &&
+                            files.GetInt32() > 0)
                             output.KeyValue("Files Extracted", files.GetInt32().ToString());
                         
                         // Show source URL
@@ -3593,6 +3595,55 @@ public class Program
                         output.WriteLine();
                         output.Warning("Note: Exact commit SHA not found - downloaded symbols by version tag.");
                         output.Dim("  The symbols should match, but are from a release build rather than the exact commit.");
+                    }
+                    
+                    // Show PDB patching results if any
+                    if (root.TryGetProperty("pdbsPatched", out var pdbsPatched) &&
+                        pdbsPatched.ValueKind == System.Text.Json.JsonValueKind.Object)
+                    {
+                        var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched) 
+                            ? patched.GetInt32() : 0;
+                        var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified) 
+                            ? verified.GetInt32() : 0;
+                        
+                        if (patchedCount > 0)
+                        {
+                            output.WriteLine();
+                            if (verifiedCount == patchedCount)
+                            {
+                                output.Success($"⚙ Patched and verified {patchedCount} PDB file(s) to match dump module GUIDs:");
+                            }
+                            else if (verifiedCount > 0)
+                            {
+                                output.Warning($"⚙ Patched {patchedCount} PDB file(s), but only {verifiedCount} verified successfully:");
+                            }
+                            else
+                            {
+                                output.Error($"⚙ Patched {patchedCount} PDB file(s), but verification FAILED:");
+                            }
+                            
+                            if (pdbsPatched.TryGetProperty("files", out var patchedFiles) &&
+                                patchedFiles.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            {
+                                foreach (var patchedFile in patchedFiles.EnumerateArray())
+                                {
+                                    var fileName = patchedFile.TryGetProperty("file", out var f) 
+                                        ? f.GetString() : "unknown";
+                                    var fileVerified = patchedFile.TryGetProperty("verified", out var fv) && fv.GetBoolean();
+                                    var checkmark = fileVerified ? "✓" : "✗";
+                                    output.Dim($"  {checkmark} {fileName}");
+                                }
+                            }
+                            
+                            if (verifiedCount == patchedCount)
+                            {
+                                output.Dim("  This allows SOS to load symbols despite the version mismatch.");
+                            }
+                            else
+                            {
+                                output.Error("  Symbol loading may not work correctly. Try clearing symbols and re-downloading.");
+                            }
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -3667,8 +3718,10 @@ public class Program
                         artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
                         output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
                     
+                    // Only show files extracted if > 0 (can be 0 when cached)
                     if (root.TryGetProperty("filesExtracted", out var files) &&
-                        files.ValueKind == System.Text.Json.JsonValueKind.Number)
+                        files.ValueKind == System.Text.Json.JsonValueKind.Number &&
+                        files.GetInt32() > 0)
                         output.KeyValue("Files Extracted", files.GetInt32().ToString());
                     
                     if (root.TryGetProperty("symbolsLoaded", out var loaded) && 
@@ -3685,12 +3738,61 @@ public class Program
                     if (urlProp.ValueKind == System.Text.Json.JsonValueKind.String)
                         output.Dim($"Source: {urlProp.GetString()}");
                     
-                    // Show SHA mismatch warning
+                    // Show SHA mismatch warning and PDB patching info
                     if (root.TryGetProperty("shaMismatch", out var shaMismatch) &&
                         shaMismatch.ValueKind == System.Text.Json.JsonValueKind.True)
                     {
                         output.WriteLine();
                         output.Warning("Note: Exact commit SHA not found - downloaded symbols by version tag.");
+                        
+                        // Show PDB patching info if any PDBs were patched
+                        if (root.TryGetProperty("pdbsPatched", out var pdbsPatched) &&
+                            pdbsPatched.ValueKind == System.Text.Json.JsonValueKind.Object)
+                        {
+                            var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched) 
+                                ? patched.GetInt32() : 0;
+                            var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified) 
+                                ? verified.GetInt32() : 0;
+                            
+                            if (patchedCount > 0)
+                            {
+                                output.WriteLine();
+                                if (verifiedCount == patchedCount)
+                                {
+                                    output.Success($"⚙ Patched and verified {patchedCount} PDB file(s) to match dump module GUIDs:");
+                                }
+                                else if (verifiedCount > 0)
+                                {
+                                    output.Warning($"⚙ Patched {patchedCount} PDB file(s), but only {verifiedCount} verified successfully:");
+                                }
+                                else
+                                {
+                                    output.Error($"⚙ Patched {patchedCount} PDB file(s), but verification FAILED:");
+                                }
+                                
+                                if (pdbsPatched.TryGetProperty("files", out var patchedFiles) &&
+                                    patchedFiles.ValueKind == System.Text.Json.JsonValueKind.Array)
+                                {
+                                    foreach (var patchedFile in patchedFiles.EnumerateArray())
+                                    {
+                                        var fileName = patchedFile.TryGetProperty("file", out var f) 
+                                            ? f.GetString() : "unknown";
+                                        var fileVerified = patchedFile.TryGetProperty("verified", out var fv) && fv.GetBoolean();
+                                        var checkmark = fileVerified ? "✓" : "✗";
+                                        output.Dim($"  {checkmark} {fileName}");
+                                    }
+                                }
+                                
+                                if (verifiedCount == patchedCount)
+                                {
+                                    output.Dim("  This allows SOS to load symbols despite the version mismatch.");
+                                }
+                                else
+                                {
+                                    output.Error("  Symbol loading may not work correctly. Try clearing symbols and re-downloading.");
+                                }
+                            }
+                        }
                     }
                 }
                 catch (Exception ex)
