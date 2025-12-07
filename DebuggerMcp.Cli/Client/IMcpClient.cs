@@ -385,6 +385,20 @@ public interface IMcpClient : IAsyncDisposable
         bool forceVersion = false,
         CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Clears downloaded Datadog symbols for the current dump.
+    /// </summary>
+    /// <param name="sessionId">The session ID.</param>
+    /// <param name="userId">The user ID that owns the session.</param>
+    /// <param name="clearApiCache">Also clear API cache (build/release lookups).</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>JSON result with cleared files information.</returns>
+    Task<string> ClearDatadogSymbolsAsync(
+        string sessionId,
+        string userId,
+        bool clearApiCache = false,
+        CancellationToken cancellationToken = default);
+
     #endregion
 
     #region Generic Tool Invocation

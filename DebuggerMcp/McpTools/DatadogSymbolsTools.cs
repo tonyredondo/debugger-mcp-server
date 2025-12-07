@@ -450,6 +450,131 @@ public class DatadogSymbolsTools(
     }
 
     /// <summary>
+    /// Clears downloaded Datadog symbols for the current dump.
+    /// </summary>
+    /// <param name="sessionId">The session ID.</param>
+    /// <param name="userId">The user ID that owns the session.</param>
+    /// <param name="clearApiCache">Whether to also clear the API cache (build lookups, release lookups).</param>
+    /// <returns>JSON result with cleared files information.</returns>
+    /// <remarks>
+    /// This tool removes all previously downloaded Datadog symbols for the current dump.
+    /// Use this to:
+    /// <list type="bullet">
+    /// <item><description>Force re-download of symbols</description></item>
+    /// <item><description>Reclaim disk space</description></item>
+    /// <item><description>Clear stale/corrupted symbol files</description></item>
+    /// </list>
+    /// </remarks>
+    [McpServerTool, Description("Clear downloaded Datadog symbols for the current dump. Use to force re-download or reclaim disk space.")]
+    public string ClearDatadogSymbols(
+        [Description("Session ID from CreateSession")] string sessionId,
+        [Description("User ID that owns the session")] string userId,
+        [Description("Also clear API cache (build/release lookups). Default: false")] bool clearApiCache = false)
+    {
+        ValidateSessionId(sessionId);
+        var sanitizedUserId = SanitizeUserId(userId);
+
+        // Get session info to find dump ID
+        var session = GetSessionInfo(sessionId, sanitizedUserId);
+        
+        if (string.IsNullOrEmpty(session.CurrentDumpId))
+        {
+            throw new InvalidOperationException("No dump is currently open. Open a dump first.");
+        }
+
+        var dumpStorage = SessionManager.GetDumpStoragePath();
+        var dumpName = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
+        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{dumpName}");
+
+        var filesDeleted = 0;
+        var totalSizeMb = 0.0;
+        var apiCacheCleared = false;
+
+        // Delete symbol directory if it exists
+        if (Directory.Exists(symbolsDir))
+        {
+            try
+            {
+                var files = Directory.GetFiles(symbolsDir, "*", SearchOption.AllDirectories);
+                filesDeleted = files.Length;
+                totalSizeMb = files.Sum(f => new FileInfo(f).Length) / (1024.0 * 1024.0);
+
+                Directory.Delete(symbolsDir, recursive: true);
+                Logger.LogInformation("[DatadogSymbols] Deleted {FileCount} files ({SizeMb:F1} MB) from {Path}", 
+                    filesDeleted, totalSizeMb, symbolsDir);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogError(ex, "[DatadogSymbols] Failed to delete symbols at {Path}", symbolsDir);
+                return JsonSerializer.Serialize(new
+                {
+                    success = false,
+                    error = $"Failed to delete symbols: {ex.Message}"
+                }, JsonOptions);
+            }
+        }
+        else
+        {
+            Logger.LogInformation("[DatadogSymbols] No symbol directory found at {Path}", symbolsDir);
+        }
+
+        // Optionally clear API caches
+        if (clearApiCache)
+        {
+            try
+            {
+                var cacheDir = DatadogTraceSymbolsConfig.GetCacheDirectory();
+                var azureCachePath = Path.Combine(cacheDir, "azure_pipelines_cache.json");
+                var githubCachePath = Path.Combine(cacheDir, "github_releases_cache.json");
+
+                if (File.Exists(azureCachePath))
+                {
+                    File.Delete(azureCachePath);
+                    Logger.LogInformation("[DatadogSymbols] Deleted Azure Pipelines cache");
+                }
+
+                if (File.Exists(githubCachePath))
+                {
+                    File.Delete(githubCachePath);
+                    Logger.LogInformation("[DatadogSymbols] Deleted GitHub Releases cache");
+                }
+
+                apiCacheCleared = true;
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "[DatadogSymbols] Failed to clear API caches");
+            }
+        }
+
+        // Clear debugger command cache since symbols are now gone
+        try
+        {
+            var debuggerManager = GetSessionManager(sessionId, sanitizedUserId);
+            debuggerManager.ClearCommandCache();
+            Logger.LogInformation("[DatadogSymbols] Cleared debugger command cache");
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "[DatadogSymbols] Failed to clear debugger command cache");
+        }
+
+        var response = new
+        {
+            success = true,
+            message = filesDeleted > 0 
+                ? $"Cleared Datadog symbols for dump {dumpName}"
+                : $"No Datadog symbols found for dump {dumpName}",
+            dumpId = dumpName,
+            filesDeleted,
+            sizeFreedMb = Math.Round(totalSizeMb, 2),
+            apiCacheCleared
+        };
+
+        return JsonSerializer.Serialize(response, JsonOptions);
+    }
+
+    /// <summary>
     /// Detects platform information from the session and debugger output.
     /// Uses 'image list' output which contains native module paths like /lib/ld-musl-aarch64.so.1
     /// </summary>

@@ -998,6 +998,21 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
+    /// <inheritdoc/>
+    public async Task<string> ClearDatadogSymbolsAsync(
+        string sessionId,
+        string userId,
+        bool clearApiCache = false,
+        CancellationToken cancellationToken = default)
+    {
+        return await CallToolAsync("clear_datadog_symbols", new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["clearApiCache"] = clearApiCache
+        }, cancellationToken);
+    }
+
     #endregion
 
     #region Generic Tool Invocation

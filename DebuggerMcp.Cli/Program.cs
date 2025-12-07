@@ -1173,8 +1173,9 @@ public class Program
                     output.Markup("  [yellow]symbols clear abc123[/]            Clear cache for specific dump");
                     output.Markup("  [yellow]symbols datadog download[/]                     Auto-detect and download (SHA only)");
                     output.Markup("  [yellow]symbols datadog download --force-version[/]    Auto-detect with version fallback");
-                    output.Markup("  [yellow]symbols datadog list 14fd3a2f[/]      List available artifacts");
-                    output.Markup("  [yellow]symbols datadog config[/]             Show configuration");
+                    output.Markup("  [yellow]symbols datadog clear[/]                       Clear downloaded symbols");
+                    output.Markup("  [yellow]symbols datadog list 14fd3a2f[/]               List available artifacts");
+                    output.Markup("  [yellow]symbols datadog config[/]                      Show configuration");
                     break;
 
                 case "stats":
@@ -3341,6 +3342,11 @@ public class Program
                 await HandleDatadogConfigAsync(output, mcpClient);
                 break;
 
+            case "clear":
+            case "clean":
+                await HandleDatadogClearAsync(subArgs, output, state, mcpClient);
+                break;
+
             case "help":
             case "?":
                 ShowDatadogSymbolsHelp(output);
@@ -3378,14 +3384,18 @@ public class Program
         output.Markup("  [green]download[/]              Auto-detect assemblies from dump and download symbols");
         output.Markup("  [green]download <sha>[/]        Download symbols for a specific commit SHA");
         output.Markup("  [green]list <sha>[/]            List available artifacts for a commit SHA");
+        output.Markup("  [green]clear[/]                 Clear downloaded symbols for current dump");
         output.Markup("  [green]config[/]                Show configuration and status");
         output.Markup("  [green]help[/]                  Show this help");
         output.WriteLine();
         
-        output.Markup("[bold]OPTIONS[/]");
+        output.Markup("[bold]OPTIONS (download)[/]");
         output.Markup("  [cyan]--tfm <framework>[/]     Target framework (e.g., net6.0, netcoreapp3.1)");
         output.Markup("  [cyan]--force-version[/]       Enable version/tag fallback if exact SHA not found");
         output.Markup("  [cyan]--no-load[/]             Download only, don't load symbols into debugger");
+        output.WriteLine();
+        output.Markup("[bold]OPTIONS (clear)[/]");
+        output.Markup("  [cyan]--all, -a[/]             Also clear API caches (build/release lookups)");
         output.WriteLine();
         
         output.Markup("[bold]EXAMPLES[/]");
@@ -3403,6 +3413,12 @@ public class Program
         output.WriteLine();
         output.Markup("  [yellow]symbols datadog config[/]");
         output.Dim("    Show current configuration and status");
+        output.WriteLine();
+        output.Markup("  [yellow]symbols datadog clear[/]");
+        output.Dim("    Remove all downloaded Datadog symbols for current dump");
+        output.WriteLine();
+        output.Markup("  [yellow]symbols datadog clear --all[/]");
+        output.Dim("    Clear symbols and API caches (force fresh lookup)");
         output.WriteLine();
         
         output.Markup("[bold]ENVIRONMENT VARIABLES[/]");
@@ -3850,6 +3866,117 @@ public class Program
         catch (Exception ex)
         {
             output.Error($"Failed to get configuration: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles clearing Datadog symbols for the current dump.
+    /// </summary>
+    private static async Task HandleDatadogClearAsync(
+        string[] args,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        if (string.IsNullOrEmpty(state.SessionId))
+        {
+            output.Error("No active session. Open a dump first with 'open <dumpId>'.");
+            return;
+        }
+
+        // Parse arguments
+        var clearApiCache = args.Contains("--all") || args.Contains("-a");
+
+        output.Info("Clearing downloaded Datadog symbols...");
+        if (clearApiCache)
+        {
+            output.Dim("Also clearing API caches (build/release lookups)");
+        }
+
+        try
+        {
+            var result = await output.WithSpinnerAsync(
+                "Clearing Datadog symbols...",
+                () => mcpClient.ClearDatadogSymbolsAsync(
+                    state.SessionId!,
+                    state.Settings.UserId,
+                    clearApiCache));
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+                return;
+            }
+
+            // Pretty print the result
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(result);
+                var root = doc.RootElement;
+
+                var isSuccess = root.TryGetProperty("success", out var successProp) && 
+                               successProp.ValueKind == System.Text.Json.JsonValueKind.True;
+
+                if (isSuccess)
+                {
+                    if (root.TryGetProperty("message", out var msg))
+                    {
+                        output.Success(msg.GetString() ?? "Symbols cleared");
+                    }
+
+                    if (root.TryGetProperty("filesDeleted", out var filesElem) &&
+                        filesElem.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        var filesDeleted = filesElem.GetInt32();
+                        if (filesDeleted > 0)
+                        {
+                            output.KeyValue("Files Deleted", filesDeleted.ToString());
+                        }
+                    }
+
+                    if (root.TryGetProperty("sizeFreedMb", out var sizeElem) &&
+                        sizeElem.ValueKind == System.Text.Json.JsonValueKind.Number)
+                    {
+                        var sizeMb = sizeElem.GetDouble();
+                        if (sizeMb > 0)
+                        {
+                            output.KeyValue("Space Freed", $"{sizeMb:F1} MB");
+                        }
+                    }
+
+                    if (root.TryGetProperty("apiCacheCleared", out var cacheElem) &&
+                        cacheElem.ValueKind == System.Text.Json.JsonValueKind.True)
+                    {
+                        output.Dim("API caches cleared");
+                    }
+
+                    output.WriteLine();
+                    output.Dim("Use 'symbols datadog download' to re-download symbols.");
+                }
+                else
+                {
+                    if (root.TryGetProperty("error", out var errMsg))
+                    {
+                        output.Error(errMsg.GetString() ?? "Failed to clear symbols");
+                    }
+                    else
+                    {
+                        output.Error("Failed to clear symbols");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                output.Error($"Error parsing result: {ex.Message}");
+            }
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"Failed to clear Datadog symbols: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to clear Datadog symbols: {ex.Message}");
         }
     }
 
