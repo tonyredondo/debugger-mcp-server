@@ -117,9 +117,10 @@ public class DatadogSymbolsTools(
             ? targetFramework
             : DatadogArtifactMapper.GetTargetTfmFolder(platform.RuntimeVersion ?? ".NET 6.0");
 
-        // Build output directory
+        // Build output directory - Datadog symbols go in a .datadog subdirectory
+        // to keep them separate from user-uploaded symbols
         var dumpStorage = SessionManager.GetDumpStoragePath();
-        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}");
+        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}", ".datadog");
 
         // Create symbol service and download using the 4-step lookup
         var symbolService = new DatadogSymbolService(session.ClrMdAnalyzer, Logger);
@@ -248,9 +249,10 @@ public class DatadogSymbolsTools(
             };
         }
 
-        // Build output directory
+        // Build output directory - Datadog symbols go in a .datadog subdirectory
+        // to keep them separate from user-uploaded symbols
         var dumpStorage = SessionManager.GetDumpStoragePath();
-        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}");
+        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}", ".datadog");
 
         // Create the symbol service
         var symbolService = new DatadogSymbolService(session.ClrMdAnalyzer, Logger);
@@ -484,28 +486,29 @@ public class DatadogSymbolsTools(
 
         var dumpStorage = SessionManager.GetDumpStoragePath();
         var dumpName = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
-        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{dumpName}");
+        // Only delete the .datadog subdirectory, not the entire symbols directory
+        var datadogSymbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{dumpName}", ".datadog");
 
         var filesDeleted = 0;
         var totalSizeMb = 0.0;
         var apiCacheCleared = false;
 
-        // Delete symbol directory if it exists
-        if (Directory.Exists(symbolsDir))
+        // Delete Datadog symbols directory if it exists
+        if (Directory.Exists(datadogSymbolsDir))
         {
             try
             {
-                var files = Directory.GetFiles(symbolsDir, "*", SearchOption.AllDirectories);
+                var files = Directory.GetFiles(datadogSymbolsDir, "*", SearchOption.AllDirectories);
                 filesDeleted = files.Length;
                 totalSizeMb = files.Sum(f => new FileInfo(f).Length) / (1024.0 * 1024.0);
 
-                Directory.Delete(symbolsDir, recursive: true);
+                Directory.Delete(datadogSymbolsDir, recursive: true);
                 Logger.LogInformation("[DatadogSymbols] Deleted {FileCount} files ({SizeMb:F1} MB) from {Path}", 
-                    filesDeleted, totalSizeMb, symbolsDir);
+                    filesDeleted, totalSizeMb, datadogSymbolsDir);
             }
             catch (Exception ex)
             {
-                Logger.LogError(ex, "[DatadogSymbols] Failed to delete symbols at {Path}", symbolsDir);
+                Logger.LogError(ex, "[DatadogSymbols] Failed to delete symbols at {Path}", datadogSymbolsDir);
                 return JsonSerializer.Serialize(new
                 {
                     success = false,
@@ -515,7 +518,7 @@ public class DatadogSymbolsTools(
         }
         else
         {
-            Logger.LogInformation("[DatadogSymbols] No symbol directory found at {Path}", symbolsDir);
+            Logger.LogInformation("[DatadogSymbols] No Datadog symbol directory found at {Path}", datadogSymbolsDir);
         }
 
         // Optionally clear API caches
