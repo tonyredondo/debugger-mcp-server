@@ -180,9 +180,9 @@ public class CrashAnalyzer
     protected async Task<string> ExecuteCommandAsync(string command)
     {
         try
-        {
-            return await Task.Run(() => _debuggerManager.ExecuteCommand(command));
-        }
+    {
+        return await Task.Run(() => _debuggerManager.ExecuteCommand(command));
+    }
         catch (InvalidOperationException ex) when (ex.Message.Contains("crashed") && ex.Message.Contains("recovered"))
         {
             // LLDB crashed but was recovered - return error message instead of throwing

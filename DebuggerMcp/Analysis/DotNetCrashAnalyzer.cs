@@ -16,7 +16,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 {
     private readonly ClrMdAnalyzer? _clrMdAnalyzer;
     private readonly ILogger? _logger;
-
+    
     /// <summary>
     /// Initializes a new instance of the <see cref="DotNetCrashAnalyzer"/> class.
     /// </summary>
@@ -25,7 +25,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <param name="clrMdAnalyzer">Optional ClrMD analyzer for assembly metadata enrichment.</param>
     /// <param name="logger">Optional logger for diagnostics.</param>
     public DotNetCrashAnalyzer(
-        IDebuggerManager debuggerManager,
+        IDebuggerManager debuggerManager, 
         SourceLinkResolver? sourceLinkResolver = null,
         ClrMdAnalyzer? clrMdAnalyzer = null,
         ILogger? logger = null)
@@ -96,7 +96,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         // Command caching is automatically enabled when dump is opened
         // All commands benefit from caching for the entire session
-
+        
         CrashAnalysisResult result;
         try
         {
@@ -107,22 +107,40 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Download Datadog.Trace symbols BEFORE detailed stack analysis for best stack traces.
             // This uses the platform info from base analysis to download correct artifacts.
             await TryDownloadDatadogSymbolsAsync(result, symbolsOutputDirectory);
-
+            
             // Continue with .NET specific analysis
             // Get CLR version
             var clrVersionOutput = await ExecuteCommandAsync("!eeversion");
             result.RawCommands!["!eeversion"] = clrVersionOutput;
             ParseClrVersion(clrVersionOutput, result);
 
-            // Get full call stacks for all threads (managed + native interleaved, with registers)
-            // -f: full stack (native + managed frames)
+            // Get full call stacks for all threads with arguments and locals
+            // Note: The -f flag (full native/managed interleaved stack) causes crashes on some
+            // platforms (e.g., .NET 10 ARM64). We use -a -r -all without -f for stability.
+            // Native frames can be obtained from 'bt all' if needed.
             // -r: include register values
             // -all: all threads
             // -a: include arguments and locals
-            var clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -f -r -all");
-            result.RawCommands!["clrstack -a -f -r -all"] = clrStackFullOutput;
+            var clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -r -all");
+            result.RawCommands!["clrstack -a -r -all"] = clrStackFullOutput;
+            
+            // Check if the command crashed or returned an error, try simpler variants
+            if (clrStackFullOutput.Contains("[ERROR:") || IsSosErrorOutput(clrStackFullOutput))
+            {
+                // Try without -r (registers) which might also cause issues
+                clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -all");
+                result.RawCommands!["clrstack -a -all"] = clrStackFullOutput;
+            }
+            
+            if (clrStackFullOutput.Contains("[ERROR:") || IsSosErrorOutput(clrStackFullOutput))
+            {
+                // Try the simplest form
+                clrStackFullOutput = await ExecuteCommandAsync("clrstack -all");
+                result.RawCommands!["clrstack -all"] = clrStackFullOutput;
+            }
+            
             ParseFullCallStacksAllThreads(clrStackFullOutput, result);
-
+            
             // Enhance variable values: convert hex to meaningful representations
             // and resolve string values using !dumpobj
             await EnhanceVariableValuesAsync(result);
@@ -136,16 +154,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             var exceptionOutput = await ExecuteCommandAsync("!pe -nested");
             result.RawCommands!["!pe -nested"] = exceptionOutput;
             ParseManagedException(exceptionOutput, result);
-
+            
             // Deep analysis of the exception object (gets Source, Data, FusionLog, etc.)
             await ParseExceptionDeepAnalysisAsync(exceptionOutput, result);
-
+            
             // Try to enrich exception stack frames with source info from thread stacks
             EnrichExceptionStackWithSourceInfo(result);
-
+            
             // For MissingMethodException, TypeLoadException, etc. - analyze what methods exist
             await AnalyzeTypeResolutionAsync(result);
-
+            
             // Analyze NativeAOT and trimming issues
             // This is particularly important for MissingMethodException in NativeAOT apps
             await AnalyzeNativeAotAsync(result);
@@ -173,12 +191,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
             // Enhanced deadlock detection using !syncblk
             await AnalyzeDotNetDeadlocksAsync(result);
-
+            
             // Get thread pool information
             var threadPoolOutput = await ExecuteCommandAsync("!threadpool");
             result.RawCommands!["!threadpool"] = threadPoolOutput;
             ParseThreadPool(threadPoolOutput, result);
-
+            
             // Get timer information
             var timerInfoOutput = await ExecuteCommandAsync("!ti");
             result.RawCommands!["!ti"] = timerInfoOutput;
@@ -199,37 +217,37 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             result.RawCommands!["!dumpdomain"] = dumpDomainOutput;
             ParseAssemblyVersions(dumpDomainOutput, result);
             EnrichAssemblyInfo(result);
-
+            
             // Enrich assembly info with version details using !dumpmodule
             await EnrichAssemblyVersionsAsync(result);
-
+            
             // Enrich with ClrMD assembly attributes (Company, Product, Repository, etc.)
             var assemblies = result.Assemblies?.Items;
             if (assemblies != null)
             {
                 EnrichAssemblyMetadata(assemblies);
             }
-
+            
             // Enrich with GitHub commit metadata (author, committer, message)
             await EnrichAssemblyGitHubInfoAsync(result);
-
+            
             // === Phase 2 ClrMD Enrichment ===
             if (_clrMdAnalyzer?.IsOpen == true)
             {
                 // Always run fast operations (no heap walk)
                 var gcSummary = _clrMdAnalyzer.GetGcSummary();
-
+                
                 // Set in new structure
                 result.Memory ??= new MemoryInfo();
                 result.Memory.Gc = gcSummary;
-
+                
                 // Also set in old structure during migration
-
+                
                 if (result.Threads?.All != null)
                 {
                     EnrichThreadsWithClrMdInfo(result.Threads.All);
                 }
-
+                
                 // Run optimized single-pass combined analysis for memory, async, and strings
                 var combinedAnalysis = _clrMdAnalyzer.GetCombinedHeapAnalysis();
                 if (combinedAnalysis != null)
@@ -237,7 +255,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     // Set in new structure
                     result.Memory.TopConsumers = combinedAnalysis.TopMemoryConsumers;
                     result.Memory.Strings = combinedAnalysis.StringAnalysis;
-
+                    
                     // Async info
                     if (combinedAnalysis.AsyncAnalysis != null)
                     {
@@ -248,7 +266,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         result.Async.AnalysisTimeMs = combinedAnalysis.AsyncAnalysis.AnalysisTimeMs;
                         result.Async.WasAborted = combinedAnalysis.AsyncAnalysis.WasAborted;
                     }
-
+                    
                     // Copy fragmentation data to GcSummary (more accurate from heap walk)
                     if (gcSummary != null)
                     {
@@ -281,12 +299,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         if (versionMatch.Success)
         {
             var clrVersion = versionMatch.Groups[1].Value;
-
+            
             // Set in Runtime info (new hierarchical structure)
             result.Environment ??= new EnvironmentInfo { Platform = new PlatformInfo() };
             result.Environment.Runtime ??= new RuntimeInfo { Type = "CoreCLR" };
             result.Environment.Runtime.ClrVersion = clrVersion;
-
+            
             // Also set in platform info for backward compatibility
             result.Environment.Platform ??= new PlatformInfo();
             result.Environment.Platform.RuntimeVersion = clrVersion;
@@ -310,7 +328,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             // Initialize Exception if not already
             result.Exception ??= new ExceptionDetails();
-
+            
             // Extract exception type
             var typeMatch = Regex.Match(output, @"Exception type:\s+(.+)");
             if (typeMatch.Success)
@@ -318,7 +336,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 var exceptionType = typeMatch.Groups[1].Value.Trim();
                 result.Exception.Type = exceptionType;
                 result.Summary!.CrashType = ".NET Managed Exception";
-
+                
                 // Also update DotNetInfo during migration
             }
             else
@@ -357,7 +375,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 if (!string.IsNullOrEmpty(inner) && inner != "<none>")
                 {
                     result.Exception.HasInnerException = true;
-
+                    
                     // Count nested exceptions
                     var nestedCount = Regex.Matches(output, @"Nested exception").Count;
                     if (nestedCount > 0)
@@ -395,18 +413,18 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // For native dumps or no exception, skip
         if (IsSosErrorOutput(peOutput)) return;
         if (!peOutput.Contains("Exception object:") && !peOutput.Contains("Exception type:")) return;
-
+        
         // Extract exception object address
         var addressMatch = Regex.Match(peOutput, @"Exception object:\s*([0-9a-fA-Fx]+)");
         if (!addressMatch.Success) return;
-
+        
         var exceptionAddress = addressMatch.Groups[1].Value;
-
+        
         // Use new structure for exception info, fall back to old
         var exceptionType = result.Exception?.Type;
         var exceptionMessage = result.Exception?.Message;
         var exceptionHResult = result.Exception?.HResult;
-
+        
         // Start building the ExceptionAnalysis
         var analysis = new ExceptionAnalysis
         {
@@ -415,7 +433,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             Message = exceptionMessage,
             HResult = FormatHResult(exceptionHResult)
         };
-
+        
         // Get StackTraceString from pe output (multi-line, ends at HResult or next section)
         var stackTraceStringMatch = Regex.Match(peOutput, @"StackTraceString:\s*(.+?)(?=\nHResult:|\nNested exception|$)", RegexOptions.Singleline);
         if (stackTraceStringMatch.Success)
@@ -426,23 +444,23 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 analysis.StackTraceString = stackStr;
             }
         }
-
+        
         // Inspect the exception object using dumpobj to get additional fields
         await InspectExceptionObjectAsync(exceptionAddress, analysis, result);
-
+        
         // Parse nested/inner exceptions from the pe -nested output (with circular reference protection)
         await ParseExceptionChainFromPeOutputAsync(peOutput, analysis, result);
-
+        
         // Add exception-type-specific properties
         await AddExceptionTypeSpecificPropertiesAsync(analysis, result);
-
+        
         // Set in new structure
         result.Exception ??= new ExceptionDetails();
         result.Exception.Analysis = analysis;
-
+        
         // Also set in old structure during migration
     }
-
+    
     /// <summary>
     /// Inspects an exception object using dumpobj to get additional fields like Source, Data, etc.
     /// </summary>
@@ -453,39 +471,39 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Use dumpobj to inspect the exception object
             var dumpOutput = await ExecuteCommandAsync($"!dumpobj {address}");
             result.RawCommands![$"!dumpobj {address}"] = dumpOutput;
-
+            
             if (IsSosErrorOutput(dumpOutput)) return;
-
+            
             // Parse fields from dumpobj output
             // Format: "      MT    Field   Offset                 Type VT     Attr            Value Name"
             //         "0000... 400001c       10         System.String  0 instance 0000... _className"
-
+            
             var lines = dumpOutput.Split('\n');
             foreach (var line in lines)
             {
                 var trimmedLine = line.Trim();
-
+                
                 // Parse field lines - look for known exception fields
                 // Example: 0000f7558ba8f6b8  4000119       88        System.String  0 instance 0000f7558edfca90 _source
-                var fieldMatch = Regex.Match(trimmedLine,
+                var fieldMatch = Regex.Match(trimmedLine, 
                     @"[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+(\S+)\s+\d\s+\w+\s+([0-9a-fA-Fx]+|null)\s+(\w+)");
-
+                
                 if (!fieldMatch.Success) continue;
-
+                
                 // Groups: 1=Type, 2=Value, 3=Name
                 var fieldValue = fieldMatch.Groups[2].Value;
                 var fieldName = fieldMatch.Groups[3].Value;
-
+                
                 // Skip null values
                 if (IsNullAddress(fieldValue)) continue;
-
+                
                 switch (fieldName.ToLowerInvariant())
                 {
                     case "_message":
                         // Always try to get the full message from the object
                         // The pe output might truncate long or multi-line messages
                         var objMessage = await GetStringValueAsync(fieldValue);
-                        if (!string.IsNullOrEmpty(objMessage) &&
+                        if (!string.IsNullOrEmpty(objMessage) && 
                             (string.IsNullOrEmpty(analysis.Message) || objMessage.Length > analysis.Message.Length))
                         {
                             analysis.Message = objMessage;
@@ -538,7 +556,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         break;
                 }
             }
-
+            
             // Parse target site from the exception's _stackTrace field if available
             await ParseTargetSiteAsync(dumpOutput, analysis, result);
         }
@@ -547,7 +565,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Silently ignore failures - don't fail the whole analysis
         }
     }
-
+    
     /// <summary>
     /// Gets a string value from an object address using dumpobj.
     /// Handles both single-line and multi-line string values.
@@ -558,18 +576,18 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             return null;
         }
-
+        
         try
         {
             var cmd = $"!dumpobj {address}";
             var output = await ExecuteCommandAsync(cmd);
-
+            
             // Store command output if rawCommands provided
             if (rawCommands != null)
             {
                 rawCommands[cmd] = output;
             }
-
+            
             // Look for the String: line which contains the actual string value
             // Format: String:          Method not found: '...'
             // For multiline strings, content continues on next lines
@@ -577,11 +595,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             if (stringIndex >= 0)
             {
                 var afterString = output[(stringIndex + 7)..]; // Skip "String:"
-
+                
                 // Find where the string content ends (typically before Fields: or next section)
                 var endMarkers = new[] { "\nFields:", "\nMT ", "\nMethodTable:", "\nEEClass:" };
                 var endIndex = afterString.Length;
-
+                
                 foreach (var marker in endMarkers)
                 {
                     var markerIndex = afterString.IndexOf(marker, StringComparison.OrdinalIgnoreCase);
@@ -590,14 +608,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         endIndex = markerIndex;
                     }
                 }
-
+                
                 var stringValue = afterString[..endIndex].Trim();
                 if (!string.IsNullOrEmpty(stringValue) && stringValue != "<none>")
                 {
                     return stringValue;
                 }
             }
-
+            
             // Alternate format - value directly after the type
             var valueMatch = Regex.Match(output, @"(?:String|System\.String).*?Value:\s*""?(.+?)""?\s*$", RegexOptions.Multiline);
             if (valueMatch.Success)
@@ -609,10 +627,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             // Ignore errors reading string values
         }
-
+        
         return null;
     }
-
+    
     /// <summary>
     /// Inspects the exception's Data dictionary (IDictionary) to extract key-value pairs.
     /// Exception.Data typically uses ListDictionaryInternal (linked list structure).
@@ -623,14 +641,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             return null;
         }
-
+        
         try
         {
             var output = await ExecuteCommandAsync($"!dumpobj {address}");
             if (IsSosErrorOutput(output)) return null;
-
+            
             var data = new Dictionary<string, string>();
-
+            
             // ListDictionaryInternal has a linked list structure:
             // - head: DictionaryNode (contains key, value, next)
             var headAddr = ExtractFieldAddress(output, "head");
@@ -640,7 +658,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 var currentNodeAddr = headAddr;
                 var count = 0;
                 var visitedNodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
+                
                 while (!IsNullAddress(currentNodeAddr) && count < 10) // Limit to 10 entries
                 {
                     var normalizedNodeAddr = NormalizeAddress(currentNodeAddr);
@@ -649,34 +667,34 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         break; // Circular reference protection
                     }
                     visitedNodes.Add(normalizedNodeAddr);
-
+                    
                     var nodeOutput = await ExecuteCommandAsync($"!dumpobj {currentNodeAddr}");
                     if (IsSosErrorOutput(nodeOutput)) break;
-
+                    
                     var keyAddr = ExtractFieldAddress(nodeOutput, "key");
                     var valueAddr = ExtractFieldAddress(nodeOutput, "value");
-
+                    
                     if (!string.IsNullOrEmpty(keyAddr))
                     {
                         var key = await GetStringValueAsync(keyAddr) ?? $"key_{count}";
-                        var value = !string.IsNullOrEmpty(valueAddr)
-                            ? await GetStringValueAsync(valueAddr) ?? valueAddr
+                        var value = !string.IsNullOrEmpty(valueAddr) 
+                            ? await GetStringValueAsync(valueAddr) ?? valueAddr 
                             : "null";
-
+                        
                         data[key] = value;
                         count++;
                     }
-
+                    
                     // Move to next node
                     currentNodeAddr = ExtractFieldAddress(nodeOutput, "next");
                 }
-
+                
                 if (count >= 10)
                 {
                     data["_truncated"] = "true";
                 }
             }
-
+            
             // Fallback: Try array-based dictionary (for other dictionary types)
             if (data.Count == 0)
             {
@@ -693,7 +711,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         foreach (Match entry in matches)
                         {
                             if (arrayCount >= 10) break;
-
+                            
                             var entryAddr = entry.Groups[1].Value;
                             if (!IsNullAddress(entryAddr))
                             {
@@ -702,21 +720,21 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                                 {
                                     var keyAddr = ExtractFieldAddress(entryOutput, "key");
                                     var valueAddr = ExtractFieldAddress(entryOutput, "value");
-
+                                    
                                     if (!string.IsNullOrEmpty(keyAddr))
                                     {
                                         var key = await GetStringValueAsync(keyAddr) ?? $"key_{arrayCount}";
-                                        var value = !string.IsNullOrEmpty(valueAddr)
-                                            ? await GetStringValueAsync(valueAddr) ?? valueAddr
+                                        var value = !string.IsNullOrEmpty(valueAddr) 
+                                            ? await GetStringValueAsync(valueAddr) ?? valueAddr 
                                             : "null";
-
+                                        
                                         data[key] = value;
                                         arrayCount++;
                                     }
                                 }
                             }
                         }
-
+                        
                         // Mark as truncated if we hit the limit
                         if (arrayCount >= 10 && matches.Count > 10)
                         {
@@ -725,11 +743,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     }
                 }
             }
-
+            
             // Check for _count to know if there are entries we couldn't read
             if (data.Count == 0)
             {
-                var countMatch = Regex.Match(output,
+                var countMatch = Regex.Match(output, 
                     @"[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+System\.Int32\s+\d\s+\w+\s+(\d+)\s+(?:_count|count|Count)");
                 if (countMatch.Success)
                 {
@@ -740,7 +758,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     }
                 }
             }
-
+            
             return data.Count > 0 ? data : null;
         }
         catch
@@ -748,7 +766,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             return null;
         }
     }
-
+    
     /// <summary>
     /// Parses target site information from the exception.
     /// Falls back to deriving from the exception stack trace if _exceptionMethod field isn't available.
@@ -756,13 +774,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private async Task ParseTargetSiteAsync(string dumpOutput, ExceptionAnalysis analysis, CrashAnalysisResult result)
     {
         // First try: Look for _exceptionMethod or _targetSite field
-        var methodMatch = Regex.Match(dumpOutput,
+        var methodMatch = Regex.Match(dumpOutput, 
             @"[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+\S+\s+\d\s+\w+\s+([0-9a-fA-Fx]+)\s+(?:_exceptionMethod|_targetSite)");
-
+        
         if (methodMatch.Success && !IsNullAddress(methodMatch.Groups[1].Value))
         {
             var methodAddress = methodMatch.Groups[1].Value;
-
+            
             try
             {
                 // Dump the MethodBase object to get method info
@@ -770,18 +788,18 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 if (!IsSosErrorOutput(methodOutput))
                 {
                     analysis.TargetSite = new TargetSiteInfo();
-
+                    
                     // Try to extract method name
                     var nameMatch = Regex.Match(methodOutput, @"Name:\s+(.+)$", RegexOptions.Multiline);
                     if (nameMatch.Success)
                     {
                         analysis.TargetSite.Name = nameMatch.Groups[1].Value.Trim();
                     }
-
+                    
                     // If we can find the declaring type
-                    var declaringTypeMatch = Regex.Match(methodOutput,
+                    var declaringTypeMatch = Regex.Match(methodOutput, 
                         @"[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+\S+\s+\d\s+\w+\s+([0-9a-fA-Fx]+)\s+(?:m_declaringType|_declaringType|DeclaringType)");
-
+                    
                     if (declaringTypeMatch.Success && !IsNullAddress(declaringTypeMatch.Groups[1].Value))
                     {
                         var typeOutput = await ExecuteCommandAsync($"!dumpobj {declaringTypeMatch.Groups[1].Value}");
@@ -791,7 +809,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                             analysis.TargetSite.DeclaringType = typeNameMatch.Groups[1].Value.Trim();
                         }
                     }
-
+                    
                     // If we got a name, we're done
                     if (!string.IsNullOrEmpty(analysis.TargetSite.Name))
                     {
@@ -804,7 +822,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Fall through to try stack trace fallback
             }
         }
-
+        
         // Fallback: Derive TargetSite from the first frame of the exception stack trace
         // The first frame is typically the method that threw the exception
         var exceptionStackTrace = result.Exception?.StackTrace;
@@ -814,7 +832,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             if (!string.IsNullOrEmpty(firstFrame.Function))
             {
                 analysis.TargetSite ??= new TargetSiteInfo();
-
+                
                 // Parse "Namespace.Class.Method(args)" format
                 var methodName = firstFrame.Function;
                 var parenIndex = methodName.IndexOf('(');
@@ -824,7 +842,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     analysis.TargetSite.Signature = methodName;
                     methodName = methodName[..parenIndex];
                 }
-
+                
                 // Split into declaring type and method name
                 var lastDotIndex = methodName.LastIndexOf('.');
                 if (lastDotIndex > 0)
@@ -839,13 +857,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Maximum depth for exception chain traversal to prevent excessive command execution.
     /// Most legitimate exception chains are under 10 levels deep.
     /// </summary>
     private const int MaxExceptionChainDepth = 20;
-
+    
     /// <summary>
     /// Parses the exception chain from !pe -nested output.
     /// Uses a visited set to prevent infinite loops from circular references.
@@ -856,13 +874,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         var chain = new List<ExceptionChainEntry>();
         var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var depth = 0;
-
+        
         // Add the root exception (already visited)
         if (!string.IsNullOrEmpty(analysis.ExceptionAddress))
         {
             visited.Add(NormalizeAddress(analysis.ExceptionAddress));
         }
-
+        
         chain.Add(new ExceptionChainEntry
         {
             Depth = depth,
@@ -872,29 +890,29 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             Address = analysis.ExceptionAddress,
             Source = analysis.Source
         });
-
+        
         // Look for nested exception sections
         // Format: "Nested exception -----------------------------------------------------"
         //         "Exception object: 0000f7158edfca10"
         //         "Exception type:   System.TypeLoadException"
         //         "Message:          Could not load type..."
-
+        
         var nestedSections = peOutput.Split(new[] { "Nested exception" }, StringSplitOptions.RemoveEmptyEntries);
         ExceptionAnalysis? currentInner = null;
-
+        
         for (var i = 1; i < nestedSections.Length && depth < MaxExceptionChainDepth; i++)
         {
             var section = nestedSections[i];
             depth++;
-
+            
             var entry = new ExceptionChainEntry { Depth = depth };
-
+            
             var addressMatch = Regex.Match(section, @"Exception object:\s*([0-9a-fA-Fx]+)");
             if (addressMatch.Success)
             {
                 entry.Address = addressMatch.Groups[1].Value;
                 var normalizedAddr = NormalizeAddress(entry.Address);
-
+                
                 // Check for circular reference
                 if (visited.Contains(normalizedAddr))
                 {
@@ -904,13 +922,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
                 visited.Add(normalizedAddr);
             }
-
+            
             var typeMatch = Regex.Match(section, @"Exception type:\s+(.+)");
             if (typeMatch.Success)
             {
                 entry.Type = typeMatch.Groups[1].Value.Trim();
             }
-
+            
             // Message can be multi-line, capture until next field marker
             var messageMatch = Regex.Match(section, @"Message:\s+(.+?)(?=\nInnerException:|\nStackTrace|\nHResult:|\nNested exception|$)", RegexOptions.Singleline);
             if (messageMatch.Success)
@@ -921,15 +939,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     entry.Message = msg;
                 }
             }
-
+            
             var hresultMatch = Regex.Match(section, @"HResult:\s+([0-9a-fA-F]+)");
             if (hresultMatch.Success)
             {
                 entry.HResult = FormatHResult(hresultMatch.Groups[1].Value.Trim());
             }
-
+            
             chain.Add(entry);
-
+            
             // Build nested InnerException structure with deep inspection
             var innerAnalysis = new ExceptionAnalysis
             {
@@ -938,16 +956,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 Message = entry.Message,
                 HResult = entry.HResult
             };
-
+            
             // Deep inspect the inner exception to get Source, FusionLog, etc.
             if (!string.IsNullOrEmpty(entry.Address))
             {
                 await InspectExceptionObjectAsync(entry.Address, innerAnalysis, result);
-
+                
                 // Update chain entry with discovered/improved values
                 entry.Source = innerAnalysis.Source;
                 // Message might have been updated with full multi-line content
-                if (!string.IsNullOrEmpty(innerAnalysis.Message) &&
+                if (!string.IsNullOrEmpty(innerAnalysis.Message) && 
                     (string.IsNullOrEmpty(entry.Message) || innerAnalysis.Message.Length > entry.Message.Length))
                 {
                     entry.Message = innerAnalysis.Message;
@@ -957,11 +975,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     entry.HResult = innerAnalysis.HResult;
                 }
-
+                
                 // Also extract type-specific properties for inner exceptions
                 await AddExceptionTypeSpecificPropertiesAsync(innerAnalysis, result);
             }
-
+            
             // Link to the chain
             if (currentInner == null)
             {
@@ -974,13 +992,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 currentInner = innerAnalysis;
             }
         }
-
+        
         if (chain.Count > 0)
         {
             analysis.ExceptionChain = chain;
         }
     }
-
+    
     /// <summary>
     /// Adds exception-type-specific properties based on the exception type.
     /// For example: FileNotFoundException has FileName, TypeLoadException has TypeName, etc.
@@ -988,10 +1006,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private async Task AddExceptionTypeSpecificPropertiesAsync(ExceptionAnalysis analysis, CrashAnalysisResult result)
     {
         if (string.IsNullOrEmpty(analysis.FullTypeName) || string.IsNullOrEmpty(analysis.ExceptionAddress)) return;
-
+        
         var customProps = new Dictionary<string, object?>();
         var typeName = analysis.FullTypeName;
-
+        
         try
         {
             // Get the exception object details
@@ -999,7 +1017,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             var dumpOutput = await ExecuteCommandAsync(dumpCmd);
             result.RawCommands![dumpCmd] = dumpOutput;
             if (IsSosErrorOutput(dumpOutput)) return;
-
+            
             // FileNotFoundException / FileLoadException
             if (typeName.Contains("FileNotFoundException") || typeName.Contains("FileLoadException"))
             {
@@ -1008,7 +1026,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     customProps["fileName"] = await GetStringValueAsync(fileNameValue);
                 }
-
+                
                 // FusionLog is particularly important for these
                 var fusionLogValue = ExtractFieldAddress(dumpOutput, "_fusionLog");
                 if (!string.IsNullOrEmpty(fusionLogValue) && string.IsNullOrEmpty(analysis.FusionLog))
@@ -1024,7 +1042,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     customProps["typeName"] = await GetStringValueAsync(typeNameValue);
                 }
-
+                
                 var assemblyNameValue = ExtractFieldAddress(dumpOutput, "_assemblyName");
                 if (!string.IsNullOrEmpty(assemblyNameValue))
                 {
@@ -1032,8 +1050,8 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
             }
             // MissingMethodException / MissingFieldException / MissingMemberException
-            else if (typeName.Contains("MissingMethodException") ||
-                     typeName.Contains("MissingFieldException") ||
+            else if (typeName.Contains("MissingMethodException") || 
+                     typeName.Contains("MissingFieldException") || 
                      typeName.Contains("MissingMemberException"))
             {
                 var classNameValue = ExtractFieldAddress(dumpOutput, "_className");
@@ -1041,13 +1059,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     customProps["className"] = await GetStringValueAsync(classNameValue);
                 }
-
+                
                 var memberNameValue = ExtractFieldAddress(dumpOutput, "_memberName");
                 if (!string.IsNullOrEmpty(memberNameValue))
                 {
                     customProps["memberName"] = await GetStringValueAsync(memberNameValue);
                 }
-
+                
                 var signatureValue = ExtractFieldAddress(dumpOutput, "_signature");
                 if (!string.IsNullOrEmpty(signatureValue))
                 {
@@ -1062,7 +1080,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     customProps["paramName"] = await GetStringValueAsync(paramNameValue);
                 }
-
+                
                 // ArgumentOutOfRangeException may have actual value
                 if (typeName.Contains("ArgumentOutOfRangeException"))
                 {
@@ -1135,7 +1153,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     customProps["webExceptionStatus"] = int.Parse(statusMatch.Groups[1].Value);
                 }
-
+                
                 // Response might have more info
                 var responseField = ExtractFieldAddress(dumpOutput, "_response");
                 if (!string.IsNullOrEmpty(responseField))
@@ -1151,13 +1169,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     customProps["hasDemanded"] = true;
                 }
-
+                
                 var permissionStateValue = ExtractFieldAddress(dumpOutput, "_permissionState");
                 if (!string.IsNullOrEmpty(permissionStateValue))
                 {
                     customProps["permissionState"] = await GetStringValueAsync(permissionStateValue);
                 }
-
+                
                 var actionValue = Regex.Match(dumpOutput, @"[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+\S*SecurityAction\S*\s+\d\s+\w+\s+(\d+)\s+(?:_action|m_action)");
                 if (actionValue.Success)
                 {
@@ -1231,7 +1249,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 customProps["isOverflow"] = true;
             }
-
+            
             if (customProps.Count > 0)
             {
                 analysis.CustomProperties = customProps;
@@ -1242,7 +1260,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Silently ignore failures adding type-specific properties
         }
     }
-
+    
     /// <summary>
     /// Extracts a field address from dumpobj output.
     /// </summary>
@@ -1250,7 +1268,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         var pattern = $@"[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+[0-9a-fA-Fx]+\s+\S+\s+\d\s+\w+\s+([0-9a-fA-Fx]+)\s+{Regex.Escape(fieldName)}";
         var match = Regex.Match(dumpOutput, pattern, RegexOptions.IgnoreCase);
-
+        
         if (match.Success)
         {
             var value = match.Groups[1].Value;
@@ -1259,10 +1277,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 return value;
             }
         }
-
+        
         return null;
     }
-
+    
     /// <summary>
     /// Normalizes an address by removing 0x prefix and converting to lowercase.
     /// Used for consistent address comparisons.
@@ -1270,26 +1288,26 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private static string NormalizeAddress(string? address)
     {
         if (string.IsNullOrEmpty(address)) return string.Empty;
-
+        
         // Remove 0x prefix if present
-        var normalized = address.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
-            ? address[2..]
+        var normalized = address.StartsWith("0x", StringComparison.OrdinalIgnoreCase) 
+            ? address[2..] 
             : address;
-
+        
         return normalized.ToLowerInvariant();
     }
-
+    
     /// <summary>
     /// Formats an HResult code with 0x prefix.
     /// </summary>
     private static string? FormatHResult(string? hresult)
     {
         if (string.IsNullOrEmpty(hresult)) return null;
-
+        
         // Remove any existing 0x prefix and leading zeros, then reformat
         var cleanHResult = hresult.TrimStart('0', 'x', 'X');
         if (string.IsNullOrEmpty(cleanHResult)) cleanHResult = "0";
-
+        
         return $"0x{cleanHResult.PadLeft(8, '0')}";
     }
 
@@ -1307,7 +1325,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Try alternate format
             stackTraceStart = output.IndexOf("StackTrace:", StringComparison.OrdinalIgnoreCase);
         }
-
+        
         if (stackTraceStart == -1) return;
 
         // Find the end of the stack trace (next section or end of output)
@@ -1323,20 +1341,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
         var stackTraceSection = output.Substring(stackTraceStart, stackTraceEnd - stackTraceStart);
         var lines = stackTraceSection.Split('\n');
-
+        
         // Initialize stack traces in both old and new structures
         var stackFrames = new List<StackFrame>();
         result.Exception ??= new ExceptionDetails();
         result.Exception.StackTrace = stackFrames;
-
+        
         var frameNumber = 0;
 
         foreach (var line in lines)
         {
             var trimmedLine = line.Trim();
-
+            
             // Skip header lines
-            if (string.IsNullOrWhiteSpace(trimmedLine) ||
+            if (string.IsNullOrWhiteSpace(trimmedLine) || 
                 trimmedLine.StartsWith("StackTrace", StringComparison.OrdinalIgnoreCase) ||
                 trimmedLine.StartsWith("SP ", StringComparison.OrdinalIgnoreCase) ||
                 trimmedLine == "SP               IP               Function")
@@ -1345,9 +1363,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
 
             // Parse frame: "0000FFFFEFCB9400 0000F7558B725348 Module.dll!Namespace.Class.Method(args)+0x48"
-            var frameMatch = Regex.Match(trimmedLine,
+            var frameMatch = Regex.Match(trimmedLine, 
                 @"^([0-9a-fA-F]+)\s+([0-9a-fA-F]+)\s+(.+)$");
-
+            
             if (frameMatch.Success)
             {
                 var sp = frameMatch.Groups[1].Value;
@@ -1363,7 +1381,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     module = callSite.Substring(0, bangIndex);
                     function = callSite.Substring(bangIndex + 1);
-
+                    
                     // Remove +offset from function name for cleaner display
                     var plusIndex = function.LastIndexOf('+');
                     if (plusIndex > 0 && Regex.IsMatch(function.Substring(plusIndex + 1), @"^0x[0-9a-fA-F]+$"))
@@ -1384,7 +1402,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Enriches exception stack frames with complete info from matching thread stack frames.
     /// The pe -nested output only has basic info (SP, IP, function), but clrstack -a has everything.
@@ -1396,11 +1414,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         var exceptionStackTrace = result.Exception?.StackTrace;
         if (exceptionStackTrace == null || exceptionStackTrace.Count == 0)
             return;
-
+        
         // Build a lookup dictionary from all thread stack frames
         // Key: function name (normalized), Value: frame with full info
         var frameLookup = new Dictionary<string, StackFrame>(StringComparer.OrdinalIgnoreCase);
-
+        
         var threads = result.Threads?.All;
         if (threads == null)
         {
@@ -1410,12 +1428,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         foreach (var thread in threads)
         {
             if (thread.CallStack == null) continue;
-
+            
             foreach (var frame in thread.CallStack)
             {
                 if (string.IsNullOrEmpty(frame.Function))
                     continue;
-
+                
                 // Normalize function name by removing parameter types for better matching
                 var normalizedFunc = NormalizeFunctionName(frame.Function);
                 if (!frameLookup.ContainsKey(normalizedFunc))
@@ -1424,15 +1442,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
             }
         }
-
+        
         // Now enrich exception stack frames with all available info
         foreach (var exFrame in exceptionStackTrace)
         {
             if (string.IsNullOrEmpty(exFrame.Function))
                 continue;
-
+            
             var normalizedFunc = NormalizeFunctionName(exFrame.Function);
-
+            
             if (frameLookup.TryGetValue(normalizedFunc, out var matchingFrame))
             {
                 // Copy source info
@@ -1440,17 +1458,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 exFrame.LineNumber = matchingFrame.LineNumber;
                 exFrame.SourceUrl = matchingFrame.SourceUrl;
                 exFrame.SourceProvider = matchingFrame.SourceProvider;
-
+                
                 // Copy parameters and locals
                 exFrame.Parameters = matchingFrame.Parameters;
                 exFrame.Locals = matchingFrame.Locals;
-
+                
                 // Copy register info
                 exFrame.Registers = matchingFrame.Registers;
             }
         }
     }
-
+    
     /// <summary>
     /// Normalizes a function name for matching by removing parameter type info.
     /// "Namespace.Class.Method(System.String)" -> "Namespace.Class.Method"
@@ -1459,17 +1477,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(function))
             return function;
-
+        
         // Find the opening parenthesis and truncate
         var parenIndex = function.IndexOf('(');
         if (parenIndex > 0)
         {
             return function.Substring(0, parenIndex);
         }
-
+        
         return function;
     }
-
+    
     /// <summary>
     /// Normalizes location format to use square brackets instead of angle brackets.
     /// Converts "&lt;CLR reg&gt;" to "[CLR reg]" for cleaner JSON output.
@@ -1478,16 +1496,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(location))
             return location;
-
+        
         // If already has angle brackets, convert to square brackets
         if (location.StartsWith('<') && location.EndsWith('>'))
         {
             return $"[{location.Substring(1, location.Length - 2)}]";
         }
-
+        
         return location;
     }
-
+    
     /// <summary>
     /// Normalizes type name format for cleaner output.
     /// Converts "Type ByRef" to "Type(ByRef)" to show ByRef as a modifier.
@@ -1496,19 +1514,19 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(typeName))
             return typeName ?? string.Empty;
-
+        
         // Handle "Type ByRef" -> "Type(ByRef)"
         if (typeName.EndsWith(" ByRef", StringComparison.Ordinal))
         {
             return $"{typeName.Substring(0, typeName.Length - 6)}(ByRef)";
         }
-
+        
         // Handle "Type&" -> "Type(ByRef)" (alternative syntax for ByRef)
         if (typeName.EndsWith('&'))
         {
             return $"{typeName.Substring(0, typeName.Length - 1)}(ByRef)";
         }
-
+        
         return typeName;
     }
 
@@ -1547,7 +1565,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Set in new structure
         result.Memory ??= new MemoryInfo();
         result.Memory.HeapStats = heapStats;
-
+        
         // Also set in old structure during migration
 
         // Add recommendation if heap is large
@@ -1570,7 +1588,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // - .GetAwaiter().GetResult()
         // - WaitAll, WaitAny
         // - AsyncHelpers.RunSync
-
+        
         var deadlockIndicators = new[]
         {
             @"\.Wait\(\)",                          // Task.Wait()
@@ -1583,10 +1601,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             @"ManualResetEvent.*WaitOne",           // Blocking wait
             @"AutoResetEvent.*WaitOne"              // Blocking wait
         };
-
+        
         var indicatorCount = 0;
         var foundPatterns = new List<string>();
-
+        
         foreach (var pattern in deadlockIndicators)
         {
             var matches = Regex.Matches(output, pattern, RegexOptions.IgnoreCase);
@@ -1596,10 +1614,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 foundPatterns.Add(pattern);
             }
         }
-
+        
         // Also check for multiple threads blocked on async continuations
         var blockedOnAsyncCount = Regex.Matches(output, @"System\.Threading\.Tasks.*Continuation", RegexOptions.IgnoreCase).Count;
-
+        
         // Only flag as async deadlock if we have strong evidence:
         // - Multiple blocking calls OR
         // - Multiple threads blocked on continuations
@@ -1608,9 +1626,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Set in new structure
             result.Async ??= new AsyncInfo();
             result.Async.HasDeadlock = true;
-
+            
             // Also set in old structure during migration
-
+            
             result.Summary!.CrashType = ".NET Async Deadlock";
             var rec = "Possible async/await deadlock detected. Avoid .Wait() and .Result on async methods. Use await instead.";
             result.Summary?.Recommendations?.Add(rec);
@@ -1692,7 +1710,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             // Skip empty lines and header lines
             var trimmedLine = line.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedLine) ||
+            if (string.IsNullOrWhiteSpace(trimmedLine) || 
                 trimmedLine.StartsWith("ThreadCount") ||
                 trimmedLine.StartsWith("Unstarted") ||
                 trimmedLine.StartsWith("Background") ||
@@ -1724,7 +1742,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             var threadObj = parts[3];
             var state = parts[4];
             var gcMode = parts[5];
-
+            
             // Find lock count and apt - they're near the end
             // The GC Alloc Context might have a colon, Domain is next hex, then count, then apt
             int lockCount = 0;
@@ -1778,12 +1796,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Threads from clrstack -f -r -all have ThreadId like "0x8954"
             // Skip dead threads (OSID = 0) as they don't have an OS thread
             ThreadInfo? matchingThread = null;
-
+            
             if (osId != "0")
             {
                 var osIdDecimal = Convert.ToInt32(osId, 16);
                 var osIdHex = $"0x{osId}";
-
+                
                 var threads = result.Threads?.All;
                 matchingThread = threads?.FirstOrDefault(t =>
                     // Direct match: ThreadId == "0x8954"
@@ -1811,7 +1829,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 matchingThread.CurrentException = currentException;
                 matchingThread.IsDead = isDead;
                 matchingThread.IsThreadpool = threadType?.Contains("Threadpool") == true;
-
+                
                 // CLR thread state is a bitmask - check the TS_Background flag (0x1000, bit 12)
                 // State examples: 0x20020 (foreground), 0x21220 (finalizer/background), 0x1021220 (threadpool/background)
                 if (long.TryParse(state, System.Globalization.NumberStyles.HexNumber, null, out var stateValue))
@@ -1847,12 +1865,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         if (match.Success)
         {
             var finalizerCount = int.Parse(match.Groups[1].Value);
-
+            
             // Set in new structure
             result.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
             result.Threads.Summary ??= new ThreadSummary();
             result.Threads.Summary.FinalizerQueueLength = finalizerCount;
-
+            
             // Also set in old structure during migration
 
             // Add recommendation if finalizer queue is large
@@ -1863,7 +1881,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Parses thread pool information from !threadpool output.
     /// </summary>
@@ -1871,77 +1889,77 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (IsSosErrorOutput(output))
             return;
-
+        
         var threadPool = new ThreadPoolInfo();
-
+        
         // Check for portable thread pool
         if (output.Contains("Portable thread pool", StringComparison.OrdinalIgnoreCase))
         {
             threadPool.IsPortableThreadPool = true;
         }
-
+        
         // Parse CPU utilization: "CPU utilization:  31%"
         var cpuMatch = Regex.Match(output, @"CPU utilization:\s*(\d+)%", RegexOptions.IgnoreCase);
         if (cpuMatch.Success)
         {
             threadPool.CpuUtilization = int.Parse(cpuMatch.Groups[1].Value);
         }
-
+        
         // Parse Workers Total: "Workers Total:    3"
         var totalMatch = Regex.Match(output, @"Workers Total:\s*(\d+)", RegexOptions.IgnoreCase);
         if (totalMatch.Success)
         {
             threadPool.WorkersTotal = int.Parse(totalMatch.Groups[1].Value);
         }
-
+        
         // Parse Workers Running: "Workers Running:  0"
         var runningMatch = Regex.Match(output, @"Workers Running:\s*(\d+)", RegexOptions.IgnoreCase);
         if (runningMatch.Success)
         {
             threadPool.WorkersRunning = int.Parse(runningMatch.Groups[1].Value);
         }
-
+        
         // Parse Workers Idle: "Workers Idle:     3"
         var idleMatch = Regex.Match(output, @"Workers Idle:\s*(\d+)", RegexOptions.IgnoreCase);
         if (idleMatch.Success)
         {
             threadPool.WorkersIdle = int.Parse(idleMatch.Groups[1].Value);
         }
-
+        
         // Parse Worker Min Limit: "Worker Min Limit: 4"
         var minMatch = Regex.Match(output, @"Worker Min Limit:\s*(\d+)", RegexOptions.IgnoreCase);
         if (minMatch.Success)
         {
             threadPool.WorkerMinLimit = int.Parse(minMatch.Groups[1].Value);
         }
-
+        
         // Parse Worker Max Limit: "Worker Max Limit: 32767"
         var maxMatch = Regex.Match(output, @"Worker Max Limit:\s*(\d+)", RegexOptions.IgnoreCase);
         if (maxMatch.Success)
         {
             threadPool.WorkerMaxLimit = int.Parse(maxMatch.Groups[1].Value);
         }
-
+        
         // Set in new structure
         result.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
         result.Threads.ThreadPool = threadPool;
-
+        
         // Also set in old structure during migration
-
+        
         // Add recommendations based on thread pool state
         if (threadPool.WorkersRunning == threadPool.WorkersTotal && threadPool.WorkersTotal > 0)
         {
             var rec = $"All {threadPool.WorkersTotal} thread pool workers are running. This may indicate thread pool saturation.";
             result.Summary?.Recommendations?.Add(rec);
         }
-
+        
         if (threadPool.CpuUtilization.HasValue && threadPool.CpuUtilization > 90)
         {
             var rec = $"High CPU utilization ({threadPool.CpuUtilization}%). Consider profiling for CPU-bound operations.";
             result.Summary?.Recommendations?.Add(rec);
         }
     }
-
+    
     /// <summary>
     /// Parses timer information from !ti output.
     /// </summary>
@@ -1949,16 +1967,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (IsSosErrorOutput(output))
             return;
-
+        
         var timers = new List<TimerInfo>();
-
+        
         // Parse timer lines - format:
         // (L) 0x0000F7158EDFD1D0 @    3999 ms every     4000 ms |  0000F7158EDFCE20 (TypeName) -> CallbackName
         // (L) 0x0000F7158ED7CD88 @    2000 ms every   ------ ms |  0000F7158ED7CD40 (TypeName) -> CallbackName
         var timerRegex = new Regex(
             @"\(L\)\s+0x([0-9a-fA-F]+)\s+@\s+(\d+)\s+ms\s+every\s+([\d\-]+)\s+ms\s+\|\s+([0-9a-fA-F]+)\s+\(([^)]+)\)\s*(?:->\s*(.*))?",
             RegexOptions.IgnoreCase);
-
+        
         foreach (var line in output.Split('\n'))
         {
             var match = timerRegex.Match(line);
@@ -1972,37 +1990,37 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     StateType = match.Groups[5].Value.Trim(),
                     Callback = string.IsNullOrWhiteSpace(match.Groups[6].Value) ? null : match.Groups[6].Value.Trim()
                 };
-
+                
                 // Parse period (------ means one-shot timer)
                 var periodStr = match.Groups[3].Value.Trim();
                 if (periodStr != "------" && int.TryParse(periodStr, out var period))
                 {
                     timer.PeriodMs = period;
                 }
-
+                
                 timers.Add(timer);
             }
         }
-
+        
         // Also parse the timer count if available: "   11 timers"
         var countMatch = Regex.Match(output, @"(\d+)\s+timers", RegexOptions.IgnoreCase);
-
+        
         if (timers.Count > 0)
         {
             // Set in new structure
             result.Async ??= new AsyncInfo();
             result.Async.Timers = timers;
-
+            
             // Also set in old structure during migration
         }
-
+        
         // Add recommendations based on timer info
         if (timers.Count > 50)
         {
             var rec = $"High number of active timers ({timers.Count}). This may indicate timer leaks or inefficient timer usage.";
             result.Summary?.Recommendations?.Add(rec);
         }
-
+        
         // Check for very short interval timers
         var shortTimers = timers.Where(t => t.PeriodMs.HasValue && t.PeriodMs < 100).ToList();
         if (shortTimers.Count > 0)
@@ -2086,7 +2104,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
         // Check for ACTUAL potential leak indicators - these are things that genuinely suggest issues
         // NOT just common types like String/Byte[] which are normal
-
+        
         // 1. Event handlers - these are a common source of leaks when not unsubscribed
         var eventHandlerAllocations = topConsumers
             .Where(t => t.TypeName.Contains("EventHandler") || t.TypeName.Contains("Delegate"))
@@ -2181,12 +2199,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Parse sync blocks
         // Format: "Index SyncBlock MonitorHeld Recursion Owning Thread Info  SyncBlock Owner"
         // Example: "   12 0000024453f8a5a8    1         1 0000024453f46720  1c54  10   00000244540a5820 System.Object"
-        var syncBlkMatches = Regex.Matches(syncBlkOutput,
+        var syncBlkMatches = Regex.Matches(syncBlkOutput, 
             @"(\d+)\s+([0-9a-f]+)\s+(\d+)\s+(\d+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+(\d+)\s+([0-9a-f]+)\s+(.+)",
             RegexOptions.IgnoreCase);
 
         var heldLocks = new Dictionary<string, (string Owner, string ObjectType, string SyncBlock)>();
-
+        
         foreach (Match match in syncBlkMatches)
         {
             var monitorHeld = int.Parse(match.Groups[3].Value);
@@ -2211,7 +2229,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Look for threads waiting to enter monitors
         // Check !threads output for "Lock" or "Wait" state
         var threadsOutput = result.RawCommands?.GetValueOrDefault("!clrthreads", "") ?? "";
-        var waitingThreadMatches = Regex.Matches(threadsOutput,
+        var waitingThreadMatches = Regex.Matches(threadsOutput, 
             @"(\d+)\s+(\d+)\s+([0-9a-f]+).*?(Wait|Lock|Preemptive)",
             RegexOptions.IgnoreCase);
 
@@ -2219,7 +2237,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         foreach (Match match in waitingThreadMatches)
         {
             var state = match.Groups[4].Value;
-            if (state.Equals("Wait", StringComparison.OrdinalIgnoreCase) ||
+            if (state.Equals("Wait", StringComparison.OrdinalIgnoreCase) || 
                 state.Equals("Lock", StringComparison.OrdinalIgnoreCase))
             {
                 var threadId = match.Groups[1].Value;
@@ -2356,7 +2374,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         // Check for various error conditions that indicate SOS/CLR is not available (native dump)
         // In these cases, we preserve the native stacks from bt all
-        if (IsSosErrorOutput(clrStackFullOutput) ||
+        if (IsSosErrorOutput(clrStackFullOutput) || 
             !clrStackFullOutput.Contains("OS Thread Id:", StringComparison.OrdinalIgnoreCase)) // No valid thread headers
         {
             // Keep existing native stacks from bt all
@@ -2367,7 +2385,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         ThreadInfo? currentThread = null;
         StackFrame? lastFrame = null;
         var frameNumber = 0;
-
+        
         // Track which section we're parsing (PARAMETERS or LOCALS)
         var currentSection = VariableSection.None;
 
@@ -2390,7 +2408,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     currentThread = FindThreadByTid(threads, threadMatch.Groups[1].Value);
                 }
-
+                
                 // If thread not found, create a new one
                 if (currentThread == null)
                 {
@@ -2401,7 +2419,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     };
                     result.Threads?.All?.Add(currentThread);
                 }
-
+                
                 // Clear existing call stack (we're replacing it with the full one)
                 currentThread.CallStack.Clear();
                 frameNumber = 0;
@@ -2411,20 +2429,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
 
             // Skip header lines and empty lines
-            if (string.IsNullOrWhiteSpace(line) ||
+            if (string.IsNullOrWhiteSpace(line) || 
                 line.Contains("Child SP", StringComparison.OrdinalIgnoreCase) ||
                 line.StartsWith("(lldb)", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
-
+            
             // Check for PARAMETERS: section header
             if (line.TrimStart().StartsWith("PARAMETERS:", StringComparison.OrdinalIgnoreCase))
             {
                 currentSection = VariableSection.Parameters;
                 continue;
             }
-
+            
             // Check for LOCALS: section header
             if (line.TrimStart().StartsWith("LOCALS:", StringComparison.OrdinalIgnoreCase))
             {
@@ -2438,21 +2456,21 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             if (line.StartsWith("    ") && line.Contains("=") && lastFrame != null)
             {
                 var trimmedLine = line.Trim();
-
+                
                 // If we're in a variable section and the line has a variable pattern, parse as variable
                 // Variable lines typically have: name (location) = value or <no data>
-                if (currentSection != VariableSection.None &&
-                    (trimmedLine.Contains("(<") || trimmedLine.StartsWith("<") ||
+                if (currentSection != VariableSection.None && 
+                    (trimmedLine.Contains("(<") || trimmedLine.StartsWith("<") || 
                      Regex.IsMatch(trimmedLine, @"^\w+\s*\([^)]+\)\s*=")))
                 {
                     // Pass parameter types only for PARAMETERS section
-                    var paramTypes = currentSection == VariableSection.Parameters
-                        ? ExtractParameterTypes(lastFrame.Function)
+                    var paramTypes = currentSection == VariableSection.Parameters 
+                        ? ExtractParameterTypes(lastFrame.Function) 
                         : null;
                     ParseVariableLine(trimmedLine, lastFrame, currentSection, paramTypes);
                     continue;
                 }
-
+                
                 // Check if it's a register line (multiple word=hex patterns on same line)
                 var registerPatterns = Regex.Matches(trimmedLine, @"\b[a-z]+\d*=[0-9a-f]+", RegexOptions.IgnoreCase);
                 if (registerPatterns.Count >= 3)
@@ -2462,12 +2480,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     ParseRegisterLine(line, lastFrame);
                     continue;
                 }
-
+                
                 // Could still be a variable line in PARAMETERS/LOCALS section
                 if (currentSection != VariableSection.None)
                 {
-                    var paramTypes = currentSection == VariableSection.Parameters
-                        ? ExtractParameterTypes(lastFrame.Function)
+                    var paramTypes = currentSection == VariableSection.Parameters 
+                        ? ExtractParameterTypes(lastFrame.Function) 
                         : null;
                     ParseVariableLine(trimmedLine, lastFrame, currentSection, paramTypes);
                     continue;
@@ -2484,7 +2502,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Enum for tracking which variable section we're parsing.
     /// </summary>
@@ -2494,7 +2512,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         Parameters,
         Locals
     }
-
+    
     /// <summary>
     /// Parses a variable line from PARAMETERS or LOCALS section.
     /// Formats:
@@ -2507,7 +2525,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private static void ParseVariableLine(string line, StackFrame frame, VariableSection section, List<string>? parameterTypes = null)
     {
         var variable = new LocalVariable();
-
+        
         // Check for <no data> pattern
         if (line.Contains("<no data>", StringComparison.OrdinalIgnoreCase))
         {
@@ -2548,12 +2566,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             variable.Name = "[unknown]";
             variable.Value = line;
         }
-
+        
         // Add to the appropriate list
         if (section == VariableSection.Parameters)
         {
             frame.Parameters ??= new List<LocalVariable>();
-
+            
             // Try to assign type from parameter types list
             // Account for 'this' parameter which is not in the signature
             var paramIndex = frame.Parameters.Count;
@@ -2568,14 +2586,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Adjust index: if first param is 'this', it's not in the signature
                 var hasThis = frame.Parameters.Count > 0 && frame.Parameters[0].Name == "this";
                 var typeIndex = hasThis ? paramIndex - 1 : paramIndex;
-
+                
                 if (typeIndex >= 0 && typeIndex < parameterTypes.Count)
                 {
                     variable.Type = NormalizeTypeName(parameterTypes[typeIndex]);
                     variable.IsReferenceType = IsReferenceType(variable.Type);
                 }
             }
-
+            
             frame.Parameters.Add(variable);
         }
         else if (section == VariableSection.Locals)
@@ -2584,7 +2602,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             frame.Locals.Add(variable);
         }
     }
-
+    
     /// <summary>
     /// Extracts parameter types from a function signature.
     /// E.g., "System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32)" -> ["Int32"]
@@ -2592,22 +2610,22 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private static List<string> ExtractParameterTypes(string function)
     {
         var types = new List<string>();
-
+        
         // Find the parameter list in parentheses
         var parenStart = function.LastIndexOf('(');
         var parenEnd = function.LastIndexOf(')');
-
+        
         if (parenStart < 0 || parenEnd <= parenStart)
             return types;
-
+        
         var paramString = function.Substring(parenStart + 1, parenEnd - parenStart - 1);
         if (string.IsNullOrWhiteSpace(paramString))
             return types;
-
+        
         // Split by comma, handling generic types with nested commas
         var depth = 0;
         var currentParam = new System.Text.StringBuilder();
-
+        
         foreach (var c in paramString)
         {
             if (c == '<' || c == '[') depth++;
@@ -2623,15 +2641,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
             currentParam.Append(c);
         }
-
+        
         if (currentParam.Length > 0)
         {
             types.Add(currentParam.ToString().Trim());
         }
-
+        
         return types;
     }
-
+    
     /// <summary>
     /// Extracts the containing type from a function name.
     /// E.g., "System.Threading.LowLevelLifoSemaphore.WaitForSignal(Int32)" -> "System.Threading.LowLevelLifoSemaphore"
@@ -2641,20 +2659,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Remove the module prefix if present (e.g., "System.Private.CoreLib.dll!")
         var bangIndex = function.IndexOf('!');
         var cleanFunc = bangIndex >= 0 ? function.Substring(bangIndex + 1) : function;
-
+        
         // Find the method name (last . before the parentheses)
         var parenIndex = cleanFunc.IndexOf('(');
         var methodPart = parenIndex >= 0 ? cleanFunc.Substring(0, parenIndex) : cleanFunc;
-
+        
         var lastDot = methodPart.LastIndexOf('.');
         if (lastDot > 0)
         {
             return methodPart.Substring(0, lastDot);
         }
-
+        
         return null;
     }
-
+    
     /// <summary>
     /// Determines if a type is a reference type based on its name.
     /// </summary>
@@ -2662,7 +2680,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(typeName))
             return null;
-
+        
         // Known value types (primitives and common structs)
         var valueTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -2674,39 +2692,39 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             "short", "int", "long", "ushort", "uint", "ulong",
             "byte", "sbyte", "bool", "char", "float", "double", "decimal",
             // Common structs
-            "DateTime", "DateTimeOffset", "TimeSpan", "Guid",
+            "DateTime", "DateTimeOffset", "TimeSpan", "Guid", 
             "Nullable`1", "ValueTuple", "Span`1", "ReadOnlySpan`1", "Memory`1",
             "CancellationToken", "Task"
         };
-
+        
         // Check if it's a known value type
         var baseName = typeName.Split('<', '`')[0]; // Handle generics
         if (valueTypes.Contains(baseName))
             return false;
-
+        
         // ByRef parameters point to the value (both old and new format)
         if (typeName.EndsWith(" ByRef", StringComparison.OrdinalIgnoreCase) ||
             typeName.EndsWith("(ByRef)", StringComparison.OrdinalIgnoreCase))
             return true; // The reference itself is an address
-
+        
         // Pointer types are addresses
         if (typeName.EndsWith('*'))
             return true;
-
+        
         // Arrays are reference types
         if (typeName.EndsWith("[]"))
             return true;
-
+        
         // String is a reference type
         if (baseName.Equals("String", StringComparison.OrdinalIgnoreCase) ||
             baseName.Equals("string", StringComparison.OrdinalIgnoreCase))
             return true;
-
+        
         // Object is a reference type
         if (baseName.Equals("Object", StringComparison.OrdinalIgnoreCase) ||
             baseName.Equals("object", StringComparison.OrdinalIgnoreCase))
             return true;
-
+        
         // Assume unknown types are reference types (most common case)
         // Unless they look like a struct pattern (start with uppercase, short name)
         return true;
@@ -2734,7 +2752,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Try to match thread by:
         // 1. ThreadId contains the tid in decimal: "1 (tid: 35156)"
         // 2. ThreadId matches hex format
-        return threads.FirstOrDefault(t =>
+        return threads.FirstOrDefault(t => 
             t.ThreadId.Contains($"tid: {tidDecimal}") ||
             t.ThreadId.Contains($"tid:{tidDecimal}") ||
             t.ThreadId.Contains($"(tid: {tidDecimal})") ||
@@ -2752,10 +2770,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // 1. SP IP CallSite:     "0000FFFFEFCB76A0 0000F75587765AB4 System.Runtime.EH.DispatchEx(...) [/path @ 123]"
         // 2. SP IP (empty):      "0000FFFFEFCB73D0 0000F7558FFEACE4 " (native crash point, no call site)
         // 3. SP    [Frame]:      "0000FFFFEFCB76F8                  [InlinedCallFrame: ...]" (IP column is spaces)
-
+        
         // First, try the full format with SP, IP, and CallSite
-        var fullMatch = Regex.Match(line,
-            @"^\s*([0-9a-f]{8,16})\s+([0-9a-f]{8,16})\s*(.*)$",
+        var fullMatch = Regex.Match(line, 
+            @"^\s*([0-9a-f]{8,16})\s+([0-9a-f]{8,16})\s*(.*)$", 
             RegexOptions.IgnoreCase);
 
         if (fullMatch.Success)
@@ -2770,15 +2788,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Try format where IP is empty (spaces) and we have [FrameName]
         // Format: "0000FFFFEFCB76F8                  [InlinedCallFrame: ...]"
         // Note: Lines may have trailing whitespace after ]
-        var noIpMatch = Regex.Match(line,
-            @"^\s*([0-9a-f]{8,16})\s+(\[.+\])\s*$",
+        var noIpMatch = Regex.Match(line, 
+            @"^\s*([0-9a-f]{8,16})\s+(\[.+\])\s*$", 
             RegexOptions.IgnoreCase);
 
         if (noIpMatch.Success)
         {
             var sp = noIpMatch.Groups[1].Value;
             var callSite = noIpMatch.Groups[2].Value.Trim();
-
+            
             return CreateStackFrame(sp, null, callSite, ref frameNumber);
         }
 
@@ -2899,7 +2917,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             libraryName = callSite.Substring(0, plusIdx);
         }
-
+        
         // For display, show the library name or native code marker
         var function = ip != null ? $"[Native Code @ 0x{ip}]" : $"[{libraryName}]";
         return (libraryName, function);
@@ -2988,10 +3006,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Format 1 (LLDB/SOS): "000000000012f000 00007ff812345678 Namespace.Class.Method(args)"
         // Format 2 (with source): "000000000012f000 00007ff812345678 Namespace.Class.Method(args) [/path/file.cs @ 42]"
         // Format 3 (simple): "Namespace.Class.Method(args)"
-
+        
         // Try to match full format with addresses
-        var fullMatch = Regex.Match(line,
-            @"^\s*([0-9a-f]+)\s+([0-9a-f]+)\s+(.+?)(?:\s*\[(.+?)\s*@\s*(\d+)\])?$",
+        var fullMatch = Regex.Match(line, 
+            @"^\s*([0-9a-f]+)\s+([0-9a-f]+)\s+(.+?)(?:\s*\[(.+?)\s*@\s*(\d+)\])?$", 
             RegexOptions.IgnoreCase);
 
         if (fullMatch.Success)
@@ -3083,7 +3101,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
         return (module, method);
     }
-
+    
     /// <summary>
     /// Enhances variable values by converting hex values to meaningful representations.
     /// For primitives: converts to actual values (e.g., "0x4e20" -> "20000")
@@ -3099,7 +3117,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
         // Collect ByRef variables that need dereferencing
         var byRefVariables = new List<LocalVariable>();
-
+        
         // First pass: convert primitive values and collect ByRef variables
         foreach (var thread in result.Threads.All)
         {
@@ -3111,7 +3129,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     foreach (var param in frame.Parameters)
                     {
                         EnhancePrimitiveValue(param);
-
+                        
                         // Collect ByRef variables for dereferencing
                         if (IsByRefVariable(param))
                         {
@@ -3119,14 +3137,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         }
                     }
                 }
-
+                
                 // Process locals
                 if (frame.Locals != null)
                 {
                     foreach (var local in frame.Locals)
                     {
                         EnhancePrimitiveValue(local);
-
+                        
                         // Collect ByRef variables for dereferencing
                         if (IsByRefVariable(local))
                         {
@@ -3136,16 +3154,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
             }
         }
-
+        
         // Second pass: resolve ByRef variables by dereferencing
         if (byRefVariables.Count > 0)
         {
             await ResolveByRefVariablesAsync(byRefVariables);
         }
-
+        
         // Third pass: collect all string addresses (including resolved ByRef strings)
         var stringAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
+        
         foreach (var thread in result.Threads.All)
         {
             foreach (var frame in thread.CallStack ?? Enumerable.Empty<StackFrame>())
@@ -3154,12 +3172,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 CollectStringAddresses(frame.Locals, stringAddresses);
             }
         }
-
+        
         // Fourth pass: resolve string values using !dumpobj
         if (stringAddresses.Count > 0)
         {
             var stringValues = await ResolveStringValuesAsync(stringAddresses, result.RawCommands);
-
+            
             // Apply resolved string values to variables (updates value to actual string content)
             foreach (var thread in result.Threads.All)
             {
@@ -3170,12 +3188,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
             }
         }
-
+        
         // Fifth pass: expand reference type objects using showobj
         // This gives full object inspection for complex types in JSON output
         await ExpandReferenceTypeObjectsAsync(result);
     }
-
+    
     /// <summary>
     /// Expands reference type objects by calling showobj to get their full structure.
     /// Uses name2ee to find the method table, then ObjectInspector to expand the object.
@@ -3189,7 +3207,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
         // Cache method tables to avoid repeated name2ee calls
         var methodTableCache = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-
+        
         foreach (var thread in result.Threads.All)
         {
             foreach (var frame in thread.CallStack ?? Enumerable.Empty<StackFrame>())
@@ -3199,63 +3217,63 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Expands a list of variables by resolving reference type objects.
     /// </summary>
     private async Task ExpandVariablesAsync(List<LocalVariable>? variables, Dictionary<string, string?> methodTableCache)
     {
         if (variables == null) return;
-
+        
         foreach (var variable in variables)
         {
             // Skip if no data
             if (!variable.HasData)
                 continue;
-
+            
             // Skip if type is unknown
             if (string.IsNullOrEmpty(variable.Type))
                 continue;
-
+            
             // Skip if value is already an expanded object (not a string)
             if (variable.Value != null && variable.Value is not string)
                 continue;
-
+            
             // Get base type name (strip ByRef suffix)
             var baseType = GetBaseTypeName(variable.Type);
-
+            
             // Skip primitive/basic BCL types that we already handle inline
             if (IsPrimitiveOrBasicBclType(baseType))
                 continue;
-
+            
             // Get the address to inspect
             var valueStr = variable.Value?.ToString();
             if (string.IsNullOrEmpty(valueStr))
                 continue;
-
+            
             // Handle [NO DATA] case
             if (valueStr.Equals("[NO DATA]", StringComparison.OrdinalIgnoreCase))
             {
                 variable.Value = new { error = "No Data" };
                 continue;
             }
-
+            
             // Check for null addresses
             if (IsNullAddress(valueStr))
             {
                 variable.Value = null;
                 continue;
             }
-
+            
             // For ByRef types, use the resolved address if available
             var addressToInspect = !string.IsNullOrEmpty(variable.ResolvedAddress)
                 ? variable.ResolvedAddress
                 : valueStr;
-
+            
             // Skip if address doesn't look valid
             if (!addressToInspect.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
                 continue;
-
+            
             try
             {
                 // Look up method table for this type (use cache)
@@ -3264,13 +3282,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     methodTable = await LookupMethodTableAsync(baseType);
                     methodTableCache[baseType] = methodTable;
                 }
-
+                
                 if (string.IsNullOrEmpty(methodTable))
                     continue; // Can't expand without method table
-
+                
                 // Expand the object using ObjectInspector
                 var expandedObject = await ExpandObjectAsync(addressToInspect, methodTable);
-
+                
                 if (expandedObject != null)
                 {
                     variable.RawValue = valueStr;
@@ -3284,7 +3302,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Gets the base type name, stripping (ByRef) suffix if present.
     /// </summary>
@@ -3296,7 +3314,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         }
         return typeName;
     }
-
+    
     /// <summary>
     /// Primitive and basic BCL types that are already handled inline and don't need showobj expansion.
     /// </summary>
@@ -3334,7 +3352,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Void
         "System.Void", "Void", "void"
     };
-
+    
     /// <summary>
     /// Checks if a type is a primitive or basic BCL type that doesn't need showobj expansion.
     /// </summary>
@@ -3343,7 +3361,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Direct match
         if (PrimitiveAndBasicBclTypes.Contains(typeName))
             return true;
-
+        
         // Handle generic type names like "System.Nullable`1[[System.Int32]]"
         var genericIndex = typeName.IndexOf('`');
         if (genericIndex > 0)
@@ -3353,14 +3371,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             if (nonGenericName.Equals("System.Nullable", StringComparison.OrdinalIgnoreCase))
                 return true;
         }
-
+        
         // Handle array notation - we handle arrays separately
         if (typeName.EndsWith("[]"))
             return true;
-
+        
         return false;
     }
-
+    
     /// <summary>
     /// Checks if an address represents null (handles various formats).
     /// </summary>
@@ -3368,19 +3386,19 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(address))
             return true;
-
+        
         // Handle literal "null" string
         if (address.Equals("null", StringComparison.OrdinalIgnoreCase))
             return true;
-
+        
         // Common null patterns - normalize and check for all zeros
         var normalized = address.ToUpperInvariant().Replace("0X", "").TrimStart('0');
-        return string.IsNullOrEmpty(normalized) ||
+        return string.IsNullOrEmpty(normalized) || 
                normalized == "0" ||
                address.Equals("0x00000000", StringComparison.OrdinalIgnoreCase) ||
                address.Equals("0x0000000000000000", StringComparison.OrdinalIgnoreCase);
     }
-
+    
     /// <summary>
     /// Looks up the method table for a type using name2ee command.
     /// </summary>
@@ -3390,29 +3408,29 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             // Use name2ee with wildcard module to search all assemblies
             var output = await ExecuteCommandAsync($"name2ee *!{typeName}");
-
-            if (string.IsNullOrWhiteSpace(output) ||
+            
+            if (string.IsNullOrWhiteSpace(output) || 
                 output.Contains("not found", StringComparison.OrdinalIgnoreCase))
             {
                 return null;
             }
-
+            
             // name2ee can return multiple assemblies. We need to find the section
             // that contains our type (has "Name: <typeName>" line)
             // Split by "------" separator
             var sections = output.Split(new[] { "------" }, StringSplitOptions.RemoveEmptyEntries);
-
+            
             foreach (var section in sections)
             {
                 // Check if this section contains the Name we're looking for
                 var nameMatch = Regex.Match(section, @"Name:\s+(.+)", RegexOptions.IgnoreCase);
                 if (!nameMatch.Success)
                     continue;
-
+                
                 var foundName = nameMatch.Groups[1].Value.Trim();
                 if (!foundName.Equals(typeName, StringComparison.OrdinalIgnoreCase))
                     continue;
-
+                
                 // Found the right section - extract MethodTable
                 var mtMatch = Regex.Match(section, @"MethodTable:\s*([0-9a-fA-Fx]+)", RegexOptions.IgnoreCase);
                 if (mtMatch.Success)
@@ -3420,7 +3438,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     return mtMatch.Groups[1].Value;
                 }
             }
-
+            
             // Fallback: If no exact name match, try to find any MethodTable
             // (for cases where the output format is different)
             var fallbackMatch = Regex.Match(output, @"MethodTable:\s*([0-9a-fA-Fx]+)", RegexOptions.IgnoreCase);
@@ -3428,7 +3446,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 return fallbackMatch.Groups[1].Value;
             }
-
+            
             return null;
         }
         catch
@@ -3436,7 +3454,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             return null;
         }
     }
-
+    
     /// <summary>
     /// Expands an object using ObjectInspector.
     /// </summary>
@@ -3446,12 +3464,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             var inspector = new ObjectInspection.ObjectInspector(
                 Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
-
+            
             // Use lower depth for report expansion to keep JSON manageable
             const int reportMaxDepth = 3;
             const int reportMaxArrayElements = 5;
             const int reportMaxStringLength = 256;
-
+            
             var result = await inspector.InspectAsync(
                 _debuggerManager,
                 address,
@@ -3460,7 +3478,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 reportMaxArrayElements,
                 reportMaxStringLength,
                 CancellationToken.None);
-
+            
             return result;
         }
         catch
@@ -3468,7 +3486,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             return null;
         }
     }
-
+    
     /// <summary>
     /// Checks if a variable is a ByRef type that needs dereferencing.
     /// </summary>
@@ -3476,16 +3494,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (variable.Type?.EndsWith("(ByRef)", StringComparison.OrdinalIgnoreCase) != true)
             return false;
-
+        
         if (!variable.HasData)
             return false;
-
+        
         // The ByRef address can be in different places:
         // 1. Location is a hex address (e.g., "0x0000FFFFEFCB76E8") - this IS the ByRef address
         // 2. Location is "[CLR reg]" and Value has the address
         return GetByRefAddress(variable) != null;
     }
-
+    
     /// <summary>
     /// Gets the ByRef address from a variable.
     /// The address can be in Location (if it's a hex) or in Value.
@@ -3498,7 +3516,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             return variable.Location;
         }
-
+        
         // Otherwise, check if Value is a hex address
         var valueStr = variable.Value?.ToString();
         if (!string.IsNullOrEmpty(valueStr) &&
@@ -3507,10 +3525,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             return valueStr;
         }
-
+        
         return null;
     }
-
+    
     /// <summary>
     /// Resolves ByRef variables by dereferencing their addresses to get the actual values.
     /// Only dereferences reference types - value types (structs) don't have a pointer to dereference.
@@ -3524,10 +3542,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 var byRefAddress = GetByRefAddress(variable);
                 if (string.IsNullOrEmpty(byRefAddress))
                     continue;
-
+                
                 // Get the base type (without ByRef modifier)
                 var baseType = GetBaseTypeFromByRef(variable.Type);
-
+                
                 // For VALUE TYPES (structs), the ByRef address points directly to the struct data
                 // We can't dereference it - the data IS at that address
                 // Mark it as a value type ByRef and store the address
@@ -3547,18 +3565,18 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     // For complex structs, just note the ByRef address (can use !dumpvc to inspect)
                     continue;
                 }
-
+                
                 // For REFERENCE TYPES, dereference to get the actual object pointer
                 var resolvedAddress = await DereferencePointerAsync(byRefAddress);
-
-                if (!string.IsNullOrEmpty(resolvedAddress) &&
-                    resolvedAddress != "0x00000000" &&
+                
+                if (!string.IsNullOrEmpty(resolvedAddress) && 
+                    resolvedAddress != "0x00000000" && 
                     resolvedAddress != "0x0000000000000000")
                 {
                     // Store both addresses
                     variable.ByRefAddress = byRefAddress;
                     variable.ResolvedAddress = resolvedAddress;
-
+                    
                     // Update value to use the resolved address for further processing (like string resolution)
                     variable.Value = resolvedAddress;
                 }
@@ -3569,7 +3587,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Checks if a type is a value type that should NOT be dereferenced.
     /// This includes structs, enums, and all primitive value types.
@@ -3578,11 +3596,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(typeName))
             return false;
-
+        
         // Primitive value types
         if (IsPrimitiveValueType(typeName))
             return true;
-
+        
         // Known reference types that should be dereferenced
         var referenceTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -3591,18 +3609,18 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             "System.Exception",
             "System.Array"
         };
-
+        
         var baseName = typeName.Split('<', '`')[0];
         var shortName = baseName.Split('.').Last();
-
+        
         // If it's a known reference type, it's NOT a value type
         if (referenceTypes.Contains(baseName) || referenceTypes.Contains(shortName))
             return false;
-
+        
         // Arrays are reference types
         if (typeName.EndsWith("[]"))
             return false;
-
+        
         // Common .NET struct types
         var knownStructs = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
@@ -3616,17 +3634,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             "StackFrameIterator", "ExInfo", "EHClauseIterator",
             "RegDisplay", "REGDISPLAY", "ExceptionRecord"
         };
-
+        
         if (knownStructs.Contains(shortName))
             return true;
-
+        
         // If type doesn't start with "System." and isn't a known reference type,
         // assume it might be a custom struct (conservative approach)
         // Actually, let's be more permissive - assume unknown types are reference types
         // since most types in .NET are classes
         return false;
     }
-
+    
     /// <summary>
     /// Checks if a type is a primitive value type (int, bool, etc.)
     /// </summary>
@@ -3634,7 +3652,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(typeName))
             return false;
-
+        
         var primitives = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "Int16", "Int32", "Int64", "UInt16", "UInt32", "UInt64",
@@ -3643,11 +3661,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             "short", "int", "long", "ushort", "uint", "ulong",
             "byte", "sbyte", "bool", "char", "float", "double"
         };
-
+        
         var baseName = typeName.Split('<', '`', '.').Last();
         return primitives.Contains(baseName);
     }
-
+    
     /// <summary>
     /// Dereferences a pointer address to get the value at that memory location.
     /// </summary>
@@ -3661,7 +3679,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // -fx: format as hex
             // -c1: count = 1 value
             var output = await ExecuteCommandAsync($"memory read -s8 -fx -c1 {address}");
-
+            
             // Parse the output to extract the dereferenced value
             // Format: "0x0000ffffefcb7a70: 0x0000f714efe57360"
             var match = Regex.Match(output, @":\s*(0x[0-9a-fA-F]+)", RegexOptions.IgnoreCase);
@@ -3669,7 +3687,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 return match.Groups[1].Value;
             }
-
+            
             // Alternative format: just the value on a line
             match = Regex.Match(output, @"(0x[0-9a-fA-F]+)\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase);
             if (match.Success)
@@ -3681,10 +3699,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             // Dereferencing failed
         }
-
+        
         return null;
     }
-
+    
     /// <summary>
     /// Gets the base type from a ByRef type name.
     /// E.g., "System.String(ByRef)" -> "System.String"
@@ -3693,15 +3711,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(typeName))
             return string.Empty;
-
+        
         if (typeName.EndsWith("(ByRef)", StringComparison.OrdinalIgnoreCase))
         {
             return typeName.Substring(0, typeName.Length - 7);
         }
-
+        
         return typeName;
     }
-
+    
     /// <summary>
     /// Checks if a type is a value type (not a reference type).
     /// </summary>
@@ -3709,7 +3727,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(typeName))
             return false;
-
+        
         var valueTypes = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "Int16", "Int32", "Int64", "UInt16", "UInt32", "UInt64",
@@ -3719,11 +3737,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             "byte", "sbyte", "bool", "char", "float", "double", "decimal",
             "DateTime", "DateTimeOffset", "TimeSpan", "Guid"
         };
-
+        
         var baseName = typeName.Split('<', '`', '.').Last();
         return valueTypes.Contains(baseName);
     }
-
+    
     /// <summary>
     /// Converts a hex value to a meaningful representation based on type.
     /// </summary>
@@ -3731,14 +3749,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(typeName) || !hexValue.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             return hexValue;
-
+        
         try
         {
             if (!long.TryParse(hexValue.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out var numValue))
                 return hexValue;
-
+            
             var baseName = typeName.Split('<', '`', '.').Last().ToLowerInvariant();
-
+            
             return baseName switch
             {
                 "int32" or "int" => ((int)numValue).ToString(),
@@ -3761,14 +3779,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             return hexValue;
         }
     }
-
+    
     /// <summary>
     /// Collects string addresses from variables, including resolved ByRef strings.
     /// </summary>
     private static void CollectStringAddresses(List<LocalVariable>? variables, HashSet<string> addresses)
     {
         if (variables == null) return;
-
+        
         foreach (var variable in variables)
         {
             // Direct string parameter
@@ -3789,7 +3807,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Checks if a variable is a string that can be resolved.
     /// </summary>
@@ -3801,7 +3819,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                !string.IsNullOrEmpty(valueStr) &&
                valueStr.StartsWith("0x", StringComparison.OrdinalIgnoreCase);
     }
-
+    
     /// <summary>
     /// Applies resolved string values to a list of variables.
     /// Handles both direct strings and ByRef strings.
@@ -3809,11 +3827,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private static void ApplyStringValues(List<LocalVariable>? variables, Dictionary<string, string> stringValues)
     {
         if (variables == null) return;
-
+        
         foreach (var variable in variables)
         {
             var valueStr = variable.Value?.ToString();
-
+            
             // Direct string
             if (variable.Type?.Equals("System.String", StringComparison.OrdinalIgnoreCase) == true &&
                 variable.HasData &&
@@ -3832,7 +3850,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Enhances a primitive value by converting hex to meaningful representation.
     /// </summary>
@@ -3841,20 +3859,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         var valueStr = variable.Value?.ToString();
         if (!variable.HasData || string.IsNullOrEmpty(valueStr) || string.IsNullOrEmpty(variable.Type))
             return;
-
+        
         // Skip if value doesn't look like a hex number
         if (!valueStr.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             return;
-
+        
         var hexValue = valueStr;
         var typeName = variable.Type.Split('<', '`')[0]; // Handle generics
-
+        
         try
         {
             // Parse the hex value
             if (!long.TryParse(hexValue.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out var numValue))
                 return;
-
+            
             string? convertedValue = typeName.ToLowerInvariant() switch
             {
                 // Signed integers
@@ -3862,31 +3880,31 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 "int16" or "short" => ((short)numValue).ToString(),
                 "int64" or "long" => numValue.ToString(),
                 "sbyte" => ((sbyte)numValue).ToString(),
-
+                
                 // Unsigned integers  
                 "uint32" or "uint" => ((uint)numValue).ToString(),
                 "uint16" or "ushort" => ((ushort)numValue).ToString(),
                 "uint64" or "ulong" => ((ulong)numValue).ToString(),
                 "byte" => ((byte)numValue).ToString(),
-
+                
                 // Boolean
                 "boolean" or "bool" => numValue != 0 ? "true" : "false",
-
+                
                 // Char
-                "char" => numValue is >= 32 and <= 126
-                    ? $"'{(char)numValue}'"
+                "char" => numValue is >= 32 and <= 126 
+                    ? $"'{(char)numValue}'" 
                     : $"'\\u{numValue:X4}'",
-
+                
                 // Floating point (interpret bits)
                 "single" or "float" => BitConverter.Int32BitsToSingle((int)numValue).ToString("G"),
                 "double" => BitConverter.Int64BitsToDouble(numValue).ToString("G"),
-
+                
                 // Keep as hex for pointers and unknowns
                 "intptr" or "uintptr" or "nint" or "nuint" => null,
-
+                
                 _ => null
             };
-
+            
             if (convertedValue != null)
             {
                 variable.RawValue = hexValue;
@@ -3898,34 +3916,34 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Keep original value on any conversion error
         }
     }
-
+    
     /// <summary>
     /// Resolves string values by calling !dumpobj on each address.
     /// </summary>
     private async Task<Dictionary<string, string>> ResolveStringValuesAsync(
-        HashSet<string> addresses,
+        HashSet<string> addresses, 
         Dictionary<string, string>? rawCommands = null)
     {
         var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-
+        
         foreach (var address in addresses)
         {
             try
             {
                 var cmd = $"!dumpobj {address}";
                 var output = await ExecuteCommandAsync(cmd);
-
+                
                 // Store the command output
                 if (rawCommands != null)
                 {
                     rawCommands[cmd] = output;
                 }
-
+                
                 // Parse the string value from dumpobj output
                 // Look for: String: <value>
                 // Or for the actual string content in the output
                 var stringValue = ExtractStringFromDumpObj(output);
-
+                
                 if (!string.IsNullOrEmpty(stringValue))
                 {
                     results[address] = stringValue;
@@ -3936,10 +3954,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Skip strings that fail to resolve
             }
         }
-
+        
         return results;
     }
-
+    
     /// <summary>
     /// Extracts the string value from !dumpobj output.
     /// </summary>
@@ -3947,9 +3965,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(output))
             return null;
-
+        
         const int maxStringLength = 1024;
-
+        
         // Look for "String:" line which contains the actual value
         var stringMatch = Regex.Match(output, @"String:\s*(.+)$", RegexOptions.Multiline);
         if (stringMatch.Success)
@@ -3962,7 +3980,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
             return value; // Return raw string without quotes
         }
-
+        
         // Alternative: look for content after the header info
         // Format varies between WinDbg and LLDB
         var contentMatch = Regex.Match(output, @"m_firstChar:\s*[^\n]+\n(.+)", RegexOptions.Singleline);
@@ -3975,7 +3993,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
             return value; // Return raw string without quotes
         }
-
+        
         return null;
     }
 
@@ -4051,7 +4069,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Set in new structure
         result.Memory ??= new MemoryInfo();
         result.Memory.Oom = oomInfo;
-
+        
         // Also set in old structure during migration
     }
 
@@ -4065,7 +4083,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Check if no crash info was found
         if (output.Contains("No crash info", StringComparison.OrdinalIgnoreCase) ||
             output.Contains("No exception record", StringComparison.OrdinalIgnoreCase) ||
-            (output.Contains("No", StringComparison.OrdinalIgnoreCase) &&
+            (output.Contains("No", StringComparison.OrdinalIgnoreCase) && 
              output.Contains("display", StringComparison.OrdinalIgnoreCase)))
         {
             crashInfo.HasInfo = false;
@@ -4156,9 +4174,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         // For native dumps or errors, skip
         if (IsSosErrorOutput(dumpDomainOutput)) return;
-
+        
         var assemblies = new List<AssemblyVersionInfo>();
-
+        
         // Parse assembly entries from dumpdomain output
         // Format varies between .NET versions:
         // 
@@ -4170,14 +4188,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Format 2 (path directly on Assembly line):
         //   Assembly: 0000abcd1234 /path/to/MyAssembly.dll
         //   Module:   0000abcd5678 /path/to/MyAssembly.dll
-
+        
         var lines = dumpDomainOutput.Split('\n');
         AssemblyVersionInfo? currentAssembly = null;
-
+        
         for (var i = 0; i < lines.Length; i++)
         {
             var line = lines[i].Trim();
-
+            
             // Match Assembly line with brackets: Assembly: 0000f7558b725348 [AssemblyName]
             var assemblyMatch = Regex.Match(line, @"Assembly:\s+([0-9a-fA-Fx]+)\s+\[([^\]]+)\]");
             if (assemblyMatch.Success)
@@ -4187,17 +4205,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     assemblies.Add(currentAssembly);
                 }
-
+                
                 var nameOrPath = assemblyMatch.Groups[2].Value.Trim();
                 var (assemblyName, assemblyPath) = ExtractAssemblyNameAndPath(nameOrPath);
-
+                
                 // Skip empty or invalid names
                 if (string.IsNullOrWhiteSpace(assemblyName))
                 {
                     currentAssembly = null;
                     continue;
                 }
-
+                
                 currentAssembly = new AssemblyVersionInfo
                 {
                     Name = assemblyName,
@@ -4206,7 +4224,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 };
                 continue;
             }
-
+            
             // Match simpler Assembly format: Assembly: 0000abcd1234 /path/to/assembly.dll or Assembly: 0000abcd1234 MyAssembly
             var simpleAssemblyMatch = Regex.Match(line, @"^Assembly:\s+([0-9a-fA-Fx]+)\s+(.+)$");
             if (simpleAssemblyMatch.Success)
@@ -4215,17 +4233,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     assemblies.Add(currentAssembly);
                 }
-
+                
                 var nameOrPath = simpleAssemblyMatch.Groups[2].Value.Trim();
                 var (assemblyName, assemblyPath) = ExtractAssemblyNameAndPath(nameOrPath);
-
+                
                 // Skip empty or invalid names
                 if (string.IsNullOrWhiteSpace(assemblyName))
                 {
                     currentAssembly = null;
                     continue;
                 }
-
+                
                 currentAssembly = new AssemblyVersionInfo
                 {
                     Name = assemblyName,
@@ -4234,7 +4252,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 };
                 continue;
             }
-
+            
             // If we have a current assembly, look for additional info
             if (currentAssembly != null)
             {
@@ -4254,7 +4272,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         currentAssembly.ModuleId = moduleMatch.Groups[1].Value;
                     }
                 }
-
+                
                 // Check for dynamic assembly indicator
                 if (line.Contains("Dynamic", StringComparison.OrdinalIgnoreCase))
                 {
@@ -4262,16 +4280,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
             }
         }
-
+        
         // Add the last assembly
         if (currentAssembly != null && !string.IsNullOrWhiteSpace(currentAssembly.Name))
         {
             assemblies.Add(currentAssembly);
         }
-
+        
         // Sort by name for easier reading
         assemblies = assemblies.OrderBy(a => a.Name).ToList();
-
+        
         if (assemblies.Count > 0)
         {
             // Set in new structure
@@ -4280,11 +4298,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 Count = assemblies.Count,
                 Items = assemblies
             };
-
+            
             // Also set in old structure during migration
         }
     }
-
+    
     /// <summary>
     /// Extracts assembly name and path from a string that could be either a name or a path.
     /// </summary>
@@ -4296,19 +4314,19 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             return (string.Empty, null);
         }
-
+        
         // Check if this looks like a path (contains path separators or ends with .dll/.exe)
-        var isPath = nameOrPath.Contains('/') || nameOrPath.Contains('\\') ||
+        var isPath = nameOrPath.Contains('/') || nameOrPath.Contains('\\') || 
                      nameOrPath.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
                      nameOrPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase);
-
+        
         if (isPath)
         {
             // Extract just the assembly name from the path (without extension)
             var fileName = System.IO.Path.GetFileNameWithoutExtension(nameOrPath);
             return (fileName, nameOrPath);
         }
-
+        
         // It's just a name
         return (nameOrPath, null);
     }
@@ -4323,20 +4341,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Use new structure, fall back to old
         var assemblies = result.Assemblies?.Items;
         if (assemblies == null || result.Modules == null) return;
-
+        
         // Create a lookup by module name (case insensitive)
         var modulesByName = result.Modules
             .Where(m => !string.IsNullOrEmpty(m.Name))
             .GroupBy(m => System.IO.Path.GetFileName(m.Name).ToLowerInvariant())
             .ToDictionary(g => g.Key, g => g.First());
-
+        
         foreach (var assembly in assemblies)
         {
             // Try to find matching module
-            var assemblyFileName = !string.IsNullOrEmpty(assembly.Path)
+            var assemblyFileName = !string.IsNullOrEmpty(assembly.Path) 
                 ? System.IO.Path.GetFileName(assembly.Path).ToLowerInvariant()
                 : $"{assembly.Name}.dll".ToLowerInvariant();
-
+            
             if (modulesByName.TryGetValue(assemblyFileName, out var module))
             {
                 // Copy info from module
@@ -4348,7 +4366,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     assembly.Path = module.Name;
                 }
-
+                
                 // Native image detection from module info
                 if (module.Name?.Contains("native", StringComparison.OrdinalIgnoreCase) == true ||
                     module.Name?.Contains(".ni.", StringComparison.OrdinalIgnoreCase) == true)
@@ -4358,7 +4376,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Enriches assembly information with version details by querying each module.
     /// Uses !dumpmodule to get version information for assemblies that have a ModuleId.
@@ -4369,23 +4387,23 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Use new structure, fall back to old
         var assemblies = result.Assemblies?.Items;
         if (assemblies == null) return;
-
+        
         // Limit to non-dynamic assemblies with a ModuleId (up to 50 to avoid excessive commands)
         var assembliesToEnrich = assemblies
             .Where(a => !string.IsNullOrEmpty(a.ModuleId) && a.IsDynamic != true)
             .Take(50)
             .ToList();
-
+        
         foreach (var assembly in assembliesToEnrich)
         {
             try
             {
                 var moduleOutput = await ExecuteCommandAsync($"!dumpmodule {assembly.ModuleId}");
                 if (IsSosErrorOutput(moduleOutput)) continue;
-
+                
                 // Store raw output for debugging
                 result.RawCommands![$"!dumpmodule {assembly.ModuleId}"] = moduleOutput;
-
+                
                 // Parse version information from dumpmodule output
                 ParseModuleVersionInfo(moduleOutput, assembly);
             }
@@ -4395,7 +4413,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Parses version information from !dumpmodule output.
     /// 
@@ -4412,11 +4430,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private static void ParseModuleVersionInfo(string moduleOutput, AssemblyVersionInfo assembly)
     {
         var lines = moduleOutput.Split('\n');
-
+        
         foreach (var line in lines)
         {
             var trimmedLine = line.Trim();
-
+            
             // Parse Version: X.X.X.X
             if (trimmedLine.StartsWith("Version:", StringComparison.OrdinalIgnoreCase))
             {
@@ -4427,7 +4445,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
                 continue;
             }
-
+            
             // Parse BaseAddress if not already set
             if (trimmedLine.StartsWith("BaseAddress:", StringComparison.OrdinalIgnoreCase))
             {
@@ -4438,7 +4456,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
                 continue;
             }
-
+            
             // Parse PEFile/PEAssembly path if we don't have a path yet
             if (string.IsNullOrEmpty(assembly.Path))
             {
@@ -4459,7 +4477,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     }
                 }
             }
-
+            
             // Detect native image from Attributes line
             if (trimmedLine.StartsWith("Attributes:", StringComparison.OrdinalIgnoreCase))
             {
@@ -4472,14 +4490,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     assembly.IsNativeImage = true;
                 }
             }
-
+            
             // Detect GAC from InGac attribute
             if (trimmedLine.Contains("InGac", StringComparison.OrdinalIgnoreCase))
             {
                 assembly.IsInGac = true;
             }
         }
-
+        
         // Check GAC from path (after loop to avoid repeated checks)
         if (assembly.IsInGac != true && !string.IsNullOrEmpty(assembly.Path))
         {
@@ -4491,7 +4509,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 assembly.IsInGac = true;
             }
         }
-
+        
         // Try to extract file version from path if we have .NET runtime assemblies
         // These typically have version in path: /shared/Microsoft.NETCore.App/9.0.10/
         if (!string.IsNullOrEmpty(assembly.Path) && string.IsNullOrEmpty(assembly.FileVersion))
@@ -4503,7 +4521,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Enriches assembly info with ClrMD metadata from dump memory.
     /// This adds Company, Product, RepositoryUrl, CommitHash, etc. from assembly attributes.
@@ -4513,7 +4531,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (_clrMdAnalyzer == null || !_clrMdAnalyzer.IsOpen)
             return;
-
+        
         try
         {
             // Get all modules with attributes in one pass
@@ -4521,19 +4539,19 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             var enrichedModules = _clrMdAnalyzer.GetAllModulesWithAttributes()
                 .GroupBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
                 .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
-
+            
             foreach (var assembly in assemblies)
             {
                 if (!enrichedModules.TryGetValue(assembly.Name, out var moduleInfo))
                     continue;
-
+                
                 // Copy assembly version from metadata definition (if not already set by SOS)
-                if (string.IsNullOrEmpty(assembly.AssemblyVersion) &&
+                if (string.IsNullOrEmpty(assembly.AssemblyVersion) && 
                     !string.IsNullOrEmpty(moduleInfo.AssemblyVersion))
                 {
                     assembly.AssemblyVersion = moduleInfo.AssemblyVersion;
                 }
-
+                
                 foreach (var attr in moduleInfo.Attributes)
                 {
                     MapAttributeToAssembly(assembly, attr);
@@ -4545,7 +4563,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Silently ignore - enrichment is optional and should not fail analysis
         }
     }
-
+    
     /// <summary>
     /// Maps a ClrMD assembly attribute to the appropriate AssemblyVersionInfo property.
     /// </summary>
@@ -4595,7 +4613,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 break;
         }
     }
-
+    
     /// <summary>
     /// Extracts commit hash from InformationalVersion (e.g., "1.0.0+abc123def456").
     /// </summary>
@@ -4603,7 +4621,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         if (string.IsNullOrEmpty(infoVersion))
             return;
-
+        
         var plusIndex = infoVersion.IndexOf('+');
         if (plusIndex > 0 && plusIndex < infoVersion.Length - 1)
         {
@@ -4614,7 +4632,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Enriches assemblies with GitHub commit metadata (author, committer, message).
     /// Uses caching to avoid hitting GitHub API rate limits.
@@ -4626,28 +4644,28 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         var assemblies = result.Assemblies?.Items;
         if (assemblies == null || assemblies.Count == 0)
             return;
-
+        
         // Check if GitHub API is enabled
         var apiEnabled = Environment.GetEnvironmentVariable("GITHUB_API_ENABLED");
         if (apiEnabled?.Equals("false", StringComparison.OrdinalIgnoreCase) == true)
         {
             return;
         }
-
+        
         // Get cache directory - use symbol directory if available
         var cacheDir = GetGitHubCacheDirectory();
         var githubToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-
+        
         using var resolver = new GitHubCommitResolver(cacheDir, githubToken);
-
+        
         // Filter assemblies with commit hashes
         var assembliesWithCommits = assemblies
             .Where(a => !string.IsNullOrEmpty(a.CommitHash))
             .ToList();
-
+        
         if (assembliesWithCommits.Count == 0)
             return;
-
+        
         foreach (var assembly in assembliesWithCommits)
         {
             try
@@ -4658,7 +4676,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     assembly.SourceUrl = sourceUrl;
                 }
-
+                
                 // Extract owner/repo for API call
                 var ownerRepo = GitHubCommitResolver.ExtractGitHubOwnerRepo(assembly.RepositoryUrl);
                 if (ownerRepo == null)
@@ -4667,7 +4685,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     var sourceCommitUrl = assembly.CustomAttributes?.GetValueOrDefault("SourceCommitUrl");
                     ownerRepo = GitHubCommitResolver.ExtractGitHubOwnerRepo(sourceCommitUrl);
                 }
-
+                
                 // Fetch commit metadata
                 if (ownerRepo != null && assembly.CommitHash != null)
                 {
@@ -4687,10 +4705,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Continue with next assembly - GitHub enrichment is optional
             }
         }
-
+        
         // Cache is saved automatically when resolver is disposed
     }
-
+    
     /// <summary>
     /// Gets the cache directory for GitHub commit data.
     /// Uses the dump storage path to ensure cache persists with dumps.
@@ -4814,16 +4832,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             assembly.SymbolsDirectory = symbolDirectory;
         }
     }
-
+    
     /// <summary>
     /// Enriches thread info with ClrMD data (blocking objects, stack usage, etc.).
     /// </summary>
     private void EnrichThreadsWithClrMdInfo(List<ThreadInfo> threads)
     {
         if (_clrMdAnalyzer == null) return;
-
+        
         var clrMdInfo = _clrMdAnalyzer.GetEnhancedThreadInfo();
-
+        
         foreach (var thread in threads)
         {
             // Match by OS thread ID with robust parsing
@@ -4833,13 +4851,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     uint osId;
                     var osIdStr = thread.OsThreadId.Trim();
-
+                    
                     // Try hex format (0x1234 or just 1234 in hex)
                     if (osIdStr.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
                     {
                         osId = Convert.ToUInt32(osIdStr[2..], 16);
                     }
-                    else if (uint.TryParse(osIdStr, System.Globalization.NumberStyles.HexNumber,
+                    else if (uint.TryParse(osIdStr, System.Globalization.NumberStyles.HexNumber, 
                         System.Globalization.CultureInfo.InvariantCulture, out var hexId))
                     {
                         osId = hexId;
@@ -4852,7 +4870,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     {
                         continue; // Skip if can't parse
                     }
-
+                    
                     if (clrMdInfo.TryGetValue(osId, out var info))
                     {
                         thread.ClrMdThreadInfo = info;
@@ -4865,7 +4883,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
     }
-
+    
     /// <summary>
     /// Analyzes type/method resolution for MissingMethodException, TypeLoadException, etc.
     /// Shows what methods actually exist on the type vs what was expected.
@@ -4876,11 +4894,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Use new structure for exception info
         var exceptionType = result.Exception?.Type;
         var exceptionMessage = result.Exception?.Message;
-
+        
         // Only analyze for resolution-related exceptions
         if (string.IsNullOrEmpty(exceptionType) || string.IsNullOrEmpty(exceptionMessage)) return;
-
-        var isResolutionException =
+        
+        var isResolutionException = 
             exceptionType.Contains("MissingMethodException") ||
             exceptionType.Contains("MissingFieldException") ||
             exceptionType.Contains("MissingMemberException") ||
@@ -4889,20 +4907,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             exceptionType.Contains("TypeInitializationException") ||
             exceptionType.Contains("BadImageFormatException") ||
             exceptionType.Contains("FileLoadException");
-
+        
         if (!isResolutionException) return;
-
+        
         string? typeName = null;
         try
         {
             var analysis = new TypeResolutionAnalysis();
-
+            
             // Parse the type and member name from the exception message
             // Format: "Method not found: 'Boolean System.Collections.Concurrent.ConcurrentDictionary`2.TryGetValue(!0, !1 ByRef)'"
             // or: "Could not load type 'TypeName' from assembly 'AssemblyName'"
             string? memberName, signature;
             (typeName, memberName, signature) = ParseExceptionForTypeAndMember(exceptionType, exceptionMessage);
-
+            
             if (string.IsNullOrEmpty(typeName))
             {
                 // Try to extract from custom properties if available
@@ -4914,15 +4932,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     memberName ??= customProps.TryGetValue("memberName", out var mn) ? mn?.ToString() : null;
                 }
             }
-
+            
             if (string.IsNullOrEmpty(typeName)) return;
-
+            
             // Sanitize type name to prevent command injection (remove dangerous chars)
             var sanitizedTypeName = SanitizeTypeNameForCommand(typeName);
             if (string.IsNullOrEmpty(sanitizedTypeName)) return;
-
+            
             analysis.FailedType = typeName; // Store original for display
-
+            
             // Only create ExpectedMember if we have meaningful data
             if (!string.IsNullOrEmpty(memberName) || !string.IsNullOrEmpty(signature))
             {
@@ -4930,24 +4948,24 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     Name = memberName,
                     Signature = signature,
-                    MemberType = exceptionType.Contains("Method") ? "Method" :
-                                exceptionType.Contains("Field") ? "Field" :
+                    MemberType = exceptionType.Contains("Method") ? "Method" : 
+                                exceptionType.Contains("Field") ? "Field" : 
                                 exceptionType.Contains("Type") ? "Type" : "Member"
                 };
             }
-
+            
             // Try to find the MethodTable using name2ee
             var name2eeCmd = $"!name2ee * {sanitizedTypeName}";
             var name2eeOutput = await ExecuteCommandAsync(name2eeCmd);
             result.RawCommands![name2eeCmd] = name2eeOutput;
-
+            
             // Parse MethodTable address (may have multiple matches from different modules)
             // Each block has Module, MethodTable, EEClass, Name lines together
             var mtBlockPattern = new Regex(
                 @"MethodTable:\s+([0-9a-fA-Fx]+).*?(?:EEClass:\s+([0-9a-fA-Fx]+))?",
                 RegexOptions.Singleline);
             var mtMatches = mtBlockPattern.Matches(name2eeOutput);
-
+            
             // Find first valid (non-null) MethodTable with its corresponding EEClass
             string? validMt = null;
             string? validEeClass = null;
@@ -4966,11 +4984,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     break;
                 }
             }
-
+            
             if (validMt != null)
             {
                 analysis.MethodTable = validMt;
-
+                
                 // Use the EEClass from the same block, or fallback to global search
                 if (!string.IsNullOrEmpty(validEeClass) && !IsNullAddress(validEeClass))
                 {
@@ -4985,41 +5003,41 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         analysis.EEClass = eeMatch.Groups[1].Value;
                     }
                 }
-
+                
                 // Get all methods from the MethodTable
                 var dumpmtCmd = $"!dumpmt -md {analysis.MethodTable}";
                 var dumpmtOutput = await ExecuteCommandAsync(dumpmtCmd);
                 result.RawCommands![dumpmtCmd] = dumpmtOutput;
-
+                
                 // Parse method descriptors
                 var allMethods = ParseMethodDescriptors(dumpmtOutput);
                 var totalMethodCount = allMethods.Count;
-
+                
                 // Check if expected method exists BEFORE truncation
                 bool exactMatch = false;
                 List<MethodDescriptorInfo> similarMatches = new();
-
+                
                 if (!string.IsNullOrEmpty(memberName))
                 {
-                    exactMatch = allMethods.Any(m =>
+                    exactMatch = allMethods.Any(m => 
                         m.Name?.Equals(memberName, StringComparison.OrdinalIgnoreCase) == true);
-
+                    
                     // Find similar methods (contains the name but not exact match)
-                    similarMatches = allMethods.Where(m =>
+                    similarMatches = allMethods.Where(m => 
                         m.Name != null &&
                         !m.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase) &&
                         m.Name.Contains(memberName, StringComparison.OrdinalIgnoreCase)).ToList();
                 }
-
+                
                 // Keep methods for output but limit to 100
                 List<MethodDescriptorInfo> methods;
                 if (allMethods.Count > 100)
                 {
                     // Prioritize: exact matches, similar matches, then others
-                    var matchingMethods = !string.IsNullOrEmpty(memberName)
+                    var matchingMethods = !string.IsNullOrEmpty(memberName) 
                         ? allMethods.Where(m => m.Name?.Contains(memberName, StringComparison.OrdinalIgnoreCase) == true).ToList()
                         : new List<MethodDescriptorInfo>();
-
+                    
                     var remainingSlots = Math.Max(0, 100 - matchingMethods.Count);
                     // Use HashSet for O(1) lookup instead of O(n) Contains
                     var matchingSet = new HashSet<MethodDescriptorInfo>(matchingMethods);
@@ -5030,19 +5048,19 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     methods = allMethods;
                 }
-
+                
                 analysis.ActualMethods = methods;
-
+                
                 // Set analysis results
                 if (!string.IsNullOrEmpty(memberName))
                 {
                     analysis.MethodFound = exactMatch;
-
+                    
                     // If method found by name, include methods with same name for signature comparison
                     if (exactMatch)
                     {
                         // Show all overloads with matching name (for signature comparison)
-                        var matchingOverloads = allMethods.Where(m =>
+                        var matchingOverloads = allMethods.Where(m => 
                             m.Name?.Equals(memberName, StringComparison.OrdinalIgnoreCase) == true).ToList();
                         if (matchingOverloads.Count > 0)
                         {
@@ -5053,7 +5071,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     {
                         analysis.SimilarMethods = similarMatches;
                     }
-
+                    
                     // Generate diagnosis (use totalMethodCount for accurate reporting)
                     analysis.Diagnosis = GenerateResolutionDiagnosis(
                         memberName, exactMatch, similarMatches.Count, totalMethodCount, exceptionType);
@@ -5063,7 +5081,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     analysis.MethodFound = false;
                     analysis.Diagnosis = $"Type '{typeName}' found with {totalMethodCount} members. Check if all required members are present.";
                 }
-
+                
                 // Parse generic instantiation info
                 analysis.GenericInstantiation = ParseGenericInstantiation(typeName, dumpmtOutput);
             }
@@ -5073,7 +5091,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // The methods on any instantiation would show us what methods exist
                 var foundViaHeap = await TryFindGenericTypeViaHeapAsync(
                     typeName, sanitizedTypeName, memberName, analysis, result);
-
+                
                 if (!foundViaHeap)
                 {
                     // Type truly not found
@@ -5083,7 +5101,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         "2) Assembly not loaded, 3) Type name is different at runtime";
                 }
             }
-
+            
             // Set in exception analysis (typeResolution is exception-related)
             result.Exception ??= new ExceptionDetails();
             result.Exception.Analysis ??= new ExceptionAnalysis();
@@ -5097,14 +5115,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 FailedType = typeName,
                 Diagnosis = $"Analysis failed: {ex.Message}"
             };
-
+            
             // Set in exception analysis
             result.Exception ??= new ExceptionDetails();
             result.Exception.Analysis ??= new ExceptionAnalysis();
             result.Exception.Analysis.TypeResolution = errorAnalysis;
         }
     }
-
+    
     /// <summary>
     /// Tries to find a generic type by searching for any concrete instantiation in the heap.
     /// This is useful when name2ee doesn't find the open generic type definition.
@@ -5118,70 +5136,70 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         // Only try this for generic types (contain backtick)
         if (!typeName.Contains('`')) return false;
-
+        
         // Extract the base type name without arity (e.g., "ConcurrentDictionary" from "ConcurrentDictionary`2")
         var backtickIndex = typeName.IndexOf('`');
         var baseTypeName = typeName[..backtickIndex];
         var lastDotIndex = baseTypeName.LastIndexOf('.');
         var shortTypeName = lastDotIndex >= 0 ? baseTypeName[(lastDotIndex + 1)..] : baseTypeName;
-
+        
         // Search for any instantiation of this generic type
         var heapCmd = $"!dumpheap -stat -type {shortTypeName}";
         var heapOutput = await ExecuteCommandAsync(heapCmd);
         result.RawCommands![heapCmd] = heapOutput;
-
+        
         // Parse the heap output to find a MethodTable for any instantiation
         // Format: MT    Count    TotalSize Class Name
         //         f7558924ae98     1        32 System.Collections.Concurrent.ConcurrentDictionary<...>
         // Note: MT may not have 0x prefix, and generic types use <> not backtick in display
         var mtPattern = new Regex(
-            @"([0-9a-fA-F]{8,16})\s+\d+\s+\d+\s+.*" + Regex.Escape(shortTypeName) + @"(?:`\d+|\<)",
+            @"([0-9a-fA-F]{8,16})\s+\d+\s+\d+\s+.*" + Regex.Escape(shortTypeName) + @"(?:`\d+|\<)", 
             RegexOptions.IgnoreCase);
         var mtMatch = mtPattern.Match(heapOutput);
-
+        
         if (mtMatch.Success)
         {
             var foundMt = mtMatch.Groups[1].Value;
             if (!IsNullAddress(foundMt))
             {
                 analysis.MethodTable = foundMt;
-
+                
                 // Note that we found it via heap search, not direct name2ee
                 var concreteTypeName = ExtractConcreteTypeName(heapOutput, shortTypeName);
-
+                
                 // Get methods from this concrete instantiation
                 var dumpmtHeapCmd = $"!dumpmt -md {foundMt}";
                 var dumpmtOutput = await ExecuteCommandAsync(dumpmtHeapCmd);
                 result.RawCommands![dumpmtHeapCmd] = dumpmtOutput;
-
+                
                 var allMethods = ParseMethodDescriptors(dumpmtOutput);
                 var totalMethodCount = allMethods.Count;
-
+                
                 // Check if the expected method exists
                 bool exactMatch = false;
                 List<MethodDescriptorInfo> similarMatches = new();
-
+                
                 if (!string.IsNullOrEmpty(memberName))
                 {
-                    exactMatch = allMethods.Any(m =>
+                    exactMatch = allMethods.Any(m => 
                         m.Name?.Equals(memberName, StringComparison.OrdinalIgnoreCase) == true);
-
-                    similarMatches = allMethods.Where(m =>
+                    
+                    similarMatches = allMethods.Where(m => 
                         m.Name != null &&
                         !m.Name.Equals(memberName, StringComparison.OrdinalIgnoreCase) &&
                         m.Name.Contains(memberName, StringComparison.OrdinalIgnoreCase)).ToList();
                 }
-
+                
                 // Limit methods for output
-                analysis.ActualMethods = allMethods.Count > 100
-                    ? allMethods.Take(100).ToList()
+                analysis.ActualMethods = allMethods.Count > 100 
+                    ? allMethods.Take(100).ToList() 
                     : allMethods;
-
+                
                 analysis.MethodFound = exactMatch;
-
+                
                 if (exactMatch)
                 {
-                    var matchingOverloads = allMethods.Where(m =>
+                    var matchingOverloads = allMethods.Where(m => 
                         m.Name?.Equals(memberName, StringComparison.OrdinalIgnoreCase) == true).ToList();
                     if (matchingOverloads.Count > 0)
                     {
@@ -5202,20 +5220,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     analysis.Diagnosis = $"Method '{memberName}' not found on any instantiation of '{typeName}' " +
                         $"({totalMethodCount} methods found). The method was likely trimmed.";
                 }
-
+                
                 // Parse generic instantiation info from the found type
                 if (!string.IsNullOrEmpty(concreteTypeName))
                 {
                     analysis.GenericInstantiation = ParseGenericInstantiation(concreteTypeName, dumpmtOutput);
                 }
-
+                
                 return true;
             }
         }
-
+        
         return false;
     }
-
+    
     /// <summary>
     /// Extracts the concrete type name from dumpheap output.
     /// </summary>
@@ -5224,12 +5242,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Look for a line containing the full type name
         // Format can be: Namespace.Type`2[[...]] or Namespace.Type<T1, T2>
         var typePattern = new Regex(
-            @"([^\s]+\." + Regex.Escape(shortTypeName) + @"(?:`\d+(?:\[\[[^\]]+\]\])?|\<[^>]+\>))",
+            @"([^\s]+\." + Regex.Escape(shortTypeName) + @"(?:`\d+(?:\[\[[^\]]+\]\])?|\<[^>]+\>))", 
             RegexOptions.IgnoreCase);
         var match = typePattern.Match(heapOutput);
         return match.Success ? match.Groups[1].Value : null;
     }
-
+    
     /// <summary>
     /// Parses the exception message to extract type name, member name, and signature.
     /// </summary>
@@ -5239,10 +5257,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         string? typeName = null;
         string? memberName = null;
         string? signature = null;
-
+        
         // Pattern 1: "Method not found: 'ReturnType Namespace.Type`N.Method(params)'"
         // Handles generic types with backticks like ConcurrentDictionary`2
-        var methodNotFoundMatch = Regex.Match(exceptionMessage,
+        var methodNotFoundMatch = Regex.Match(exceptionMessage, 
             @"Method not found:\s*'(?:(\S+)\s+)?(.+?)\.([^.(`]+)\(([^)]*)\)'");
         if (methodNotFoundMatch.Success)
         {
@@ -5250,23 +5268,23 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             typeName = methodNotFoundMatch.Groups[2].Value;
             memberName = methodNotFoundMatch.Groups[3].Value;
             var parameters = methodNotFoundMatch.Groups[4].Value;
-            signature = string.IsNullOrEmpty(returnType)
-                ? $"{memberName}({parameters})"
+            signature = string.IsNullOrEmpty(returnType) 
+                ? $"{memberName}({parameters})" 
                 : $"{returnType} {memberName}({parameters})";
             return (typeName, memberName, signature);
         }
-
+        
         // Pattern 2: "Could not load type 'TypeName' from assembly 'AssemblyName'"
-        var typeLoadMatch = Regex.Match(exceptionMessage,
+        var typeLoadMatch = Regex.Match(exceptionMessage, 
             @"Could not load type '([^']+)'");
         if (typeLoadMatch.Success)
         {
             typeName = typeLoadMatch.Groups[1].Value;
             return (typeName, null, null);
         }
-
+        
         // Pattern 3: "Field not found: 'TypeName.FieldName'"
-        var fieldNotFoundMatch = Regex.Match(exceptionMessage,
+        var fieldNotFoundMatch = Regex.Match(exceptionMessage, 
             @"Field not found:\s*'([^.]+(?:\.[^.]+)*)\.([^']+)'");
         if (fieldNotFoundMatch.Success)
         {
@@ -5274,9 +5292,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             memberName = fieldNotFoundMatch.Groups[2].Value;
             return (typeName, memberName, memberName);
         }
-
+        
         // Pattern 4: Generic "Member 'X' not found on type 'Y'"
-        var memberNotFoundMatch = Regex.Match(exceptionMessage,
+        var memberNotFoundMatch = Regex.Match(exceptionMessage, 
             @"[Mm]ember\s*'([^']+)'.*(?:not found|does not exist).*(?:type|class)\s*'([^']+)'",
             RegexOptions.IgnoreCase);
         if (memberNotFoundMatch.Success)
@@ -5285,25 +5303,25 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             typeName = memberNotFoundMatch.Groups[2].Value;
             return (typeName, memberName, null);
         }
-
+        
         // Pattern 5: Just extract any type-looking name (Namespace.Type`N pattern)
-        var genericTypeMatch = Regex.Match(exceptionMessage,
+        var genericTypeMatch = Regex.Match(exceptionMessage, 
             @"([A-Z][a-zA-Z0-9_.]*(?:`\d+)?(?:\[[^\]]+\])?)");
         if (genericTypeMatch.Success && genericTypeMatch.Groups[1].Value.Contains('.'))
         {
             typeName = genericTypeMatch.Groups[1].Value;
         }
-
+        
         return (typeName, memberName, signature);
     }
-
+    
     /// <summary>
     /// Parses method descriptors from !dumpmt -md output.
     /// </summary>
     private static List<MethodDescriptorInfo> ParseMethodDescriptors(string dumpmtOutput)
     {
         var methods = new List<MethodDescriptorInfo>();
-
+        
         // dumpmt -md output format:
         // MethodDesc Table
         //    Entry       MethodDesc    JIT Name
@@ -5311,21 +5329,21 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Or:
         //    Entry       MethodDesc    JIT     Name
         // 00007FFD...  00007FFD...  NONE     System.Object.ToString()
-
+        
         var lines = dumpmtOutput.Split('\n');
         var inMethodTable = false;
-
+        
         foreach (var line in lines)
         {
             var trimmedLine = line.Trim();
-
+            
             // Detect start of method table - look for the header line
             if (trimmedLine.Contains("MethodDesc Table"))
             {
                 inMethodTable = true;
                 continue;
             }
-
+            
             // Skip header line (Entry MethodDesc JIT Name)
             if (trimmedLine.StartsWith("Entry", StringComparison.OrdinalIgnoreCase) &&
                 trimmedLine.Contains("MethodDesc", StringComparison.OrdinalIgnoreCase))
@@ -5333,33 +5351,33 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 inMethodTable = true;
                 continue;
             }
-
+            
             if (!inMethodTable) continue;
-
+            
             // Skip empty lines, separators, and non-method lines
-            if (string.IsNullOrWhiteSpace(trimmedLine) ||
+            if (string.IsNullOrWhiteSpace(trimmedLine) || 
                 trimmedLine.StartsWith("---") ||
                 trimmedLine.StartsWith("Total", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
-
+            
             // Parse method line
             // Format: EntryAddr  MethodDescAddr  JITStatus  Slot  FullMethodName
             // Example: 0000F755884B0000 0000F75587424898   NONE 0000000000000000 System.Object.Finalize()
             // Note: JIT status may be followed by extra chars like 'PreJIT' or 'P' prefix
-            var methodMatch = Regex.Match(trimmedLine,
+            var methodMatch = Regex.Match(trimmedLine, 
                 @"([0-9a-fA-Fx]+)\s+([0-9a-fA-Fx]+)\s+(\S+)\s+([0-9a-fA-Fx]+)\s+(.+)$");
-
+            
             if (methodMatch.Success)
             {
                 var fullName = methodMatch.Groups[5].Value.Trim();
                 var slotValue = methodMatch.Groups[4].Value;
-
+                
                 // Extract just the method name from the full name
                 // "System.Collections.Concurrent.ConcurrentDictionary`2.TryAdd(!0, !1)" -> "TryAdd"
                 var methodName = ExtractMethodName(fullName);
-
+                
                 // Parse slot from hex
                 int parsedSlot = 0;
                 if (slotValue.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
@@ -5370,7 +5388,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     int.TryParse(slotValue, System.Globalization.NumberStyles.HexNumber, null, out parsedSlot);
                 }
-
+                
                 methods.Add(new MethodDescriptorInfo
                 {
                     CodeAddress = methodMatch.Groups[1].Value,
@@ -5382,31 +5400,31 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 });
             }
         }
-
+        
         return methods;
     }
-
+    
     /// <summary>
     /// Extracts the method name from a full method signature.
     /// </summary>
     private static string? ExtractMethodName(string fullName)
     {
         if (string.IsNullOrEmpty(fullName)) return null;
-
+        
         // Remove parameters if present
         var parenIndex = fullName.IndexOf('(');
         var nameWithoutParams = parenIndex > 0 ? fullName[..parenIndex] : fullName;
-
+        
         // Get the last part after the last dot (but handle generic types with backticks)
         var lastDotIndex = nameWithoutParams.LastIndexOf('.');
         if (lastDotIndex > 0 && lastDotIndex < nameWithoutParams.Length - 1)
         {
             return nameWithoutParams[(lastDotIndex + 1)..];
         }
-
+        
         return nameWithoutParams;
     }
-
+    
     /// <summary>
     /// Generates a diagnosis message based on the resolution analysis.
     /// </summary>
@@ -5414,33 +5432,33 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         string memberName, bool exactMatch, int similarCount, int totalMethods, string exceptionType)
     {
         // Determine member type from exception for accurate messaging
-        var memberType = exceptionType.Contains("Field") ? "Field" :
+        var memberType = exceptionType.Contains("Field") ? "Field" : 
                         exceptionType.Contains("Method") ? "Method" : "Member";
-
+        
         if (exactMatch)
         {
             return $"{memberType} '{memberName}' exists but signature may not match. " +
                    "Check parameter types, generic arguments, or return type.";
         }
-
+        
         if (similarCount > 0)
         {
             return $"{memberType} '{memberName}' not found exactly, but {similarCount} similar member(s) exist. " +
                    "Possible causes: 1) Member was renamed, 2) Overload was removed/trimmed, " +
                    "3) Signature changed in newer version.";
         }
-
-        if (exceptionType.Contains("MissingMethod") || exceptionType.Contains("MissingField") ||
+        
+        if (exceptionType.Contains("MissingMethod") || exceptionType.Contains("MissingField") || 
             exceptionType.Contains("MissingMember"))
         {
             return $"{memberType} '{memberName}' not found in MethodTable ({totalMethods} members total). " +
                    "Possible causes: 1) Member was trimmed in NativeAOT/PublishTrimmed, " +
                    "2) Assembly version mismatch, 3) Member doesn't exist on this type.";
         }
-
+        
         return $"Member '{memberName}' not found. {totalMethods} members found on the type.";
     }
-
+    
     /// <summary>
     /// Parses generic instantiation information from the type name and dumpmt output.
     /// </summary>
@@ -5448,32 +5466,32 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         // Check if it's a generic type (contains backtick)
         if (!typeName.Contains('`')) return null;
-
+        
         var info = new GenericInstantiationInfo
         {
             IsGenericType = true
         };
-
+        
         // Extract type definition (e.g., "ConcurrentDictionary`2" from full name)
         var backtickIndex = typeName.IndexOf('`');
         var dotBeforeBacktick = backtickIndex > 0 ? typeName.LastIndexOf('.', backtickIndex) : -1;
-        info.TypeDefinition = dotBeforeBacktick >= 0
-            ? typeName[(dotBeforeBacktick + 1)..]
+        info.TypeDefinition = dotBeforeBacktick >= 0 
+            ? typeName[(dotBeforeBacktick + 1)..] 
             : typeName;
-
+        
         // Extract the arity (number of type parameters)
         var arityMatch = Regex.Match(typeName, @"`(\d+)");
         var arity = arityMatch.Success && int.TryParse(arityMatch.Groups[1].Value, out var parsedArity) ? parsedArity : 0;
-
+        
         // Try to extract type arguments from dumpmt output or type name
         // Multiple formats:
         // 1. [[System.String, ...], [OtherType, ...]] - Two type args with assembly info
         // 2. [System.String, OtherType] - Simple format
         // 3. [System.String] - Single type arg
         var combinedText = typeName + " " + dumpmtOutput;
-
+        
         info.TypeArguments = new List<string>();
-
+        
         // Try to find type arguments in various formats
         // Format 1: [[Type1, Assembly...], [Type2, Assembly...]] - .NET generic instantiation
         var allBracketMatches = Regex.Matches(combinedText, @"\[([^\[\]]+)\]");
@@ -5481,18 +5499,18 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             var content = match.Groups[1].Value;
             // Skip if this looks like an array dimension (e.g., "[]" or "[,]") or index
-            if (string.IsNullOrWhiteSpace(content) ||
+            if (string.IsNullOrWhiteSpace(content) || 
                 content.All(c => c == ',' || char.IsDigit(c))) continue;
-
+            
             var cleanArg = CleanTypeArgument(content);
-            if (!string.IsNullOrEmpty(cleanArg) &&
+            if (!string.IsNullOrEmpty(cleanArg) && 
                 LooksLikeTypeName(cleanArg) && // Must look like a type name
                 info.TypeArguments.Count < arity) // Don't exceed expected arity
             {
                 info.TypeArguments.Add(cleanArg);
             }
         }
-
+        
         // If no type arguments found and we know the arity, indicate unknown types
         if (info.TypeArguments.Count == 0 && arity > 0)
         {
@@ -5501,47 +5519,47 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 info.TypeArguments.Add($"T{i}");
             }
         }
-
+        
         return info;
     }
-
+    
     /// <summary>
     /// Cleans a type argument by removing assembly qualification.
     /// </summary>
     private static string CleanTypeArgument(string arg)
     {
         if (string.IsNullOrEmpty(arg)) return string.Empty;
-
+        
         // Remove assembly info: "System.String, System.Private.CoreLib, ..." -> "System.String"
         var commaIndex = arg.IndexOf(',');
         var cleanArg = commaIndex > 0 ? arg[..commaIndex].Trim() : arg.Trim();
-
+        
         return cleanArg;
     }
-
+    
     /// <summary>
     /// Known primitive and built-in types without namespace (for type name validation).
     /// </summary>
     private static readonly HashSet<string> KnownPrimitiveTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "String", "Int32", "Int64", "Int16", "Byte", "Boolean", "Double", "Single",
-        "Decimal", "Char", "Object", "DateTime", "TimeSpan", "Guid", "UInt32",
+        "Decimal", "Char", "Object", "DateTime", "TimeSpan", "Guid", "UInt32", 
         "UInt64", "UInt16", "SByte", "IntPtr", "UIntPtr", "Void"
     };
-
+    
     /// <summary>
     /// Checks if a string looks like a .NET type name.
     /// </summary>
     private static bool LooksLikeTypeName(string name)
     {
         if (string.IsNullOrWhiteSpace(name) || name.Length < 2) return false;
-
+        
         // Must contain a dot (namespace.type) OR be a known primitive/common type
         if (name.Contains('.')) return true;
-
+        
         return KnownPrimitiveTypes.Contains(name);
     }
-
+    
     /// <summary>
     /// Sanitizes a type name for use in debugger commands.
     /// Removes potentially dangerous characters that could cause command injection.
@@ -5549,22 +5567,22 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private static string? SanitizeTypeNameForCommand(string typeName)
     {
         if (string.IsNullOrWhiteSpace(typeName)) return null;
-
+        
         // Remove characters that could break or inject commands
         // Keep: alphanumeric, dots, backticks (generics), plus (nested), brackets (arrays/generics)
-        var sanitized = new string(typeName.Where(c =>
-            char.IsLetterOrDigit(c) ||
-            c == '.' || c == '`' || c == '+' ||
+        var sanitized = new string(typeName.Where(c => 
+            char.IsLetterOrDigit(c) || 
+            c == '.' || c == '`' || c == '+' || 
             c == '[' || c == ']' || c == ',' || c == '_').ToArray());
-
+        
         // Ensure it still looks like a valid type name
         if (string.IsNullOrWhiteSpace(sanitized) || sanitized.Length < 2)
             return null;
-
+            
         return sanitized;
     }
-
-
+    
+    
     /// <summary>
     /// Analyzes if the application is NativeAOT and detects potential trimming issues.
     /// NativeAOT applications have different failure modes, especially around reflection and trimming.
@@ -5575,11 +5593,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             Indicators = new List<NativeAotIndicator>()
         };
-
+        
         // 1. Check for JIT compiler presence (NativeAOT apps don't have clrjit)
         // Try both LLDB and WinDbg key formats
-        var modulesOutput = result.RawCommands?.TryGetValue("image list", out var mod) == true ? mod
-                          : result.RawCommands?.TryGetValue("lm", out mod) == true ? mod
+        var modulesOutput = result.RawCommands?.TryGetValue("image list", out var mod) == true ? mod 
+                          : result.RawCommands?.TryGetValue("lm", out mod) == true ? mod 
                           : null;
         if (string.IsNullOrEmpty(modulesOutput))
         {
@@ -5590,16 +5608,16 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 result.RawCommands!["image list"] = modulesOutput;
             }
         }
-
+        
         analysis.HasJitCompiler = HasJitCompiler(modulesOutput ?? string.Empty);
-
+        
         // 2. Detect NativeAOT from stack frames (returns actual frame data)
         var stackFrameIndicators = DetectNativeAotFromStackFrames(result);
         if (stackFrameIndicators.Count > 0)
         {
             analysis.Indicators.AddRange(stackFrameIndicators);
         }
-
+        
         // 3. Check modules for NativeAOT-specific patterns
         var moduleIndicators = DetectNativeAotFromModules(modulesOutput ?? string.Empty);
         if (moduleIndicators.Count > 0)
@@ -5611,7 +5629,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
             analysis.Indicators.AddRange(moduleIndicators);
         }
-
+        
         // Determine if NativeAOT based on indicators
         // CRITICAL: If JIT compiler is present, this is NOT NativeAOT - JIT presence is definitive
         // NativeAOT by definition has no JIT, all code is AOT compiled
@@ -5627,19 +5645,19 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Just having one indicator when JIT is missing strongly suggests NativeAOT
             analysis.IsNativeAot = (analysis.Indicators?.Count ?? 0) >= 1;
         }
-
+        
         // 4. Detect reflection usage patterns in stack traces
         var reflectionUsage = DetectReflectionUsage(result);
         if (reflectionUsage.Count > 0)
         {
             analysis.ReflectionUsage = reflectionUsage;
         }
-
+        
         // 5. Analyze trimming-related exceptions (MissingMethodException, TypeLoadException, etc.)
         // These are useful diagnostics regardless of NativeAOT status
         var exceptionType = result.Exception?.Type;
         var exceptionMessage = result.Exception?.Message;
-
+        
         if (!string.IsNullOrEmpty(exceptionType) && !string.IsNullOrEmpty(exceptionMessage))
         {
             // Always analyze trimming-related exceptions for diagnostic value
@@ -5648,22 +5666,22 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 // Count evidence to determine confidence level
                 var evidenceCount = 0;
-
+                
                 // NativeAOT detection is strong evidence
                 if (analysis.IsNativeAot) evidenceCount += 3;
-
+                
                 // No JIT compiler is strong evidence for NativeAOT/trimming
                 if (!analysis.HasJitCompiler) evidenceCount += 2;
-
+                
                 // NativeAOT-like indicators (only count if no JIT, otherwise likely false positives)
                 if (!analysis.HasJitCompiler)
                 {
                     evidenceCount += analysis.Indicators?.Count ?? 0;
                 }
-
+                
                 // Reflection usage in stack is weak evidence (only if multiple)
                 if ((analysis.ReflectionUsage?.Count ?? 0) >= 2) evidenceCount += 1;
-
+                
                 // Set confidence based on evidence
                 if (analysis.IsNativeAot)
                 {
@@ -5683,20 +5701,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     trimmingAnalysis.Confidence = "low";
                     trimmingAnalysis.PotentialTrimmingIssue = false; // Not trimming, but still useful diagnostic
                 }
-
+                
                 analysis.TrimmingAnalysis = trimmingAnalysis;
             }
         }
-
+        
         // Only add to result if we found meaningful findings
         // - NativeAOT detection (no JIT + indicators)
         // - Trimming analysis (exception parsing found useful data)
         // - With JIT: many indicators + reflection usage (informational)
-        var hasSignificantFindings =
-            analysis.IsNativeAot ||
+        var hasSignificantFindings = 
+            analysis.IsNativeAot || 
             analysis.TrimmingAnalysis != null ||
             (analysis.HasJitCompiler && (analysis.Indicators?.Count ?? 0) >= 3 && (analysis.ReflectionUsage?.Count ?? 0) >= 2);
-
+            
         if (hasSignificantFindings)
         {
             // Set in environment (nativeAot is runtime/environment info)
@@ -5704,7 +5722,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             result.Environment.NativeAot = analysis;
         }
     }
-
+    
     /// <summary>
     /// Checks if a JIT compiler module is loaded.
     /// NativeAOT applications don't have clrjit since all code is AOT compiled.
@@ -5712,18 +5730,18 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     private static bool HasJitCompiler(string modulesOutput)
     {
         if (string.IsNullOrEmpty(modulesOutput)) return true; // Assume JIT if we can't check
-
+        
         return modulesOutput.Contains("clrjit", StringComparison.OrdinalIgnoreCase) ||
                modulesOutput.Contains("libclrjit", StringComparison.OrdinalIgnoreCase);
     }
-
+    
     /// <summary>
     /// Detects NativeAOT indicators from stack frames with actual frame data.
     /// </summary>
     private static List<NativeAotIndicator> DetectNativeAotFromStackFrames(CrashAnalysisResult result)
     {
         var indicators = new List<NativeAotIndicator>();
-
+        
         // NativeAOT-specific patterns in stack frames
         // These are ordered from most specific to least specific
         var nativeAotPatterns = new[]
@@ -5756,10 +5774,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             "__type_check_",
             "__vtable_",
         };
-
+        
         // Collect all stack frames from all threads
         var allFrames = new List<StackFrame>();
-
+        
         if (result.Threads!.All != null)
         {
             foreach (var thread in result.Threads!.All)
@@ -5770,17 +5788,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
             }
         }
-
+        
         // Also check exception stack trace frames if available
         if (result.Exception?.StackTrace != null)
         {
             allFrames.AddRange(result.Exception.StackTrace);
         }
-
+        
         // Track which frames have been matched to avoid double-counting
         var matchedFrames = new HashSet<string>();
         var matchedPatterns = new HashSet<string>();
-
+        
         // Check for patterns (patterns are ordered most-specific first)
         foreach (var pattern in nativeAotPatterns)
         {
@@ -5788,13 +5806,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 // Create a unique key for this frame
                 var frameKey = $"{frame.Function}|{frame.Module}|{frame.Source}";
-
+                
                 // Skip if this frame was already matched by a more specific pattern
                 if (matchedFrames.Contains(frameKey)) continue;
-
+                
                 string? matchedValue = null;
                 string? matchedIn = null;
-
+                
                 if (frame.Function?.Contains(pattern, StringComparison.OrdinalIgnoreCase) == true)
                 {
                     matchedValue = frame.Function;
@@ -5810,12 +5828,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     matchedValue = frame.Source;
                     matchedIn = "source";
                 }
-
+                
                 if (matchedValue != null && !matchedPatterns.Contains(pattern))
                 {
                     matchedFrames.Add(frameKey);
                     matchedPatterns.Add(pattern);
-
+                    
                     indicators.Add(new NativeAotIndicator
                     {
                         Source = $"stackFrame:{matchedIn}",
@@ -5823,24 +5841,24 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         MatchedValue = matchedValue,
                         Frame = frame
                     });
-
+                    
                     break; // Found one match for this pattern, move to next pattern
                 }
             }
         }
-
+        
         return indicators;
     }
-
+    
     /// <summary>
     /// Detects NativeAOT indicators from loaded modules with actual data.
     /// </summary>
     private static List<NativeAotIndicator> DetectNativeAotFromModules(string modulesOutput)
     {
         var indicators = new List<NativeAotIndicator>();
-
+        
         if (string.IsNullOrEmpty(modulesOutput)) return indicators;
-
+        
         // NativeAOT-specific module patterns
         var modulePatterns = new[]
         {
@@ -5849,7 +5867,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             "Runtime.ServerGC",
             "standalonegc"
         };
-
+        
         // Search for each pattern in the modules output
         foreach (var pattern in modulePatterns)
         {
@@ -5857,7 +5875,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 // Try to extract the matching line from modules output
                 var matchedLine = ExtractMatchingLine(modulesOutput, pattern);
-
+                
                 indicators.Add(new NativeAotIndicator
                 {
                     Source = "module",
@@ -5866,11 +5884,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 });
             }
         }
-
+        
         // Check for absence of CoreCLR (negative indicator - less useful as raw data)
         var hasCoreCLR = modulesOutput.Contains("coreclr", StringComparison.OrdinalIgnoreCase) ||
                          modulesOutput.Contains("libcoreclr", StringComparison.OrdinalIgnoreCase);
-
+        
         if (!hasCoreCLR)
         {
             indicators.Add(new NativeAotIndicator
@@ -5880,10 +5898,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 MatchedValue = "NOT_FOUND"
             });
         }
-
+        
         return indicators;
     }
-
+    
     /// <summary>
     /// Extracts the line containing a pattern from output.
     /// </summary>
@@ -5899,17 +5917,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         }
         return null;
     }
-
+    
     /// <summary>
     /// Analyzes potential trimming issues from exception type and message.
     /// </summary>
     private static TrimmingAnalysis? AnalyzeTrimmingIssue(
-        string exceptionType,
-        string exceptionMessage,
+        string exceptionType, 
+        string exceptionMessage, 
         CrashAnalysisResult result)
     {
         // Only analyze for resolution-related exceptions
-        var isTrimmingRelated =
+        var isTrimmingRelated = 
             exceptionType.Contains("MissingMethodException") ||
             exceptionType.Contains("MissingFieldException") ||
             exceptionType.Contains("MissingMemberException") ||
@@ -5919,25 +5937,25 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             exceptionType.Contains("FileNotFoundException") ||
             exceptionType.Contains("BadImageFormatException") ||
             exceptionType.Contains("PlatformNotSupportedException");
-
+        
         if (!isTrimmingRelated) return null;
-
+        
         var analysis = new TrimmingAnalysis
         {
             PotentialTrimmingIssue = true,
             ExceptionType = exceptionType
         };
-
+        
         // Parse the missing member from the message using multiple patterns
         string? missingMember = null;
-
+        
         // Pattern 1: "Method not found: 'ReturnType Namespace.Type.Method(params)'"
         var methodMatch = Regex.Match(exceptionMessage, @"Method not found:\s*'([^']+)'");
         if (methodMatch.Success)
         {
             missingMember = methodMatch.Groups[1].Value;
         }
-
+        
         // Pattern 2: "Could not load type 'TypeName' from assembly 'AssemblyName'"
         if (missingMember == null)
         {
@@ -5947,7 +5965,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 missingMember = typeMatch.Groups[1].Value;
             }
         }
-
+        
         // Pattern 3: "Field not found: 'FieldName'"
         if (missingMember == null)
         {
@@ -5957,7 +5975,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 missingMember = fieldMatch.Groups[1].Value;
             }
         }
-
+        
         // Pattern 4: "Member 'MemberName' not found" (MissingMemberException)
         if (missingMember == null)
         {
@@ -5967,7 +5985,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 missingMember = memberMatch.Groups[1].Value;
             }
         }
-
+        
         // Pattern 5: "Unable to find an entry point named 'xxx'" (EntryPointNotFoundException)
         if (missingMember == null)
         {
@@ -5977,7 +5995,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 missingMember = entryPointMatch.Groups[1].Value;
             }
         }
-
+        
         // Pattern 6: TypeInitializationException - extract the type that failed to initialize
         if (missingMember == null && exceptionType.Contains("TypeInitializationException"))
         {
@@ -5987,50 +6005,50 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 missingMember = typeInitMatch.Groups[1].Value;
             }
         }
-
+        
         // Fallback to the truncated message
-        analysis.MissingMember = missingMember ?? (exceptionMessage.Length > 200
-            ? exceptionMessage[..200] + "..."
+        analysis.MissingMember = missingMember ?? (exceptionMessage.Length > 200 
+            ? exceptionMessage[..200] + "..." 
             : exceptionMessage);
-
+        
         // Find the calling frame from exception stack trace or thread stack
-        var stackToSearch = result.Exception?.StackTrace ??
+        var stackToSearch = result.Exception?.StackTrace ?? 
                            result.Threads!.All?.FirstOrDefault(t => t.IsFaulting)?.CallStack ??
                            result.Threads!.All?.FirstOrDefault(t => t.CallStack?.Count > 0)?.CallStack;
-
+        
         if (stackToSearch?.Count > 0)
         {
             // Filter out runtime and system modules to find the user code frame
-            var firstManagedFrame = stackToSearch.FirstOrDefault(f =>
-                !string.IsNullOrEmpty(f.Module) &&
+            var firstManagedFrame = stackToSearch.FirstOrDefault(f => 
+                !string.IsNullOrEmpty(f.Module) && 
                 !f.Module.Contains("System.Private.CoreLib", StringComparison.OrdinalIgnoreCase) &&
                 !f.Module.Contains("coreclr", StringComparison.OrdinalIgnoreCase) &&
                 !f.Module.Contains("libcoreclr", StringComparison.OrdinalIgnoreCase) &&
                 // NativeAOT patterns to skip
                 !f.Module.StartsWith("S_P_", StringComparison.OrdinalIgnoreCase) &&
                 f.Function?.StartsWith("S_P_", StringComparison.OrdinalIgnoreCase) != true);
-
+            
             if (firstManagedFrame != null)
             {
                 // Store the actual frame, not just the module name
                 analysis.CallingFrame = firstManagedFrame;
             }
         }
-
+        
         // Generate recommendation
         analysis.Recommendation = GenerateTrimmingRecommendation(
             analysis.MissingMember ?? string.Empty, exceptionType);
-
+        
         return analysis;
     }
-
+    
     /// <summary>
     /// Generates a recommendation for fixing trimming issues.
     /// </summary>
     private static string GenerateTrimmingRecommendation(string missingMember, string exceptionType)
     {
         var recommendations = new List<string>();
-
+        
         if (exceptionType.Contains("MissingMethod"))
         {
             // Parse to check if it's a generic type
@@ -6038,7 +6056,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 recommendations.Add("Add [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicMethods)] to the type parameter");
             }
-
+            
             recommendations.Add("Add [DynamicDependency] attribute to preserve the method");
             recommendations.Add("Use rd.xml file to explicitly preserve the method: <Type Name=\"TypeName\" Dynamic=\"All\" />");
             recommendations.Add("Consider using source generators instead of reflection");
@@ -6091,27 +6109,27 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             recommendations.Add("Use source generators instead of runtime reflection patterns");
             recommendations.Add("Consider using ILLink substitution files to provide alternative implementations");
         }
-
+        
         // General recommendations
         recommendations.Add("Enable trimming warnings during build: <SuppressTrimAnalysisWarnings>false</SuppressTrimAnalysisWarnings>");
         recommendations.Add("Run with IL Linker in analysis mode to find trimming issues");
-
+        
         // Format as bullet list with consistent bullets
-        return recommendations.Count > 0
+        return recommendations.Count > 0 
             ? "• " + string.Join("\n• ", recommendations)
             : string.Empty;
     }
-
+    
     /// <summary>
     /// Detects reflection usage patterns in stack traces that may be problematic in NativeAOT.
     /// </summary>
     private static List<ReflectionUsageInfo> DetectReflectionUsage(CrashAnalysisResult result)
     {
         var usage = new List<ReflectionUsageInfo>();
-
+        
         // Collect all stack frames from all threads
         var allFrames = new List<StackFrame>();
-
+        
         if (result.Threads!.All != null)
         {
             foreach (var thread in result.Threads!.All)
@@ -6122,13 +6140,13 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 }
             }
         }
-
+        
         // Also check exception stack trace frames if available
         if (result.Exception?.StackTrace != null)
         {
             allFrames.AddRange(result.Exception.StackTrace);
         }
-
+        
         // Reflection patterns to detect
         var reflectionPatterns = new (string Pattern, string Description, string Risk)[]
         {
@@ -6180,18 +6198,18 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             ("XmlSerializer", "XML serialization", "High - may require runtime code generation"),
             ("DataContractSerializer", "Data contract serialization", "Medium - ensure types are preserved"),
         };
-
+        
         var addedPatterns = new HashSet<string>(); // Avoid duplicates
         var matchedFrameFunctions = new HashSet<string>(); // Prevent double-counting from substring matches
-
+        
         foreach (var frame in allFrames)
         {
             if (string.IsNullOrEmpty(frame.Function)) continue;
-
+            
             // Skip if this frame function was already matched by a pattern
             // (prevents Assembly.LoadFrom matching both "Assembly.LoadFrom" and "Assembly.Load" patterns)
             if (matchedFrameFunctions.Contains(frame.Function)) continue;
-
+            
             foreach (var (pattern, description, risk) in reflectionPatterns)
             {
                 if (frame.Function.Contains(pattern, StringComparison.OrdinalIgnoreCase))
@@ -6200,7 +6218,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     if (addedPatterns.Add(key)) // Only add if not already seen
                     {
                         matchedFrameFunctions.Add(frame.Function);
-
+                        
                         // Build location string, preferring source file info
                         string location;
                         if (!string.IsNullOrEmpty(frame.SourceFile) && frame.LineNumber > 0)
@@ -6215,7 +6233,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         {
                             location = frame.Function;
                         }
-
+                        
                         usage.Add(new ReflectionUsageInfo
                         {
                             Location = location,
@@ -6227,12 +6245,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     break; // Found match for this frame, move to next frame
                 }
             }
-
+            
             // Limit to prevent too many entries
             if (usage.Count >= 20) break;
         }
-
+        
         return usage;
     }
-
+    
 }
