@@ -479,6 +479,19 @@ public class LldbManager : IDebuggerManager
                 TryLoadMainExecutableDebugSymbols(VerifiedCorePlatform.MainExecutableName);
             }
 
+            // Load all native modules from verifycore at their correct memory addresses
+            // This is critical for SOS to work properly - LLDB doesn't auto-load modules from core dumps
+            // Without this, libcoreclr.so and other modules won't be mapped correctly
+            if (VerifiedCorePlatform?.ModuleAddresses != null && VerifiedCorePlatform.ModuleAddresses.Count > 0)
+            {
+                _logger.LogInformation("[LLDB] Loading {Count} native modules from verifycore at their correct memory addresses...", 
+                    VerifiedCorePlatform.ModuleAddresses.Count);
+                var loadResults = LoadModulesFromVerifyCore();
+                var successCount = loadResults.Count(r => r.Value);
+                _logger.LogInformation("[LLDB] Successfully loaded {Success}/{Total} modules from verifycore", 
+                    successCount, loadResults.Count);
+            }
+
             // Log loaded modules for diagnostics
             var moduleList = ExecuteCommandInternal("image list");
             _logger.LogInformation("[LLDB] Loaded modules:\n{Modules}", moduleList);
@@ -980,7 +993,11 @@ public class LldbManager : IDebuggerManager
             _logger.LogInformation("[LLDB] Configuring NuGet symbol server: {Command}", nugetSymbolServerCmd);
             ExecuteCommandInternal(nugetSymbolServerCmd);
 
-            // Step 5: Check SOS status
+            // Step 5: Flush SOS internal cache to pick up any modules we loaded
+            _logger.LogInformation("[LLDB] Flushing SOS internal cache...");
+            ExecuteCommandInternal("sosflush");
+
+            // Step 6: Check SOS status
             var statusOutput = ExecuteCommandInternal("sosstatus");
             _logger.LogInformation("[LLDB] SOS status:\n{Output}", statusOutput);
 
@@ -1534,6 +1551,7 @@ public class LldbManager : IDebuggerManager
     {
         var result = new VerifyCoreResult();
         var modulePaths = new List<string>();
+        var moduleAddresses = new Dictionary<string, ulong>();
 
         foreach (var line in outputLines)
         {
@@ -1559,15 +1577,24 @@ public class LldbManager : IDebuggerManager
                 continue;
             }
 
-            // Extract the path from lines like "00007F3156DC7000 /lib/ld-musl-x86_64.so.1"
+            // Extract the address and path from lines like "00007F3156DC7000 /lib/ld-musl-x86_64.so.1"
             var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length >= 2 && parts[1].StartsWith("/"))
             {
-                modulePaths.Add(parts[1]);
+                var path = parts[1];
+                modulePaths.Add(path);
+                
+                // Parse the address and store it
+                if (ulong.TryParse(firstWord, System.Globalization.NumberStyles.HexNumber, null, out var address))
+                {
+                    moduleAddresses[path] = address;
+                    _logger.LogDebug("[dotnet-symbol-verifycore] Module: {Path} @ 0x{Address:X16}", path, address);
+                }
             }
         }
 
         result.ModulePaths = modulePaths;
+        result.ModuleAddresses = moduleAddresses;
 
         // The first module is typically the main executable
         if (modulePaths.Count > 0)
@@ -1847,6 +1874,109 @@ public class LldbManager : IDebuggerManager
 
         _logger.LogWarning("[LLDB] No debug symbols found for standalone app: {Name}. Native debugging may be limited.", executableName);
         _logger.LogInformation("[LLDB] Tip: Upload the debug file ({Name}.dbg) using 'symbols upload' or 'dumps binary' for full debugging support.", executableName);
+    }
+
+    /// <summary>
+    /// Loads modules from verifycore output at their correct memory addresses.
+    /// This is useful for standalone apps where LLDB doesn't automatically load modules.
+    /// </summary>
+    /// <param name="moduleNames">Optional list of module names to load. If null, loads all modules with .so files available.</param>
+    /// <returns>Dictionary of module name to success status.</returns>
+    public Dictionary<string, bool> LoadModulesFromVerifyCore(IEnumerable<string>? moduleNames = null)
+    {
+        var results = new Dictionary<string, bool>();
+
+        if (VerifiedCorePlatform?.ModuleAddresses == null || VerifiedCorePlatform.ModuleAddresses.Count == 0)
+        {
+            _logger.LogWarning("[LLDB] No module addresses available from verifycore");
+            return results;
+        }
+
+        if (string.IsNullOrEmpty(_symbolCacheDirectory) || !Directory.Exists(_symbolCacheDirectory))
+        {
+            _logger.LogWarning("[LLDB] Symbol cache directory not available");
+            return results;
+        }
+
+        // Get available .so files in the symbol cache
+        var availableModules = Directory.GetFiles(_symbolCacheDirectory, "*.so", SearchOption.AllDirectories)
+            .ToDictionary(f => Path.GetFileName(f), f => f, StringComparer.OrdinalIgnoreCase);
+
+        _logger.LogInformation("[LLDB] Found {Count} .so files in symbol cache", availableModules.Count);
+
+        // Determine which modules to load
+        var modulesToLoad = new List<(string Name, string Path, ulong Address)>();
+
+        foreach (var (modulePath, address) in VerifiedCorePlatform.ModuleAddresses)
+        {
+            var moduleName = Path.GetFileName(modulePath);
+            
+            // Filter by requested names if provided
+            if (moduleNames != null && !moduleNames.Any(m => 
+                moduleName.Contains(m, StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
+            // Check if we have this module in our symbol cache
+            if (availableModules.TryGetValue(moduleName, out var localPath))
+            {
+                modulesToLoad.Add((moduleName, localPath, address));
+            }
+        }
+
+        _logger.LogInformation("[LLDB] Loading {Count} modules from verifycore", modulesToLoad.Count);
+
+        foreach (var (name, localPath, address) in modulesToLoad)
+        {
+            try
+            {
+                _logger.LogInformation("[LLDB] Loading module {Name} at 0x{Address:X16}", name, address);
+
+                // Step 1: Add the module to the target
+                var addResult = ExecuteCommandInternal($"target modules add \"{localPath}\"");
+                _logger.LogDebug("[LLDB] target modules add result: {Result}", addResult);
+
+                // Step 2: Load the module at the correct address using --slide
+                // The slide value is the offset from the original link address (usually 0)
+                var loadResult = ExecuteCommandInternal($"target modules load --file \"{name}\" --slide 0x{address:X}");
+                _logger.LogDebug("[LLDB] target modules load result: {Result}", loadResult);
+
+                if (loadResult.Contains("error", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Fallback: try loading individual sections
+                    _logger.LogDebug("[LLDB] Slide failed, trying section load for {Name}", name);
+                    
+                    // Get section info
+                    var sectionsOutput = ExecuteCommandInternal($"image dump sections \"{name}\"");
+                    
+                    // Try loading .text section at the address
+                    var textResult = ExecuteCommandInternal($"target modules load --file \"{name}\" .text 0x{address:X}");
+                    _logger.LogDebug("[LLDB] Section load result: {Result}", textResult);
+
+                    results[name] = !textResult.Contains("error", StringComparison.OrdinalIgnoreCase);
+                }
+                else
+                {
+                    results[name] = true;
+                }
+
+                // Also try to load associated .dbg file if it exists
+                var dbgPath = localPath + ".dbg";
+                if (File.Exists(dbgPath))
+                {
+                    var symbolResult = ExecuteCommandInternal($"target symbols add \"{dbgPath}\"");
+                    _logger.LogDebug("[LLDB] Symbol add result: {Result}", symbolResult);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "[LLDB] Failed to load module {Name}", name);
+                results[name] = false;
+            }
+        }
+
+        return results;
     }
 
     /// <summary>
@@ -2536,6 +2666,12 @@ public class VerifyCoreResult
     /// Gets or sets the list of module paths found in the dump.
     /// </summary>
     public List<string> ModulePaths { get; set; } = [];
+
+    /// <summary>
+    /// Gets or sets the modules with their load addresses.
+    /// Key: module path, Value: load address in memory.
+    /// </summary>
+    public Dictionary<string, ulong> ModuleAddresses { get; set; } = [];
 
     /// <summary>
     /// Gets or sets the main executable path (first module in the dump).

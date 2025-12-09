@@ -289,7 +289,9 @@ CritSec module!SomeLock at 0000000077c8c440
 
         // Assert
         mockManager.Verify(m => m.ExecuteCommand("process status"), Times.Once);
-        mockManager.Verify(m => m.ExecuteCommand("memory region --all"), Times.Once);
+        // memory region --all is called at least once (CrashAnalyzer), and possibly twice
+        // if ProcessInfoExtractor uses stack scan fallback
+        mockManager.Verify(m => m.ExecuteCommand("memory region --all"), Times.AtLeastOnce);
         Assert.NotNull(result.Memory!.LeakAnalysis);
     }
 

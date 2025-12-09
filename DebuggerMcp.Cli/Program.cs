@@ -5252,10 +5252,22 @@ public class Program
                             case "so":
                                 await HandleShowObjAsync(cliArgs, console, output, state, mcpClient);
                                 continue;
+                            case "clearcache":
+                            case "cc":
+                                await HandleClearCacheAsync(console, output, state, mcpClient);
+                                continue;
+                            case "loadmodules":
+                            case "lm":
+                                await HandleLoadModulesAsync(cliArgs, console, output, state, mcpClient);
+                                continue;
                             case "help":
                                 output.Dim("Available / commands in cmd mode:");
                                 output.Markup("  [cyan]/showobj <address>[/]  Inspect .NET object as JSON");
                                 output.Markup("  [cyan]/so <address>[/]       Alias for /showobj");
+                                output.Markup("  [cyan]/clearcache[/]         Clear command cache (forces fresh results)");
+                                output.Markup("  [cyan]/cc[/]                 Alias for /clearcache");
+                                output.Markup("  [cyan]/loadmodules[/]        Load modules from verifycore at correct addresses");
+                                output.Markup("  [cyan]/lm[/]                 Alias for /loadmodules");
                                 output.Markup("  [cyan]/help[/]               Show this help");
                                 output.WriteLine();
                                 continue;
@@ -5632,6 +5644,133 @@ public class Program
         catch (Exception ex)
         {
             output.Error($"Failed to inspect object: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles the /clearcache command in cmd mode.
+    /// </summary>
+    private static async Task HandleClearCacheAsync(
+        IAnsiConsole console,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        if (!state.IsConnected || !mcpClient.IsConnected)
+        {
+            output.Error("Not connected or MCP not available.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.SessionId))
+        {
+            output.Error("No active session. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        try
+        {
+            output.Info("Clearing command cache...");
+            var result = await mcpClient.ClearCommandCacheAsync(state.SessionId, state.Settings.UserId);
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+                return;
+            }
+
+            output.Success("Command cache cleared. Subsequent commands will fetch fresh results.");
+        }
+        catch (McpClientException ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"Failed to clear cache: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to clear cache: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles the /loadmodules command in cmd mode.
+    /// </summary>
+    private static async Task HandleLoadModulesAsync(
+        string[] args,
+        IAnsiConsole console,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        if (!state.IsConnected || !mcpClient.IsConnected)
+        {
+            output.Error("Not connected or MCP not available.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.SessionId))
+        {
+            output.Error("No active session. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        try
+        {
+            // Module names are optional - can be comma-separated list
+            string? moduleNames = args.Length > 0 ? string.Join(",", args) : null;
+
+            if (moduleNames != null)
+            {
+                output.Info($"Loading modules: {moduleNames}...");
+            }
+            else
+            {
+                output.Info("Loading all available modules from verifycore...");
+            }
+
+            var result = await mcpClient.LoadVerifyCoreModulesAsync(state.SessionId, state.Settings.UserId, moduleNames);
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+                return;
+            }
+
+            // Display results
+            foreach (var line in result.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (line.StartsWith("Successfully"))
+                {
+                    output.Success(line);
+                }
+                else if (line.StartsWith("Failed"))
+                {
+                    output.Warning(line);
+                }
+                else if (line.StartsWith("Tip:"))
+                {
+                    output.Dim(line);
+                }
+                else
+                {
+                    output.WriteLine(line);
+                }
+            }
+        }
+        catch (McpClientException ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"Failed to load modules: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to load modules: {ex.Message}");
         }
     }
 

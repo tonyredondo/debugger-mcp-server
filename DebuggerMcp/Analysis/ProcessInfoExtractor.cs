@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
@@ -144,8 +145,9 @@ public class ProcessInfoExtractor
             var (argc, argvAddress) = FindMainFrame(backtraceOutput);
             if (argvAddress == null)
             {
-                _logger?.LogDebug("ProcessInfoExtractor: Could not find main frame with argv address");
-                return null;
+                _logger?.LogDebug("ProcessInfoExtractor: Could not find main frame with argv address, trying stack scan fallback");
+                // Fallback: scan the stack directly for environment variables
+                return await ExtractFromStackScanAsync(debuggerManager, platformInfo, rawCommands);
             }
 
             _logger?.LogDebug("ProcessInfoExtractor: Found main frame - argc={Argc}, argv={ArgvAddress}",
@@ -622,6 +624,447 @@ public class ProcessInfoExtractor
         });
 
         return result;
+    }
+
+    /// <summary>
+    /// Fallback method to extract process info by scanning the stack directly.
+    /// This is used when the main frame approach fails (e.g., for standalone .NET apps).
+    /// The stack layout from high to low is: strings -> auxv -> envp pointers -> argv pointers -> argc
+    /// </summary>
+    /// <param name="debuggerManager">The debugger manager.</param>
+    /// <param name="platformInfo">Platform info for pointer size detection.</param>
+    /// <param name="rawCommands">Optional dictionary to store executed commands.</param>
+    /// <returns>ProcessInfo if extraction succeeded, null otherwise.</returns>
+    private async Task<ProcessInfo?> ExtractFromStackScanAsync(
+        IDebuggerManager debuggerManager,
+        PlatformInfo? platformInfo,
+        Dictionary<string, string>? rawCommands = null)
+    {
+        try
+        {
+            _logger?.LogInformation("ProcessInfoExtractor: Attempting stack scan fallback for environment extraction");
+
+            // Step 1: Get memory regions to find the stack
+            var regionCmd = "memory region --all";
+            var regionOutput = await Task.Run(() => debuggerManager.ExecuteCommand(regionCmd));
+
+            if (rawCommands != null && !string.IsNullOrWhiteSpace(regionOutput))
+            {
+                rawCommands["memory region --all (for stack scan)"] = regionOutput;
+            }
+
+            if (string.IsNullOrWhiteSpace(regionOutput))
+            {
+                _logger?.LogWarning("ProcessInfoExtractor: Stack scan - memory region returned empty");
+                return null;
+            }
+
+            // Step 2: Find the stack region (look for high-address rw- region)
+            var stackRegion = FindStackRegion(regionOutput);
+            if (stackRegion == null)
+            {
+                _logger?.LogWarning("ProcessInfoExtractor: Stack scan - could not identify stack region");
+                return null;
+            }
+
+            _logger?.LogDebug("ProcessInfoExtractor: Stack scan - found stack region: 0x{Start:X}-0x{End:X}",
+                stackRegion.Value.start, stackRegion.Value.end);
+
+            // Step 3: Read memory from near the stack top where strings are stored
+            // The string area is typically within the last ~8KB of the stack
+            var maxScanSize = 8192ul; // 8KB should be enough for most cases
+            var regionSize = stackRegion.Value.end - stackRegion.Value.start;
+            
+            // Cap scan size to actual region size (minus small buffer to avoid reading past region)
+            var scanSize = Math.Min(maxScanSize, regionSize > 256 ? regionSize - 256 : regionSize);
+            var scanStart = stackRegion.Value.end - scanSize;
+
+            var memoryCmd = $"memory read -c{scanSize} 0x{scanStart:X}";
+            var memoryOutput = await Task.Run(() => debuggerManager.ExecuteCommand(memoryCmd));
+
+            if (rawCommands != null && !string.IsNullOrWhiteSpace(memoryOutput))
+            {
+                // Don't store raw output as it may contain sensitive data
+                rawCommands["memory read (stack scan)"] = $"Read {scanSize} bytes from 0x{scanStart:X}";
+            }
+
+            if (string.IsNullOrWhiteSpace(memoryOutput))
+            {
+                _logger?.LogWarning("ProcessInfoExtractor: Stack scan - memory read returned empty");
+                return null;
+            }
+
+            // Step 4: Parse the memory output to extract strings
+            var strings = ParseMemoryToStrings(memoryOutput);
+
+            if (strings.Count == 0)
+            {
+                _logger?.LogWarning("ProcessInfoExtractor: Stack scan - no strings found in stack memory");
+                return null;
+            }
+
+            _logger?.LogDebug("ProcessInfoExtractor: Stack scan - found {Count} strings in stack", strings.Count);
+
+            // Step 5: Separate into arguments and environment variables
+            // Arguments come first (no '='), then environment variables (have '=')
+            var result = new ProcessInfo();
+            var foundFirstEnvVar = false;
+            var sensitiveCount = 0;
+            var candidateArguments = new List<string>();
+
+            foreach (var str in strings)
+            {
+                // Skip empty or very short strings
+                if (string.IsNullOrWhiteSpace(str) || str.Length < 2)
+                    continue;
+
+                // Check if this looks like an environment variable (contains '=')
+                // Must have '=' not at start (equalsIdx > 0) and key must be valid env var format
+                var equalsIdx = str.IndexOf('=');
+                var potentialEnvVar = equalsIdx > 0; // '=' not at position 0 means there's a key
+                
+                string? envVarKey = null;
+                var isValidEnvVar = false;
+                
+                if (potentialEnvVar)
+                {
+                    envVarKey = str.Substring(0, equalsIdx);
+                    isValidEnvVar = IsValidEnvVarKey(envVarKey);
+                }
+
+                if (isValidEnvVar)
+                {
+                    // This is a real environment variable
+                    foundFirstEnvVar = true;
+                    
+                    var (redacted, wasRedacted) = RedactSensitiveValue(str);
+                    result.EnvironmentVariables.Add(redacted);
+                    if (wasRedacted) sensitiveCount++;
+
+                    if (result.EnvironmentVariables.Count >= MaxEnvironmentVariables)
+                        break;
+                }
+                else if (!foundFirstEnvVar)
+                {
+                    // This is a potential argument (before we found any env vars)
+                    // Collect as candidates - we'll validate them later
+                    if (IsValidArgument(str))
+                    {
+                        candidateArguments.Add(str);
+
+                        if (candidateArguments.Count >= MaxArguments)
+                            continue; // Don't break, keep looking for env vars
+                    }
+                }
+            }
+
+            // Validate candidate arguments: argv[0] MUST be an executable path
+            // If the first argument doesn't look like a path, the whole list is likely garbage
+            if (candidateArguments.Count > 0)
+            {
+                var firstArg = candidateArguments[0];
+                // argv[0] should be an absolute path (/) or relative path (./ or ../)
+                // or at minimum look like a path with directory separators
+                var looksLikeExecutablePath = firstArg.StartsWith('/') || 
+                                               firstArg.StartsWith("./") || 
+                                               firstArg.StartsWith("../") ||
+                                               (firstArg.Contains('/') && !firstArg.Contains(' '));
+                
+                if (looksLikeExecutablePath)
+                {
+                    result.Arguments.AddRange(candidateArguments);
+                    _logger?.LogDebug("ProcessInfoExtractor: Stack scan - accepted {Count} arguments (argv[0]={Argv0})",
+                        candidateArguments.Count, firstArg);
+                }
+                else
+                {
+                    _logger?.LogDebug("ProcessInfoExtractor: Stack scan - discarded {Count} candidate arguments (first doesn't look like path: {First})",
+                        candidateArguments.Count, firstArg.Length > 50 ? firstArg.Substring(0, 50) + "..." : firstArg);
+                }
+            }
+
+            // Set argc based on arguments found
+            result.Argc = result.Arguments.Count;
+
+            // Set flag if any sensitive data was redacted
+            if (sensitiveCount > 0)
+            {
+                result.SensitiveDataFiltered = true;
+                _logger?.LogDebug("ProcessInfoExtractor: Stack scan - redacted {Count} sensitive environment variables", sensitiveCount);
+            }
+
+            // Sort environment variables alphabetically for consistent output
+            result.EnvironmentVariables.Sort(StringComparer.Ordinal);
+
+            _logger?.LogInformation(
+                "ProcessInfoExtractor: Stack scan - extracted {ArgCount} arguments and {EnvCount} environment variables",
+                result.Arguments.Count, result.EnvironmentVariables.Count);
+
+            // Only return if we found something useful
+            if (result.Arguments.Count > 0 || result.EnvironmentVariables.Count > 0)
+            {
+                return result;
+            }
+
+            _logger?.LogWarning("ProcessInfoExtractor: Stack scan - no valid arguments or environment variables found");
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "ProcessInfoExtractor: Stack scan fallback failed");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Finds the stack region from memory region output.
+    /// </summary>
+    /// <param name="regionOutput">Output from 'memory region --all' command.</param>
+    /// <returns>Stack region start and end addresses, or null if not found.</returns>
+    private (ulong start, ulong end)? FindStackRegion(string regionOutput)
+    {
+        // Look for [stack] annotation or a high-address rw- region
+        // Pattern: [0x00007ffc993fb000-0x00007ffc9957e000) rw-
+        var lines = regionOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        
+        (ulong start, ulong end)? bestCandidate = null;
+        ulong highestRwEnd = 0;
+
+        foreach (var line in lines)
+        {
+            // Match memory region pattern: [0xSTART-0xEND) permissions
+            var match = Regex.Match(line, @"\[0x([0-9a-fA-F]+)-0x([0-9a-fA-F]+)\)\s+rw-");
+            if (!match.Success)
+                continue;
+
+            if (!ulong.TryParse(match.Groups[1].Value, NumberStyles.HexNumber, null, out var start))
+                continue;
+            if (!ulong.TryParse(match.Groups[2].Value, NumberStyles.HexNumber, null, out var end))
+                continue;
+
+            // Check if explicitly marked as [stack]
+            if (line.Contains("[stack]"))
+            {
+                _logger?.LogDebug("ProcessInfoExtractor: Found explicit [stack] region");
+                return (start, end);
+            }
+
+            // Track highest rw- region as candidate (stack is typically at high addresses)
+            // Check for high address range based on platform:
+            // - x64 Linux: 0x7ffc-0x7fff range (start > 0x7f0000000000)
+            // - ARM64: 0x0000ffff range (start > 0x0000ff0000000000 or start > 0x7f0000000000)
+            // - 32-bit: 0xbf000000-0xff000000 range
+            var isHighAddress = start > 0x7f0000000000 ||  // x64 Linux
+                               (start > 0x0000ff0000000000 && start < 0x0001000000000000) || // ARM64 variant
+                               (start > 0xbf000000 && start < 0x100000000); // 32-bit
+
+            if (end > highestRwEnd && isHighAddress)
+            {
+                var size = end - start;
+                // Stack regions are typically 64KB to 16MB in size
+                if (size >= 0x10000 && size <= 0x1000000)
+                {
+                    highestRwEnd = end;
+                    bestCandidate = (start, end);
+                }
+            }
+        }
+
+        return bestCandidate;
+    }
+
+    /// <summary>
+    /// Parses LLDB memory read output to extract null-terminated strings.
+    /// </summary>
+    /// <param name="memoryOutput">Output from 'memory read -c...' command.</param>
+    /// <returns>List of extracted strings.</returns>
+    private List<string> ParseMemoryToStrings(string memoryOutput)
+    {
+        var strings = new List<string>();
+        var currentString = new StringBuilder();
+
+        // LLDB memory read output format:
+        // 0x7ffc9957d0c0: 00 00 00 00 00 2f 70 72 6f 6a 65 63 74 2f 70 72  ...../project/pr
+        // 0x7ffc9957d0d0: 6f 66 69 6c 65 72 2f 5f 62 75 69 6c 64 2f 62 69  ofiler/_build/bi
+
+        var lines = memoryOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var line in lines)
+        {
+            // Extract the ASCII representation from the right side of the output
+            // Or parse the hex bytes directly
+            
+            // Try to find hex bytes pattern
+            var hexMatch = Regex.Match(line, @"0x[0-9a-fA-F]+:\s+((?:[0-9a-fA-F]{2}\s+)+)");
+            if (!hexMatch.Success)
+                continue;
+
+            var hexPart = hexMatch.Groups[1].Value;
+            var hexBytes = hexPart.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+
+            foreach (var hexByte in hexBytes)
+            {
+                if (!byte.TryParse(hexByte, NumberStyles.HexNumber, null, out var byteValue))
+                    continue;
+
+                if (byteValue == 0) // Null terminator
+                {
+                    if (currentString.Length > 0)
+                    {
+                        var str = currentString.ToString();
+                        // Only keep printable strings with reasonable length
+                        if (str.Length >= 1 && str.Length <= MaxStringLength && IsPrintableString(str))
+                        {
+                            strings.Add(str);
+                        }
+                        currentString.Clear();
+                    }
+                }
+                else if (byteValue >= 0x20 && byteValue < 0x7F) // Printable ASCII
+                {
+                    currentString.Append((char)byteValue);
+                }
+                else if (byteValue == 0x09 || byteValue == 0x0A || byteValue == 0x0D) // Tab, LF, CR
+                {
+                    // Allow whitespace characters
+                    currentString.Append((char)byteValue);
+                }
+                else
+                {
+                    // Non-printable character - might indicate end of string area or corrupted data
+                    if (currentString.Length > 0)
+                    {
+                        var str = currentString.ToString();
+                        if (str.Length >= 1 && str.Length <= MaxStringLength && IsPrintableString(str))
+                        {
+                            strings.Add(str);
+                        }
+                        currentString.Clear();
+                    }
+                }
+            }
+        }
+
+        // Don't forget the last string if there's no final null
+        if (currentString.Length > 0)
+        {
+            var str = currentString.ToString();
+            if (str.Length <= MaxStringLength && IsPrintableString(str))
+            {
+                strings.Add(str);
+            }
+        }
+
+        return strings;
+    }
+
+    /// <summary>
+    /// Checks if a string is printable (contains mostly printable ASCII characters).
+    /// </summary>
+    /// <param name="str">String to check.</param>
+    /// <returns>True if printable, false otherwise.</returns>
+    private static bool IsPrintableString(string str)
+    {
+        if (string.IsNullOrEmpty(str))
+            return false;
+
+        var printableCount = 0;
+        foreach (var c in str)
+        {
+            if ((c >= 0x20 && c < 0x7F) || c == '\t' || c == '\n' || c == '\r')
+                printableCount++;
+        }
+
+        // At least 80% of characters should be printable
+        return (double)printableCount / str.Length >= 0.8;
+    }
+
+    /// <summary>
+    /// Validates if a string looks like a valid environment variable key.
+    /// </summary>
+    /// <param name="key">The key part of an environment variable.</param>
+    /// <returns>True if it looks like a valid key.</returns>
+    private static bool IsValidEnvVarKey(string key)
+    {
+        if (string.IsNullOrEmpty(key) || key.Length < 1)
+            return false;
+
+        // First character should be a letter or underscore
+        if (!char.IsLetter(key[0]) && key[0] != '_')
+            return false;
+
+        // Rest should be alphanumeric or underscore
+        foreach (var c in key)
+        {
+            if (!char.IsLetterOrDigit(c) && c != '_')
+                return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Validates if a string looks like a valid command-line argument.
+    /// </summary>
+    /// <param name="arg">The argument string.</param>
+    /// <returns>True if it looks like a valid argument.</returns>
+    private static bool IsValidArgument(string arg)
+    {
+        if (string.IsNullOrEmpty(arg))
+            return false;
+
+        // Reject strings that are too short - real arguments are usually at least 4 chars
+        // (short options like "-v" are 2 chars, but we need more context to trust them)
+        // This helps filter out random 2-3 byte garbage from memory
+        if (arg.Length < 4)
+            return false;
+
+        // Reject strings that are too long (likely not real arguments)
+        if (arg.Length > 1000)
+            return false;
+
+        // Arguments typically:
+        // - Start with / for absolute paths (Unix) or options
+        // - Start with - or -- for flags/options
+        // - Start with http for URLs
+        // - Start with . for relative paths
+        // - First argument (argv[0]) is usually the executable path
+        
+        // High confidence patterns - must match one of these
+        if (arg.StartsWith('/') || arg.StartsWith("./") || arg.StartsWith("../"))
+            return true; // Paths
+            
+        if (arg.StartsWith("--") || (arg.StartsWith('-') && arg.Length >= 2 && char.IsLetter(arg[1])))
+            return true; // Command-line flags
+            
+        if (arg.StartsWith("http://") || arg.StartsWith("https://"))
+            return true; // URLs
+
+        // For other strings, require high confidence they're real arguments
+        // Must be mostly alphanumeric with common path/argument characters
+        var validChars = 0;
+        var letterOrDigitCount = 0;
+        foreach (var c in arg)
+        {
+            if (char.IsLetterOrDigit(c))
+            {
+                validChars++;
+                letterOrDigitCount++;
+            }
+            else if (c == '/' || c == '\\' || c == '.' || c == '-' || c == '_' || 
+                     c == ':' || c == '@' || c == ',' || c == ';' ||
+                     c == '[' || c == ']' || c == '(' || c == ')' || c == ' ')
+            {
+                validChars++;
+            }
+        }
+
+        // At least 80% of characters should be "valid" for arguments
+        // AND at least 50% should be letters or digits (not just punctuation)
+        var validRatio = (double)validChars / arg.Length;
+        var alphanumRatio = (double)letterOrDigitCount / arg.Length;
+        
+        return validRatio >= 0.8 && alphanumRatio >= 0.5;
     }
 }
 

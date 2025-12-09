@@ -512,7 +512,30 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
+    /// <inheritdoc/>
+    public async Task<string> ClearCommandCacheAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
+    {
+        return await CallToolAsync("clear_command_cache", new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId
+        }, cancellationToken);
+    }
 
+    /// <inheritdoc/>
+    public async Task<string> LoadVerifyCoreModulesAsync(string sessionId, string userId, string? moduleNames = null, CancellationToken cancellationToken = default)
+    {
+        var parameters = new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId
+        };
+        if (!string.IsNullOrEmpty(moduleNames))
+        {
+            parameters["moduleNames"] = moduleNames;
+        }
+        return await CallToolAsync("load_verify_core_modules", parameters, cancellationToken);
+    }
 
     /// <inheritdoc/>
     public async Task<string> OpenDumpAsync(string sessionId, string userId, string dumpId, CancellationToken cancellationToken = default)
