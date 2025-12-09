@@ -276,7 +276,7 @@ public class Program
                 var statusColor = server.IsOnline ? "green" : "red";
                 var status = server.IsOnline ? "online" : server.ErrorMessage ?? "offline";
                 var arch = server.Capabilities?.Architecture ?? "-";
-                var distro = server.Capabilities?.IsAlpine == true ? "alpine" :
+                var distro = server.Capabilities?.IsAlpine == true ? "alpine" : 
                     (server.Capabilities?.Distribution ?? "-");
                 var name = server.Name;
 
@@ -557,15 +557,15 @@ public class Program
         const string DefaultServerUrl = "http://localhost:5000";
 
         // Auto-connect: use configured URL or try default localhost
-        var serverUrl = !string.IsNullOrEmpty(settings.ServerUrl)
-            ? settings.ServerUrl
+        var serverUrl = !string.IsNullOrEmpty(settings.ServerUrl) 
+            ? settings.ServerUrl 
             : DefaultServerUrl;
 
         try
         {
             output.Dim($"Connecting to {serverUrl}...");
             httpClient.Configure(serverUrl, settings.ApiKey, settings.Timeout);
-
+            
             // Use the normalized URL from the client (has http:// scheme added if missing)
             var normalizedUrl = httpClient.ServerUrl!;
             var health = await httpClient.CheckHealthAsync();
@@ -590,12 +590,12 @@ public class Program
                     }
                     output.KeyValue("Debugger", serverInfo.DebuggerType);
                     output.KeyValue("Runtime", serverInfo.DotNetVersion);
-
+                    
                     if (serverInfo.IsAlpine)
                     {
                         output.Warning("⚠️  Alpine Linux host - can only debug Alpine .NET dumps");
                     }
-
+                    
                     if (serverInfo.InstalledRuntimes.Count > 0)
                     {
                         var majorVersions = serverInfo.InstalledRuntimes
@@ -1696,14 +1696,14 @@ public class Program
         try
         {
             await TextCopy.ClipboardService.SetTextAsync(state.LastCommandResult!);
-
+            
             // Show summary of what was copied
             var resultLength = state.LastCommandResult!.Length;
             var lineCount = state.LastCommandResult.Split('\n').Length;
-            var sizeDisplay = resultLength > 1024
-                ? $"{resultLength / 1024.0:F1} KB"
+            var sizeDisplay = resultLength > 1024 
+                ? $"{resultLength / 1024.0:F1} KB" 
                 : $"{resultLength} bytes";
-
+            
             output.Success($"Copied to clipboard!");
             output.KeyValue("Command", state.LastCommandName ?? "unknown");
             output.KeyValue("Size", sizeDisplay);
@@ -1729,7 +1729,7 @@ public class Program
         if (state.IsConnected)
         {
             output.KeyValue("Server", state.ServerDisplay);
-
+            
             // Show server host info if available
             if (state.ServerInfo != null)
             {
@@ -1737,12 +1737,12 @@ public class Program
                 output.KeyValue("Host", $"{info.Description}{(info.IsDocker ? " (Docker)" : "")}");
                 output.KeyValue("Debugger", info.DebuggerType);
                 output.KeyValue("Runtime", info.DotNetVersion);
-
+                
                 if (info.IsAlpine)
                 {
                     output.Warning("⚠️  Alpine host - can only debug Alpine .NET dumps");
                 }
-
+                
                 if (info.InstalledRuntimes.Count > 0)
                 {
                     var majorVersions = info.InstalledRuntimes
@@ -1830,7 +1830,7 @@ public class Program
         {
             // Configure HTTP client
             httpClient.Configure(serverUrl, apiKey, state.Settings.Timeout);
-
+            
             // Use the normalized URL from the client (has http:// scheme added if missing)
             var normalizedUrl = httpClient.ServerUrl!;
 
@@ -1861,12 +1861,12 @@ public class Program
                     }
                     output.KeyValue("Debugger", serverInfo.DebuggerType);
                     output.KeyValue("Runtime", serverInfo.DotNetVersion);
-
+                    
                     if (serverInfo.IsAlpine)
                     {
                         output.Warning("⚠️  Alpine Linux host - can only debug Alpine .NET dumps");
                     }
-
+                    
                     if (serverInfo.InstalledRuntimes.Count > 0)
                     {
                         // Show major versions available
@@ -2124,7 +2124,7 @@ public class Program
             {
                 output.KeyValue("Runtime", $".NET {result.RuntimeVersion}");
             }
-
+            
             // Show architecture
             if (!string.IsNullOrEmpty(result.Architecture))
             {
@@ -2142,7 +2142,7 @@ public class Program
                 {
                     output.KeyValue("Host Type", "glibc (Debian/Ubuntu/etc.)");
                 }
-
+                
                 // Check for host mismatch with server
                 CheckDumpServerCompatibility(result.IsAlpineDump, result.Architecture, state, output);
             }
@@ -2284,10 +2284,10 @@ public class Program
             {
                 // Show full ID for easy copying, highlight first 8 chars for partial matching
                 var fullId = dump.DumpId;
-                var displayId = fullId.Length > 8
+                var displayId = fullId.Length > 8 
                     ? $"[yellow]{fullId[..8]}[/]{fullId[8..]}"
                     : $"[yellow]{fullId}[/]";
-
+                
                 // Check for host compatibility (Alpine vs glibc)
                 var isHostIncompatible = false;
                 if (dump.IsAlpineDump.HasValue && serverIsAlpine.HasValue)
@@ -2295,7 +2295,7 @@ public class Program
                     isHostIncompatible = dump.IsAlpineDump.Value != serverIsAlpine.Value;
                     if (isHostIncompatible) hasIncompatibleDumps = true;
                 }
-
+                
                 // Check for architecture compatibility
                 var isArchIncompatible = false;
                 if (!string.IsNullOrEmpty(dump.Architecture) && !string.IsNullOrEmpty(serverArch))
@@ -2305,7 +2305,7 @@ public class Program
                     isArchIncompatible = !string.Equals(normalizedDumpArch, normalizedServerArch, StringComparison.OrdinalIgnoreCase);
                     if (isArchIncompatible) hasIncompatibleDumps = true;
                 }
-
+                
                 // Show Alpine/glibc indicator with compatibility warning
                 var hostType = dump.IsAlpineDump switch
                 {
@@ -2315,7 +2315,7 @@ public class Program
                     false => "glibc",
                     null => "-"
                 };
-
+                
                 // Show runtime version (e.g., "9.0.10" -> ".NET 9.0")
                 var runtime = "-";
                 if (!string.IsNullOrEmpty(dump.RuntimeVersion))
@@ -2323,14 +2323,14 @@ public class Program
                     var parts = dump.RuntimeVersion.Split('.');
                     runtime = parts.Length >= 2 ? $".NET {parts[0]}.{parts[1]}" : $".NET {dump.RuntimeVersion}";
                 }
-
+                
                 // Architecture with compatibility warning
                 var arch = dump.Architecture ?? "-";
                 if (isArchIncompatible && !string.IsNullOrEmpty(dump.Architecture))
                 {
                     arch = $"[red]{dump.Architecture} ⚠[/]";
                 }
-
+                    
                 table.AddRow(
                     displayId,
                     dump.FileName ?? "(unknown)",
@@ -2338,13 +2338,13 @@ public class Program
                     runtime,
                     arch,
                     hostType,
-                    dump.UploadedAt == default
-                        ? "(unknown)"
+                    dump.UploadedAt == default 
+                        ? "(unknown)" 
                         : dump.UploadedAt.ToString("yyyy-MM-dd HH:mm"));
             }
 
             console.Write(table);
-
+            
             // Show warning note if there are incompatible dumps
             if (hasIncompatibleDumps && state.ServerInfo != null)
             {
@@ -2462,19 +2462,19 @@ public class Program
             output.KeyValue("File Name", dump.FileName ?? "(unknown)");
             output.KeyValue("Size", dump.FormattedSize);
             output.KeyValue("Format", dump.DumpFormat ?? "(unknown)");
-
+            
             // Show runtime version
             if (!string.IsNullOrEmpty(dump.RuntimeVersion))
             {
                 output.KeyValue("Runtime", $".NET {dump.RuntimeVersion}");
             }
-
+            
             // Show architecture
             if (!string.IsNullOrEmpty(dump.Architecture))
             {
                 output.KeyValue("Architecture", dump.Architecture);
             }
-
+            
             // Show Alpine/glibc host type
             if (dump.IsAlpineDump.HasValue)
             {
@@ -2486,7 +2486,7 @@ public class Program
                 {
                     output.KeyValue("Host Type", "glibc (Debian/Ubuntu/etc.)");
                 }
-
+                
                 // Check for host mismatch with server
                 CheckDumpServerCompatibility(dump.IsAlpineDump, dump.Architecture, state, output);
             }
@@ -2502,7 +2502,7 @@ public class Program
                 output.KeyValue("Executable", dump.ExecutableName ?? "(unknown)");
                 output.Dim("  Standalone app - binary will be used when opening dump");
             }
-
+            
             output.KeyValue("Uploaded At", dump.UploadedAt.ToString("yyyy-MM-dd HH:mm:ss UTC"));
 
             if (!string.IsNullOrEmpty(dump.Description))
@@ -3074,7 +3074,7 @@ public class Program
             // Build and display tree view
             var tree = BuildSymbolTree(result.Symbols, resolvedDumpId);
             console.Write(tree);
-
+            
             output.WriteLine();
             output.Dim($"Total: {result.Symbols.Count} files");
         }
@@ -3091,29 +3091,29 @@ public class Program
             }
         }
     }
-
+    
     /// <summary>
     /// Builds a tree view from a list of symbol file paths.
     /// </summary>
     private static Tree BuildSymbolTree(List<string> symbols, string rootLabel)
     {
         var tree = new Tree($"[yellow]📁 .symbols_{rootLabel.Split('-')[0]}[/]");
-
+        
         // Build directory structure
         var rootNode = new Dictionary<string, object>();
-
+        
         foreach (var symbol in symbols.OrderBy(s => s))
         {
             // Normalize path separators
             var normalizedPath = symbol.Replace('\\', '/');
             var parts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-
+            
             var currentNode = rootNode;
             for (var i = 0; i < parts.Length; i++)
             {
                 var part = parts[i];
                 var isFile = i == parts.Length - 1;
-
+                
                 if (isFile)
                 {
                     // Store file as a string marker
@@ -3130,13 +3130,13 @@ public class Program
                 }
             }
         }
-
+        
         // Convert to Spectre.Console tree
         AddNodesToTree(tree, rootNode);
-
+        
         return tree;
     }
-
+    
     /// <summary>
     /// Recursively adds nodes to a Spectre.Console tree.
     /// </summary>
@@ -3146,11 +3146,11 @@ public class Program
         var sortedKeys = nodes.Keys
             .OrderBy(k => nodes[k] is string ? 1 : 0) // Directories first
             .ThenBy(k => k);
-
+        
         foreach (var key in sortedKeys)
         {
             var value = nodes[key];
-
+            
             if (value is string) // File
             {
                 var icon = GetFileIcon(key);
@@ -3163,7 +3163,7 @@ public class Program
             }
         }
     }
-
+    
     /// <summary>
     /// Gets an appropriate icon for a file based on its extension.
     /// </summary>
@@ -4304,7 +4304,7 @@ public class Program
                     if (IsErrorResult(createResult))
                     {
                         output.Error(createResult);
-
+                        
                         // Provide helpful hints based on error type
                         if (createResult.Contains("maximum number of sessions", StringComparison.OrdinalIgnoreCase))
                         {
@@ -4431,7 +4431,7 @@ public class Program
                         }
 
                         state.SessionId = resolvedSessionId;
-
+                        
                         // Extract debugger type from response
                         var debuggerTypeMatch = System.Text.RegularExpressions.Regex.Match(
                             verifyResult, @"Debugger\s*Type:\s*(\w+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -4439,7 +4439,7 @@ public class Program
                         {
                             state.DebuggerType = debuggerTypeMatch.Groups[1].Value;
                         }
-
+                        
                         output.Success($"Now using session: {resolvedSessionId}");
                         output.Markup(verifyResult);
                     }
@@ -4480,7 +4480,7 @@ public class Program
                         }
 
                         state.SessionId = resolvedRestoreId;
-
+                        
                         // Check if dump is mentioned in result
                         if (restoreResult.Contains("CurrentDump:") && !restoreResult.Contains("None"))
                         {
@@ -4491,7 +4491,7 @@ public class Program
                                 state.SetDumpLoaded(dumpMatch.Groups[1].Value);
                             }
                         }
-
+                        
                         // Get debugger type for command mode prompt
                         try
                         {
@@ -4507,7 +4507,7 @@ public class Program
                         {
                             // Debugger type extraction failed - not critical
                         }
-
+                        
                         output.Success("Session restored!");
                         output.Markup(restoreResult);
                     }
@@ -4593,7 +4593,7 @@ public class Program
                 if (IsErrorResult(createResult))
                 {
                     output.Error(createResult);
-
+                    
                     // Provide helpful hints based on error type
                     if (createResult.Contains("maximum number of sessions", StringComparison.OrdinalIgnoreCase))
                     {
@@ -4621,7 +4621,7 @@ public class Program
             catch (Exception ex)
             {
                 output.Error($"Failed to create session: {ex.Message}");
-
+                
                 // Check exception message for hints
                 if (ex.Message.Contains("maximum number of sessions", StringComparison.OrdinalIgnoreCase))
                 {
@@ -4643,7 +4643,7 @@ public class Program
             output.Dim("  3. Loading dump file into debugger");
             output.Dim("  4. Configuring symbol paths");
             output.WriteLine();
-
+            
             var result = await output.WithSpinnerAsync(
                 "Downloading symbols and loading dump (please wait)...",
                 () => mcpClient.OpenDumpAsync(state.SessionId!, state.Settings.UserId, dumpId));
@@ -4658,7 +4658,7 @@ public class Program
                 output.Success("Dump opened successfully!");
                 output.Markup(result);
                 state.SetDumpLoaded(dumpId);
-
+                
                 // Get debugger type for proper command mapping
                 try
                 {
@@ -4676,7 +4676,7 @@ public class Program
                 {
                     // Ignore errors getting debugger info - not critical
                 }
-
+                
                 output.WriteLine();
                 output.Dim("Tip: For .NET dumps, SOS is auto-loaded. Try 'analyze dotnet' or 'exec !threads'");
             }
@@ -4734,7 +4734,7 @@ public class Program
             // Get server capabilities
             var configManager = new ServerConfigManager();
             var discovery = new ServerDiscovery(configManager);
-
+            
             // Try to get current server capabilities
             ServerCapabilities? serverCaps = null;
             try
@@ -4770,7 +4770,7 @@ public class Program
             var dumpIsAlpine = dumpInfo.IsAlpineDump ?? false;
 
             // Check for mismatches
-            var archMismatch = !string.IsNullOrEmpty(dumpArch) &&
+            var archMismatch = !string.IsNullOrEmpty(dumpArch) && 
                 !serverCaps.Architecture.Equals(dumpArch, StringComparison.OrdinalIgnoreCase);
             var alpineMismatch = serverCaps.IsAlpine != dumpIsAlpine;
 
@@ -4786,10 +4786,10 @@ public class Program
 
             // Show comparison (not using table to avoid centering)
             var dumpDistroDisplay = dumpIsAlpine ? "[cyan]Alpine[/]" : "[cyan]Debian/glibc[/]";
-            var serverArchDisplay = archMismatch
-                ? $"[red]{serverCaps.Architecture}[/]"
+            var serverArchDisplay = archMismatch 
+                ? $"[red]{serverCaps.Architecture}[/]" 
                 : $"[green]{serverCaps.Architecture}[/]";
-            var serverDistroDisplay = alpineMismatch
+            var serverDistroDisplay = alpineMismatch 
                 ? (serverCaps.IsAlpine ? "[red]Alpine[/]" : "[red]Debian/glibc[/]")
                 : (serverCaps.IsAlpine ? "[green]Alpine[/]" : "[green]Debian/glibc[/]");
 
@@ -4811,7 +4811,7 @@ public class Program
                 output.Warning("No matching servers configured.");
                 output.WriteLine();
                 output.Warning("The dump may not analyze correctly due to architecture/distribution mismatch.");
-
+                
                 if (output.Console.Confirm("Continue anyway?", false))
                 {
                     return ServerSwitchResult.ContinueWithMismatch;
@@ -5034,7 +5034,7 @@ public class Program
             "unable to"
         };
 
-        return errorIndicators.Any(indicator =>
+        return errorIndicators.Any(indicator => 
             result.Contains(indicator, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -5158,7 +5158,7 @@ public class Program
     /// </summary>
     // Separate command history for debugger cmd mode
     private static CommandHistory? _cmdHistory;
-
+    
     private static async Task HandleMultiLineCommandAsync(
         IAnsiConsole console,
         ConsoleOutput output,
@@ -5218,7 +5218,7 @@ public class Program
                     output.Info("Exiting multi-line command mode.");
                     break;
                 }
-
+                
                 if (string.IsNullOrEmpty(command))
                 {
                     continue;
@@ -5240,12 +5240,12 @@ public class Program
                 {
                     var cliCommand = command[1..].Trim();
                     var cliParts = ParseCommandLine(cliCommand);
-
+                    
                     if (cliParts.Length > 0)
                     {
                         var cliCmd = cliParts[0].ToLowerInvariant();
                         var cliArgs = cliParts.Length > 1 ? cliParts[1..] : [];
-
+                        
                         switch (cliCmd)
                         {
                             case "showobj":
@@ -5281,10 +5281,10 @@ public class Program
 
                 // Execute the debugger command
                 var result = await mcpClient.ExecuteCommandAsync(state.SessionId!, state.Settings.UserId, command);
-
+                
                 // Save result for copy command
                 state.SetLastResult($"cmd: {command}", result);
-
+                
                 Console.WriteLine(result);
             }
             catch (OperationCanceledException)
@@ -5474,7 +5474,7 @@ public class Program
             output.Dim("Loading SOS (Son of Strike) .NET debugging extension...");
             output.Dim("This enables commands like: clrthreads, dumpheap, pe, clrstack");
             output.WriteLine();
-
+            
             var result = await output.WithSpinnerAsync(
                 "Searching for SOS plugin and loading...",
                 () => mcpClient.LoadSosAsync(state.SessionId!, state.Settings.UserId));
@@ -5904,7 +5904,7 @@ public class Program
         output.Dim($"Starting {analysisName}...");
         output.Dim("This involves executing debugger commands and parsing output.");
         output.WriteLine();
-
+        
         var result = await output.WithSpinnerAsync(
             $"Analyzing (executing debugger commands)...",
             analyzeFunc);
@@ -6348,7 +6348,7 @@ public class Program
         {
             string result;
             var spinnerText = summary ? "Generating summary report..." : "Generating full report...";
-
+                
             if (summary)
             {
                 result = await output.WithSpinnerAsync(
@@ -7036,7 +7036,7 @@ public class Program
     private static bool IsSessionNotFoundError(Exception ex)
     {
         var message = ex.Message.ToLowerInvariant();
-        return message.Contains("session") &&
+        return message.Contains("session") && 
                (message.Contains("not found") || message.Contains("expired") || message.Contains("does not exist"));
     }
 

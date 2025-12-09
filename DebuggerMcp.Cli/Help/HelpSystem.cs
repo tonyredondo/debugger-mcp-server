@@ -113,18 +113,18 @@ public static class HelpSystem
             }
 
             output.Markup($"[bold cyan]{categoryKey.ToUpperInvariant()}[/] [dim]- {categoryDesc}[/]");
-
+            
             foreach (var cmd in commands)
             {
-                var syntax = string.IsNullOrEmpty(cmd.Syntax)
-                    ? cmd.Name
+                var syntax = string.IsNullOrEmpty(cmd.Syntax) 
+                    ? cmd.Name 
                     : $"{cmd.Name} {cmd.Syntax}";
-
+                
                 // Calculate padding: escaped [[ and ]] count as 2 chars in string but render as 1
                 // So we need extra padding for each escaped bracket pair
                 var escapedBrackets = (syntax.Length - syntax.Replace("[[", "[").Replace("]]", "]").Length);
                 var padding = 32 + escapedBrackets;
-
+                
                 output.Markup($"  [green]{syntax.PadRight(padding)}[/] {cmd.Description}");
             }
             output.WriteLine();
@@ -161,11 +161,11 @@ public static class HelpSystem
         foreach (var cmd in commands)
         {
             var syntax = string.IsNullOrEmpty(cmd.Syntax) ? cmd.Name : $"{cmd.Name} {cmd.Syntax}";
-
+            
             // Calculate padding for escaped brackets
             var escapedBrackets = (syntax.Length - syntax.Replace("[[", "[").Replace("]]", "]").Length);
             var padding = 30 + escapedBrackets;
-
+            
             output.Markup($"  [green]{syntax.PadRight(padding)}[/] {cmd.Description}");
         }
 
@@ -181,9 +181,9 @@ public static class HelpSystem
         // Find command in categories
         foreach (var (category, commands) in CommandsByCategory)
         {
-            var cmd = commands.FirstOrDefault(c =>
+            var cmd = commands.FirstOrDefault(c => 
                 c.Name.Equals(command, StringComparison.OrdinalIgnoreCase));
-
+            
             if (cmd != null)
             {
                 ShowCommandDetails(output, cmd, category);
@@ -275,7 +275,7 @@ public static class HelpSystem
         {
             var catDesc = Categories.GetValueOrDefault(category, "");
             output.Markup($"[bold cyan]{category.ToUpper()}[/] - [dim]{catDesc}[/]");
-
+            
             foreach (var cmd in commands)
             {
                 output.Markup($"  [green]{cmd.Name,-16}[/] {cmd.Description}");

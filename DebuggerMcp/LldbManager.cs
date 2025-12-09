@@ -775,19 +775,22 @@ public class LldbManager : IDebuggerManager
             {
                 _logger.LogError("[LLDB] Detected LLDB crash during command: {Command}", command);
                 
-                // Attempt auto-recovery
+                // Attempt auto-recovery (restore LLDB but don't retry the command)
                 if (TryRecoverFromCrash())
                 {
-                    _logger.LogInformation("[LLDB] Successfully recovered from crash - retrying command");
-                    // Retry the command after recovery (avoid infinite recursion with a flag)
-                    if (!_isRecovering)
-                    {
-                        return ExecuteCommandInternal(command); // Use internal to avoid cache
-                    }
+                    _logger.LogInformation("[LLDB] Successfully recovered from crash - LLDB restored and dump reopened");
+                    // Return error message instead of retrying (the crashing command might crash again)
+                    throw new InvalidOperationException(
+                        $"LLDB crashed while executing command. LLDB has been automatically recovered and the dump reopened. " +
+                        $"The command that caused the crash was: {(command.Length > 100 ? command[..97] + "..." : command)}. " +
+                        $"Please retry your operation.");
                 }
                 else
                 {
                     _logger.LogError("[LLDB] Failed to recover from crash");
+                    throw new InvalidOperationException(
+                        $"LLDB crashed while executing command and recovery failed. " +
+                        $"Please close and reopen the dump manually.");
                 }
             }
             
@@ -803,7 +806,10 @@ public class LldbManager : IDebuggerManager
                 _logger.LogWarning("[LLDB] Process has exited unexpectedly, attempting recovery...");
                 if (TryRecoverFromCrash())
                 {
-                    _logger.LogInformation("[LLDB] Recovered from crash - please retry the command");
+                    _logger.LogInformation("[LLDB] Recovered from crash - LLDB restored and dump reopened");
+                    throw new InvalidOperationException(
+                        $"LLDB crashed unexpectedly. LLDB has been automatically recovered and the dump reopened. " +
+                        $"Please retry your operation. Original error: {ex.Message}");
                 }
             }
             
