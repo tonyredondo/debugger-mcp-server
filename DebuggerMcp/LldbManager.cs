@@ -271,6 +271,13 @@ public class LldbManager : IDebuggerManager
                     $"LLDB process exited immediately with code {_lldbProcess.ExitCode}");
             }
 
+            // Configure frame format to include stack pointer (SP) for better stack merging
+            // This enables accurate merging of native and managed frames by SP value
+            // when clrstack -f crashes and we need to merge bt all + clrstack output
+            ExecuteCommandInternal(
+                "settings set frame-format \"frame #${frame.index}: ${frame.pc} SP=${frame.sp}{ ${module.file.basename}{\\`${function.name-with-args}{${frame.no-debug}${function.pc-offset}}}}{ at ${line.file.basename}:${line.number}{:${line.column}}}{${function.is-optimized} [opt]}\\n\"");
+            _logger.LogDebug("[LLDB] Configured frame-format with SP");
+            
             _logger.LogInformation("[LLDB] Initialization complete - LLDB is ready");
         }
         catch (Exception ex) when (ex is not InvalidOperationException)

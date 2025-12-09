@@ -124,23 +124,34 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             
             // The -f flag can crash the DAC on some platforms (e.g., .NET 10 ARM64)
             // If it crashed/failed, fall back to getting native + managed stacks separately
+            // and merge them by stack pointer values
+            var usedFallbackMerge = false;
             if (clrStackFullOutput.Contains("[ERROR:") || IsSosErrorOutput(clrStackFullOutput))
             {
-                _logger?.LogWarning("clrstack -f crashed, falling back to separate native + managed stacks");
+                _logger?.LogWarning("clrstack -f crashed, falling back to separate native + managed stacks with SP-based merging");
+                usedFallbackMerge = true;
                 
                 // Get native stacks from bt all
                 var btAllOutput = await ExecuteCommandAsync("bt all");
                 result.RawCommands!["bt all (fallback)"] = btAllOutput;
                 
-                // Get managed stacks with args/locals (without -f)
+                // Get managed stacks with args/locals (without -f) - this includes SP values
                 clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -r -all");
                 result.RawCommands!["clrstack -a -r -all (fallback)"] = clrStackFullOutput;
                 
-                // Parse native stacks from bt all first (this populates thread basic info)
+                // Parse native stacks from bt all first - this populates threads with native frames
                 ParseLldbBacktraceAll(btAllOutput, result);
             }
             
-            ParseFullCallStacksAllThreads(clrStackFullOutput, result);
+            // Parse managed frames (with or without native interleaving depending on -f success)
+            // In fallback mode, append managed frames to existing native frames instead of replacing
+            ParseFullCallStacksAllThreads(clrStackFullOutput, result, appendToExisting: usedFallbackMerge);
+            
+            // If we used the fallback, merge native and managed frames by SP
+            if (usedFallbackMerge)
+            {
+                MergeNativeAndManagedFramesBySP(result);
+            }
             
             // Enhance variable values: convert hex to meaningful representations
             // and resolve string values using !dumpobj
@@ -2371,7 +2382,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// This command gives us both managed and native frames interleaved in the correct order,
     /// plus register values, parameters, and locals for each frame.
     /// </summary>
-    protected void ParseFullCallStacksAllThreads(string clrStackFullOutput, CrashAnalysisResult result)
+    /// <param name="clrStackFullOutput">The clrstack command output to parse.</param>
+    /// <param name="result">The result object to populate.</param>
+    /// <param name="appendToExisting">If true, append frames to existing call stacks instead of clearing them.
+    /// Used in fallback mode when native frames were already parsed from bt all.</param>
+    protected void ParseFullCallStacksAllThreads(string clrStackFullOutput, CrashAnalysisResult result, bool appendToExisting = false)
     {
         // Check for various error conditions that indicate SOS/CLR is not available (native dump)
         // In these cases, we preserve the native stacks from bt all
@@ -2421,9 +2436,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     result.Threads?.All?.Add(currentThread);
                 }
                 
-                // Clear existing call stack (we're replacing it with the full one)
-                currentThread.CallStack.Clear();
-                frameNumber = 0;
+                // Clear existing call stack unless we're appending (fallback mode with native frames already parsed)
+                if (!appendToExisting)
+                {
+                    currentThread.CallStack.Clear();
+                }
+                frameNumber = appendToExisting ? currentThread.CallStack.Count : 0;
                 lastFrame = null;
                 currentSection = VariableSection.None;
                 continue;
@@ -3101,6 +3119,192 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         }
 
         return (module, method);
+    }
+    
+    /// <summary>
+    /// Merges native frames (from bt all) and managed frames (from clrstack) by stack pointer values.
+    /// This is used as a fallback when clrstack -f crashes.
+    /// Stack grows downward, so higher SP = earlier frame (closer to top of stack).
+    /// 
+    /// With frame-format configured to include SP=${frame.sp}, native frames now have real SP values,
+    /// making the merge straightforward: just sort all frames by SP descending.
+    /// </summary>
+    private void MergeNativeAndManagedFramesBySP(CrashAnalysisResult result)
+    {
+        if (result.Threads?.All == null)
+        {
+            return;
+        }
+        
+        foreach (var thread in result.Threads.All)
+        {
+            if (thread.CallStack == null || thread.CallStack.Count == 0)
+            {
+                continue;
+            }
+            
+            // Separate managed and native frames
+            var managedFrames = thread.CallStack.Where(f => f.IsManaged).ToList();
+            var nativeFrames = thread.CallStack.Where(f => !f.IsManaged).ToList();
+            
+            // If we only have one type, nothing to merge
+            if (managedFrames.Count == 0 || nativeFrames.Count == 0)
+            {
+                continue;
+            }
+            
+            // Parse SP values from all frames
+            var allFrames = thread.CallStack
+                .Select(f => (frame: f, sp: ParseHexAddress(f.StackPointer ?? ""), originalOrder: f.FrameNumber))
+                .ToList();
+            
+            // Check how many frames have valid SP values
+            var framesWithSp = allFrames.Where(x => x.sp > 0).ToList();
+            
+            if (framesWithSp.Count < 2)
+            {
+                // Not enough SP values to merge by SP - fall back to frame number ordering
+                _logger?.LogWarning("Insufficient SP values for thread {ThreadId} ({Count} frames with SP), merging by frame number", 
+                    thread.ThreadId, framesWithSp.Count);
+                
+                // Merge by frame number only (interleave by original frame numbers)
+                var merged = thread.CallStack
+                    .OrderBy(f => f.FrameNumber)
+                    .ToList();
+                
+                for (int i = 0; i < merged.Count; i++)
+                {
+                    merged[i].FrameNumber = i;
+                }
+                
+                thread.CallStack = merged;
+                continue;
+            }
+            
+            // For frames without SP, estimate based on surrounding frames
+            var framesWithValidSp = framesWithSp.Select(x => (x.frame, x.sp)).ToList();
+            var minSp = framesWithSp.Min(x => x.sp);
+            var maxSp = framesWithSp.Max(x => x.sp);
+            
+            var finalFrames = new List<(StackFrame frame, ulong sp, int originalOrder)>();
+            
+            foreach (var (frame, sp, originalOrder) in allFrames)
+            {
+                ulong effectiveSp = sp;
+                if (sp == 0)
+                {
+                    // Frame without SP - estimate based on frame number
+                    effectiveSp = EstimateSpFromFrameNumber(originalOrder, framesWithValidSp, minSp, maxSp);
+                }
+                finalFrames.Add((frame, effectiveSp, originalOrder));
+            }
+            
+            // Sort by SP descending (higher SP = top of stack = frame 0)
+            var sortedFrames = finalFrames
+                .OrderByDescending(x => x.sp)
+                .ThenBy(x => x.originalOrder) // Tie-break by original order
+                .Select(x => x.frame)
+                .ToList();
+            
+            // Renumber frames
+            for (int i = 0; i < sortedFrames.Count; i++)
+            {
+                sortedFrames[i].FrameNumber = i;
+            }
+            
+            // Replace call stack with merged version
+            thread.CallStack = sortedFrames;
+            
+            _logger?.LogDebug("Merged {NativeCount} native + {ManagedCount} managed frames for thread {ThreadId} ({WithSp} had SP)",
+                nativeFrames.Count, managedFrames.Count, thread.ThreadId, framesWithSp.Count);
+        }
+    }
+    
+    /// <summary>
+    /// Estimates an SP value for a frame based on its frame number and known SP values from other frames.
+    /// Uses linear interpolation between surrounding frames with known SP values.
+    /// </summary>
+    private static ulong EstimateSpFromFrameNumber(
+        int frameNumber, 
+        List<(StackFrame frame, ulong sp)> framesWithSp,
+        ulong minSp,
+        ulong maxSp)
+    {
+        // Find surrounding frames with known SP
+        var above = framesWithSp
+            .Where(x => x.frame.FrameNumber < frameNumber)
+            .OrderByDescending(x => x.frame.FrameNumber)
+            .FirstOrDefault();
+        var below = framesWithSp
+            .Where(x => x.frame.FrameNumber > frameNumber)
+            .OrderBy(x => x.frame.FrameNumber)
+            .FirstOrDefault();
+        
+        if (above.frame != null && below.frame != null)
+        {
+            // Interpolate between the two (stack grows down, so above has higher SP)
+            var frameRange = (ulong)(below.frame.FrameNumber - above.frame.FrameNumber);
+            var frameOffset = (ulong)(frameNumber - above.frame.FrameNumber);
+            
+            // Handle case where SP values are in unexpected order (above.sp < below.sp)
+            if (above.sp < below.sp)
+            {
+                // Swap logic - below has higher SP (unusual)
+                var spRange = below.sp - above.sp;
+                if (frameRange > 0)
+                {
+                    return above.sp + (spRange * frameOffset / frameRange);
+                }
+                return above.sp;
+            }
+            
+            var normalSpRange = above.sp - below.sp; // above has higher SP (normal case)
+            if (frameRange > 0)
+            {
+                return above.sp - (normalSpRange * frameOffset / frameRange);
+            }
+            return above.sp;
+        }
+        else if (above.frame != null)
+        {
+            // Only have frame above - estimate below it
+            var offset = (ulong)(frameNumber - above.frame.FrameNumber) * 0x100;
+            return above.sp > offset ? above.sp - offset : 0;
+        }
+        else if (below.frame != null)
+        {
+            // Only have frame below - estimate above it
+            return below.sp + (ulong)(below.frame.FrameNumber - frameNumber) * 0x100;
+        }
+        else
+        {
+            // No reference frames - use midpoint
+            return (maxSp + minSp) / 2;
+        }
+    }
+    
+    /// <summary>
+    /// Parses a hex address string (with or without 0x prefix) to ulong.
+    /// </summary>
+    private static ulong ParseHexAddress(string address)
+    {
+        if (string.IsNullOrEmpty(address))
+        {
+            return 0;
+        }
+        
+        var hex = address.TrimStart();
+        if (hex.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            hex = hex.Substring(2);
+        }
+        
+        if (ulong.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var result))
+        {
+            return result;
+        }
+        
+        return 0;
     }
     
     /// <summary>

@@ -729,23 +729,28 @@ public class CrashAnalyzer
 
     /// <summary>
     /// Parses a single stack frame line from LLDB output.
-    /// Format: "frame #N: 0xADDR module`function(args) + offset at file:line"
+    /// Format: "frame #N: 0xADDR SP=0xSP module`function(args) + offset at file:line"
+    /// The SP= part is optional (added via frame-format setting for better native/managed merging)
     /// </summary>
     private StackFrame? ParseSingleFrame(string line)
     {
-        // Match frame pattern with module`function (backtick separator)
+        // Match frame pattern with optional SP= and module`function (backtick separator)
         // Note: Use (.+?) for function to capture complex C++ signatures with spaces
+        // SP= is optional to support both old and new frame formats
         var frameMatch = Regex.Match(line,
-            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(\S+)`(.+?)(?:\s+\+\s+\d+)?(?:\s+at\s+(.+))?$",
+            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)(?:\s+SP=(0x[0-9a-f]+))?\s+(\S+)`(.+?)(?:\s+\+\s+\d+)?(?:\s+at\s+(.+))?$",
             RegexOptions.IgnoreCase);
 
         if (frameMatch.Success)
         {
             var frameNum = int.Parse(frameMatch.Groups[1].Value);
             var address = frameMatch.Groups[2].Value;
-            var moduleName = frameMatch.Groups[3].Value;
-            var functionName = frameMatch.Groups[4].Value.Trim();
-            var sourceInfo = frameMatch.Groups[5].Success ? frameMatch.Groups[5].Value.Trim() : null;
+            var stackPointer = frameMatch.Groups[3].Success && frameMatch.Groups[3].Length > 0 
+                ? frameMatch.Groups[3].Value : null;
+            var moduleName = frameMatch.Groups[4].Value;
+            var functionName = frameMatch.Groups[5].Value.Trim();
+            var sourceInfo = frameMatch.Groups[6].Success && frameMatch.Groups[6].Length > 0 
+                ? frameMatch.Groups[6].Value.Trim() : null;
 
             // Clean up function name - remove trailing " + N" if regex didn't catch it
             var plusIdx = functionName.LastIndexOf(" + ");
@@ -758,6 +763,7 @@ public class CrashAnalyzer
             {
                 FrameNumber = frameNum,
                 InstructionPointer = address,
+                StackPointer = stackPointer,
                 Module = moduleName,
                 Function = functionName,
                 Source = sourceInfo,
@@ -766,21 +772,26 @@ public class CrashAnalyzer
         }
 
         // Try pattern for frames without backtick separator (e.g., "libstdc++.so.6 + 123")
+        // Also supports optional SP= field
         var noBacktickMatch = Regex.Match(line,
-            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(\S+\.(?:so|dylib)(?:\.\d+)*)(?:\s+\+\s+(-?\d+))?(?:\s+at\s+(.+))?$",
+            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)(?:\s+SP=(0x[0-9a-f]+))?\s+(\S+\.(?:so|dylib)(?:\.\d+)*)(?:\s+\+\s+(-?\d+))?(?:\s+at\s+(.+))?$",
             RegexOptions.IgnoreCase);
 
         if (noBacktickMatch.Success)
         {
             var frameNum = int.Parse(noBacktickMatch.Groups[1].Value);
             var address = noBacktickMatch.Groups[2].Value;
-            var libraryName = noBacktickMatch.Groups[3].Value;
-            var sourceInfo = noBacktickMatch.Groups[5].Success ? noBacktickMatch.Groups[5].Value.Trim() : null;
+            var stackPointer = noBacktickMatch.Groups[3].Success && noBacktickMatch.Groups[3].Length > 0 
+                ? noBacktickMatch.Groups[3].Value : null;
+            var libraryName = noBacktickMatch.Groups[4].Value;
+            var sourceInfo = noBacktickMatch.Groups[6].Success && noBacktickMatch.Groups[6].Length > 0 
+                ? noBacktickMatch.Groups[6].Value.Trim() : null;
 
             return new StackFrame
             {
                 FrameNumber = frameNum,
                 InstructionPointer = address,
+                StackPointer = stackPointer,
                 Module = libraryName,
                 Function = $"[Native Code @ {address}]",
                 Source = sourceInfo,
@@ -788,16 +799,18 @@ public class CrashAnalyzer
             };
         }
 
-        // Try simpler pattern for any remaining format
+        // Try simpler pattern for any remaining format (also supports optional SP=)
         var simpleMatch = Regex.Match(line,
-            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(.+)$",
+            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)(?:\s+SP=(0x[0-9a-f]+))?\s+(.+)$",
             RegexOptions.IgnoreCase);
 
         if (simpleMatch.Success)
         {
             var frameNum = int.Parse(simpleMatch.Groups[1].Value);
             var address = simpleMatch.Groups[2].Value;
-            var rest = simpleMatch.Groups[3].Value.Trim();
+            var stackPointer = simpleMatch.Groups[3].Success && simpleMatch.Groups[3].Length > 0 
+                ? simpleMatch.Groups[3].Value : null;
+            var rest = simpleMatch.Groups[4].Value.Trim();
 
             // Try to extract module`function with backtick
             string moduleName = "";
@@ -828,14 +841,18 @@ public class CrashAnalyzer
             }
             else
             {
-                // No backtick - might be just a library name
-                functionName = $"[{rest}]";
+                // No backtick - might be just a library name or special frame like [vdso]
+                // Don't add extra brackets if already bracketed
+                functionName = rest.StartsWith("[") && rest.EndsWith("]") 
+                    ? rest 
+                    : $"[{rest}]";
             }
 
             return new StackFrame
             {
                 FrameNumber = frameNum,
                 InstructionPointer = address,
+                StackPointer = stackPointer,
                 Module = moduleName,
                 Function = functionName,
                 Source = sourceInfo,
