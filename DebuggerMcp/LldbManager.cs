@@ -423,12 +423,25 @@ public class LldbManager : IDebuggerManager
             }
             else if (isStandaloneApp)
             {
-                // Standalone app detected but no binary provided - use core-only mode
-                // The dotnet host won't work for standalone apps because the runtime is bundled in the app
-                _logger.LogInformation("[LLDB] Standalone app detected ({Name}) but no binary provided - using core-only mode",
-                    VerifiedCorePlatform!.MainExecutableName);
-                _logger.LogInformation("[LLDB] Tip: Upload the binary using 'dumps binary <dumpId> <path>' for full debugging support");
-                targetCreateCmd = $"target create --core \"{dumpFilePath}\"";
+                // Standalone app detected but no binary provided
+                // Try to find a usable ELF file (.dbg might work if it has program headers)
+                var usableElf = FindUsableElfForStandaloneApp(VerifiedCorePlatform!.MainExecutableName!);
+                
+                if (usableElf != null)
+                {
+                    // Found a usable ELF (possibly a .dbg file with full ELF structure)
+                    _logger.LogInformation("[LLDB] Using found ELF file as executable: {Path}", usableElf);
+                    targetCreateCmd = $"target create \"{usableElf}\" --core \"{dumpFilePath}\"";
+                }
+                else
+                {
+                    // No usable ELF found - fall back to core-only mode (limited functionality)
+                    _logger.LogWarning("[LLDB] Standalone app detected ({Name}) but no usable binary found - using core-only mode",
+                        VerifiedCorePlatform.MainExecutableName);
+                    _logger.LogWarning("[LLDB] SOS functionality will be severely limited without the executable!");
+                    _logger.LogInformation("[LLDB] Tip: Upload the binary using 'dumps binary <dumpId> <path>' for full debugging support");
+                    targetCreateCmd = $"target create --core \"{dumpFilePath}\"";
+                }
             }
             else
             {
@@ -1625,6 +1638,127 @@ public class LldbManager : IDebuggerManager
         {
             _logger.LogWarning(ex, "[LLDB] Failed to enumerate debug symbol files");
         }
+    }
+
+    /// <summary>
+    /// Checks if a file is a valid ELF that could potentially be used as an executable.
+    /// Some .dbg files created with objcopy --only-keep-debug retain enough ELF structure.
+    /// </summary>
+    /// <param name="filePath">Path to the file to check.</param>
+    /// <returns>True if file appears to be a usable ELF, false otherwise.</returns>
+    private bool IsUsableElf(string filePath)
+    {
+        try
+        {
+            using var fs = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+            if (fs.Length < 64) return false; // Too small for ELF header
+
+            var header = new byte[64];
+            if (fs.Read(header, 0, 64) < 64) return false;
+
+            // Check ELF magic: 0x7F 'E' 'L' 'F'
+            if (header[0] != 0x7F || header[1] != 'E' || header[2] != 'L' || header[3] != 'F')
+            {
+                _logger.LogDebug("[LLDB] {File} is not an ELF file", Path.GetFileName(filePath));
+                return false;
+            }
+
+            // Check ELF class (32-bit or 64-bit)
+            var is64Bit = header[4] == 2;
+            
+            // Get e_phnum (program header count) - indicates if it can be loaded
+            // For 64-bit: offset 56 (2 bytes), for 32-bit: offset 44 (2 bytes)
+            int phNumOffset = is64Bit ? 56 : 44;
+            var phNum = BitConverter.ToUInt16(header, phNumOffset);
+
+            // Get e_type (object file type)
+            // 2 = ET_EXEC (executable), 3 = ET_DYN (shared object/PIE)
+            var eType = BitConverter.ToUInt16(header, 16);
+
+            _logger.LogDebug("[LLDB] ELF check for {File}: type={Type}, phnum={PhNum}, is64bit={Is64}",
+                Path.GetFileName(filePath), eType, phNum, is64Bit);
+
+            // A usable ELF should have program headers and be executable or shared object
+            var isUsable = phNum > 0 && (eType == 2 || eType == 3);
+            
+            if (isUsable)
+            {
+                _logger.LogInformation("[LLDB] {File} appears to be a usable ELF (type={Type}, {PhNum} program headers)",
+                    Path.GetFileName(filePath), eType == 2 ? "executable" : "shared object", phNum);
+            }
+
+            return isUsable;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[LLDB] Error checking ELF structure of {File}", filePath);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Tries to find a usable ELF file (.dbg or .debug) for a standalone app.
+    /// If found and valid, returns the path so it can be used as the executable.
+    /// </summary>
+    /// <param name="executableName">The name of the executable (without extension).</param>
+    /// <returns>Path to usable ELF file, or null if not found.</returns>
+    public string? FindUsableElfForStandaloneApp(string executableName)
+    {
+        _logger.LogInformation("[LLDB] Searching for usable ELF for standalone app: {Name}", executableName);
+
+        // Search patterns - .dbg files might be usable ELFs
+        var searchPatterns = new[]
+        {
+            $"{executableName}.dbg",
+            $"{executableName}.debug",
+            $"{executableName}",  // The actual executable if it exists
+            $"lib{executableName}.dbg",
+            $"lib{executableName}.debug"
+        };
+
+        var searchPaths = new List<string>();
+
+        // Add symbol cache directory
+        if (!string.IsNullOrEmpty(_symbolCacheDirectory) && Directory.Exists(_symbolCacheDirectory))
+        {
+            searchPaths.Add(_symbolCacheDirectory);
+        }
+
+        // Add dump directory
+        if (!string.IsNullOrEmpty(_currentDumpPath))
+        {
+            var dumpDir = Path.GetDirectoryName(_currentDumpPath);
+            if (!string.IsNullOrEmpty(dumpDir) && Directory.Exists(dumpDir))
+            {
+                searchPaths.Add(dumpDir);
+            }
+        }
+
+        foreach (var searchPath in searchPaths)
+        {
+            foreach (var pattern in searchPatterns)
+            {
+                try
+                {
+                    var matches = Directory.GetFiles(searchPath, pattern, SearchOption.AllDirectories);
+                    foreach (var file in matches)
+                    {
+                        if (IsUsableElf(file))
+                        {
+                            _logger.LogInformation("[LLDB] Found usable ELF for standalone app: {File}", file);
+                            return file;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[LLDB] Error searching for {Pattern} in {Path}", pattern, searchPath);
+                }
+            }
+        }
+
+        _logger.LogWarning("[LLDB] No usable ELF found for standalone app: {Name}", executableName);
+        return null;
     }
 
     /// <summary>
