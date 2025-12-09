@@ -114,29 +114,30 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             result.RawCommands!["!eeversion"] = clrVersionOutput;
             ParseClrVersion(clrVersionOutput, result);
 
-            // Get full call stacks for all threads with arguments and locals
-            // Note: The -f flag (full native/managed interleaved stack) causes crashes on some
-            // platforms (e.g., .NET 10 ARM64). We use -a -r -all without -f for stability.
-            // Native frames can be obtained from 'bt all' if needed.
+            // Get full call stacks for all threads (managed + native interleaved, with registers)
+            // -f: full stack (native + managed frames interleaved)
             // -r: include register values
             // -all: all threads
             // -a: include arguments and locals
-            var clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -r -all");
-            result.RawCommands!["clrstack -a -r -all"] = clrStackFullOutput;
+            var clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -f -r -all");
+            result.RawCommands!["clrstack -a -f -r -all"] = clrStackFullOutput;
             
-            // Check if the command crashed or returned an error, try simpler variants
+            // The -f flag can crash the DAC on some platforms (e.g., .NET 10 ARM64)
+            // If it crashed/failed, fall back to getting native + managed stacks separately
             if (clrStackFullOutput.Contains("[ERROR:") || IsSosErrorOutput(clrStackFullOutput))
             {
-                // Try without -r (registers) which might also cause issues
-                clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -all");
-                result.RawCommands!["clrstack -a -all"] = clrStackFullOutput;
-            }
-            
-            if (clrStackFullOutput.Contains("[ERROR:") || IsSosErrorOutput(clrStackFullOutput))
-            {
-                // Try the simplest form
-                clrStackFullOutput = await ExecuteCommandAsync("clrstack -all");
-                result.RawCommands!["clrstack -all"] = clrStackFullOutput;
+                _logger?.LogWarning("clrstack -f crashed, falling back to separate native + managed stacks");
+                
+                // Get native stacks from bt all
+                var btAllOutput = await ExecuteCommandAsync("bt all");
+                result.RawCommands!["bt all (fallback)"] = btAllOutput;
+                
+                // Get managed stacks with args/locals (without -f)
+                clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -r -all");
+                result.RawCommands!["clrstack -a -r -all (fallback)"] = clrStackFullOutput;
+                
+                // Parse native stacks from bt all first (this populates thread basic info)
+                ParseLldbBacktraceAll(btAllOutput, result);
             }
             
             ParseFullCallStacksAllThreads(clrStackFullOutput, result);
