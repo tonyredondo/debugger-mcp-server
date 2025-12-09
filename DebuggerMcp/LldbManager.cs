@@ -2096,13 +2096,29 @@ public class LldbManager : IDebuggerManager
             return results;
         }
 
+        // Get list of already loaded modules to avoid duplicates
+        var moduleListOutput = ExecuteCommandInternal("target modules list");
+        var alreadyLoadedModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in moduleListOutput.Split('\n'))
+        {
+            // Extract module name from lines like:
+            // [ 11] CEB8ED03... 0x0000f58559dd9000 /usr/share/dotnet/.../libcoreclr.so
+            var match = System.Text.RegularExpressions.Regex.Match(line, @"0x[0-9a-fA-F]{8,16}\s+(/[^\s]+\.so)");
+            if (match.Success)
+            {
+                var loadedModule = Path.GetFileName(match.Groups[1].Value);
+                alreadyLoadedModules.Add(loadedModule);
+            }
+        }
+        _logger.LogInformation("[LLDB] Found {Count} modules already loaded in target", alreadyLoadedModules.Count);
+
         // Get available .so files in the symbol cache
         var availableModules = Directory.GetFiles(_symbolCacheDirectory, "*.so", SearchOption.AllDirectories)
             .ToDictionary(f => Path.GetFileName(f), f => f, StringComparer.OrdinalIgnoreCase);
 
         _logger.LogInformation("[LLDB] Found {Count} .so files in symbol cache", availableModules.Count);
 
-        // Determine which modules to load
+        // Determine which modules to load - only those NOT already loaded with an address
         var modulesToLoad = new List<(string Name, string Path, ulong Address)>();
 
         foreach (var (modulePath, address) in VerifiedCorePlatform.ModuleAddresses)
@@ -2116,6 +2132,14 @@ public class LldbManager : IDebuggerManager
                 continue;
             }
 
+            // Skip if already loaded (LLDB already has it from the dump)
+            if (alreadyLoadedModules.Contains(moduleName))
+            {
+                _logger.LogDebug("[LLDB] Skipping {Name} - already loaded", moduleName);
+                results[moduleName] = true; // Already loaded is success
+                continue;
+            }
+
             // Check if we have this module in our symbol cache
             if (availableModules.TryGetValue(moduleName, out var localPath))
             {
@@ -2123,7 +2147,8 @@ public class LldbManager : IDebuggerManager
             }
         }
 
-        _logger.LogInformation("[LLDB] Loading {Count} modules from verifycore", modulesToLoad.Count);
+        _logger.LogInformation("[LLDB] Loading {Count} new modules from verifycore (skipped {Skipped} already loaded)", 
+            modulesToLoad.Count, results.Count);
 
         foreach (var (name, localPath, address) in modulesToLoad)
         {
