@@ -65,9 +65,10 @@ public class CommandCache
     public bool TryGetCachedResult(string command, out string? result)
     {
         result = null;
-        
+
         if (!_isEnabled)
         {
+            // Cache bypassed when disabled to avoid stale results
             return false;
         }
 
@@ -75,7 +76,7 @@ public class CommandCache
         if (_cache.TryGetValue(key, out result))
         {
             Interlocked.Increment(ref _hits);
-            _logger.LogDebug("[Cache] HIT for command: {Command} (hits: {Hits}, misses: {Misses})", 
+            _logger.LogDebug("[Cache] HIT for command: {Command} (hits: {Hits}, misses: {Misses})",
                 TruncateForLog(command), _hits, _misses);
             return true;
         }
@@ -93,6 +94,7 @@ public class CommandCache
     {
         if (!_isEnabled)
         {
+            // Ignore populate requests when caching is off
             return;
         }
 
@@ -105,7 +107,7 @@ public class CommandCache
 
         var key = NormalizeCommand(command);
         _cache.TryAdd(key, result);
-        _logger.LogDebug("[Cache] Cached result for command: {Command} (total cached: {Count})", 
+        _logger.LogDebug("[Cache] Cached result for command: {Command} (total cached: {Count})",
             TruncateForLog(command), _cache.Count);
     }
 
@@ -116,11 +118,11 @@ public class CommandCache
     {
         var count = _cache.Count;
         _cache.Clear();
-        
+
         var hits = Interlocked.Exchange(ref _hits, 0);
         var misses = Interlocked.Exchange(ref _misses, 0);
-        
-        _logger.LogDebug("[Cache] Cleared {Count} entries (final stats: {Hits} hits, {Misses} misses)", 
+
+        _logger.LogDebug("[Cache] Cleared {Count} entries (final stats: {Hits} hits, {Misses} misses)",
             count, hits, misses);
     }
 
@@ -139,7 +141,7 @@ public class CommandCache
     private static bool IsStateModifyingCommand(string command)
     {
         var normalizedCommand = command.Trim().ToLowerInvariant();
-        
+
         // Commands that change debugger state
         return normalizedCommand.StartsWith("settings ") ||
                normalizedCommand.StartsWith("plugin ") ||
@@ -173,4 +175,3 @@ public class CommandCache
         return command[..maxLength] + "...";
     }
 }
-

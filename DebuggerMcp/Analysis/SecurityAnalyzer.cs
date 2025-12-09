@@ -14,7 +14,7 @@ public class SecurityAnalyzer
 
     // Common exploit patterns
     private static readonly byte[] NopSled = { 0x90, 0x90, 0x90, 0x90 }; // x86/x64 NOPs
-    private static readonly string[] SuspiciousPatterns = 
+    private static readonly string[] SuspiciousPatterns =
     {
         "41414141", // AAAA - common overflow pattern
         "42424242", // BBBB
@@ -210,10 +210,10 @@ public class SecurityAnalyzer
         {
             // Parse the fault address from the analysis output
             var faultMatch = Regex.Match(analyzeOutput, @"FAULTING_IP:\s*\n?\s*([^\s]+)\s*", RegexOptions.IgnoreCase);
-            
+
             // Try to get the accessed address - first check for read violation
             var accessMatch = Regex.Match(analyzeOutput, @"READ_ADDRESS:\s*(0x[0-9a-f]+)", RegexOptions.IgnoreCase);
-            
+
             // If no read address, check for write address
             // Write violations are often more serious as they indicate potential code injection
             if (!accessMatch.Success)
@@ -363,7 +363,7 @@ public class SecurityAnalyzer
             {
                 var baseAddr = match.Groups[1].Value.Replace("`", "");
                 var moduleName = match.Groups[3].Value;
-                
+
                 // Check if base address looks like a non-ASLR address
                 if (baseAddr.StartsWith("00400") || baseAddr.StartsWith("10000"))
                 {
@@ -508,13 +508,13 @@ public class SecurityAnalyzer
             try
             {
                 var searchOutput = await ExecuteCommandAsync($"s -d 0 L?80000000 0x{pattern}");
-                
-                if (!string.IsNullOrEmpty(searchOutput) && 
+
+                if (!string.IsNullOrEmpty(searchOutput) &&
                     !searchOutput.Contains("No match", StringComparison.OrdinalIgnoreCase) &&
                     searchOutput.Contains("0x", StringComparison.OrdinalIgnoreCase))
                 {
                     var matchCount = Regex.Matches(searchOutput, @"^[0-9a-f`]+", RegexOptions.Multiline | RegexOptions.IgnoreCase).Count;
-                    
+
                     if (matchCount > 10) // Significant number of matches
                     {
                         result.Vulnerabilities.Add(new Vulnerability
@@ -544,7 +544,7 @@ public class SecurityAnalyzer
         // Check for modules without SafeSEH (32-bit)
         var safeSehMissing = new List<string>();
         var moduleBlocks = lmvOutput.Split(new[] { "Image name:" }, StringSplitOptions.RemoveEmptyEntries);
-        
+
         foreach (var block in moduleBlocks)
         {
             if (block.Contains("SafeSEH") && block.Contains("NO"))
@@ -604,7 +604,7 @@ public class SecurityAnalyzer
             // 3. Thread info may contain "address = 0xHEX"
             // 4. LLDB stop description may contain the address
             string? faultAddress = null;
-            
+
             // Try ARM64 FAR register
             var faultAddrMatch = Regex.Match(registerOutput, @"far\s*=\s*(0x[0-9a-f]+)", RegexOptions.IgnoreCase);
             if (faultAddrMatch.Success)
@@ -616,12 +616,12 @@ public class SecurityAnalyzer
             if (faultAddress == null)
             {
                 faultAddrMatch = Regex.Match(registerOutput, @"cr2\s*=\s*(0x[0-9a-f]+)", RegexOptions.IgnoreCase);
-            if (faultAddrMatch.Success)
-            {
+                if (faultAddrMatch.Success)
+                {
                     faultAddress = faultAddrMatch.Groups[1].Value;
                 }
             }
-            
+
             // Try thread info "address = 0xHEX" pattern
             if (faultAddress == null)
             {
@@ -664,7 +664,7 @@ public class SecurityAnalyzer
                 "malloc_printerr", "__libc_message",  // Linux glibc
                 "tcache", "fastbin", "unsorted",  // glibc heap internals
             };
-            
+
             if (heapIndicators.Any(indicator => btOutput.Contains(indicator, StringComparison.OrdinalIgnoreCase)))
             {
                 result.Vulnerabilities.Add(new Vulnerability
@@ -716,18 +716,18 @@ public class SecurityAnalyzer
             // Extract address from image list line
             var addressMatch = Regex.Match(line, @"0x([0-9a-f]{8,16})", RegexOptions.IgnoreCase);
             if (!addressMatch.Success) continue;
-            
+
             var address = ParseAddress(addressMatch.Value);
-            
+
             // Extract module name
             var moduleMatch = Regex.Match(line, @"(/[^\s]+|\\[^\s]+)$");
             var moduleName = moduleMatch.Success ? Path.GetFileName(moduleMatch.Groups[1].Value) : "unknown";
-            
+
             // Check for non-ASLR indicators:
             // 1. Very low addresses (non-PIE executables on Linux)
             // 2. Predictable base addresses (0x00400000 for x86, 0x00010000 for some systems)
             // 3. Page-aligned round numbers that don't look randomized
-            
+
             // Non-PIE binaries on Linux typically load at 0x400000 (x86_64) or 0x10000 (ARM)
             var suspiciousAddresses = new long[]
             {
@@ -737,26 +737,26 @@ public class SecurityAnalyzer
                 0x08048000,      // x86 Linux non-PIE default
                 0x00100000,      // Some embedded systems
             };
-            
-            if (suspiciousAddresses.Any(suspicious => address == suspicious || 
+
+            if (suspiciousAddresses.Any(suspicious => address == suspicious ||
                 (address >= suspicious && address < suspicious + 0x1000)))
-                {
+            {
                 result.MemoryProtections.ModulesWithoutAslr.Add(moduleName);
             }
         }
 
         result.MemoryProtections.AslrEnabled = !result.MemoryProtections.ModulesWithoutAslr.Any();
-        
+
         // DEP/NX is enabled by default on modern Linux and macOS
         // We could check /proc/self/maps or vmmap for actual permissions,
         // but for dump analysis we assume it's enabled unless we see evidence otherwise
         result.MemoryProtections.DepEnabled = true;
-        
+
         // Check if we can detect stack canaries by looking for stack protector functions in modules
         var btOutput = result.RawOutput.GetValueOrDefault("backtrace", "");
         // If the binary has stack canaries and they didn't trigger, we assume they're present
         // (We can't definitively tell without checking the binary itself)
-        result.MemoryProtections.StackCanariesPresent = 
+        result.MemoryProtections.StackCanariesPresent =
             imageOutput.Contains("libssp", StringComparison.OrdinalIgnoreCase) || // SSP library
             btOutput.Contains("__stack_chk", StringComparison.OrdinalIgnoreCase);  // Stack check function
     }
@@ -771,10 +771,10 @@ public class SecurityAnalyzer
         // Try to get heap info (limited on LLDB without special plugins)
         // This command may fail but we catch errors
         await ExecuteCommandAsync("memory read --size 8 --count 10 0x0");
-        
+
         // Look for heap-related functions in backtrace
         var btOutput = result.RawOutput.GetValueOrDefault("backtrace", "");
-        
+
         // macOS heap error indicators
         var macOsHeapErrors = new[]
         {
@@ -783,7 +783,7 @@ public class SecurityAnalyzer
             "nano_zone_error",
             "szone_error"
         };
-        
+
         // Linux glibc heap error indicators
         var glibcHeapErrors = new[]
         {
@@ -804,7 +804,7 @@ public class SecurityAnalyzer
             "_int_malloc",
             "_int_free"
         };
-        
+
         // musl libc heap error indicators (Alpine Linux)
         var muslHeapErrors = new[]
         {
@@ -812,18 +812,18 @@ public class SecurityAnalyzer
             "__malloc_alloc",
             "__expand_heap"
         };
-        
+
         // Check for macOS heap errors
         foreach (var error in macOsHeapErrors)
         {
             if (btOutput.Contains(error, StringComparison.OrdinalIgnoreCase))
-        {
-            result.HeapIntegrity.CorruptionDetected = true;
+            {
+                result.HeapIntegrity.CorruptionDetected = true;
                 result.HeapIntegrity.MetadataIssues.Add($"macOS heap error: {error}");
                 break;
             }
         }
-        
+
         // Check for glibc heap errors
         foreach (var error in glibcHeapErrors)
         {
@@ -834,7 +834,7 @@ public class SecurityAnalyzer
                 break;
             }
         }
-        
+
         // Check for musl heap errors
         foreach (var error in muslHeapErrors)
         {
@@ -845,7 +845,7 @@ public class SecurityAnalyzer
                 break;
             }
         }
-        
+
         if (result.HeapIntegrity.CorruptionDetected)
         {
             result.Vulnerabilities.Add(new Vulnerability
@@ -888,7 +888,7 @@ public class SecurityAnalyzer
         {
             result.StackIntegrity.CorruptionDetected = true;
             result.StackIntegrity.ReturnAddressOverwritten = true;
-            
+
             result.Vulnerabilities.Add(new Vulnerability
             {
                 Type = VulnerabilityType.StackCorruption,
@@ -904,14 +904,14 @@ public class SecurityAnalyzer
     {
         // Search for NOP sleds and common shellcode patterns
         var registerOutput = result.RawOutput.GetValueOrDefault("registers", "");
-        
+
         // Get instruction pointer (PC) and stack pointer (SP) to detect stack execution
         // ARM64: pc, sp
         // x86_64: rip, rsp (or pc, sp in LLDB unified format)
         long pcValue = 0;
         long spValue = 0;
         string? pcAddress = null;
-        
+
         // Try ARM64/unified format first: pc = 0xHEX
         var pcMatch = Regex.Match(registerOutput, @"\bpc\s*=\s*(0x[0-9a-f]+)", RegexOptions.IgnoreCase);
         if (pcMatch.Success)
@@ -929,7 +929,7 @@ public class SecurityAnalyzer
                 pcValue = ParseAddress(pcAddress);
             }
         }
-        
+
         // Get stack pointer for comparison
         var spMatch = Regex.Match(registerOutput, @"\bsp\s*=\s*(0x[0-9a-f]+)", RegexOptions.IgnoreCase);
         if (spMatch.Success)
@@ -945,12 +945,12 @@ public class SecurityAnalyzer
                 spValue = ParseAddress(spMatch.Groups[1].Value);
             }
         }
-        
+
         if (pcValue > 0 && pcAddress != null)
         {
             bool suspiciousExecution = false;
             string description = "";
-            
+
             // Method 1: Compare PC to SP - if PC is within 16MB of SP, likely stack execution
             if (spValue > 0)
             {
@@ -961,7 +961,7 @@ public class SecurityAnalyzer
                     description = "Execution near stack pointer detected - possible shellcode execution";
                 }
             }
-            
+
             // Method 2: Check for execution in typical stack regions by architecture
             // These are heuristics and may not catch all cases
             if (!suspiciousExecution)
@@ -970,7 +970,7 @@ public class SecurityAnalyzer
                 // x86_64 macOS: Stack typically at 0x7FFxxxxxx  
                 // ARM64 Linux: Stack typically at 0xFFFFxxxxxx or 0x0000FFFFxxxxxx
                 // ARM64 macOS: Stack typically at 0x16Fxxxxxxx or higher
-                
+
                 // High address check (common for stacks on 64-bit)
                 if (pcValue > 0x7F00_0000_0000_0000L ||  // x86_64 high addresses
                     (pcValue > 0x0000_FFFF_0000_0000L && pcValue < 0x0001_0000_0000_0000L) ||  // ARM64 Linux typical range
@@ -980,7 +980,7 @@ public class SecurityAnalyzer
                     description = "Execution in high memory region detected - possible stack execution";
                 }
             }
-            
+
             // Method 3: Check for execution at address with suspicious patterns
             if (!suspiciousExecution)
             {
@@ -994,7 +994,7 @@ public class SecurityAnalyzer
                     }
                 }
             }
-            
+
             if (suspiciousExecution)
             {
                 result.Vulnerabilities.Add(new Vulnerability
@@ -1107,4 +1107,3 @@ public class SecurityAnalyzer
         }
     }
 }
-

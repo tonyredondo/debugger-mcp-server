@@ -20,8 +20,8 @@ public class MarkdownReportGenerator : IReportGenerator
             throw new ArgumentNullException(nameof(analysis));
         }
 
-        options ??= ReportOptions.FullReport;
-        metadata ??= new ReportMetadata();
+        options ??= ReportOptions.FullReport; // Ensure we always have sensible defaults
+        metadata ??= new ReportMetadata();    // Allow callers to omit metadata
 
         var sb = new StringBuilder();
 
@@ -41,6 +41,7 @@ public class MarkdownReportGenerator : IReportGenerator
         var threads = analysis.Threads?.All ?? new List<ThreadInfo>();
         if (options.IncludeCallStacks && threads.Any(t => t.CallStack.Any()))
         {
+            // Avoid empty sections when no frames are present
             AppendAllThreadCallStacks(sb, analysis, options);
         }
 
@@ -54,62 +55,63 @@ public class MarkdownReportGenerator : IReportGenerator
         var threadsForInfo = analysis.Threads?.All ?? new List<ThreadInfo>();
         if (options.IncludeThreadInfo && threadsForInfo.Any())
         {
+            // Skip thread table if no thread objects exist
             AppendThreadInfo(sb, analysis, options);
         }
 
         // .NET Specific Info (from new hierarchical structure)
-        var hasDotNetInfo = analysis.Environment?.Runtime != null || 
+        var hasDotNetInfo = analysis.Environment?.Runtime != null ||
                             analysis.Exception?.Analysis != null ||
                             analysis.Assemblies?.Items?.Any() == true ||
                             analysis.Memory?.Gc != null;
         if (options.IncludeDotNetInfo && hasDotNetInfo)
         {
             AppendDotNetInfoFromHierarchy(sb, analysis, options);
-            
+
             // Exception Deep Analysis
             if (analysis.Exception?.Analysis != null)
             {
                 AppendExceptionAnalysis(sb, analysis.Exception.Analysis);
             }
-            
+
             // Type Resolution Analysis (for MissingMethodException, TypeLoadException, etc.)
             if (analysis.Exception?.Analysis?.TypeResolution != null)
             {
                 AppendTypeResolutionAnalysis(sb, analysis.Exception.Analysis.TypeResolution);
             }
-            
+
             // NativeAOT / Trimming Analysis
             if (analysis.Environment?.NativeAot != null)
             {
                 AppendNativeAotAnalysis(sb, analysis.Environment.NativeAot);
             }
-            
+
             // Assembly Versions
             if (analysis.Assemblies?.Items?.Any() == true)
             {
                 AppendAssemblyVersions(sb, analysis.Assemblies.Items);
             }
-            
+
             // === Phase 2 ClrMD Enrichment ===
-            
+
             // GC Summary
             if (analysis.Memory?.Gc != null)
             {
                 AppendGcSummary(sb, analysis.Memory.Gc);
             }
-            
+
             // Top Memory Consumers (deep analysis)
             if (analysis.Memory?.TopConsumers != null)
             {
                 AppendTopMemoryConsumers(sb, analysis.Memory.TopConsumers);
             }
-            
+
             // Async Analysis (deep analysis) - use AsyncAnalysis from Async info
             if (analysis.Async != null)
             {
                 AppendAsyncInfoFromHierarchy(sb, analysis.Async);
             }
-            
+
             // String Analysis (deep analysis)
             if (analysis.Memory?.Strings != null)
             {
@@ -183,7 +185,7 @@ public class MarkdownReportGenerator : IReportGenerator
         sb.AppendLine($"| **Dump ID** | {metadata.DumpId} |");
         sb.AppendLine($"| **Crash Type** | {analysis.Summary?.CrashType ?? "Unknown"} |");
         sb.AppendLine($"| **Debugger** | {metadata.DebuggerType} |");
-        
+
         // Add platform info if available (use new structure first, fall back to old)
         var platform = analysis.Environment?.Platform;
         if (platform != null)
@@ -201,14 +203,14 @@ public class MarkdownReportGenerator : IReportGenerator
             {
                 osInfo += " - glibc";
             }
-            
+
             sb.AppendLine($"| **Platform** | {osInfo} |");
-            
+
             if (!string.IsNullOrEmpty(platform.Architecture))
             {
                 sb.AppendLine($"| **Architecture** | {platform.Architecture} ({platform.PointerSize ?? 64}-bit) |");
             }
-            
+
             // Runtime version from new Environment.Runtime or old Platform.RuntimeVersion
             var runtimeVersion = analysis.Environment?.Runtime?.Version ?? platform.RuntimeVersion;
             if (!string.IsNullOrEmpty(runtimeVersion))
@@ -216,7 +218,7 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine($"| **.NET Runtime** | {runtimeVersion} |");
             }
         }
-        
+
         sb.AppendLine();
     }
 
@@ -224,7 +226,7 @@ public class MarkdownReportGenerator : IReportGenerator
     {
         sb.AppendLine("## 📋 Executive Summary");
         sb.AppendLine();
-        
+
         // Use new structure first, fall back to old
         var summaryText = analysis.Summary?.Description;
         if (!string.IsNullOrEmpty(summaryText))
@@ -245,7 +247,7 @@ public class MarkdownReportGenerator : IReportGenerator
 
         // Use new structure
         var exception = analysis.Exception;
-        
+
         if (exception != null)
         {
             sb.AppendLine("### Exception Details");
@@ -290,7 +292,7 @@ public class MarkdownReportGenerator : IReportGenerator
         {
             var faultingMarker = thread.IsFaulting ? " ⚠️ **Faulting**" : "";
             var stateInfo = !string.IsNullOrEmpty(thread.State) ? $" - {thread.State}" : "";
-            
+
             // Add CLR thread info if available
             var clrInfo = "";
             if (!string.IsNullOrEmpty(thread.ThreadType))
@@ -301,7 +303,7 @@ public class MarkdownReportGenerator : IReportGenerator
             {
                 clrInfo += $" 🔥 {thread.CurrentException}";
             }
-            
+
             sb.AppendLine($"### Thread #{thread.ThreadId}{faultingMarker}{stateInfo}{clrInfo}");
             sb.AppendLine();
 
@@ -323,10 +325,10 @@ public class MarkdownReportGenerator : IReportGenerator
 
         // Check if any frames have source links
         var hasSourceLinks = frames.Any(f => !string.IsNullOrEmpty(f.SourceUrl));
-        
+
         // Check if any frames have parameters (for faulting thread)
-        var hasParameters = showParameters && frames.Any(f => 
-            (f.Parameters != null && f.Parameters.Count > 0) || 
+        var hasParameters = showParameters && frames.Any(f =>
+            (f.Parameters != null && f.Parameters.Count > 0) ||
             (f.Locals != null && f.Locals.Count > 0));
 
         if (hasSourceLinks || hasParameters)
@@ -334,13 +336,13 @@ public class MarkdownReportGenerator : IReportGenerator
             // Use detailed format with source links
             sb.AppendLine("| # | Type | Module | Function | Source |");
             sb.AppendLine("|---|------|--------|----------|--------|");
-            
+
             foreach (var frame in frames)
             {
                 var moduleName = frame.Module ?? "???";
                 var functionName = frame.Function ?? "???";
                 var frameType = frame.IsManaged ? "🟢" : "🔵";  // Green for managed, blue for native
-                
+
                 string sourceColumn;
                 if (!string.IsNullOrEmpty(frame.SourceUrl))
                 {
@@ -356,11 +358,11 @@ public class MarkdownReportGenerator : IReportGenerator
                 {
                     sourceColumn = "-";
                 }
-                
+
                 sb.AppendLine($"| {frame.FrameNumber:D2} | {frameType} | {moduleName} | `{functionName}` | {sourceColumn} |");
             }
             sb.AppendLine();
-            
+
             // Show parameters and locals for frames that have them
             if (hasParameters)
             {
@@ -384,76 +386,76 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
         }
     }
-    
+
     private static void AppendFrameVariables(StringBuilder sb, List<StackFrame> frames)
     {
         sb.AppendLine("#### 📍 Frame Variables (Faulting Thread)");
         sb.AppendLine();
-        
-        foreach (var frame in frames.Where(f => 
-            (f.Parameters != null && f.Parameters.Count > 0) || 
+
+        foreach (var frame in frames.Where(f =>
+            (f.Parameters != null && f.Parameters.Count > 0) ||
             (f.Locals != null && f.Locals.Count > 0)))
         {
             var funcName = frame.Function ?? "???";
-            
+
             sb.AppendLine($"<details>");
             sb.AppendLine($"<summary><strong>Frame {frame.FrameNumber:D2}</strong>: {funcName}</summary>");
             sb.AppendLine();
-            
+
             if (frame.Parameters != null && frame.Parameters.Count > 0)
             {
                 sb.AppendLine("**Parameters:**");
                 sb.AppendLine();
                 sb.AppendLine("| Name | Type | Value |");
                 sb.AppendLine("|------|------|-------|");
-                
+
                 foreach (var param in frame.Parameters)
                 {
                     var name = param.Name ?? "[unnamed]";
                     var type = param.Type ?? "-";
                     var value = FormatVariableValue(param.Value, 60);
-                    
+
                     // Show ByRef resolution if available
                     if (!string.IsNullOrEmpty(param.ByRefAddress))
                     {
                         type += " (ByRef)";
                     }
-                    
+
                     sb.AppendLine($"| `{name}` | `{type}` | {value} |");
                 }
                 sb.AppendLine();
             }
-            
+
             if (frame.Locals != null && frame.Locals.Count > 0)
             {
                 sb.AppendLine("**Local Variables:**");
                 sb.AppendLine();
                 sb.AppendLine("| Name | Type | Value |");
                 sb.AppendLine("|------|------|-------|");
-                
+
                 foreach (var local in frame.Locals)
                 {
                     var name = local.Name ?? "[unnamed]";
                     var type = local.Type ?? "-";
                     var value = FormatVariableValue(local.Value, 60);
-                    
+
                     sb.AppendLine($"| `{name}` | `{type}` | {value} |");
                 }
                 sb.AppendLine();
             }
-            
+
             sb.AppendLine("</details>");
             sb.AppendLine();
         }
     }
-    
+
     private static string FormatVariableValue(object? value, int maxLength)
     {
         if (value == null)
         {
             return "*null*";
         }
-        
+
         // If value is an expanded object (from showobj), format it as JSON
         if (value is not string)
         {
@@ -476,16 +478,16 @@ public class MarkdownReportGenerator : IReportGenerator
                 return value.ToString() ?? "";
             }
         }
-        
+
         var stringValue = value as string ?? value.ToString() ?? "";
-        
+
         if (string.IsNullOrEmpty(stringValue) || stringValue == "[NO DATA]")
         {
             return "*no data*";
         }
-        
+
         var truncated = stringValue;
-        
+
         // Format based on value type
         if (truncated.StartsWith("\"") && truncated.EndsWith("\""))
         {
@@ -507,7 +509,7 @@ public class MarkdownReportGenerator : IReportGenerator
             // Numeric
             return $"`{truncated}`";
         }
-        
+
         return truncated;
     }
 
@@ -522,14 +524,14 @@ public class MarkdownReportGenerator : IReportGenerator
         {
             sb.AppendLine("### Heap Statistics");
             sb.AppendLine();
-            
+
             if (options.IncludeCharts)
             {
                 // Group by truncated key to avoid duplicates (different types can truncate to same string)
                 var heapData = heapStats.Take(10)
                     .GroupBy(kv => kv.Key)
                     .ToDictionary(g => g.Key, g => g.Sum(kv => kv.Value));
-                
+
                 if (heapData.Any())
                 {
                     sb.AppendLine("```");
@@ -549,19 +551,21 @@ public class MarkdownReportGenerator : IReportGenerator
                 Detected = leakAnalysis.Detected,
                 Severity = leakAnalysis.Severity ?? "Unknown",
                 TotalHeapBytes = leakAnalysis.TotalHeapBytes ?? 0,
-                EstimatedLeakedBytes = leakAnalysis.EstimatedLeakedBytes ?? 0,
                 TopConsumers = leakAnalysis.TopConsumers ?? new List<MemoryConsumer>(),
                 PotentialIssueIndicators = leakAnalysis.PotentialIssueIndicators ?? new List<string>()
             };
-            
+
             if (leak.Detected)
             {
                 var displaySeverity = leak.Severity ?? "Elevated";
                 sb.AppendLine($"### ⚠️ Memory Consumption: {displaySeverity}");
                 sb.AppendLine();
-                sb.AppendLine($"**Total Heap Size**: {AsciiCharts.FormatBytes(leak.TotalHeapBytes > 0 ? leak.TotalHeapBytes : leak.EstimatedLeakedBytes)}");
+                var heapSize = leak.TotalHeapBytes > 0
+                    ? leak.TotalHeapBytes
+                    : leak.TopConsumers?.Sum(c => c.TotalSize) ?? 0;
+                sb.AppendLine($"**Total Heap Size**: {AsciiCharts.FormatBytes(heapSize)}");
                 sb.AppendLine();
-                
+
                 // Show potential issue indicators if any
                 if (leak.PotentialIssueIndicators?.Any() == true)
                 {
@@ -613,11 +617,11 @@ public class MarkdownReportGenerator : IReportGenerator
     {
         sb.AppendLine("## 🧵 Thread Information");
         sb.AppendLine();
-        
+
         // Use new structure if available
         var allThreads = analysis.Threads?.All ?? new List<ThreadInfo>();
         var threadSummary = analysis.Threads?.Summary;
-        
+
         var threadCount = threadSummary?.Total ?? allThreads.Count;
         sb.AppendLine($"**Total Threads**: {threadCount}");
         sb.AppendLine();
@@ -668,14 +672,14 @@ public class MarkdownReportGenerator : IReportGenerator
         }
         else
         {
-        var headers = new[] { "Thread ID", "State", "Top Function" };
-        var rows = threads.Select(t => new[]
-        {
+            var headers = new[] { "Thread ID", "State", "Top Function" };
+            var rows = threads.Select(t => new[]
+            {
             t.ThreadId,
             t.State ?? "Unknown",
             t.TopFunction ?? "-"
         }).ToList();
-        sb.AppendLine(AsciiCharts.Table(headers, rows));
+            sb.AppendLine(AsciiCharts.Table(headers, rows));
         }
         sb.AppendLine();
     }
@@ -713,7 +717,7 @@ public class MarkdownReportGenerator : IReportGenerator
             if (runtime?.IsHosted == true)
                 sb.AppendLine($"| Hosted Runtime | Yes |");
         }
-        
+
         // Exception info from Exception
         var exception = analysis.Exception;
         if (!string.IsNullOrEmpty(exception?.Type))
@@ -722,25 +726,25 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine("### 🔥 Managed Exception");
             sb.AppendLine();
             sb.AppendLine($"**Type**: `{exception.Type}`");
-            
+
             if (!string.IsNullOrEmpty(exception.Message))
             {
                 sb.AppendLine();
                 sb.AppendLine($"**Message**: {exception.Message}");
             }
-            
+
             if (!string.IsNullOrEmpty(exception.HResult))
             {
                 sb.AppendLine();
                 sb.AppendLine($"**HResult**: 0x{exception.HResult}");
             }
-            
+
             if (exception.HasInnerException == true)
             {
                 sb.AppendLine();
                 sb.AppendLine($"**Inner Exceptions**: {(exception.NestedExceptionCount > 0 ? exception.NestedExceptionCount : 1)} nested exception(s)");
             }
-            
+
             if (exception.StackTrace != null && exception.StackTrace.Count > 0)
             {
                 sb.AppendLine();
@@ -770,7 +774,7 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
             sb.AppendLine("The analysis detected a potential async/await deadlock pattern.");
         }
-        
+
         // Thread Pool Information from Threads.ThreadPool
         var tp = analysis.Threads?.ThreadPool;
         if (tp != null)
@@ -778,10 +782,10 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
             sb.AppendLine("### 🔄 Thread Pool Status");
             sb.AppendLine();
-            
+
             sb.AppendLine("| Metric | Value |");
             sb.AppendLine("|--------|-------|");
-            
+
             if (tp.CpuUtilization.HasValue)
                 sb.AppendLine($"| CPU Utilization | {tp.CpuUtilization}% |");
             if (tp.WorkersTotal.HasValue)
@@ -796,21 +800,21 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine($"| Max Threads | {tp.WorkerMaxLimit:N0} |");
             if (tp.IsPortableThreadPool == true)
                 sb.AppendLine($"| Thread Pool Type | Portable |");
-            
+
             // Add warnings
             if (tp.WorkersRunning == tp.WorkersTotal && tp.WorkersTotal > 0)
             {
                 sb.AppendLine();
                 sb.AppendLine("> ⚠️ **Thread Pool Saturation**: All worker threads are busy. Consider increasing thread pool limits or reducing blocking operations.");
             }
-            
+
             if (tp.CpuUtilization > 90)
             {
                 sb.AppendLine();
                 sb.AppendLine($"> ⚠️ **High CPU Utilization** ({tp.CpuUtilization}%): Consider profiling for CPU-bound operations.");
             }
         }
-        
+
         // Timer Information from Async.Timers
         var timers = analysis.Async?.Timers;
         if (timers != null && timers.Count > 0)
@@ -820,17 +824,17 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
             sb.AppendLine($"**Total Active Timers**: {timers.Count}");
             sb.AppendLine();
-            
+
             // Group by state type
             var timerGroups = timers
                 .GroupBy(t => t.StateType ?? "Unknown")
                 .OrderByDescending(g => g.Count())
                 .Take(10)
                 .ToList();
-            
+
             sb.AppendLine("| State Type | Count | Due Time | Period |");
             sb.AppendLine("|------------|-------|----------|--------|");
-            
+
             foreach (var group in timerGroups)
             {
                 var sample = group.First();
@@ -840,14 +844,14 @@ public class MarkdownReportGenerator : IReportGenerator
                 var stateType = group.Key;
                 sb.AppendLine($"| `{stateType}` | {count} | {dueTime} | {period} |");
             }
-            
+
             // Warnings
             if (timers.Count > 50)
             {
                 sb.AppendLine();
                 sb.AppendLine($"> ⚠️ **High Timer Count** ({timers.Count}): This may indicate timer leaks. Consider using a single timer with multiplexing.");
             }
-            
+
             var shortTimers = timers.Where(t => t.PeriodMs.HasValue && t.PeriodMs < 100).ToList();
             if (shortTimers.Count > 0)
             {
@@ -863,7 +867,7 @@ public class MarkdownReportGenerator : IReportGenerator
     {
         sb.AppendLine("## ⚡ Async Analysis");
         sb.AppendLine();
-        
+
         if (asyncInfo.Summary != null)
         {
             sb.AppendLine("### Task Summary");
@@ -881,7 +885,7 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine($"| Canceled | {asyncInfo.Summary.CanceledTasks} |");
             sb.AppendLine();
         }
-        
+
         if (asyncInfo.StateMachines?.Count > 0)
         {
             sb.AppendLine("### Pending State Machines");
@@ -898,7 +902,7 @@ public class MarkdownReportGenerator : IReportGenerator
             }
             sb.AppendLine();
         }
-        
+
         if (asyncInfo.FaultedTasks?.Count > 0)
         {
             sb.AppendLine("### Faulted Tasks");
@@ -909,7 +913,7 @@ public class MarkdownReportGenerator : IReportGenerator
             }
             sb.AppendLine();
         }
-        
+
         if (asyncInfo.AnalysisTimeMs.HasValue)
         {
             sb.AppendLine($"> Analysis completed in {asyncInfo.AnalysisTimeMs}ms");
@@ -926,13 +930,13 @@ public class MarkdownReportGenerator : IReportGenerator
     {
         sb.AppendLine("## 🔎 Exception Deep Analysis");
         sb.AppendLine();
-        
+
         // Basic exception info
         sb.AppendLine("### Exception Details");
         sb.AppendLine();
         sb.AppendLine("| Property | Value |");
         sb.AppendLine("|----------|-------|");
-        
+
         if (!string.IsNullOrEmpty(exceptionAnalysis.FullTypeName))
             sb.AppendLine($"| **Type** | `{exceptionAnalysis.FullTypeName}` |");
         if (!string.IsNullOrEmpty(exceptionAnalysis.Message))
@@ -944,7 +948,7 @@ public class MarkdownReportGenerator : IReportGenerator
         if (!string.IsNullOrEmpty(exceptionAnalysis.Source))
             sb.AppendLine($"| **Source** | {exceptionAnalysis.Source} |");
         sb.AppendLine();
-        
+
         // Target Site
         if (exceptionAnalysis.TargetSite != null)
         {
@@ -957,13 +961,13 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine($"- **Signature**: `{exceptionAnalysis.TargetSite.Signature}`");
             sb.AppendLine();
         }
-        
+
         // Exception Chain
         if (exceptionAnalysis.ExceptionChain?.Any() == true)
         {
             sb.AppendLine("### Exception Chain");
             sb.AppendLine();
-            
+
             foreach (var entry in exceptionAnalysis.ExceptionChain)
             {
                 var depthMarker = entry.Depth == 0 ? "🔴" : new string('↳', entry.Depth);
@@ -975,7 +979,7 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine();
             }
         }
-        
+
         // Custom Properties (type-specific)
         if (exceptionAnalysis.CustomProperties?.Any() == true)
         {
@@ -983,7 +987,7 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
             sb.AppendLine("| Property | Value |");
             sb.AppendLine("|----------|-------|");
-            
+
             foreach (var (key, value) in exceptionAnalysis.CustomProperties)
             {
                 var displayValue = value?.ToString() ?? "*null*";
@@ -999,20 +1003,20 @@ public class MarkdownReportGenerator : IReportGenerator
     {
         sb.AppendLine("## 🔍 Type/Method Resolution Analysis");
         sb.AppendLine();
-        
+
         // Failed Type Info
         if (!string.IsNullOrEmpty(typeResolution.FailedType))
         {
             sb.AppendLine($"**Failed Type**: `{typeResolution.FailedType}`");
             sb.AppendLine();
-            
+
             if (!string.IsNullOrEmpty(typeResolution.MethodTable))
                 sb.AppendLine($"- MethodTable: `0x{typeResolution.MethodTable}`");
             if (!string.IsNullOrEmpty(typeResolution.EEClass))
                 sb.AppendLine($"- EEClass: `0x{typeResolution.EEClass}`");
             sb.AppendLine();
         }
-        
+
         // Expected Member
         if (typeResolution.ExpectedMember != null)
         {
@@ -1025,7 +1029,7 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine($"- **Member Type**: {typeResolution.ExpectedMember.MemberType}");
             sb.AppendLine();
         }
-        
+
         // Similar Methods (potential matches)
         if (typeResolution.SimilarMethods?.Any() == true)
         {
@@ -1033,14 +1037,14 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
             sb.AppendLine("These methods have similar names - check for signature mismatches:");
             sb.AppendLine();
-            
+
             foreach (var method in typeResolution.SimilarMethods)
             {
                 sb.AppendLine($"- `{method.Signature}` ({method.JitStatus})");
             }
             sb.AppendLine();
         }
-        
+
         // Diagnosis
         if (!string.IsNullOrEmpty(typeResolution.Diagnosis))
         {
@@ -1049,7 +1053,7 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine($"> {typeResolution.Diagnosis}");
             sb.AppendLine();
         }
-        
+
         // Actual Methods (collapsible for large lists)
         if (typeResolution.ActualMethods?.Any() == true)
         {
@@ -1058,13 +1062,13 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
             sb.AppendLine("| Method | JIT Status |");
             sb.AppendLine("|--------|------------|");
-            
+
             foreach (var method in typeResolution.ActualMethods)
             {
                 var sig = method.Signature ?? method.Name ?? "???";
                 sb.AppendLine($"| `{sig}` | {method.JitStatus} |");
             }
-            
+
             sb.AppendLine();
             sb.AppendLine("</details>");
             sb.AppendLine();
@@ -1075,23 +1079,23 @@ public class MarkdownReportGenerator : IReportGenerator
     {
         sb.AppendLine("## 🚀 NativeAOT / Trimming Analysis");
         sb.AppendLine();
-        
+
         // Status badges
         var aotBadge = nativeAot.IsNativeAot ? "🔴 **NativeAOT Detected**" : "🟢 **Not NativeAOT**";
         var jitBadge = nativeAot.HasJitCompiler ? "✅ JIT Present" : "❌ No JIT";
-        
+
         sb.AppendLine($"| Property | Status |");
         sb.AppendLine($"|----------|--------|");
         sb.AppendLine($"| NativeAOT | {aotBadge} |");
         sb.AppendLine($"| JIT Compiler | {jitBadge} |");
         sb.AppendLine();
-        
+
         // Indicators
         if (nativeAot.Indicators?.Any() == true)
         {
             sb.AppendLine("### Detection Indicators");
             sb.AppendLine();
-            
+
             foreach (var indicator in nativeAot.Indicators)
             {
                 sb.AppendLine($"- **Pattern**: `{indicator.Pattern}`");
@@ -1102,22 +1106,22 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine();
             }
         }
-        
+
         // Trimming Analysis
         if (nativeAot.TrimmingAnalysis != null)
         {
             var trimming = nativeAot.TrimmingAnalysis;
-            
+
             var confidenceEmoji = trimming.Confidence switch
             {
                 "high" => "🔴",
                 "medium" => "🟠",
                 _ => "🟡"
             };
-            
+
             sb.AppendLine("### Trimming Analysis");
             sb.AppendLine();
-            
+
             if (trimming.PotentialTrimmingIssue)
             {
                 sb.AppendLine($"> {confidenceEmoji} **Potential Trimming Issue Detected** (Confidence: {trimming.Confidence})");
@@ -1127,12 +1131,12 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine($"> {confidenceEmoji} Possible version mismatch or configuration issue (Confidence: {trimming.Confidence})");
             }
             sb.AppendLine();
-            
+
             if (!string.IsNullOrEmpty(trimming.ExceptionType))
                 sb.AppendLine($"- **Exception Type**: `{trimming.ExceptionType}`");
             if (!string.IsNullOrEmpty(trimming.MissingMember))
                 sb.AppendLine($"- **Missing Member**: `{trimming.MissingMember}`");
-            
+
             if (trimming.CallingFrame != null)
             {
                 sb.AppendLine($"- **Called From**: `{trimming.CallingFrame.Function}`");
@@ -1140,7 +1144,7 @@ public class MarkdownReportGenerator : IReportGenerator
                     sb.AppendLine($"  - [View Source]({trimming.CallingFrame.SourceUrl})");
             }
             sb.AppendLine();
-            
+
             if (!string.IsNullOrEmpty(trimming.Recommendation))
             {
                 sb.AppendLine("### Recommendations");
@@ -1149,7 +1153,7 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine();
             }
         }
-        
+
         // Reflection Usage
         if (nativeAot.ReflectionUsage?.Any() == true)
         {
@@ -1159,7 +1163,7 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
             sb.AppendLine("| Location | Pattern | Risk |");
             sb.AppendLine("|----------|---------|------|");
-            
+
             foreach (var usage in nativeAot.ReflectionUsage)
             {
                 var location = usage.Location ?? "-";
@@ -1175,20 +1179,20 @@ public class MarkdownReportGenerator : IReportGenerator
     {
         sb.AppendLine("## 📦 Assembly Versions");
         sb.AppendLine();
-        
+
         if (!assemblies.Any())
         {
             sb.AppendLine("*No assembly information available.*");
             sb.AppendLine();
             return;
         }
-        
+
         sb.AppendLine("<details>");
         sb.AppendLine($"<summary>View all {assemblies.Count} assemblies</summary>");
         sb.AppendLine();
         sb.AppendLine("| Assembly | Version | Info Version | Config | Company | Repository |");
         sb.AppendLine("|----------|---------|--------------|--------|---------|------------|");
-        
+
         foreach (var asm in assemblies)
         {
             var name = asm.Name;
@@ -1198,7 +1202,7 @@ public class MarkdownReportGenerator : IReportGenerator
             name = name.Replace("|", "\\|");
             var asmVersion = (asm.AssemblyVersion ?? "-").Replace("|", "\\|");
             var dynamicBadge = asm.IsDynamic == true ? " 🔄" : "";
-            
+
             // Build info version with optional commit link
             var infoVersion = asm.InformationalVersion ?? "-";
             if (infoVersion.Length > 30)
@@ -1211,23 +1215,23 @@ public class MarkdownReportGenerator : IReportGenerator
                 var escapedUrl = asm.RepositoryUrl.Replace("(", "%28").Replace(")", "%29");
                 infoVersion += $" [`{shortHash}`]({escapedUrl}/commit/{asm.CommitHash})";
             }
-            
+
             // Repository link
             var repoLink = !string.IsNullOrEmpty(asm.RepositoryUrl)
                 ? $"[🔗]({asm.RepositoryUrl.Replace("(", "%28").Replace(")", "%29")})" : "-";
-            
+
             // Configuration badge
             var config = (asm.Configuration ?? "-").Replace("|", "\\|");
-            
+
             // Company (truncate if too long)
             var company = asm.Company ?? "-";
             if (company.Length > 25)
                 company = company[..25] + "...";
             company = company.Replace("|", "\\|");
-            
+
             sb.AppendLine($"| `{name}`{dynamicBadge} | {asmVersion} | {infoVersion} | {config} | {company} | {repoLink} |");
         }
-        
+
         sb.AppendLine();
         sb.AppendLine("</details>");
         sb.AppendLine();
@@ -1280,7 +1284,7 @@ public class MarkdownReportGenerator : IReportGenerator
             {
                 var status = watch.Success ? "✓" : "✗";
                 sb.AppendLine($"### {status} `{watch.Expression}`");
-                
+
                 if (!string.IsNullOrEmpty(watch.Description))
                 {
                     sb.AppendLine($"*{watch.Description}*");
@@ -1316,7 +1320,7 @@ public class MarkdownReportGenerator : IReportGenerator
     private static void AppendModules(StringBuilder sb, CrashAnalysisResult analysis, ReportOptions options)
     {
         if (analysis.Modules == null) return;
-        
+
         sb.AppendLine("## 📦 Loaded Modules");
         sb.AppendLine();
 
@@ -1420,7 +1424,7 @@ public class MarkdownReportGenerator : IReportGenerator
                     VulnerabilitySeverity.Low => "🟢 Low",
                     _ => "⚪ Info"
                 };
-                var cweLinks = vuln.CweIds.Any() 
+                var cweLinks = vuln.CweIds.Any()
                     ? string.Join(", ", vuln.CweIds.Select(c => $"[{c}](https://cwe.mitre.org/data/definitions/{c.Replace("CWE-", "")}.html)"))
                     : "-";
                 sb.AppendLine($"| {severityBadge} | {vuln.Type} | {vuln.Description} | {cweLinks} |");
@@ -1439,7 +1443,7 @@ public class MarkdownReportGenerator : IReportGenerator
                     sb.AppendLine($"#### {vuln.Type}");
                     sb.AppendLine();
                     sb.AppendLine(vuln.Description);
-                    
+
                     if (!string.IsNullOrEmpty(vuln.Address))
                     {
                         sb.AppendLine($"- **Address**: `{vuln.Address}`");
@@ -1509,7 +1513,7 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
             sb.AppendLine("| # | Argument |");
             sb.AppendLine("|---|----------|");
-            
+
             for (var i = 0; i < process.Arguments.Count; i++)
             {
                 var arg = EscapeMarkdownTableCell(process.Arguments[i]);
@@ -1527,14 +1531,14 @@ public class MarkdownReportGenerator : IReportGenerator
         if (process.EnvironmentVariables.Any())
         {
             var envVars = process.EnvironmentVariables;
-            var maxEnvVars = options.MaxEnvironmentVariables > 0 
-                ? options.MaxEnvironmentVariables 
+            var maxEnvVars = options.MaxEnvironmentVariables > 0
+                ? options.MaxEnvironmentVariables
                 : envVars.Count;
             var showAll = maxEnvVars >= envVars.Count;
-            
+
             sb.AppendLine($"### Environment Variables ({envVars.Count} total)");
             sb.AppendLine();
-            
+
             // Use collapsible section for large env var lists
             if (!showAll)
             {
@@ -1542,15 +1546,15 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine($"<summary>View {maxEnvVars} of {envVars.Count} environment variables</summary>");
                 sb.AppendLine();
             }
-            
+
             sb.AppendLine("| Variable | Value |");
             sb.AppendLine("|----------|-------|");
-            
+
             foreach (var envVar in envVars.Take(maxEnvVars))
             {
                 var equalsIndex = envVar.IndexOf('=');
                 string name, value;
-                
+
                 if (equalsIndex > 0)
                 {
                     name = envVar[..equalsIndex];
@@ -1561,7 +1565,7 @@ public class MarkdownReportGenerator : IReportGenerator
                     name = envVar;
                     value = "";
                 }
-                
+
                 // Escape and truncate
                 name = EscapeMarkdownTableCell(name);
                 value = EscapeMarkdownTableCell(value);
@@ -1569,10 +1573,10 @@ public class MarkdownReportGenerator : IReportGenerator
                 {
                     value = value[..100] + "...";
                 }
-                
+
                 sb.AppendLine($"| `{name}` | {value} |");
             }
-            
+
             if (!showAll)
             {
                 sb.AppendLine();
@@ -1674,9 +1678,9 @@ public class MarkdownReportGenerator : IReportGenerator
         }
         return thread.ThreadId;
     }
-    
+
     // === Phase 2 ClrMD Enrichment Methods ===
-    
+
     private static void AppendGcSummary(StringBuilder sb, GcSummary gc)
     {
         sb.AppendLine("### 🗑️ GC Heap Summary (ClrMD)");
@@ -1692,7 +1696,7 @@ public class MarkdownReportGenerator : IReportGenerator
         }
         sb.AppendLine($"| Finalizable Objects | {gc.FinalizableObjectCount:N0} |");
         sb.AppendLine();
-        
+
         if (gc.GenerationSizes != null)
         {
             sb.AppendLine("**Generation Sizes:**");
@@ -1707,12 +1711,12 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
         }
     }
-    
+
     private static void AppendTopMemoryConsumers(StringBuilder sb, TopMemoryConsumers mem)
     {
         sb.AppendLine("### 📊 Top Memory Consumers (ClrMD)");
         sb.AppendLine();
-        
+
         if (mem.Summary != null)
         {
             sb.AppendLine($"*{mem.Summary.TotalObjects:N0} objects, {FormatBytesCompact(mem.Summary.TotalSize)}, {mem.Summary.UniqueTypes:N0} unique types*");
@@ -1721,7 +1725,7 @@ public class MarkdownReportGenerator : IReportGenerator
                 sb.AppendLine("*⚠️ Analysis was aborted due to timeout*");
             sb.AppendLine();
         }
-        
+
         if (mem.BySize?.Count > 0)
         {
             sb.AppendLine("**By Total Size:**");
@@ -1735,7 +1739,7 @@ public class MarkdownReportGenerator : IReportGenerator
             }
             sb.AppendLine();
         }
-        
+
         if (mem.LargeObjects?.Count > 0)
         {
             sb.AppendLine("**Large Objects (>85KB):**");
@@ -1750,12 +1754,12 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
         }
     }
-    
+
     private static void AppendAsyncAnalysis(StringBuilder sb, AsyncAnalysis async)
     {
         sb.AppendLine("### ⏳ Async/Task Analysis (ClrMD)");
         sb.AppendLine();
-        
+
         if (async.Summary != null)
         {
             sb.AppendLine("| Status | Count |");
@@ -1767,12 +1771,12 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine($"| Canceled | {async.Summary.CanceledTasks:N0} |");
             sb.AppendLine();
         }
-        
+
         sb.AppendLine($"*Analysis time: {async.AnalysisTimeMs:N0}ms*");
         if (async.WasAborted)
             sb.AppendLine("*⚠️ Analysis was aborted due to timeout*");
         sb.AppendLine();
-        
+
         if (async.FaultedTasks?.Count > 0)
         {
             sb.AppendLine("**🔥 Faulted Tasks:**");
@@ -1787,7 +1791,7 @@ public class MarkdownReportGenerator : IReportGenerator
             }
             sb.AppendLine();
         }
-        
+
         if (async.PendingStateMachines?.Count > 0)
         {
             sb.AppendLine("**🔄 Pending State Machines:**");
@@ -1808,12 +1812,12 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine();
         }
     }
-    
+
     private static void AppendStringAnalysis(StringBuilder sb, StringAnalysis str)
     {
         sb.AppendLine("### 📝 String Duplicate Analysis (ClrMD)");
         sb.AppendLine();
-        
+
         if (str.Summary != null)
         {
             sb.AppendLine("| Metric | Value |");
@@ -1825,12 +1829,12 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine($"| Wasted Size | {FormatBytesCompact(str.Summary.WastedSize)} ({str.Summary.WastedPercentage:F1}%) |");
             sb.AppendLine();
         }
-        
+
         sb.AppendLine($"*Analysis time: {str.AnalysisTimeMs:N0}ms*");
         if (str.WasAborted)
             sb.AppendLine("*⚠️ Analysis was aborted due to timeout*");
         sb.AppendLine();
-        
+
         if (str.ByLength != null)
         {
             sb.AppendLine("**Length Distribution:**");
@@ -1844,7 +1848,7 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine("```");
             sb.AppendLine();
         }
-        
+
         if (str.TopDuplicates?.Count > 0)
         {
             sb.AppendLine("**Top Duplicates (by wasted bytes):**");
@@ -1853,15 +1857,15 @@ public class MarkdownReportGenerator : IReportGenerator
             sb.AppendLine("|-------|------:|-------:|------------|");
             foreach (var dup in str.TopDuplicates.Take(15))
             {
-                var displayValue = dup.Value.Length > 40 
-                    ? $"`{EscapeMarkdownTableCell(dup.Value[..40])}...`" 
+                var displayValue = dup.Value.Length > 40
+                    ? $"`{EscapeMarkdownTableCell(dup.Value[..40])}...`"
                     : $"`{EscapeMarkdownTableCell(dup.Value)}`";
                 sb.AppendLine($"| {displayValue} | {dup.Count:N0} | {FormatBytesCompact(dup.WastedBytes)} | {EscapeMarkdownTableCell(dup.Suggestion ?? "")} |");
             }
             sb.AppendLine();
         }
     }
-    
+
     private static string FormatBytesCompact(long bytes)
     {
         string[] sizes = { "B", "KB", "MB", "GB", "TB" };
@@ -1874,11 +1878,10 @@ public class MarkdownReportGenerator : IReportGenerator
         }
         return $"{len:0.##} {sizes[order]}";
     }
-    
+
     private static string EscapeMarkdownTableCell(string value)
     {
         if (string.IsNullOrEmpty(value)) return value ?? "";
         return value.Replace("|", "\\|").Replace("\n", " ").Replace("\r", "");
     }
 }
-

@@ -57,13 +57,14 @@ public class SymbolTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Validate additionalPaths is not empty
         if (string.IsNullOrWhiteSpace(additionalPaths))
         {
+            // Fail fast so we don't overwrite symbol paths with empty values
             throw new ArgumentException("additionalPaths cannot be null or empty", nameof(additionalPaths));
         }
 
@@ -84,7 +85,7 @@ public class SymbolTools(
         if (!string.IsNullOrEmpty(symbolPathString))
         {
             manager.ConfigureSymbolPath(symbolPathString);
-            
+
             // Clear command cache since symbol paths have changed
             manager.ClearCommandCache();
             Logger.LogInformation("[ConfigureAdditionalSymbols] Cleared command cache after configuring new symbol paths");
@@ -157,6 +158,7 @@ public class SymbolTools(
 
         if (!Directory.Exists(symbolCachePath))
         {
+            // Nothing to delete; keep operation idempotent
             return $"No symbol cache found for dump {sanitizedDumpId}. The cache may have already been cleared or symbols were never downloaded.";
         }
 
@@ -171,7 +173,7 @@ public class SymbolTools(
             // Delete the directory
             Directory.Delete(symbolCachePath, recursive: true);
 
-            Logger.LogInformation("[ClearSymbolCache] Deleted {FileCount} files ({SizeMb:F1} MB) from {Path}", 
+            Logger.LogInformation("[ClearSymbolCache] Deleted {FileCount} files ({SizeMb:F1} MB) from {Path}",
                 fileCount, totalSizeMb, symbolCachePath);
 
             // Also clear the SymbolFiles list from the dump metadata so the smart cache doesn't think files exist
@@ -187,7 +189,7 @@ public class SymbolTools(
             return $"Error: Failed to clear symbol cache. {ex.Message}";
         }
     }
-    
+
     /// <summary>
     /// Reloads symbols into the running debugger session after uploading new symbol files.
     /// This adds the symbol directories to the debugger's search paths and explicitly loads .dbg/.debug files.
@@ -245,13 +247,14 @@ public class SymbolTools(
         {
             // Get all subdirectories
             var allDirs = SymbolManager.GetAllSubdirectories(symbolDir);
-            
+
             // Add each directory to LLDB's search paths
             foreach (var dir in allDirs)
             {
                 var result = manager.ExecuteCommand($"settings append target.debug-file-search-paths \"{dir}\"");
                 if (!result.Contains("error", StringComparison.OrdinalIgnoreCase))
                 {
+                    // Count only successful additions to avoid double-counting failures
                     addedPaths++;
                 }
             }
@@ -259,7 +262,7 @@ public class SymbolTools(
 
             // Get symbol files that LLDB can load (.dbg, .debug only - not .pdb)
             var symbolFiles = SymbolManager.GetSymbolFilesInDirectory(symbolDir, lldbOnly: true);
-            
+
             foreach (var symbolFile in symbolFiles)
             {
                 var result = manager.ExecuteCommand($"target symbols add \"{symbolFile}\"");
@@ -270,11 +273,12 @@ public class SymbolTools(
                 }
                 else
                 {
-                    Logger.LogWarning("[ReloadSymbols] Failed to load symbol file: {File} - {Error}", 
+                    // Continue attempting other files even if one fails to load
+                    Logger.LogWarning("[ReloadSymbols] Failed to load symbol file: {File} - {Error}",
                         Path.GetFileName(symbolFile), result.Trim());
                 }
             }
-            
+
             messages.Add($"Added {addedPaths} directories to symbol search paths");
             messages.Add($"Loaded {loadedCount} of {symbolFiles.Count} symbol files");
         }
@@ -283,17 +287,17 @@ public class SymbolTools(
             // For WinDbg, update the symbol path and reload
             var allDirs = SymbolManager.GetAllSubdirectories(symbolDir);
             var symbolPath = string.Join(";", allDirs);
-            
+
             // Append to existing symbol path
             manager.ExecuteCommand($".sympath+ {symbolPath}");
             addedPaths = allDirs.Count;
-            
+
             // Force reload symbols
             var result = manager.ExecuteCommand(".reload /f");
-            
+
             messages.Add($"Added {addedPaths} directories to symbol path");
             messages.Add("Executed .reload /f to reload symbols");
-            
+
             // Check if symbols loaded
             var symResult = manager.ExecuteCommand("lm");
             var loadedModules = symResult.Split('\n').Count(l => l.Contains(".pdb", StringComparison.OrdinalIgnoreCase));
@@ -301,6 +305,7 @@ public class SymbolTools(
         }
         else
         {
+            // Defensive branch in case new debugger types are added without symbol support
             return $"Unknown debugger type: {manager.DebuggerType}";
         }
 
@@ -314,7 +319,7 @@ public class SymbolTools(
 
         return $"Symbol reload completed.\n{string.Join("\n", messages)}";
     }
-    
+
     /// <summary>
     /// Clears the SymbolFiles list from the dump metadata to invalidate the smart cache.
     /// </summary>
@@ -325,27 +330,30 @@ public class SymbolTools(
             // Find the dump file to get its directory
             var userDumpDir = Path.Combine(dumpStoragePath, userId);
             if (!Directory.Exists(userDumpDir))
+                // No dumps for this user, nothing to clear
                 return;
-            
+
             // Look for matching dump files
             var dumpFiles = Directory.GetFiles(userDumpDir, $"{dumpId}*.dmp", SearchOption.TopDirectoryOnly)
                 .Concat(Directory.GetFiles(userDumpDir, $"{dumpId}*.dump", SearchOption.TopDirectoryOnly))
                 .ToList();
-            
+
             if (dumpFiles.Count == 0)
+                // Dump never persisted; skip metadata update
                 return;
-            
+
             // Get the metadata file path (same name as dump but .json)
             var dumpFile = dumpFiles.First();
             var metadataPath = Path.ChangeExtension(dumpFile, ".json");
-            
+
             if (!File.Exists(metadataPath))
+                // No metadata means nothing to clear
                 return;
-            
+
             // Load, clear SymbolFiles, and save
             var json = File.ReadAllText(metadataPath);
             var metadata = System.Text.Json.JsonSerializer.Deserialize<Controllers.DumpMetadata>(json);
-            
+
             if (metadata != null && metadata.SymbolFiles != null && metadata.SymbolFiles.Count > 0)
             {
                 Logger.LogInformation("[ClearSymbolCache] Clearing {Count} entries from SymbolFiles in metadata", metadata.SymbolFiles.Count);

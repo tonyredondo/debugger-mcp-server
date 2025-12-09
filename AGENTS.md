@@ -13,6 +13,11 @@ This is a cross-platform MCP (Model Context Protocol) server for controlling deb
 
 ## Development Workflow
 
+### Interaction Cadence
+- Prefer batching meaningful edits before pausing; avoid frequent stop/start updates after only 1–2 trivial changes.
+- Surface interim status only at natural checkpoints (e.g., end of a batch, before running build/test, or when blocked/at risk).
+- Always validate (build/test) after a batch, not after every micro-edit, unless a change obviously risks stability.
+
 ### 1. Implementation Review (Mandatory)
 
 After implementing and completing a feature or plan, you **must review your implementation at least 3 times**, focusing exclusively on finding issues and bugs:
@@ -265,4 +270,3 @@ DebuggerMcp.Tests/
 ---
 
 **Remember**: Quality over speed. Taking time to review, test, and document properly prevents bugs and makes the codebase maintainable.
-

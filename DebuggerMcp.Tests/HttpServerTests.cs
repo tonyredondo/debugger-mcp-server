@@ -24,7 +24,7 @@ public class HttpServerTests
         // Arrange
         var args = new[] { "--http" };
         var cancellationTokenSource = new CancellationTokenSource();
-        
+
         // Act & Assert
         // We just verify that the server can be created without throwing
         // We can't actually run it because it would block the test
@@ -33,12 +33,12 @@ public class HttpServerTests
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
         builder.Services.AddSingleton<DebuggerSessionManager>();
-        
+
         var app = builder.Build();
-        
+
         // Verify services are registered
         Assert.NotNull(app.Services.GetService<DebuggerSessionManager>());
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -52,25 +52,25 @@ public class HttpServerTests
         // Arrange
         var args = new[] { "--mcp-http" };
         var cancellationTokenSource = new CancellationTokenSource();
-        
+
         // Act & Assert
         var builder = WebApplication.CreateBuilder(args);
         builder.Services.AddControllers();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
         builder.Services.AddSingleton<DebuggerSessionManager>();
-        
+
         // Add MCP server with HTTP transport
         builder.Services
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         var app = builder.Build();
-        
+
         // Verify services are registered
         Assert.NotNull(app.Services.GetService<DebuggerSessionManager>());
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -84,12 +84,12 @@ public class HttpServerTests
         // Arrange
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddSingleton<DebuggerSessionManager>();
-        
+
         // Act
         var app = builder.Build();
         var manager1 = app.Services.GetService<DebuggerSessionManager>();
         var manager2 = app.Services.GetService<DebuggerSessionManager>();
-        
+
         // Assert
         Assert.NotNull(manager1);
         Assert.NotNull(manager2);
@@ -114,15 +114,15 @@ public class HttpServerTests
                       .AllowAnyHeader();
             });
         });
-        
+
         // Act
         var app = builder.Build();
         app.UseCors();
-        
+
         // Assert
         // If no exception is thrown, CORS is configured correctly
         Assert.NotNull(app);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -135,7 +135,7 @@ public class HttpServerTests
     {
         // Arrange
         var builder = WebApplication.CreateBuilder();
-        
+
         // Add all services as in the real application
         builder.Services.AddControllers();
         builder.Services.AddEndpointsApiExplorer();
@@ -150,15 +150,15 @@ public class HttpServerTests
                       .AllowAnyHeader();
             });
         });
-        
+
         // Act
         var app = builder.Build();
-        
+
         // Assert
         Assert.NotNull(app);
         Assert.NotNull(app.Services);
         Assert.NotNull(app.Services.GetService<DebuggerSessionManager>());
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -171,20 +171,20 @@ public class HttpServerTests
     {
         // Arrange
         var builder = WebApplication.CreateBuilder();
-        
+
         // Act
         builder.Services
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         var app = builder.Build();
-        
+
         // Assert
         // If no exception is thrown, MCP server is configured correctly
         Assert.NotNull(app);
         Assert.NotNull(app.Services);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -199,15 +199,15 @@ public class HttpServerTests
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddEndpointsApiExplorer();
         builder.Services.AddSwaggerGen();
-        
+
         // Act
         var app = builder.Build();
         app.UseSwagger();
         app.UseSwaggerUI();
-        
+
         // Assert
         Assert.NotNull(app);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -221,14 +221,14 @@ public class HttpServerTests
         // Arrange
         var builder = WebApplication.CreateBuilder();
         builder.Services.AddControllers();
-        
+
         // Act
         var app = builder.Build();
         app.MapControllers();
-        
+
         // Assert
         Assert.NotNull(app);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }

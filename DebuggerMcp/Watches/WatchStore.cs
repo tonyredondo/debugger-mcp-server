@@ -26,7 +26,7 @@ public class WatchStore
     private readonly string _dumpStoragePath;
     private readonly ConcurrentDictionary<string, List<WatchExpression>> _cache = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileLocks = new();
-    
+
     private const string WatchesFileName = "watches.json";
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -77,7 +77,7 @@ public class WatchStore
     public async Task<WatchExpression> AddWatchAsync(string userId, string dumpId, WatchExpression watch)
     {
         ValidateParameters(userId, dumpId);
-        
+
         if (watch == null)
         {
             throw new ArgumentNullException(nameof(watch));
@@ -100,7 +100,7 @@ public class WatchStore
         try
         {
             var watches = await LoadWatchesInternalAsync(userId, dumpId);
-            
+
             // Check for duplicate expression
             if (watches.Any(w => w.Expression.Equals(watch.Expression, StringComparison.OrdinalIgnoreCase)))
             {
@@ -109,7 +109,7 @@ public class WatchStore
 
             watches.Add(watch);
             await SaveWatchesInternalAsync(userId, dumpId, watches);
-            
+
             // Update cache
             _cache[cacheKey] = watches;
 
@@ -131,7 +131,7 @@ public class WatchStore
     public async Task<bool> RemoveWatchAsync(string userId, string dumpId, string watchId)
     {
         ValidateParameters(userId, dumpId);
-        
+
         if (string.IsNullOrWhiteSpace(watchId))
         {
             throw new ArgumentException("Watch ID cannot be empty", nameof(watchId));
@@ -145,7 +145,7 @@ public class WatchStore
         {
             var watches = await LoadWatchesInternalAsync(userId, dumpId);
             var removed = watches.RemoveAll(w => w.Id == watchId) > 0;
-            
+
             if (removed)
             {
                 await SaveWatchesInternalAsync(userId, dumpId, watches);
@@ -171,7 +171,7 @@ public class WatchStore
         ValidateParameters(userId, dumpId);
 
         var cacheKey = GetCacheKey(userId, dumpId);
-        
+
         // Check cache first
         if (_cache.TryGetValue(cacheKey, out var cached))
         {
@@ -215,7 +215,7 @@ public class WatchStore
     public async Task<bool> UpdateWatchAsync(string userId, string dumpId, WatchExpression watch)
     {
         ValidateParameters(userId, dumpId);
-        
+
         if (watch == null)
         {
             throw new ArgumentNullException(nameof(watch));
@@ -229,7 +229,7 @@ public class WatchStore
         {
             var watches = await LoadWatchesInternalAsync(userId, dumpId);
             var index = watches.FindIndex(w => w.Id == watch.Id);
-            
+
             if (index < 0)
             {
                 return false;
@@ -265,7 +265,7 @@ public class WatchStore
         {
             var watches = await LoadWatchesInternalAsync(userId, dumpId);
             var count = watches.Count;
-            
+
             if (count > 0)
             {
                 watches.Clear();
@@ -338,10 +338,10 @@ public class WatchStore
     public void CleanupDumpResources(string userId, string dumpId)
     {
         var cacheKey = GetCacheKey(userId, dumpId);
-        
+
         // Remove from cache
         _cache.TryRemove(cacheKey, out _);
-        
+
         // Remove and dispose the file lock
         if (_fileLocks.TryRemove(cacheKey, out var semaphore))
         {
@@ -361,14 +361,14 @@ public class WatchStore
     public void CleanupUserResources(string userId)
     {
         var prefix = $"{userId}/";
-        
+
         // Find all keys for this user
         var keysToRemove = _cache.Keys.Where(k => k.StartsWith(prefix, StringComparison.Ordinal)).ToList();
-        
+
         foreach (var key in keysToRemove)
         {
             _cache.TryRemove(key, out _);
-            
+
             if (_fileLocks.TryRemove(key, out var semaphore))
             {
                 semaphore.Dispose();
@@ -406,7 +406,7 @@ public class WatchStore
     private async Task<List<WatchExpression>> LoadWatchesInternalAsync(string userId, string dumpId)
     {
         var filePath = GetWatchesFilePath(userId, dumpId);
-        
+
         if (!File.Exists(filePath))
         {
             return new List<WatchExpression>();
@@ -415,7 +415,7 @@ public class WatchStore
         try
         {
             var json = await File.ReadAllTextAsync(filePath);
-            return JsonSerializer.Deserialize<List<WatchExpression>>(json, JsonOptions) 
+            return JsonSerializer.Deserialize<List<WatchExpression>>(json, JsonOptions)
                    ?? new List<WatchExpression>();
         }
         catch (JsonException)
@@ -429,7 +429,7 @@ public class WatchStore
     {
         var filePath = GetWatchesFilePath(userId, dumpId);
         var directory = Path.GetDirectoryName(filePath);
-        
+
         if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
         {
             Directory.CreateDirectory(directory);

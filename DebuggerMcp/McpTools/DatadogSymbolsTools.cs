@@ -74,6 +74,7 @@ public class DatadogSymbolsTools(
         // Must be at least 7 characters for a short SHA
         if (string.IsNullOrWhiteSpace(commitSha) || commitSha.Length < 7)
         {
+            // Shorter SHAs are ambiguous and would cause noisy lookups
             throw new ArgumentException("commitSha must be at least 7 characters", nameof(commitSha));
         }
 
@@ -99,7 +100,7 @@ public class DatadogSymbolsTools(
             // e.g., /lib/ld-musl-aarch64.so.1 tells us it's musl (Alpine) and aarch64 (ARM64)
             var imageListOutput = debuggerManager.ExecuteCommand("image list");
             platform = DetectPlatformFromSession(session, imageListOutput);
-            Logger.LogInformation("[DatadogSymbols] Detected platform: {Os} {Arch} (Alpine: {IsAlpine})", 
+            Logger.LogInformation("[DatadogSymbols] Detected platform: {Os} {Arch} (Alpine: {IsAlpine})",
                 platform.Os, platform.Architecture, platform.IsAlpine);
         }
         catch (Exception ex)
@@ -137,20 +138,21 @@ public class DatadogSymbolsTools(
         List<PdbPatcher.PatchResult>? patchResults = null;
         Logger.LogInformation("[DatadogSymbols] Checking PDB patching conditions: Success={Success}, ShaMismatch={ShaMismatch}, ManagedDir={ManagedDir}",
             downloadResult.Success, downloadResult.ShaMismatch, downloadResult.MergeResult?.ManagedSymbolDirectory ?? "(null)");
-        
+
         if (downloadResult.Success && downloadResult.ShaMismatch && downloadResult.MergeResult?.ManagedSymbolDirectory != null)
         {
-            Logger.LogInformation("[DatadogSymbols] SHA mismatch detected, patching PDBs to match DLL GUIDs in {Dir}...", 
+            Logger.LogInformation("[DatadogSymbols] SHA mismatch detected, patching PDBs to match DLL GUIDs in {Dir}...",
                 downloadResult.MergeResult.ManagedSymbolDirectory);
             var patcher = new PdbPatcher(Logger);
             patchResults = patcher.PatchAllPdbsInDirectory(downloadResult.MergeResult.ManagedSymbolDirectory);
-            
+
             var patchedCount = patchResults.Count(r => r.WasPatched);
             var totalCount = patchResults.Count;
             Logger.LogInformation("[DatadogSymbols] PDB patching complete: {Patched}/{Total} files patched", patchedCount, totalCount);
         }
         else
         {
+            // Skip patching when we don't have a mismatch or managed symbols to edit
             Logger.LogDebug("[DatadogSymbols] PDB patching skipped (conditions not met)");
         }
 
@@ -162,7 +164,7 @@ public class DatadogSymbolsTools(
             loadResult = await loader.LoadSymbolsAsync(
                 downloadResult.MergeResult,
                 cmd => debuggerManager.ExecuteCommand(cmd));
-            
+
             // Clear command cache after loading new symbols so subsequent commands
             // (like clrstack) will re-run and show improved stack traces
             if (loadResult.Success)
@@ -272,7 +274,7 @@ public class DatadogSymbolsTools(
             // e.g., /lib/ld-musl-aarch64.so.1 tells us it's musl (Alpine) and aarch64 (ARM64)
             var imageListOutput = debuggerManager.ExecuteCommand("image list");
             platform = DetectPlatformFromSession(session, imageListOutput);
-            Logger.LogInformation("[DatadogSymbols] Detected platform: {Os} {Arch} (Alpine: {IsAlpine})", 
+            Logger.LogInformation("[DatadogSymbols] Detected platform: {Os} {Arch} (Alpine: {IsAlpine})",
                 platform.Os, platform.Architecture, platform.IsAlpine);
         }
         catch (Exception ex)
@@ -528,7 +530,7 @@ public class DatadogSymbolsTools(
 
         // Get session info to find dump ID
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         if (string.IsNullOrEmpty(session.CurrentDumpId))
         {
             throw new InvalidOperationException("No dump is currently open. Open a dump first.");
@@ -553,7 +555,7 @@ public class DatadogSymbolsTools(
                 totalSizeMb = files.Sum(f => new FileInfo(f).Length) / (1024.0 * 1024.0);
 
                 Directory.Delete(datadogSymbolsDir, recursive: true);
-                Logger.LogInformation("[DatadogSymbols] Deleted {FileCount} files ({SizeMb:F1} MB) from {Path}", 
+                Logger.LogInformation("[DatadogSymbols] Deleted {FileCount} files ({SizeMb:F1} MB) from {Path}",
                     filesDeleted, totalSizeMb, datadogSymbolsDir);
             }
             catch (Exception ex)
@@ -615,7 +617,7 @@ public class DatadogSymbolsTools(
         var response = new
         {
             success = true,
-            message = filesDeleted > 0 
+            message = filesDeleted > 0
                 ? $"Cleared Datadog symbols for dump {dumpName}"
                 : $"No Datadog symbols found for dump {dumpName}",
             dumpId = dumpName,
@@ -688,4 +690,3 @@ public class DatadogSymbolsTools(
         return platform;
     }
 }
-

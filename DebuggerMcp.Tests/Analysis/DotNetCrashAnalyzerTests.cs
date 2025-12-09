@@ -192,7 +192,7 @@ public class DotNetCrashAnalyzerTests
         var mockManager = new Mock<IDebuggerManager>();
         mockManager.Setup(m => m.IsInitialized).Returns(true);
         mockManager.Setup(m => m.DebuggerType).Returns("WinDbg");
-        
+
         // Return heap stats with large allocations (2GB+ to trigger "High" severity)
         mockManager.Setup(m => m.ExecuteCommand("!dumpheap -stat"))
             .Returns(@"MT    Count    TotalSize Class Name
@@ -200,7 +200,7 @@ public class DotNetCrashAnalyzerTests
 00007ff8a1234568    30000    1000000000 System.Byte[]
 00007ff8a1234569    20000    500000000 System.Object[]
 Total 100000 objects, 3000000000 bytes");
-        
+
         mockManager.Setup(m => m.ExecuteCommand(It.Is<string>(s => s != "!dumpheap -stat")))
             .Returns("Test output");
 
@@ -210,10 +210,12 @@ Total 100000 objects, 3000000000 bytes");
         var result = await analyzer.AnalyzeDotNetCrashAsync();
 
         // Assert
+        Assert.NotNull(result.Memory);
         Assert.NotNull(result.Memory!.LeakAnalysis);
         // Memory consumption is analyzed, but Detected is only true with High severity or specific indicators
-        Assert.True(result.Memory!.LeakAnalysis.TopConsumers.Count >= 3);
-        Assert.Contains(result.Memory!.LeakAnalysis.TopConsumers, c => c.TypeName.Contains("System.String"));
+        Assert.NotNull(result.Memory.LeakAnalysis.TopConsumers);
+        Assert.True(result.Memory.LeakAnalysis.TopConsumers.Count >= 3);
+        Assert.Contains(result.Memory.LeakAnalysis.TopConsumers, c => c.TypeName.Contains("System.String"));
     }
 
     /// <summary>
@@ -226,12 +228,12 @@ Total 100000 objects, 3000000000 bytes");
         var mockManager = new Mock<IDebuggerManager>();
         mockManager.Setup(m => m.IsInitialized).Returns(true);
         mockManager.Setup(m => m.DebuggerType).Returns("WinDbg");
-        
+
         mockManager.Setup(m => m.ExecuteCommand("!dumpheap -stat"))
             .Returns(@"MT    Count    TotalSize Class Name
 00007ff812345678    1000    50000 MyApp.LargeObject
 00007ff812345679    500     25000 MyApp.SmallObject");
-        
+
         mockManager.Setup(m => m.ExecuteCommand(It.Is<string>(s => s != "!dumpheap -stat")))
             .Returns("Test output");
 
@@ -241,10 +243,12 @@ Total 100000 objects, 3000000000 bytes");
         var result = await analyzer.AnalyzeDotNetCrashAsync();
 
         // Assert
+        Assert.NotNull(result.Memory);
         Assert.NotNull(result.Memory!.LeakAnalysis);
-        Assert.True(result.Memory!.LeakAnalysis.TopConsumers.Count >= 2);
-        
-        var largeObject = result.Memory!.LeakAnalysis.TopConsumers.FirstOrDefault(c => c.TypeName.Contains("LargeObject"));
+        Assert.NotNull(result.Memory.LeakAnalysis.TopConsumers);
+        Assert.True(result.Memory.LeakAnalysis.TopConsumers.Count >= 2);
+
+        var largeObject = result.Memory.LeakAnalysis.TopConsumers.FirstOrDefault(c => c.TypeName.Contains("LargeObject"));
         Assert.NotNull(largeObject);
         Assert.Equal(1000, largeObject.Count);
         Assert.Equal(50000, largeObject.TotalSize);
@@ -260,20 +264,20 @@ Total 100000 objects, 3000000000 bytes");
         var mockManager = new Mock<IDebuggerManager>();
         mockManager.Setup(m => m.IsInitialized).Returns(true);
         mockManager.Setup(m => m.DebuggerType).Returns("WinDbg");
-        
+
         // Return syncblk with held locks
         mockManager.Setup(m => m.ExecuteCommand("!syncblk"))
             .Returns(@"Index SyncBlock MonitorHeld Recursion Owning Thread Info  SyncBlock Owner
    12 0000024453f8a5a8    1         1 0000024453f46720  1c54  10   00000244540a5820 System.Object
    15 0000024453f8a5b8    1         1 0000024453f46730  1d54  11   00000244540a5830 System.Object");
-        
+
         // Return threads with Wait state
         mockManager.Setup(m => m.ExecuteCommand("!threads"))
             .Returns(@"ThreadCount:      5
   ID OSID ThreadOBJ    State GC Mode     GC Alloc Context  Domain   Count Apt Exception
   10 1c54 0000024453f46720    20220 Wait
   11 1d54 0000024453f46730    20220 Wait");
-        
+
         mockManager.Setup(m => m.ExecuteCommand(It.Is<string>(s => s != "!syncblk" && s != "!threads")))
             .Returns("Test output");
 
@@ -297,12 +301,12 @@ Total 100000 objects, 3000000000 bytes");
         var mockManager = new Mock<IDebuggerManager>();
         mockManager.Setup(m => m.IsInitialized).Returns(true);
         mockManager.Setup(m => m.DebuggerType).Returns("WinDbg");
-        
+
         // Use heap size > 2GB to trigger "High" severity and Detected = true
         mockManager.Setup(m => m.ExecuteCommand("!dumpheap -stat"))
             .Returns(@"MT    Count    TotalSize Class Name
 00007ff812345678    50000    2500000000 System.String");
-        
+
         mockManager.Setup(m => m.ExecuteCommand(It.Is<string>(s => s != "!dumpheap -stat")))
             .Returns("Test output");
 
@@ -328,12 +332,12 @@ Total 100000 objects, 3000000000 bytes");
         var mockManager = new Mock<IDebuggerManager>();
         mockManager.Setup(m => m.IsInitialized).Returns(true);
         mockManager.Setup(m => m.DebuggerType).Returns("WinDbg");
-        
+
         // Return heap with large average object size (LOH)
         mockManager.Setup(m => m.ExecuteCommand("!dumpheap -stat"))
             .Returns(@"MT    Count    TotalSize Class Name
 00007ff812345678    100    100000000 System.Byte[]");
-        
+
         mockManager.Setup(m => m.ExecuteCommand(It.Is<string>(s => s != "!dumpheap -stat")))
             .Returns("Test output");
 

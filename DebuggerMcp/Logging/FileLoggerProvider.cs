@@ -26,16 +26,17 @@ public sealed class FileLoggerProvider : ILoggerProvider
         _filePrefix = filePrefix;
         _minimumLevel = minimumLevel;
         _processId = Environment.ProcessId;
-        
+
         // Ensure log directory exists
         Directory.CreateDirectory(_logDirectory);
-        
+
         // Initialize the writer for today
         EnsureWriterForDate(DateTime.UtcNow);
     }
 
     public ILogger CreateLogger(string categoryName)
     {
+        // Reuse loggers per category to avoid recreating wrappers on every request
         return _loggers.GetOrAdd(categoryName, name => new FileLogger(name, this, _minimumLevel));
     }
 
@@ -45,7 +46,7 @@ public sealed class FileLoggerProvider : ILoggerProvider
         {
             var now = DateTimeOffset.UtcNow;
             EnsureWriterForDate(now.DateTime);
-            
+
             if (_writer == null)
                 return;
 
@@ -64,9 +65,9 @@ public sealed class FileLoggerProvider : ILoggerProvider
             // Format: 2024-12-02T15:30:45.123Z (Z indicates UTC)
             var timestamp = now.ToString("yyyy-MM-ddTHH:mm:ss.fff") + "Z";
             var shortCategory = GetShortCategoryName(categoryName);
-            
+
             _writer.WriteLine($"[{timestamp}] [{levelString}] [{shortCategory}] {message}");
-            
+
             if (exception != null)
             {
                 _writer.WriteLine($"  Exception: {exception.GetType().Name}: {exception.Message}");
@@ -78,7 +79,7 @@ public sealed class FileLoggerProvider : ILoggerProvider
                     }
                 }
             }
-            
+
             _writer.Flush();
         }
     }
@@ -93,22 +94,23 @@ public sealed class FileLoggerProvider : ILoggerProvider
     private void EnsureWriterForDate(DateTime date)
     {
         var dateOnly = date.Date;
-        
+
         if (_currentDate == dateOnly && _writer != null)
+            // Writer already set for today
             return;
-        
+
         // Close existing writer and null it before creating new one
         // This prevents ObjectDisposedException if new writer creation fails
         _writer?.Dispose();
         _writer = null;
-        
+
         try
         {
             // Create new file for today with PID
             _currentDate = dateOnly;
             var fileName = $"{_filePrefix}-{dateOnly:yyyy-MM-dd}-{_processId}.log";
             _currentFilePath = Path.Combine(_logDirectory, fileName);
-            
+
             // Open file in append mode
             _writer = new StreamWriter(
                 new FileStream(_currentFilePath, FileMode.Append, FileAccess.Write, FileShare.Read),
@@ -116,7 +118,7 @@ public sealed class FileLoggerProvider : ILoggerProvider
             {
                 AutoFlush = false
             };
-            
+
             // Write header for new log file with ISO 8601 timestamp
             _writer.WriteLine($"=== Log started at {DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ss.fff}Z (PID: {_processId}) ===");
             _writer.Flush();
@@ -133,7 +135,7 @@ public sealed class FileLoggerProvider : ILoggerProvider
     public void Dispose()
     {
         _loggers.Clear();
-        
+
         lock (_lock)
         {
             _writer?.Dispose();
@@ -171,4 +173,3 @@ internal sealed class FileLogger : ILogger
         _provider.WriteLog(_categoryName, logLevel, message, exception);
     }
 }
-

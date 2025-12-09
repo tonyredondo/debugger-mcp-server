@@ -59,21 +59,21 @@ public class PerformanceTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
         // Create analyzer and perform comprehensive performance analysis
         var analyzer = new PerformanceAnalyzer(manager);
         var result = await analyzer.AnalyzePerformanceAsync();
-        
+
         // Include watch evaluations if enabled and dump has watches
         if (includeWatches && !string.IsNullOrEmpty(session.CurrentDumpId))
         {
@@ -84,7 +84,7 @@ public class PerformanceTools(
                 result.WatchResults = await evaluator.EvaluateAllAsync(sanitizedUserId, session.CurrentDumpId);
             }
         }
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(result, JsonOptions);
     }
@@ -110,20 +110,20 @@ public class PerformanceTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
         // Create analyzer and perform CPU analysis
         var analyzer = new PerformanceAnalyzer(manager);
         var result = await analyzer.AnalyzeCpuUsageAsync();
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(result, JsonOptions);
     }
@@ -149,20 +149,20 @@ public class PerformanceTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
         // Create analyzer and perform allocation analysis
         var analyzer = new PerformanceAnalyzer(manager);
         var result = await analyzer.AnalyzeAllocationsAsync();
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(result, JsonOptions);
     }
@@ -189,20 +189,20 @@ public class PerformanceTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
         // Create analyzer and perform GC analysis
         var analyzer = new PerformanceAnalyzer(manager);
         var result = await analyzer.AnalyzeGcAsync();
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(result, JsonOptions);
     }
@@ -228,20 +228,20 @@ public class PerformanceTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
         // Create analyzer and perform contention analysis
         var analyzer = new PerformanceAnalyzer(manager);
         var result = await analyzer.AnalyzeContentionAsync();
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(result, JsonOptions);
     }

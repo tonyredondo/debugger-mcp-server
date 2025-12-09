@@ -38,7 +38,6 @@ public class WatchEvaluatorTests : IDisposable
         }
     }
 
-    #region Constructor Tests
 
     [Fact]
     public void Constructor_WithNullManager_ThrowsArgumentNullException()
@@ -70,9 +69,7 @@ public class WatchEvaluatorTests : IDisposable
         Assert.NotNull(evaluator);
     }
 
-    #endregion
 
-    #region DetectWatchType Tests
 
     [Theory]
     [InlineData("0x12345678", WatchType.MemoryAddress)]
@@ -149,9 +146,7 @@ public class WatchEvaluatorTests : IDisposable
         Assert.Equal(WatchType.Expression, result);
     }
 
-    #endregion
 
-    #region EvaluateAsync Tests
 
     [Fact]
     public async Task EvaluateAsync_WhenDumpNotOpen_ReturnsError()
@@ -182,11 +177,11 @@ public class WatchEvaluatorTests : IDisposable
             .Returns("00000000`12345678  Hello World");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Id = "watch-1",
             Expression = "0x12345678",
-            Type = WatchType.MemoryAddress 
+            Type = WatchType.MemoryAddress
         };
 
         // Act
@@ -208,10 +203,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "0x12345678",
-            Type = WatchType.MemoryAddress 
+            Type = WatchType.MemoryAddress
         };
 
         // Act
@@ -231,10 +226,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "0x12345678",
-            Type = WatchType.MemoryAddress 
+            Type = WatchType.MemoryAddress
         };
 
         // Act
@@ -254,10 +249,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "0x12345678",
-            Type = WatchType.Object 
+            Type = WatchType.Object
         };
 
         // Act
@@ -309,9 +304,7 @@ public class WatchEvaluatorTests : IDisposable
         Assert.NotEqual(originalTime, watch.LastEvaluatedAt);
     }
 
-    #endregion
 
-    #region EvaluateAllAsync Tests
 
     [Fact]
     public async Task EvaluateAllAsync_WithNoWatches_ReturnsEmptyReport()
@@ -384,8 +377,8 @@ public class WatchEvaluatorTests : IDisposable
     public async Task EvaluateAllAsync_GeneratesInsightsForNullValues()
     {
         // Arrange
-        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression 
-        { 
+        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression
+        {
             Expression = "ptr",
             Description = "Important pointer"
         });
@@ -405,9 +398,7 @@ public class WatchEvaluatorTests : IDisposable
         Assert.Contains(report.Insights, i => i.Contains("NULL"));
     }
 
-    #endregion
 
-    #region BuildCommand Tests - Additional Coverage
 
     [Fact]
     public async Task EvaluateAsync_WithVariable_WinDbg_WithModuleSymbol_UsesDt()
@@ -419,10 +410,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "ntdll!LdrpLoaderLock",
-            Type = WatchType.Variable 
+            Type = WatchType.Variable
         };
 
         // Act
@@ -442,10 +433,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "myModule`mySymbol",
-            Type = WatchType.Variable 
+            Type = WatchType.Variable
         };
 
         // Act
@@ -465,10 +456,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "myLocalVar",
-            Type = WatchType.Variable 
+            Type = WatchType.Variable
         };
 
         // Act
@@ -488,10 +479,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("object data");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "!do 0x12345678",
-            Type = WatchType.Object 
+            Type = WatchType.Object
         };
 
         // Act
@@ -511,10 +502,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("object data");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "!dumpobj 0x12345678",
-            Type = WatchType.Object 
+            Type = WatchType.Object
         };
 
         // Act
@@ -534,10 +525,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("object data");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "12345678",
-            Type = WatchType.Object 
+            Type = WatchType.Object
         };
 
         // Act
@@ -557,10 +548,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "!threads",
-            Type = WatchType.Expression 
+            Type = WatchType.Expression
         };
 
         // Act
@@ -580,10 +571,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = ".effmach",
-            Type = WatchType.Expression 
+            Type = WatchType.Expression
         };
 
         // Act
@@ -603,10 +594,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "sos clrstack",
-            Type = WatchType.Expression 
+            Type = WatchType.Expression
         };
 
         // Act
@@ -626,10 +617,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("result");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "x + y",
-            Type = WatchType.Expression 
+            Type = WatchType.Expression
         };
 
         // Act
@@ -649,10 +640,10 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Setup(m => m.ExecuteCommand(It.IsAny<string>())).Returns("memory data");
 
         var evaluator = new WatchEvaluator(mockManager.Object, _watchStore);
-        var watch = new WatchExpression 
-        { 
+        var watch = new WatchExpression
+        {
             Expression = "12345678",
-            Type = WatchType.MemoryAddress 
+            Type = WatchType.MemoryAddress
         };
 
         // Act
@@ -662,17 +653,15 @@ public class WatchEvaluatorTests : IDisposable
         mockManager.Verify(m => m.ExecuteCommand(It.Is<string>(cmd => cmd.Contains("0x12345678"))), Times.Once);
     }
 
-    #endregion
 
-    #region Insight Generation Tests
 
     [Fact]
     public async Task EvaluateAllAsync_GeneratesInsightsForExceptionObject()
     {
         // Arrange - Use WatchType.Object which triggers exception insight
         // Value must contain "exception" but NOT contain "null" (which would trigger NULL insight first)
-        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression 
-        { 
+        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression
+        {
             Expression = "!do 0x12345678",
             Type = WatchType.Object,
             Description = "Exception object"
@@ -699,8 +688,8 @@ public class WatchEvaluatorTests : IDisposable
     public async Task EvaluateAllAsync_GeneratesInsightsForUninitializedMemory()
     {
         // Arrange - Pattern needs to match 0x[cC][dD]{6,} (c followed by 6+ d's)
-        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression 
-        { 
+        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression
+        {
             Expression = "0x12345678",
             Type = WatchType.MemoryAddress,
             Description = "Memory block"
@@ -727,8 +716,8 @@ public class WatchEvaluatorTests : IDisposable
     public async Task EvaluateAllAsync_GeneratesInsightsForFreedMemory()
     {
         // Arrange - Pattern needs to match 0x[dD]{8,}
-        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression 
-        { 
+        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression
+        {
             Expression = "0x12345678",
             Type = WatchType.MemoryAddress,
             Description = "Memory block"
@@ -755,8 +744,8 @@ public class WatchEvaluatorTests : IDisposable
     public async Task EvaluateAllAsync_GeneratesInsightsForFreedHeapMemory()
     {
         // Arrange - Pattern needs to match 0x[fF][eE][eE][eE]
-        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression 
-        { 
+        await _watchStore.AddWatchAsync("user1", "dump1", new WatchExpression
+        {
             Expression = "0x12345678",
             Type = WatchType.MemoryAddress,
             Description = "Memory block"
@@ -803,6 +792,5 @@ public class WatchEvaluatorTests : IDisposable
         Assert.Contains(report.Insights, i => i.Contains("failure rate"));
     }
 
-    #endregion
 }
 

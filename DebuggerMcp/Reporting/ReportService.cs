@@ -66,9 +66,9 @@ public class ReportService
     /// <param name="debuggerType">The debugger type.</param>
     /// <returns>The generated report content.</returns>
     public string GenerateReport(
-        CrashAnalysisResult analysis, 
-        ReportFormat format, 
-        string dumpId, 
+        CrashAnalysisResult analysis,
+        ReportFormat format,
+        string dumpId,
         string userId,
         string debuggerType)
     {

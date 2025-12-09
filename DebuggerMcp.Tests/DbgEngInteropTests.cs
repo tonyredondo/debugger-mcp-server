@@ -11,7 +11,6 @@ namespace DebuggerMcp.Tests;
 /// </remarks>
 public class DbgEngInteropTests
 {
-    #region Constant Tests
 
     /// <summary>
     /// Tests that output mask constants have the correct values.
@@ -68,9 +67,7 @@ public class DbgEngInteropTests
         Assert.Equal(0x00000004u, DbgEngConstants.DEBUG_EXECUTE_NO_REPEAT);
     }
 
-    #endregion
 
-    #region Structure Tests
 
     /// <summary>
     /// Tests that DEBUG_STACK_FRAME structure has the expected layout.
@@ -234,9 +231,7 @@ public class DbgEngInteropTests
         Assert.Equal(0xC0000005u, filter.ExceptionCode);
     }
 
-    #endregion
 
-    #region GUID Tests
 
     /// <summary>
     /// Tests that the IDebugClient GUID is correct.
@@ -255,5 +250,4 @@ public class DbgEngInteropTests
         Assert.Equal(expectedGuid, actualGuid);
     }
 
-    #endregion
 }

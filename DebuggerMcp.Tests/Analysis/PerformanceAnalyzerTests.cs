@@ -14,7 +14,6 @@ namespace DebuggerMcp.Tests.Analysis;
 /// </summary>
 public class PerformanceAnalyzerTests
 {
-    #region Constructor Tests
 
     [Fact]
     public void Constructor_WithNullManager_ThrowsArgumentNullException()
@@ -36,9 +35,7 @@ public class PerformanceAnalyzerTests
         Assert.NotNull(analyzer);
     }
 
-    #endregion
 
-    #region AnalyzePerformanceAsync Tests
 
     [Fact]
     public async Task AnalyzePerformanceAsync_WithWinDbg_ReturnsCompleteResult()
@@ -77,9 +74,7 @@ public class PerformanceAnalyzerTests
         Assert.NotNull(result.AllocationAnalysis);
     }
 
-    #endregion
 
-    #region AnalyzeCpuUsageAsync Tests
 
     [Fact]
     public async Task AnalyzeCpuUsageAsync_ParsesRunawayOutput()
@@ -167,9 +162,7 @@ Kernel Mode Time
         Assert.NotEmpty(result.PotentialSpinLoops);
     }
 
-    #endregion
 
-    #region AnalyzeAllocationsAsync Tests
 
     [Fact]
     public async Task AnalyzeAllocationsAsync_ParsesDumpHeapStats()
@@ -270,9 +263,7 @@ Total 1000 objects, 1000000 bytes");
         Assert.Contains(result.LargeObjectAllocations, a => a.TypeName == "System.Byte[]");
     }
 
-    #endregion
 
-    #region AnalyzeGcAsync Tests
 
     [Fact]
     public async Task AnalyzeGcAsync_ParsesEeheapOutput()
@@ -363,9 +354,7 @@ Workstation GC");
         Assert.Contains(result.Recommendations, r => r.Contains("Finalizer thread"));
     }
 
-    #endregion
 
-    #region AnalyzeContentionAsync Tests
 
     [Fact]
     public async Task AnalyzeContentionAsync_ParsesSyncBlocks()
@@ -472,9 +461,7 @@ OS Thread Id: 0x3333
         Assert.True(result.HighContention);
     }
 
-    #endregion
 
-    #region ToJson Tests
 
     [Fact]
     public void ToJson_WithValidResult_ReturnsValidJson()
@@ -510,9 +497,7 @@ OS Thread Id: 0x3333
         Assert.Equal("WinDbg", deserialized.DebuggerType);
     }
 
-    #endregion
 
-    #region Helper Methods
 
     private static Mock<IDebuggerManager> CreateMockWinDbgManager()
     {
@@ -569,7 +554,6 @@ OS Thread Id: 0x3333
         return mock;
     }
 
-    #endregion
 }
 
 /// <summary>

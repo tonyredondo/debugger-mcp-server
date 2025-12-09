@@ -12,32 +12,32 @@ public class CachedGitHubRelease
     /// Gets or sets the release ID.
     /// </summary>
     public long Id { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the tag name.
     /// </summary>
     public string TagName { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the release name.
     /// </summary>
     public string Name { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the target commit SHA.
     /// </summary>
     public string? TargetCommitish { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the release URL.
     /// </summary>
     public string HtmlUrl { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets when the release was published.
     /// </summary>
     public DateTime? PublishedAt { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the asset names and download URLs.
     /// </summary>
@@ -53,7 +53,7 @@ public class GitHubReleaseCacheEntry
     /// Gets or sets when this entry was cached.
     /// </summary>
     public DateTime CachedAt { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the release info (null if not found).
     /// </summary>
@@ -68,12 +68,12 @@ public class GitHubReleasesCache
 {
     private const string CacheFileName = "github_releases_cache.json";
     private const int CacheExpirationHours = 1; // Cache entries expire after 1 hour
-    
+
     private readonly string _cacheFilePath;
     private Dictionary<string, GitHubReleaseCacheEntry> _releasesByVersion = new();
     private Dictionary<string, GitHubReleaseCacheEntry> _releasesByCommit = new();
     private Dictionary<string, string> _downloadedSymbols = new(); // key: "{version}/{platform}", value: directory path
-    
+
     /// <summary>
     /// Creates a new GitHub releases cache.
     /// </summary>
@@ -84,7 +84,7 @@ public class GitHubReleasesCache
         _cacheFilePath = Path.Combine(cacheDirectory, CacheFileName);
         Load();
     }
-    
+
     /// <summary>
     /// Loads the cache from disk.
     /// </summary>
@@ -101,7 +101,7 @@ public class GitHubReleasesCache
                     _releasesByVersion = data.ReleasesByVersion ?? new();
                     _releasesByCommit = data.ReleasesByCommit ?? new();
                     _downloadedSymbols = data.DownloadedSymbols ?? new();
-                    
+
                     // Clean expired entries
                     CleanExpiredEntries();
                 }
@@ -115,7 +115,7 @@ public class GitHubReleasesCache
             _downloadedSymbols = new();
         }
     }
-    
+
     /// <summary>
     /// Saves the cache to disk.
     /// </summary>
@@ -129,7 +129,7 @@ public class GitHubReleasesCache
                 ReleasesByCommit = _releasesByCommit,
                 DownloadedSymbols = _downloadedSymbols
             };
-            
+
             var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
             File.WriteAllText(_cacheFilePath, json);
         }
@@ -138,35 +138,35 @@ public class GitHubReleasesCache
             // Ignore cache save errors
         }
     }
-    
+
     /// <summary>
     /// Cleans expired cache entries.
     /// </summary>
     private void CleanExpiredEntries()
     {
         var cutoff = DateTime.UtcNow.AddHours(-CacheExpirationHours);
-        
+
         var expiredVersionKeys = _releasesByVersion
             .Where(kvp => kvp.Value.CachedAt < cutoff)
             .Select(kvp => kvp.Key)
             .ToList();
-        
+
         foreach (var key in expiredVersionKeys)
         {
             _releasesByVersion.Remove(key);
         }
-        
+
         var expiredCommitKeys = _releasesByCommit
             .Where(kvp => kvp.Value.CachedAt < cutoff)
             .Select(kvp => kvp.Key)
             .ToList();
-        
+
         foreach (var key in expiredCommitKeys)
         {
             _releasesByCommit.Remove(key);
         }
     }
-    
+
     /// <summary>
     /// Tries to get a cached release by version.
     /// </summary>
@@ -183,11 +183,11 @@ public class GitHubReleasesCache
             release = entry.Release != null ? ConvertToReleaseInfo(entry.Release) : null;
             return true;
         }
-        
+
         release = null;
         return false;
     }
-    
+
     /// <summary>
     /// Sets a cached release by version.
     /// </summary>
@@ -200,7 +200,7 @@ public class GitHubReleasesCache
             Release = release != null ? ConvertToCachedRelease(release) : null
         };
     }
-    
+
     /// <summary>
     /// Tries to get a cached release by commit SHA.
     /// </summary>
@@ -217,11 +217,11 @@ public class GitHubReleasesCache
             release = entry.Release != null ? ConvertToReleaseInfo(entry.Release) : null;
             return true;
         }
-        
+
         release = null;
         return false;
     }
-    
+
     /// <summary>
     /// Sets a cached release by commit SHA.
     /// </summary>
@@ -234,7 +234,7 @@ public class GitHubReleasesCache
             Release = release != null ? ConvertToCachedRelease(release) : null
         };
     }
-    
+
     /// <summary>
     /// Checks if symbols have already been downloaded for a version/platform combo.
     /// </summary>
@@ -245,11 +245,11 @@ public class GitHubReleasesCache
         {
             return Directory.Exists(directory);
         }
-        
+
         directory = null;
         return false;
     }
-    
+
     /// <summary>
     /// Records that symbols have been downloaded.
     /// </summary>
@@ -258,7 +258,7 @@ public class GitHubReleasesCache
         var key = $"{version}/{platformSuffix}";
         _downloadedSymbols[key] = directory;
     }
-    
+
     /// <summary>
     /// Converts a GitHubReleaseInfo to a CachedGitHubRelease.
     /// </summary>
@@ -275,7 +275,7 @@ public class GitHubReleasesCache
             Assets = release.Assets.ToDictionary(a => a.Name, a => a.BrowserDownloadUrl)
         };
     }
-    
+
     /// <summary>
     /// Converts a CachedGitHubRelease to a GitHubReleaseInfo.
     /// </summary>
@@ -290,7 +290,7 @@ public class GitHubReleasesCache
             HtmlUrl = cached.HtmlUrl,
             PublishedAt = cached.PublishedAt
         };
-        
+
         foreach (var (name, url) in cached.Assets)
         {
             release.Assets.Add(new GitHubReleaseAsset
@@ -299,10 +299,10 @@ public class GitHubReleasesCache
                 BrowserDownloadUrl = url
             });
         }
-        
+
         return release;
     }
-    
+
     /// <summary>
     /// Cache data structure for serialization.
     /// </summary>
@@ -310,10 +310,10 @@ public class GitHubReleasesCache
     {
         [JsonPropertyName("releasesByVersion")]
         public Dictionary<string, GitHubReleaseCacheEntry>? ReleasesByVersion { get; set; }
-        
+
         [JsonPropertyName("releasesByCommit")]
         public Dictionary<string, GitHubReleaseCacheEntry>? ReleasesByCommit { get; set; }
-        
+
         [JsonPropertyName("downloadedSymbols")]
         public Dictionary<string, string>? DownloadedSymbols { get; set; }
     }

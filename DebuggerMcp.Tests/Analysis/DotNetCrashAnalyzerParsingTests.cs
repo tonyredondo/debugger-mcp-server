@@ -283,8 +283,9 @@ Ready for finalization 10 objects";
 
         _analyzer.TestUpdateDotNetSummary(result);
 
-        Assert.NotEmpty(result.Summary!.Description);
-        Assert.Contains("NullReferenceException", result.Summary!.Description);
+        Assert.NotNull(result.Summary);
+        Assert.False(string.IsNullOrWhiteSpace(result.Summary.Description));
+        Assert.Contains("NullReferenceException", result.Summary.Description);
     }
 
     [Fact]
@@ -295,8 +296,9 @@ Ready for finalization 10 objects";
 
         _analyzer.TestUpdateDotNetSummary(result);
 
-        Assert.NotEmpty(result.Summary!.Description);
-        Assert.Contains("8.0.0", result.Summary!.Description);
+        Assert.NotNull(result.Summary);
+        Assert.False(string.IsNullOrWhiteSpace(result.Summary.Description));
+        Assert.Contains("8.0.0", result.Summary.Description);
     }
 
     [Fact]
@@ -313,8 +315,9 @@ Ready for finalization 10 objects";
 
         _analyzer.TestUpdateDotNetSummary(result);
 
-        Assert.NotEmpty(result.Summary!.Description);
-        Assert.Contains("MEMORY", result.Summary!.Description);
+        Assert.NotNull(result.Summary);
+        Assert.False(string.IsNullOrWhiteSpace(result.Summary.Description));
+        Assert.Contains("MEMORY", result.Summary.Description);
     }
 
     [Fact]
@@ -325,8 +328,9 @@ Ready for finalization 10 objects";
 
         _analyzer.TestUpdateDotNetSummary(result);
 
-        Assert.NotEmpty(result.Summary!.Description);
-        Assert.Contains("Async deadlock", result.Summary!.Description);
+        Assert.NotNull(result.Summary);
+        Assert.False(string.IsNullOrWhiteSpace(result.Summary.Description));
+        Assert.Contains("Async deadlock", result.Summary.Description);
     }
 
     [Fact]
@@ -347,4 +351,3 @@ Ready for finalization 10 objects";
         _analyzer.TestUpdateDotNetSummary(result);
     }
 }
-

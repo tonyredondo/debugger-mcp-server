@@ -17,9 +17,9 @@ public class AzurePipelinesResolver : IDisposable
     private readonly bool _ownsHttpClient;
     private AzurePipelinesCache _cache;
     private bool _cacheModified;
-    
+
     private const string UserAgent = "DebuggerMcp/1.0";
-    
+
     /// <summary>
     /// Initializes a new instance of the <see cref="AzurePipelinesResolver"/> class.
     /// </summary>
@@ -34,7 +34,7 @@ public class AzurePipelinesResolver : IDisposable
         _cacheDirectory = cacheDirectory ?? DatadogTraceSymbolsConfig.GetCacheDirectory();
         _logger = logger;
         _cache = AzurePipelinesCache.Load(_cacheDirectory);
-        
+
         if (httpClient != null)
         {
             _httpClient = httpClient;
@@ -49,7 +49,7 @@ public class AzurePipelinesResolver : IDisposable
             _ownsHttpClient = true;
         }
     }
-    
+
     /// <summary>
     /// Finds a build by commit SHA, with fallback to version tag lookup.
     /// </summary>
@@ -75,13 +75,15 @@ public class AzurePipelinesResolver : IDisposable
                 // Cached "not found" result - but if we have a version, skip commit lookup and go straight to tag lookup
                 if (!string.IsNullOrEmpty(version))
                 {
-                    _logger?.LogInformation("Cache has null for commit {Commit}, but we have version {Version} - skipping to tag lookup", 
+                    // We already know commit lookups failed, so jump to the cheaper tag path when a version is provided
+                    _logger?.LogInformation("Cache has null for commit {Commit}, but we have version {Version} - skipping to tag lookup",
                         DatadogTraceSymbolsConfig.GetShortSha(commitSha), version);
                     skipCommitLookup = true;
                     // Fall through to tag lookup below
                 }
                 else
                 {
+                    // Preserve negative cache result when we have no other hint
                     _logger?.LogDebug("Cache hit (null) for build: {Org}/{Project}/{Commit}", organization, project, DatadogTraceSymbolsConfig.GetShortSha(commitSha));
                     return null;
                 }
@@ -92,9 +94,10 @@ public class AzurePipelinesResolver : IDisposable
                 var cachedSv = cachedBuild.SourceVersion ?? "";
                 var isMatch = cachedSv.StartsWith(commitSha, StringComparison.OrdinalIgnoreCase) ||
                              commitSha.StartsWith(cachedSv, StringComparison.OrdinalIgnoreCase);
-                
+
                 if (isMatch)
                 {
+                    // Return cached build when SHA aligns to avoid redundant API calls
                     _logger?.LogDebug("Cache hit for build {Id}: {Org}/{Project}/{Commit}", cachedBuild.Id, organization, project, DatadogTraceSymbolsConfig.GetShortSha(commitSha));
                     return cachedBuild;
                 }
@@ -108,12 +111,13 @@ public class AzurePipelinesResolver : IDisposable
                 }
             }
         }
-        
+
         // Skip directly to tag lookup if we know commit lookup won't find anything
         if (skipCommitLookup)
         {
             if (!string.IsNullOrEmpty(version))
             {
+                // Tag lookup is the only remaining signal when commit lookup is known to fail
                 _logger?.LogInformation("Trying version tag lookup for v{Version}", version);
                 var tagBuild = await FindBuildByVersionTagAsync(organization, project, version, commitSha, ct);
                 if (tagBuild != null)
@@ -126,44 +130,45 @@ public class AzurePipelinesResolver : IDisposable
             }
             return null;
         }
-        
+
         var url = $"{DatadogTraceSymbolsConfig.AzureDevOpsBaseUrl}/{organization}/{project}/_apis/build/builds" +
                   $"?sourceVersion={commitSha}&api-version={DatadogTraceSymbolsConfig.ApiVersion}";
-        
+
         try
         {
             using var request = CreateRequest(HttpMethod.Get, url);
             _logger?.LogDebug("Fetching build for commit: {Url}", url);
-            
+
             var response = await _httpClient.SendAsync(request, ct);
-            
+
             if (!response.IsSuccessStatusCode)
             {
                 _logger?.LogWarning("Azure DevOps API returned {Status} for {Url}", response.StatusCode, url);
-                
+
                 // Cache null result to avoid repeated failed lookups
                 _cache.SetBuild(organization, project, commitSha, null);
                 _cacheModified = true;
                 return null;
             }
-            
+
             var json = await response.Content.ReadAsStringAsync(ct);
             var build = ParseBuildResponse(json, organization, project, commitSha);
-            
+
             // Cache the result
             _cache.SetBuild(organization, project, commitSha, build);
             _cacheModified = true;
-            
+
             if (build != null)
             {
                 _logger?.LogInformation("Found build {BuildNumber} (ID: {BuildId}) for commit {Commit}",
                     build.BuildNumber, build.Id, DatadogTraceSymbolsConfig.GetShortSha(commitSha));
                 return build;
             }
-            
+
             // Fallback: Try to find build by version tag (e.g., v3.31.0)
             if (!string.IsNullOrEmpty(version))
             {
+                // Sometimes commits are not in build history; use release tags as a hint
                 _logger?.LogInformation("No direct commit match, trying version tag lookup for v{Version}", version);
                 var tagBuild = await FindBuildByVersionTagAsync(organization, project, version, commitSha, ct);
                 if (tagBuild != null)
@@ -174,7 +179,7 @@ public class AzurePipelinesResolver : IDisposable
                     return tagBuild;
                 }
             }
-            
+
             _logger?.LogDebug("No build found for commit {Commit}", DatadogTraceSymbolsConfig.GetShortSha(commitSha));
             return null;
         }
@@ -194,7 +199,7 @@ public class AzurePipelinesResolver : IDisposable
             return null;
         }
     }
-    
+
     /// <summary>
     /// Finds a build by version tag (e.g., v3.31.0).
     /// This is a fallback when the commit SHA lookup doesn't return a direct match.
@@ -221,62 +226,63 @@ public class AzurePipelinesResolver : IDisposable
             $"refs/heads/v{version}",
             // NOTE: Do NOT add refs/heads/master - it returns latest builds, not version-specific
         };
-        
+
         foreach (var tag in tagFormats)
         {
             var url = $"{DatadogTraceSymbolsConfig.AzureDevOpsBaseUrl}/{organization}/{project}/_apis/build/builds" +
                       $"?branchName={Uri.EscapeDataString(tag)}&$top=5&api-version={DatadogTraceSymbolsConfig.ApiVersion}";
-            
+
             try
             {
                 using var request = CreateRequest(HttpMethod.Get, url);
                 _logger?.LogInformation("Trying version tag lookup: {Tag}", tag);
-                
+
                 var response = await _httpClient.SendAsync(request, ct);
                 if (!response.IsSuccessStatusCode)
                 {
                     _logger?.LogInformation("Tag {Tag} returned {Status}", tag, response.StatusCode);
                     continue;
                 }
-                
+
                 var json = await response.Content.ReadAsStringAsync(ct);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
-                
+
                 if (!root.TryGetProperty("value", out var builds) || builds.GetArrayLength() == 0)
                 {
                     _logger?.LogInformation("Tag {Tag} returned no builds", tag);
                     continue;
                 }
-                
+
                 _logger?.LogInformation("Tag {Tag} returned {Count} builds", tag, builds.GetArrayLength());
-                
+
                 // Find a build that matches our expected commit (or any successful build for this tag)
                 foreach (var candidate in builds.EnumerateArray())
                 {
                     var candidateSv = candidate.TryGetProperty("sourceVersion", out var svProp) ? svProp.GetString() : null;
                     var candidateResult = candidate.TryGetProperty("result", out var resProp) ? resProp.GetString() : null;
                     var candidateId = candidate.TryGetProperty("id", out var idProp) ? idProp.GetInt32() : 0;
-                    
-                    _logger?.LogDebug("Tag build candidate: ID={Id}, Result={Result}, SourceVersion={Sv}", 
+
+                    _logger?.LogDebug("Tag build candidate: ID={Id}, Result={Result}, SourceVersion={Sv}",
                         candidateId, candidateResult, DatadogTraceSymbolsConfig.GetShortSha(candidateSv));
-                    
+
                     // Check if commit matches
                     var commitMatches = !string.IsNullOrEmpty(candidateSv) && !string.IsNullOrEmpty(expectedCommitSha) &&
                                        (candidateSv.StartsWith(expectedCommitSha, StringComparison.OrdinalIgnoreCase) ||
                                         expectedCommitSha.StartsWith(candidateSv, StringComparison.OrdinalIgnoreCase));
-                    
+
                     // Prefer builds that match commit, but accept succeeded builds for this tag
                     if (commitMatches || candidateResult == "succeeded")
                     {
-                        _logger?.LogInformation("Found build via tag {Tag}: ID={Id}, SourceVersion={Sv}", 
+                        // We return as soon as we find a credible build rather than scanning all candidates
+                        _logger?.LogInformation("Found build via tag {Tag}: ID={Id}, SourceVersion={Sv}",
                             tag, candidateId, DatadogTraceSymbolsConfig.GetShortSha(candidateSv));
-                        
+
                         // Parse and return this build
                         return ParseSingleBuild(candidate, organization, project);
                     }
                 }
-                
+
                 _logger?.LogInformation("Tag {Tag} builds didn't match expected commit or weren't succeeded", tag);
             }
             catch (Exception ex)
@@ -284,12 +290,12 @@ public class AzurePipelinesResolver : IDisposable
                 _logger?.LogWarning(ex, "Error trying tag {Tag}", tag);
             }
         }
-        
+
         _logger?.LogWarning("Version tag lookup exhausted all formats without finding a matching build");
-        
+
         return null;
     }
-    
+
     /// <summary>
     /// Parses a single build from a JSON element.
     /// </summary>
@@ -304,16 +310,16 @@ public class AzurePipelinesResolver : IDisposable
             SourceVersion = buildElement.TryGetProperty("sourceVersion", out var sv) ? sv.GetString() ?? "" : "",
             SourceBranch = buildElement.TryGetProperty("sourceBranch", out var sb) ? sb.GetString() ?? "" : "",
         };
-        
+
         if (buildElement.TryGetProperty("finishTime", out var ft) && ft.ValueKind != JsonValueKind.Null)
             buildInfo.FinishTime = ft.GetDateTime();
-        
+
         if (buildElement.TryGetProperty("queueTime", out var qt) && qt.ValueKind != JsonValueKind.Null)
             buildInfo.QueueTime = qt.GetDateTime();
-        
+
         if (buildElement.TryGetProperty("startTime", out var stt) && stt.ValueKind != JsonValueKind.Null)
             buildInfo.StartTime = stt.GetDateTime();
-        
+
         // Extract web URL from _links
         if (buildElement.TryGetProperty("_links", out var links) &&
             links.TryGetProperty("web", out var web) &&
@@ -325,10 +331,10 @@ public class AzurePipelinesResolver : IDisposable
         {
             buildInfo.WebUrl = $"https://dev.azure.com/{organization}/{project}/_build/results?buildId={buildInfo.Id}";
         }
-        
+
         return buildInfo;
     }
-    
+
     /// <summary>
     /// Lists artifacts for a build.
     /// </summary>
@@ -346,35 +352,36 @@ public class AzurePipelinesResolver : IDisposable
         // Check cache first
         if (_cache.TryGetArtifacts(organization, project, buildId, out var cachedArtifacts) && cachedArtifacts != null)
         {
+            // Avoid API round trip when cached data is still fresh
             _logger?.LogDebug("Cache hit for artifacts: {Org}/{Project}/{BuildId}", organization, project, buildId);
             return cachedArtifacts;
         }
-        
+
         var url = $"{DatadogTraceSymbolsConfig.AzureDevOpsBaseUrl}/{organization}/{project}/_apis/build/builds/{buildId}/artifacts" +
                   $"?api-version={DatadogTraceSymbolsConfig.ApiVersion}";
-        
+
         try
         {
             using var request = CreateRequest(HttpMethod.Get, url);
             _logger?.LogDebug("Fetching artifacts for build {BuildId}: {Url}", buildId, url);
-            
+
             var response = await _httpClient.SendAsync(request, ct);
-            
+
             if (!response.IsSuccessStatusCode)
             {
                 _logger?.LogWarning("Azure DevOps API returned {Status} for artifacts: {Url}", response.StatusCode, url);
                 return new List<AzurePipelinesArtifact>();
             }
-            
+
             var json = await response.Content.ReadAsStringAsync(ct);
             var artifacts = ParseArtifactsResponse(json);
-            
+
             // Cache the result
             _cache.SetArtifacts(organization, project, buildId, artifacts);
             _cacheModified = true;
-            
+
             _logger?.LogInformation("Found {Count} artifacts for build {BuildId}", artifacts.Count, buildId);
-            
+
             return artifacts;
         }
         catch (Exception ex)
@@ -383,7 +390,7 @@ public class AzurePipelinesResolver : IDisposable
             return new List<AzurePipelinesArtifact>();
         }
     }
-    
+
     /// <summary>
     /// Downloads an artifact to the specified directory.
     /// </summary>
@@ -404,40 +411,42 @@ public class AzurePipelinesResolver : IDisposable
     {
         var url = $"{DatadogTraceSymbolsConfig.AzureDevOpsBaseUrl}/{organization}/{project}/_apis/build/builds/{buildId}/artifacts" +
                   $"?artifactName={Uri.EscapeDataString(artifactName)}&$format=zip&api-version={DatadogTraceSymbolsConfig.ApiVersion}";
-        
+
         try
         {
             Directory.CreateDirectory(outputDirectory);
             var zipPath = Path.Combine(outputDirectory, $"{artifactName}.zip");
-            
+
             using var request = CreateRequest(HttpMethod.Get, url);
             _logger?.LogDebug("Downloading artifact {Name}: {Url}", artifactName, url);
-            
+
             var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
-            
+
             if (!response.IsSuccessStatusCode)
             {
+                // Stop early when the artifact is missing or access is denied
                 _logger?.LogWarning("Failed to download artifact {Name}: {Status}", artifactName, response.StatusCode);
                 return null;
             }
-            
+
             // Check content length
             var contentLength = response.Content.Headers.ContentLength;
             var maxSize = DatadogTraceSymbolsConfig.GetMaxArtifactSize();
-            
+
             if (contentLength > maxSize)
             {
-                _logger?.LogWarning("Artifact {Name} too large: {Size}MB > {Max}MB", 
+                // Avoid filling disk with unexpectedly large artifacts
+                _logger?.LogWarning("Artifact {Name} too large: {Size}MB > {Max}MB",
                     artifactName, contentLength / 1024 / 1024, maxSize / 1024 / 1024);
                 return null;
             }
-            
+
             await using var fileStream = File.Create(zipPath);
             await response.Content.CopyToAsync(fileStream, ct);
-            
-            _logger?.LogInformation("Downloaded artifact {Name} ({Size}KB) to {Path}", 
+
+            _logger?.LogInformation("Downloaded artifact {Name} ({Size}KB) to {Path}",
                 artifactName, new FileInfo(zipPath).Length / 1024, zipPath);
-            
+
             return zipPath;
         }
         catch (Exception ex)
@@ -446,7 +455,7 @@ public class AzurePipelinesResolver : IDisposable
             return null;
         }
     }
-    
+
     /// <summary>
     /// Downloads Datadog symbols for a specific platform/architecture.
     /// Downloads multiple artifacts and merges them into a unified symbol directory.
@@ -470,12 +479,13 @@ public class AzurePipelinesResolver : IDisposable
     {
         var result = new DatadogSymbolDownloadResult();
         var platformSuffix = DatadogArtifactMapper.GetPlatformSuffix(platform);
-        
+
         // Check if already downloaded (only if not using override build ID)
-        if (overrideBuildId == null && 
-            _cache.HasDownloadedSymbols(commitSha, platformSuffix, out var existingDir) && 
+        if (overrideBuildId == null &&
+            _cache.HasDownloadedSymbols(commitSha, platformSuffix, out var existingDir) &&
             Directory.Exists(existingDir))
         {
+            // Reuse existing symbols to avoid re-downloading gigabytes of data
             _logger?.LogDebug("Symbols already downloaded for {Commit}/{Platform}", DatadogTraceSymbolsConfig.GetShortSha(commitSha), platformSuffix);
             result.Success = true;
             result.MergeResult = new ArtifactMergeResult
@@ -492,9 +502,9 @@ public class AzurePipelinesResolver : IDisposable
             }
             return result;
         }
-        
+
         AzurePipelinesBuildInfo? build;
-        
+
         if (overrideBuildId.HasValue)
         {
             // Use the provided build ID directly
@@ -517,7 +527,7 @@ public class AzurePipelinesResolver : IDisposable
                 version,
                 ct);
         }
-        
+
         if (build == null)
         {
             var versionHint = !string.IsNullOrEmpty(version) ? $" (version {version})" : "";
@@ -528,28 +538,28 @@ public class AzurePipelinesResolver : IDisposable
                                   $"(look for builds around the release date, then use --build-id <id>)";
             return result;
         }
-        
+
         result.BuildId = build.Id;
         result.BuildNumber = build.BuildNumber;
         result.BuildUrl = build.WebUrl;
-        
+
         _logger?.LogInformation("Found Azure Pipelines build {BuildNumber} (ID: {BuildId}) for Datadog symbols",
             build.BuildNumber, build.Id);
-        
+
         // Get artifact names for platform
         var artifactNames = DatadogArtifactMapper.GetArtifactNames(platform);
-        
+
         _logger?.LogDebug("Downloading {Count} artifacts for platform {Platform}: {Names}",
             artifactNames.Count, platformSuffix, string.Join(", ", artifactNames.Values));
-        
+
         // Download each artifact
         var tempDir = Path.Combine(outputDirectory, ".temp_download");
         var artifactZips = new Dictionary<DatadogArtifactType, string>();
-        
+
         try
         {
             Directory.CreateDirectory(tempDir);
-            
+
             foreach (var (artifactType, artifactName) in artifactNames)
             {
                 var zipPath = await DownloadArtifactAsync(
@@ -559,7 +569,7 @@ public class AzurePipelinesResolver : IDisposable
                     artifactName,
                     tempDir,
                     ct);
-                
+
                 if (zipPath != null && File.Exists(zipPath))
                 {
                     var fileSize = new FileInfo(zipPath).Length;
@@ -569,16 +579,18 @@ public class AzurePipelinesResolver : IDisposable
                 }
                 else
                 {
+                    // Platform builds may omit some artifacts; continue with whatever we have
                     _logger?.LogDebug("Artifact {Name} not available for this platform", artifactName);
                 }
             }
-            
+
             if (artifactZips.Count == 0)
             {
+                // Bail out instead of trying to merge nothing
                 result.ErrorMessage = "No artifacts could be downloaded";
                 return result;
             }
-            
+
             // Merge artifacts
             var processor = new DatadogArtifactProcessor(_logger);
             result.MergeResult = await processor.MergeArtifactsAsync(
@@ -587,9 +599,9 @@ public class AzurePipelinesResolver : IDisposable
                 platformSuffix,
                 targetTfm,
                 ct);
-            
+
             result.Success = result.MergeResult.Success;
-            
+
             // Update cache
             if (result.Success && result.MergeResult.SymbolDirectory != null)
             {
@@ -612,10 +624,10 @@ public class AzurePipelinesResolver : IDisposable
                 // Ignore cleanup errors
             }
         }
-        
+
         return result;
     }
-    
+
     /// <summary>
     /// Creates an HTTP request with appropriate headers.
     /// </summary>
@@ -624,7 +636,7 @@ public class AzurePipelinesResolver : IDisposable
         var request = new HttpRequestMessage(method, url);
         request.Headers.Add("User-Agent", UserAgent);
         request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-        
+
         // Add PAT authentication if configured
         var pat = DatadogTraceSymbolsConfig.GetPatToken();
         if (!string.IsNullOrEmpty(pat))
@@ -632,10 +644,10 @@ public class AzurePipelinesResolver : IDisposable
             var credentials = Convert.ToBase64String(System.Text.Encoding.ASCII.GetBytes($":{pat}"));
             request.Headers.Authorization = new AuthenticationHeaderValue("Basic", credentials);
         }
-        
+
         return request;
     }
-    
+
     /// <summary>
     /// Parses the build list response from Azure DevOps API.
     /// </summary>
@@ -645,33 +657,33 @@ public class AzurePipelinesResolver : IDisposable
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            
+
             if (!root.TryGetProperty("value", out var builds) || builds.GetArrayLength() == 0)
                 return null;
-            
+
             // The Azure DevOps API with sourceVersion filter returns builds that REFERENCE the commit
             // (including merge commits). We need to find the build where sourceVersion EQUALS our commit.
             JsonElement? matchingBuild = null;
             JsonElement? fallbackBuild = null;
-            
+
             var buildCount = builds.GetArrayLength();
-            _logger?.LogInformation("Azure Pipelines returned {Count} builds for commit {Commit}", 
+            _logger?.LogInformation("Azure Pipelines returned {Count} builds for commit {Commit}",
                 buildCount, DatadogTraceSymbolsConfig.GetShortSha(expectedCommitSha));
-            
+
             foreach (var candidate in builds.EnumerateArray())
             {
                 var candidateSv = candidate.TryGetProperty("sourceVersion", out var svProp) ? svProp.GetString() : null;
                 var candidateId = candidate.TryGetProperty("id", out var idProp) ? idProp.GetInt32() : 0;
                 var candidateBn = candidate.TryGetProperty("buildNumber", out var bnProp) ? bnProp.GetString() : null;
-                
-                _logger?.LogInformation("Build candidate: ID={Id}, BuildNumber={Bn}, SourceVersion={SV}", 
+
+                _logger?.LogInformation("Build candidate: ID={Id}, BuildNumber={Bn}, SourceVersion={SV}",
                     candidateId, candidateBn ?? "(null)", candidateSv ?? "(null)");
-                
+
                 if (fallbackBuild == null)
                 {
                     fallbackBuild = candidate;
                 }
-                
+
                 // If we expect a specific commit, only use the build that EXACTLY matches
                 if (!string.IsNullOrEmpty(expectedCommitSha) && !string.IsNullOrEmpty(candidateSv))
                 {
@@ -679,17 +691,17 @@ public class AzurePipelinesResolver : IDisposable
                     var isMatch = string.Equals(candidateSv, expectedCommitSha, StringComparison.OrdinalIgnoreCase) ||
                                   candidateSv.StartsWith(expectedCommitSha, StringComparison.OrdinalIgnoreCase) ||
                                   expectedCommitSha.StartsWith(candidateSv, StringComparison.OrdinalIgnoreCase);
-                    
+
                     if (isMatch)
                     {
                         matchingBuild = candidate;
-                        _logger?.LogInformation("Found EXACT matching build {Id} for commit {Commit}", 
+                        _logger?.LogInformation("Found EXACT matching build {Id} for commit {Commit}",
                             candidateId, DatadogTraceSymbolsConfig.GetShortSha(expectedCommitSha));
                         break;
                     }
                 }
             }
-            
+
             // If no exact match found but we have builds, log a warning with advice
             if (matchingBuild == null && fallbackBuild != null)
             {
@@ -699,19 +711,19 @@ public class AzurePipelinesResolver : IDisposable
                     "API returned builds with different sourceVersions (e.g., merge commits). " +
                     "First returned build has sourceVersion={FallbackSv}. " +
                     "The requested commit may be from an older release - try finding the release build ID manually.",
-                    DatadogTraceSymbolsConfig.GetShortSha(expectedCommitSha), 
+                    DatadogTraceSymbolsConfig.GetShortSha(expectedCommitSha),
                     DatadogTraceSymbolsConfig.GetShortSha(fallbackSv));
                 return null;
             }
-            
+
             if (matchingBuild == null)
             {
                 _logger?.LogWarning("No builds returned for commit {Commit}", DatadogTraceSymbolsConfig.GetShortSha(expectedCommitSha));
                 return null;
             }
-            
+
             var buildElement = matchingBuild.Value;
-            
+
             var buildInfo = new AzurePipelinesBuildInfo
             {
                 Id = buildElement.GetProperty("id").GetInt32(),
@@ -721,16 +733,16 @@ public class AzurePipelinesResolver : IDisposable
                 SourceVersion = buildElement.TryGetProperty("sourceVersion", out var sv) ? sv.GetString() ?? "" : "",
                 SourceBranch = buildElement.TryGetProperty("sourceBranch", out var sb) ? sb.GetString() ?? "" : "",
             };
-            
+
             if (buildElement.TryGetProperty("finishTime", out var ft) && ft.ValueKind != JsonValueKind.Null)
                 buildInfo.FinishTime = ft.GetDateTime();
-            
+
             if (buildElement.TryGetProperty("queueTime", out var qt) && qt.ValueKind != JsonValueKind.Null)
                 buildInfo.QueueTime = qt.GetDateTime();
-            
+
             if (buildElement.TryGetProperty("startTime", out var stt) && stt.ValueKind != JsonValueKind.Null)
                 buildInfo.StartTime = stt.GetDateTime();
-            
+
             // Extract web URL from _links
             if (buildElement.TryGetProperty("_links", out var links) &&
                 links.TryGetProperty("web", out var web) &&
@@ -743,7 +755,7 @@ public class AzurePipelinesResolver : IDisposable
                 // Construct URL manually
                 buildInfo.WebUrl = $"https://dev.azure.com/{organization}/{project}/_build/results?buildId={buildInfo.Id}";
             }
-            
+
             return buildInfo;
         }
         catch (JsonException ex)
@@ -752,22 +764,22 @@ public class AzurePipelinesResolver : IDisposable
             return null;
         }
     }
-    
+
     /// <summary>
     /// Parses the artifacts list response from Azure DevOps API.
     /// </summary>
     private List<AzurePipelinesArtifact> ParseArtifactsResponse(string json)
     {
         var artifacts = new List<AzurePipelinesArtifact>();
-        
+
         try
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            
+
             if (!root.TryGetProperty("value", out var artifactList))
                 return artifacts;
-            
+
             foreach (var artifactElement in artifactList.EnumerateArray())
             {
                 var artifact = new AzurePipelinesArtifact
@@ -775,17 +787,17 @@ public class AzurePipelinesResolver : IDisposable
                     Id = artifactElement.TryGetProperty("id", out var id) ? id.GetInt32() : 0,
                     Name = artifactElement.TryGetProperty("name", out var name) ? name.GetString() ?? "" : ""
                 };
-                
+
                 // Extract download URL from resource
                 if (artifactElement.TryGetProperty("resource", out var resource))
                 {
                     if (resource.TryGetProperty("downloadUrl", out var url))
                         artifact.DownloadUrl = url.GetString() ?? "";
-                    
+
                     if (resource.TryGetProperty("type", out var type))
                         artifact.ResourceType = type.GetString() ?? "";
                 }
-                
+
                 artifacts.Add(artifact);
             }
         }
@@ -793,10 +805,10 @@ public class AzurePipelinesResolver : IDisposable
         {
             _logger?.LogWarning(ex, "Failed to parse artifacts response");
         }
-        
+
         return artifacts;
     }
-    
+
     /// <summary>
     /// Saves the cache if modified.
     /// </summary>
@@ -808,18 +820,17 @@ public class AzurePipelinesResolver : IDisposable
             _cacheModified = false;
         }
     }
-    
+
     /// <summary>
     /// Disposes resources and saves the cache.
     /// </summary>
     public void Dispose()
     {
         SaveCache();
-        
+
         if (_ownsHttpClient)
         {
             _httpClient.Dispose();
         }
     }
 }
-

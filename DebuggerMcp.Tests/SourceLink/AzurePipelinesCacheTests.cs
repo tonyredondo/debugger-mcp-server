@@ -171,7 +171,7 @@ public class AzurePipelinesCacheTests
         var tempDir = Path.Combine(Path.GetTempPath(), $"test_symbols_{Guid.NewGuid()}");
         Directory.CreateDirectory(tempDir);
         cache.SetDownloadedSymbols("commit123", "linux-x64", tempDir);
-        
+
         // Delete the directory
         Directory.Delete(tempDir, true);
 

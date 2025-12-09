@@ -17,7 +17,7 @@ public class CrashAnalysisResult
     [JsonPropertyName("metadata")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public CrashReportMetadata? Metadata { get; set; }
-    
+
     /// <summary>
     /// Analysis summary with crash type, severity, and recommendations.
     /// </summary>
@@ -176,7 +176,7 @@ public class StackFrame
     [JsonPropertyName("registers")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, string>? Registers { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the parameters passed to this frame's function.
     /// Only available for managed frames when using clrstack -a.
@@ -184,7 +184,7 @@ public class StackFrame
     [JsonPropertyName("parameters")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<LocalVariable>? Parameters { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the local variables in this frame.
     /// Only available for managed frames when using clrstack -a.
@@ -204,14 +204,14 @@ public class LocalVariable
     /// </summary>
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the variable type (e.g., "Int32", "String", "System.Object").
     /// </summary>
     [JsonPropertyName("type")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Type { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the variable value.
     /// Can be: string (primitive/address), number, boolean, or expanded object from showobj.
@@ -219,7 +219,7 @@ public class LocalVariable
     /// </summary>
     [JsonPropertyName("value")]
     public object? Value { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the raw hex value before conversion.
     /// Only set when value has been converted to a meaningful representation.
@@ -227,20 +227,20 @@ public class LocalVariable
     [JsonPropertyName("rawValue")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RawValue { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the storage location (e.g., "CLR reg", "stack", or register name).
     /// </summary>
     [JsonPropertyName("location")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Location { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether the variable data is available.
     /// </summary>
     [JsonPropertyName("hasData")]
     public bool HasData { get; set; } = true;
-    
+
     /// <summary>
     /// Gets or sets whether this value is a reference type (object) that can be inspected with !dumpobj.
     /// Null if type is unknown.
@@ -248,7 +248,7 @@ public class LocalVariable
     [JsonPropertyName("isReferenceType")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? IsReferenceType { get; set; }
-    
+
     /// <summary>
     /// For ByRef types: the address where the reference is stored.
     /// The 'value' field contains the dereferenced content.
@@ -256,7 +256,7 @@ public class LocalVariable
     [JsonPropertyName("byRefAddress")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ByRefAddress { get; set; }
-    
+
     /// <summary>
     /// For ByRef types: the dereferenced address (the actual object pointer).
     /// Use this with !dumpobj to inspect the object.
@@ -375,9 +375,9 @@ public class ThreadInfo
     /// </summary>
     [JsonPropertyName("isThreadpool")]
     public bool? IsThreadpool { get; set; }
-    
+
     // === Phase 2 ClrMD Enrichment ===
-    
+
     /// <summary>
     /// Gets or sets additional thread info from ClrMD.
     /// </summary>
@@ -534,37 +534,37 @@ public class ThreadPoolInfo
     /// </summary>
     [JsonPropertyName("cpuUtilization")]
     public int? CpuUtilization { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the total number of worker threads.
     /// </summary>
     [JsonPropertyName("workersTotal")]
     public int? WorkersTotal { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the number of running worker threads.
     /// </summary>
     [JsonPropertyName("workersRunning")]
     public int? WorkersRunning { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the number of idle worker threads.
     /// </summary>
     [JsonPropertyName("workersIdle")]
     public int? WorkersIdle { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the minimum worker thread limit.
     /// </summary>
     [JsonPropertyName("workerMinLimit")]
     public int? WorkerMinLimit { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the maximum worker thread limit.
     /// </summary>
     [JsonPropertyName("workerMaxLimit")]
     public int? WorkerMaxLimit { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether the portable thread pool is used.
     /// </summary>
@@ -582,31 +582,31 @@ public class TimerInfo
     /// </summary>
     [JsonPropertyName("address")]
     public string Address { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the due time in milliseconds.
     /// </summary>
     [JsonPropertyName("dueTimeMs")]
     public int? DueTimeMs { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the period in milliseconds (null for one-shot timers).
     /// </summary>
     [JsonPropertyName("periodMs")]
     public int? PeriodMs { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the state object address.
     /// </summary>
     [JsonPropertyName("stateAddress")]
     public string? StateAddress { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the state object type.
     /// </summary>
     [JsonPropertyName("stateType")]
     public string? StateType { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the callback method name.
     /// </summary>
@@ -646,12 +646,6 @@ public class MemoryLeakInfo
     /// </summary>
     [JsonPropertyName("totalHeapBytes")]
     public long TotalHeapBytes { get; set; }
-
-    /// <summary>
-    /// Gets or sets the estimated leaked memory in bytes (legacy field, kept for compatibility).
-    /// </summary>
-    [JsonPropertyName("estimatedLeakedBytes")]
-    public long EstimatedLeakedBytes { get; set; }
 
     /// <summary>
     /// Gets or sets indicators that suggest potential memory issues.
@@ -742,72 +736,72 @@ public class AssemblyVersionInfo
     /// </summary>
     [JsonPropertyName("name")]
     public string Name { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the assembly version (e.g., "9.0.0.0").
     /// </summary>
     [JsonPropertyName("assemblyVersion")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AssemblyVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the file version (e.g., "9.0.1025.47515").
     /// </summary>
     [JsonPropertyName("fileVersion")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FileVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the assembly path.
     /// </summary>
     [JsonPropertyName("path")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Path { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the module base address in memory.
     /// </summary>
     [JsonPropertyName("baseAddress")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? BaseAddress { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the assembly address (from dumpdomain).
     /// </summary>
     [JsonPropertyName("assemblyAddress")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AssemblyAddress { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether this is a dynamic assembly.
     /// </summary>
     [JsonPropertyName("isDynamic")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? IsDynamic { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether this assembly is in the GAC (Global Assembly Cache).
     /// </summary>
     [JsonPropertyName("isInGac")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? IsInGac { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether this is a native image (NGEN/ReadyToRun/NativeAOT).
     /// </summary>
     [JsonPropertyName("isNativeImage")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? IsNativeImage { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the module ID.
     /// </summary>
     [JsonPropertyName("moduleId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ModuleId { get; set; }
-    
+
     // === ClrMD enriched properties (from dump memory) ===
-    
+
     /// <summary>
     /// Gets or sets the informational version (includes semver + commit hash).
     /// Example: "9.0.0+abc123def456"
@@ -815,28 +809,28 @@ public class AssemblyVersionInfo
     [JsonPropertyName("informationalVersion")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? InformationalVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the company name from AssemblyCompanyAttribute.
     /// </summary>
     [JsonPropertyName("company")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Company { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the product name from AssemblyProductAttribute.
     /// </summary>
     [JsonPropertyName("product")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Product { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the copyright notice from AssemblyCopyrightAttribute.
     /// </summary>
     [JsonPropertyName("copyright")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Copyright { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the build configuration from AssemblyConfigurationAttribute.
     /// Example: "Release", "Debug"
@@ -844,35 +838,35 @@ public class AssemblyVersionInfo
     [JsonPropertyName("configuration")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Configuration { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the assembly title from AssemblyTitleAttribute.
     /// </summary>
     [JsonPropertyName("title")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Title { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the assembly description from AssemblyDescriptionAttribute.
     /// </summary>
     [JsonPropertyName("description")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Description { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the repository URL from AssemblyMetadataAttribute("RepositoryUrl", ...).
     /// </summary>
     [JsonPropertyName("repositoryUrl")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RepositoryUrl { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the commit hash extracted from InformationalVersion.
     /// </summary>
     [JsonPropertyName("commitHash")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CommitHash { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the target framework from TargetFrameworkAttribute.
     /// Example: ".NETCoreApp,Version=v9.0"
@@ -880,16 +874,16 @@ public class AssemblyVersionInfo
     [JsonPropertyName("targetFramework")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TargetFramework { get; set; }
-    
+
     /// <summary>
     /// Gets or sets additional custom attributes not mapped to specific properties.
     /// </summary>
     [JsonPropertyName("customAttributes")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, string>? CustomAttributes { get; set; }
-    
+
     // === GitHub commit metadata (enriched via GitHub API) ===
-    
+
     /// <summary>
     /// Gets or sets the source URL pointing to the commit tree on GitHub.
     /// Example: https://github.com/DataDog/dd-trace-dotnet/tree/14fd3a2fe...
@@ -897,72 +891,72 @@ public class AssemblyVersionInfo
     [JsonPropertyName("sourceUrl")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? SourceUrl { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the commit author's name from GitHub.
     /// </summary>
     [JsonPropertyName("authorName")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AuthorName { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the commit author's date (ISO 8601 format).
     /// </summary>
     [JsonPropertyName("authorDate")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AuthorDate { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the committer's name from GitHub.
     /// </summary>
     [JsonPropertyName("committerName")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CommitterName { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the committer's date (ISO 8601 format).
     /// </summary>
     [JsonPropertyName("committerDate")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CommitterDate { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the commit message (may be truncated for very long messages).
     /// </summary>
     [JsonPropertyName("commitMessage")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CommitMessage { get; set; }
-    
+
     // === Azure Pipelines metadata (for Datadog assemblies) ===
-    
+
     /// <summary>
     /// Gets or sets the Azure Pipelines build ID that produced this assembly.
     /// </summary>
     [JsonPropertyName("azurePipelinesBuildId")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public int? AzurePipelinesBuildId { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the Azure Pipelines build number (version string).
     /// </summary>
     [JsonPropertyName("azurePipelinesBuildNumber")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AzurePipelinesBuildNumber { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the URL to the Azure Pipelines build.
     /// </summary>
     [JsonPropertyName("azurePipelinesBuildUrl")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? AzurePipelinesBuildUrl { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether symbols were downloaded for this assembly.
     /// </summary>
     [JsonPropertyName("symbolsDownloaded")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? SymbolsDownloaded { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the local directory where symbols were downloaded.
     /// </summary>
@@ -983,84 +977,84 @@ public class ExceptionAnalysis
     [JsonPropertyName("exceptionAddress")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ExceptionAddress { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the full type name of the exception.
     /// </summary>
     [JsonPropertyName("fullTypeName")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FullTypeName { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the HResult code (formatted as 0x...).
     /// </summary>
     [JsonPropertyName("hResult")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? HResult { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the exception message.
     /// </summary>
     [JsonPropertyName("message")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Message { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the source (usually the assembly that threw the exception).
     /// </summary>
     [JsonPropertyName("source")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Source { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the help link if any.
     /// </summary>
     [JsonPropertyName("helpLink")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? HelpLink { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the target site information (method that threw the exception).
     /// </summary>
     [JsonPropertyName("targetSite")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TargetSiteInfo? TargetSite { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the fusion log (for assembly binding exceptions like FileNotFoundException, TypeLoadException).
     /// </summary>
     [JsonPropertyName("fusionLog")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FusionLog { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the Data dictionary entries from the exception.
     /// </summary>
     [JsonPropertyName("data")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, string>? Data { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the inner exception (if any).
     /// </summary>
     [JsonPropertyName("innerException")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExceptionAnalysis? InnerException { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the stack trace string from the exception object.
     /// </summary>
     [JsonPropertyName("stackTraceString")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? StackTraceString { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the flattened exception chain for easier analysis.
     /// </summary>
     [JsonPropertyName("exceptionChain")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<ExceptionChainEntry>? ExceptionChain { get; set; }
-    
+
     /// <summary>
     /// Gets or sets custom properties specific to certain exception types.
     /// For example: FileNotFoundException has FileName, TypeLoadException has TypeName, etc.
@@ -1068,14 +1062,14 @@ public class ExceptionAnalysis
     [JsonPropertyName("customProperties")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, object?>? CustomProperties { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the remote stack trace string (for exceptions that were re-thrown across remoting boundaries).
     /// </summary>
     [JsonPropertyName("remoteStackTraceString")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RemoteStackTraceString { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the Watson buckets (internal .NET crash reporting data).
     /// </summary>
@@ -1103,42 +1097,42 @@ public class TargetSiteInfo
     [JsonPropertyName("name")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Name { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the declaring type name.
     /// </summary>
     [JsonPropertyName("declaringType")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DeclaringType { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the member type (Method, Constructor, etc.).
     /// </summary>
     [JsonPropertyName("memberType")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MemberType { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether the method is public.
     /// </summary>
     [JsonPropertyName("isPublic")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? IsPublic { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether the method is static.
     /// </summary>
     [JsonPropertyName("isStatic")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? IsStatic { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the return type.
     /// </summary>
     [JsonPropertyName("returnType")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ReturnType { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the method signature.
     /// </summary>
@@ -1157,35 +1151,35 @@ public class ExceptionChainEntry
     /// </summary>
     [JsonPropertyName("depth")]
     public int Depth { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the exception type name.
     /// </summary>
     [JsonPropertyName("type")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Type { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the exception message.
     /// </summary>
     [JsonPropertyName("message")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Message { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the source.
     /// </summary>
     [JsonPropertyName("source")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Source { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the HResult.
     /// </summary>
     [JsonPropertyName("hResult")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? HResult { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the exception object address.
     /// </summary>
@@ -1204,20 +1198,20 @@ public class PlatformInfo
     /// </summary>
     [JsonPropertyName("os")]
     public string Os { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the CPU architecture (x64, arm64, x86, arm).
     /// </summary>
     [JsonPropertyName("architecture")]
     public string Architecture { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the Linux distribution if applicable (Alpine, Debian, Ubuntu, etc.).
     /// </summary>
     [JsonPropertyName("distribution")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Distribution { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether this is an Alpine Linux (musl libc) dump.
     /// Important for .NET SOS compatibility.
@@ -1225,21 +1219,21 @@ public class PlatformInfo
     [JsonPropertyName("isAlpine")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public bool? IsAlpine { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the C library type (glibc, musl).
     /// </summary>
     [JsonPropertyName("libcType")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LibcType { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the .NET runtime version from the dump.
     /// </summary>
     [JsonPropertyName("runtimeVersion")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? RuntimeVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the pointer size in bits (32 or 64).
     /// </summary>
@@ -1305,55 +1299,55 @@ public class TypeResolutionAnalysis
     [JsonPropertyName("failedType")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? FailedType { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the MethodTable address of the type.
     /// </summary>
     [JsonPropertyName("methodTable")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MethodTable { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the EEClass address of the type.
     /// </summary>
     [JsonPropertyName("eeClass")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? EEClass { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the information about the expected member that was not found.
     /// </summary>
     [JsonPropertyName("expectedMember")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public ExpectedMemberInfo? ExpectedMember { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the list of actual methods found on the type.
     /// </summary>
     [JsonPropertyName("actualMethods")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<MethodDescriptorInfo>? ActualMethods { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether the expected method was found on the type.
     /// </summary>
     [JsonPropertyName("methodFound")]
     public bool MethodFound { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the diagnosis message explaining why resolution failed.
     /// </summary>
     [JsonPropertyName("diagnosis")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Diagnosis { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the generic instantiation information if the type is generic.
     /// </summary>
     [JsonPropertyName("genericInstantiation")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public GenericInstantiationInfo? GenericInstantiation { get; set; }
-    
+
     /// <summary>
     /// Gets or sets similar methods that might be what the caller intended.
     /// Useful when signature differs slightly.
@@ -1374,14 +1368,14 @@ public class ExpectedMemberInfo
     [JsonPropertyName("name")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Name { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the full signature including return type and parameters.
     /// </summary>
     [JsonPropertyName("signature")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Signature { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the member type (Method, Field, Property, etc.).
     /// </summary>
@@ -1401,35 +1395,35 @@ public class MethodDescriptorInfo
     [JsonPropertyName("name")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Name { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the full method signature.
     /// </summary>
     [JsonPropertyName("signature")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Signature { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the method descriptor address.
     /// </summary>
     [JsonPropertyName("methodDesc")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MethodDesc { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the JIT status (PreJIT, JIT, NONE, etc.).
     /// </summary>
     [JsonPropertyName("jitStatus")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? JitStatus { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the code address if JITted.
     /// </summary>
     [JsonPropertyName("codeAddress")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? CodeAddress { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the method slot number.
     /// </summary>
@@ -1448,14 +1442,14 @@ public class GenericInstantiationInfo
     /// </summary>
     [JsonPropertyName("isGenericType")]
     public bool IsGenericType { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the generic type definition name (e.g., "ConcurrentDictionary`2").
     /// </summary>
     [JsonPropertyName("typeDefinition")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? TypeDefinition { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the type arguments.
     /// </summary>
@@ -1475,27 +1469,27 @@ public class NativeAotAnalysis
     /// </summary>
     [JsonPropertyName("isNativeAot")]
     public bool IsNativeAot { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether a JIT compiler is present (NativeAOT apps don't have one).
     /// </summary>
     [JsonPropertyName("hasJitCompiler")]
     public bool HasJitCompiler { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the list of NativeAOT indicators found with actual evidence.
     /// </summary>
     [JsonPropertyName("indicators")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<NativeAotIndicator>? Indicators { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the trimming analysis if trimming issues are suspected.
     /// </summary>
     [JsonPropertyName("trimmingAnalysis")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TrimmingAnalysis? TrimmingAnalysis { get; set; }
-    
+
     /// <summary>
     /// Gets or sets detected reflection usage patterns that may be problematic in NativeAOT.
     /// </summary>
@@ -1514,20 +1508,20 @@ public class NativeAotIndicator
     /// </summary>
     [JsonPropertyName("source")]
     public string Source { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the pattern that was matched.
     /// </summary>
     [JsonPropertyName("pattern")]
     public string Pattern { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the matched value (function name, module name, etc.).
     /// </summary>
     [JsonPropertyName("matchedValue")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MatchedValue { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the stack frame where this indicator was found (if applicable).
     /// </summary>
@@ -1546,35 +1540,35 @@ public class TrimmingAnalysis
     /// </summary>
     [JsonPropertyName("potentialTrimmingIssue")]
     public bool PotentialTrimmingIssue { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the confidence level of this analysis.
     /// </summary>
     [JsonPropertyName("confidence")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Confidence { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the exception type that triggered the analysis.
     /// </summary>
     [JsonPropertyName("exceptionType")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ExceptionType { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the missing member that triggered the issue.
     /// </summary>
     [JsonPropertyName("missingMember")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? MissingMember { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the actual stack frame where the call originated.
     /// </summary>
     [JsonPropertyName("callingFrame")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StackFrame? CallingFrame { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the recommendation to fix the trimming issue.
     /// </summary>
@@ -1594,21 +1588,21 @@ public class ReflectionUsageInfo
     [JsonPropertyName("location")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Location { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the reflection pattern detected.
     /// </summary>
     [JsonPropertyName("pattern")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Pattern { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the risk level of this reflection usage.
     /// </summary>
     [JsonPropertyName("risk")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Risk { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the type or method being accessed via reflection.
     /// </summary>
@@ -1628,38 +1622,38 @@ public class GcSummary
 {
     [JsonPropertyName("heapCount")]
     public int HeapCount { get; set; }
-    
+
     [JsonPropertyName("gcMode")]
     public string GcMode { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("isServerGC")]
     public bool IsServerGC { get; set; }
-    
+
     [JsonPropertyName("totalHeapSize")]
     public long TotalHeapSize { get; set; }
-    
+
     /// <summary>
     /// Fragmentation ratio (0.0 to 1.0). Only populated with deep analysis.
     /// </summary>
     [JsonPropertyName("fragmentation")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public double? Fragmentation { get; set; }
-    
+
     /// <summary>
     /// Fragmentation in bytes. Only populated with deep analysis.
     /// </summary>
     [JsonPropertyName("fragmentationBytes")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public long? FragmentationBytes { get; set; }
-    
+
     [JsonPropertyName("generationSizes")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public GenerationSizes? GenerationSizes { get; set; }
-    
+
     [JsonPropertyName("segments")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<GcSegmentInfo>? Segments { get; set; }
-    
+
     [JsonPropertyName("finalizableObjectCount")]
     public int FinalizableObjectCount { get; set; }
 }
@@ -1671,16 +1665,16 @@ public class GenerationSizes
 {
     [JsonPropertyName("gen0")]
     public long Gen0 { get; set; }
-    
+
     [JsonPropertyName("gen1")]
     public long Gen1 { get; set; }
-    
+
     [JsonPropertyName("gen2")]
     public long Gen2 { get; set; }
-    
+
     [JsonPropertyName("loh")]
     public long Loh { get; set; }
-    
+
     [JsonPropertyName("poh")]
     public long Poh { get; set; }
 }
@@ -1692,10 +1686,10 @@ public class GcSegmentInfo
 {
     [JsonPropertyName("address")]
     public string Address { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("size")]
     public long Size { get; set; }
-    
+
     [JsonPropertyName("kind")]
     public string Kind { get; set; } = string.Empty;
 }
@@ -1707,15 +1701,15 @@ public class ClrMdThreadInfo
 {
     [JsonPropertyName("isGC")]
     public bool IsGC { get; set; }
-    
+
     [JsonPropertyName("stackBase")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? StackBase { get; set; }
-    
+
     [JsonPropertyName("stackLimit")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? StackLimit { get; set; }
-    
+
     [JsonPropertyName("stackUsageBytes")]
     public long StackUsageBytes { get; set; }
 }
@@ -1728,15 +1722,15 @@ public class TopMemoryConsumers
     [JsonPropertyName("bySize")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TypeMemoryStats>? BySize { get; set; }
-    
+
     [JsonPropertyName("byCount")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<TypeMemoryStats>? ByCount { get; set; }
-    
+
     [JsonPropertyName("largeObjects")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<LargeObjectInfo>? LargeObjects { get; set; }
-    
+
     [JsonPropertyName("summary")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public HeapWalkSummary? Summary { get; set; }
@@ -1749,19 +1743,19 @@ public class TypeMemoryStats
 {
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("count")]
     public int Count { get; set; }
-    
+
     [JsonPropertyName("totalSize")]
     public long TotalSize { get; set; }
-    
+
     [JsonPropertyName("averageSize")]
     public long AverageSize { get; set; }
-    
+
     [JsonPropertyName("largestInstance")]
     public long LargestInstance { get; set; }
-    
+
     [JsonPropertyName("percentage")]
     public double Percentage { get; set; }
 }
@@ -1773,13 +1767,13 @@ public class LargeObjectInfo
 {
     [JsonPropertyName("address")]
     public string Address { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("type")]
     public string Type { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("size")]
     public long Size { get; set; }
-    
+
     [JsonPropertyName("generation")]
     public string Generation { get; set; } = string.Empty;
 }
@@ -1791,25 +1785,25 @@ public class HeapWalkSummary
 {
     [JsonPropertyName("totalObjects")]
     public int TotalObjects { get; set; }
-    
+
     [JsonPropertyName("totalSize")]
     public long TotalSize { get; set; }
-    
+
     [JsonPropertyName("uniqueTypes")]
     public int UniqueTypes { get; set; }
-    
+
     [JsonPropertyName("analysisTimeMs")]
     public long AnalysisTimeMs { get; set; }
-    
+
     [JsonPropertyName("wasAborted")]
     public bool WasAborted { get; set; }
-    
+
     /// <summary>
     /// Free space in bytes (fragmentation).
     /// </summary>
     [JsonPropertyName("freeBytes")]
     public long FreeBytes { get; set; }
-    
+
     /// <summary>
     /// Fragmentation ratio (freeBytes / totalHeapSize).
     /// </summary>
@@ -1825,18 +1819,18 @@ public class AsyncAnalysis
     [JsonPropertyName("summary")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AsyncSummary? Summary { get; set; }
-    
+
     [JsonPropertyName("faultedTasks")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<FaultedTaskInfo>? FaultedTasks { get; set; }
-    
+
     [JsonPropertyName("pendingStateMachines")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<StateMachineInfo>? PendingStateMachines { get; set; }
-    
+
     [JsonPropertyName("analysisTimeMs")]
     public long AnalysisTimeMs { get; set; }
-    
+
     [JsonPropertyName("wasAborted")]
     public bool WasAborted { get; set; }
 }
@@ -1848,16 +1842,16 @@ public class AsyncSummary
 {
     [JsonPropertyName("totalTasks")]
     public int TotalTasks { get; set; }
-    
+
     [JsonPropertyName("pendingTasks")]
     public int PendingTasks { get; set; }
-    
+
     [JsonPropertyName("completedTasks")]
     public int CompletedTasks { get; set; }
-    
+
     [JsonPropertyName("faultedTasks")]
     public int FaultedTasks { get; set; }
-    
+
     [JsonPropertyName("canceledTasks")]
     public int CanceledTasks { get; set; }
 }
@@ -1869,17 +1863,17 @@ public class FaultedTaskInfo
 {
     [JsonPropertyName("address")]
     public string Address { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("taskType")]
     public string TaskType { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("status")]
     public string Status { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("exceptionType")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ExceptionType { get; set; }
-    
+
     [JsonPropertyName("exceptionMessage")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? ExceptionMessage { get; set; }
@@ -1892,10 +1886,10 @@ public class StateMachineInfo
 {
     [JsonPropertyName("address")]
     public string Address { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("stateMachineType")]
     public string StateMachineType { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("currentState")]
     public int CurrentState { get; set; }
 }
@@ -1908,18 +1902,18 @@ public class StringAnalysis
     [JsonPropertyName("summary")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StringAnalysisSummary? Summary { get; set; }
-    
+
     [JsonPropertyName("topDuplicates")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<StringDuplicateInfo>? TopDuplicates { get; set; }
-    
+
     [JsonPropertyName("byLength")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StringLengthDistribution? ByLength { get; set; }
-    
+
     [JsonPropertyName("analysisTimeMs")]
     public long AnalysisTimeMs { get; set; }
-    
+
     [JsonPropertyName("wasAborted")]
     public bool WasAborted { get; set; }
 }
@@ -1931,19 +1925,19 @@ public class StringAnalysisSummary
 {
     [JsonPropertyName("totalStrings")]
     public int TotalStrings { get; set; }
-    
+
     [JsonPropertyName("uniqueStrings")]
     public int UniqueStrings { get; set; }
-    
+
     [JsonPropertyName("duplicateStrings")]
     public int DuplicateStrings { get; set; }
-    
+
     [JsonPropertyName("totalSize")]
     public long TotalSize { get; set; }
-    
+
     [JsonPropertyName("wastedSize")]
     public long WastedSize { get; set; }
-    
+
     [JsonPropertyName("wastedPercentage")]
     public double WastedPercentage { get; set; }
 }
@@ -1955,16 +1949,16 @@ public class StringDuplicateInfo
 {
     [JsonPropertyName("value")]
     public string Value { get; set; } = string.Empty;
-    
+
     [JsonPropertyName("count")]
     public int Count { get; set; }
-    
+
     [JsonPropertyName("sizePerInstance")]
     public long SizePerInstance { get; set; }
-    
+
     [JsonPropertyName("wastedBytes")]
     public long WastedBytes { get; set; }
-    
+
     [JsonPropertyName("suggestion")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Suggestion { get; set; }
@@ -1977,16 +1971,16 @@ public class StringLengthDistribution
 {
     [JsonPropertyName("empty")]
     public int Empty { get; set; }
-    
+
     [JsonPropertyName("short")]
     public int Short { get; set; }
-    
+
     [JsonPropertyName("medium")]
     public int Medium { get; set; }
-    
+
     [JsonPropertyName("long")]
     public int Long { get; set; }
-    
+
     [JsonPropertyName("veryLong")]
     public int VeryLong { get; set; }
 }
@@ -1999,39 +1993,39 @@ public class CombinedHeapAnalysis
     [JsonPropertyName("topMemoryConsumers")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public TopMemoryConsumers? TopMemoryConsumers { get; set; }
-    
+
     [JsonPropertyName("asyncAnalysis")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AsyncAnalysis? AsyncAnalysis { get; set; }
-    
+
     [JsonPropertyName("stringAnalysis")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public StringAnalysis? StringAnalysis { get; set; }
-    
+
     /// <summary>
     /// Free space in bytes (for fragmentation calculation).
     /// </summary>
     [JsonPropertyName("freeBytes")]
     public long FreeBytes { get; set; }
-    
+
     /// <summary>
     /// Fragmentation ratio.
     /// </summary>
     [JsonPropertyName("fragmentationRatio")]
     public double FragmentationRatio { get; set; }
-    
+
     /// <summary>
     /// Total analysis time in milliseconds.
     /// </summary>
     [JsonPropertyName("totalAnalysisTimeMs")]
     public long TotalAnalysisTimeMs { get; set; }
-    
+
     /// <summary>
     /// Whether parallel processing was used.
     /// </summary>
     [JsonPropertyName("usedParallel")]
     public bool UsedParallel { get; set; }
-    
+
     /// <summary>
     /// Number of segments processed.
     /// </summary>
@@ -2044,7 +2038,6 @@ public class CombinedHeapAnalysis
 // These classes will replace the flat structure incrementally
 // ============================================================================
 
-#region Phase 1: New Container Classes
 
 /// <summary>
 /// Report metadata information for the new hierarchical structure.
@@ -2453,13 +2446,6 @@ public class LeakAnalysis
     public long? TotalHeapBytes { get; set; }
 
     /// <summary>
-    /// Estimated leaked bytes.
-    /// </summary>
-    [JsonPropertyName("estimatedLeakedBytes")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public long? EstimatedLeakedBytes { get; set; }
-
-    /// <summary>
     /// Top memory consumers (suspected leaks).
     /// </summary>
     [JsonPropertyName("topConsumers")]
@@ -2632,4 +2618,3 @@ public class SecurityFinding
     public string? Recommendation { get; set; }
 }
 
-#endregion

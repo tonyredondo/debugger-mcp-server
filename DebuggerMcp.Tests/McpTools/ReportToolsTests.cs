@@ -21,7 +21,7 @@ public class ReportToolsTests : IDisposable
     {
         _tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempPath);
-        
+
         _sessionManager = new DebuggerSessionManager(_tempPath);
         _symbolManager = new SymbolManager(_tempPath);
         _watchStore = new WatchStore(_tempPath);
@@ -46,21 +46,21 @@ public class ReportToolsTests : IDisposable
     [InlineData("   ")]
     public async Task GenerateReport_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.GenerateReport(sessionId!, "user"));
     }
 
     [Fact]
     public async Task GenerateReport_WithPathTraversalInUserId_ThrowsArgumentException()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.GenerateReport("session", "../etc/passwd"));
     }
 
     [Fact]
     public async Task GenerateReport_WithNonExistentSession_ThrowsInvalidOperationException()
     {
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateReport("non-existent", "user"));
     }
 
@@ -68,8 +68,8 @@ public class ReportToolsTests : IDisposable
     public async Task GenerateReport_WithWrongUserId_ThrowsUnauthorizedAccessException()
     {
         var sessionId = _sessionManager.CreateSession("owner");
-        
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => 
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             _tools.GenerateReport(sessionId, "wrong-user"));
     }
 
@@ -78,10 +78,10 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateReport(sessionId, userId));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 
@@ -96,11 +96,11 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
+
         // Should fail at dump validation, not format parsing
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateReport(sessionId, userId, format));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 
@@ -109,11 +109,11 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
+
         // Invalid format should default to markdown and fail at dump validation
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateReport(sessionId, userId, "invalid-format"));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 
@@ -122,10 +122,10 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateReport(sessionId, userId, includeWatches: false));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 
@@ -134,10 +134,10 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateReport(sessionId, userId, includeSecurity: false));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 
@@ -146,10 +146,10 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateReport(sessionId, userId, maxStackFrames: 50));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 
@@ -163,21 +163,21 @@ public class ReportToolsTests : IDisposable
     [InlineData("   ")]
     public async Task GenerateSummaryReport_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.GenerateSummaryReport(sessionId!, "user"));
     }
 
     [Fact]
     public async Task GenerateSummaryReport_WithPathTraversalInUserId_ThrowsArgumentException()
     {
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.GenerateSummaryReport("session", "..\\..\\Windows"));
     }
 
     [Fact]
     public async Task GenerateSummaryReport_WithNonExistentSession_ThrowsInvalidOperationException()
     {
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateSummaryReport("non-existent", "user"));
     }
 
@@ -185,8 +185,8 @@ public class ReportToolsTests : IDisposable
     public async Task GenerateSummaryReport_WithWrongUserId_ThrowsUnauthorizedAccessException()
     {
         var sessionId = _sessionManager.CreateSession("owner");
-        
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => 
+
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             _tools.GenerateSummaryReport(sessionId, "wrong-user"));
     }
 
@@ -195,10 +195,10 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateSummaryReport(sessionId, userId));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 
@@ -210,10 +210,10 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateSummaryReport(sessionId, userId, format));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 
@@ -222,10 +222,10 @@ public class ReportToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => 
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.GenerateSummaryReport(sessionId, userId, "pdf"));
-        
+
         Assert.Contains("No dump file is open", ex.Message);
     }
 }

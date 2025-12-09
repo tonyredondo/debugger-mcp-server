@@ -65,14 +65,14 @@ public class AnalysisTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
@@ -86,6 +86,7 @@ public class AnalysisTools(
             Logger.LogInformation("[AnalysisTools] Looking for symbols in: {SymbolPath}", symbolPath);
             if (Directory.Exists(symbolPath))
             {
+                // Only add existing symbol paths to avoid unnecessary resolution attempts.
                 sourceLinkResolver.AddSymbolSearchPath(symbolPath);
             }
             else
@@ -98,7 +99,7 @@ public class AnalysisTools(
         // heap stats, interleaved call stacks from clrstack -f -r -all, async deadlock detection)
         var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
         var result = await analyzer.AnalyzeDotNetCrashAsync();
-        
+
         // Run security analysis and include in results
         var securityAnalyzer = new SecurityAnalyzer(manager);
         var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
@@ -121,7 +122,7 @@ public class AnalysisTools(
                 Recommendations = securityResult.Recommendations
             };
         }
-        
+
         // Include watch evaluations if enabled and dump has watches
         if (includeWatches && !string.IsNullOrEmpty(session.CurrentDumpId))
         {
@@ -130,15 +131,15 @@ public class AnalysisTools(
             {
                 var evaluator = new WatchEvaluator(manager, WatchStore);
                 result.Watches = await evaluator.EvaluateAllAsync(sanitizedUserId, session.CurrentDumpId);
-                
+
                 // Add watch insights to recommendations for actionable guidance
-                if (result.Watches?.Insights.Count > 0)
+                if (result.Watches?.Insights?.Count > 0)
                 {
                     result.Summary?.Recommendations?.AddRange(result.Watches.Insights);
                 }
             }
         }
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(result, JsonOptions);
     }
@@ -170,14 +171,14 @@ public class AnalysisTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
@@ -202,7 +203,7 @@ public class AnalysisTools(
         // Create .NET analyzer and perform analysis
         var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
         var result = await analyzer.AnalyzeDotNetCrashAsync();
-        
+
         // Run security analysis and include in results
         var securityAnalyzer = new SecurityAnalyzer(manager);
         var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
@@ -225,7 +226,7 @@ public class AnalysisTools(
                 Recommendations = securityResult.Recommendations
             };
         }
-        
+
         // Include watch evaluations if enabled and dump has watches
         if (includeWatches && !string.IsNullOrEmpty(session.CurrentDumpId))
         {
@@ -234,15 +235,15 @@ public class AnalysisTools(
             {
                 var evaluator = new WatchEvaluator(manager, WatchStore);
                 result.Watches = await evaluator.EvaluateAllAsync(sanitizedUserId, session.CurrentDumpId);
-                
-                // Add watch insights to recommendations for actionable guidance
-                if (result.Watches?.Insights.Count > 0)
+
+                // Add watch insights to recommendations for actionable guidance (if available)
+                if (result.Watches?.Insights?.Count > 0)
                 {
                     result.Summary?.Recommendations?.AddRange(result.Watches.Insights);
                 }
             }
         }
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(result, JsonOptions);
     }

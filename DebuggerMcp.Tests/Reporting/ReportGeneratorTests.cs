@@ -13,7 +13,7 @@ public class ReportGeneratorTests
         {
             Summary = new AnalysisSummary
             {
-            CrashType = "Access Violation",
+                CrashType = "Access Violation",
                 Description = "The application crashed due to a null pointer dereference.",
                 Recommendations = new List<string>
                 {
@@ -32,10 +32,10 @@ public class ReportGeneratorTests
             {
                 All = new List<ThreadInfo>
             {
-                new() 
-                { 
-                    ThreadId = "1", 
-                    State = "Running", 
+                new()
+                {
+                    ThreadId = "1",
+                    State = "Running",
                     TopFunction = "myapp!DoSomething",
                     IsFaulting = true,
             CallStack = new List<StackFrame>
@@ -58,10 +58,10 @@ public class ReportGeneratorTests
             Memory = new MemoryInfo
             {
                 LeakAnalysis = new LeakAnalysis
-            {
-                Detected = true,
-                EstimatedLeakedBytes = 1024 * 1024 * 50, // 50 MB
-                TopConsumers = new List<MemoryConsumer>
+                {
+                    Detected = true,
+                    TotalHeapBytes = 1024 * 1024 * 50, // 50 MB
+                    TopConsumers = new List<MemoryConsumer>
                 {
                     new() { TypeName = "System.String", Count = 10000, TotalSize = 1024 * 1024 * 20 },
                     new() { TypeName = "System.Byte[]", Count = 500, TotalSize = 1024 * 1024 * 15 },
@@ -222,7 +222,7 @@ public class ReportGeneratorTests
         var generator = new MarkdownReportGenerator();
 
         // Act & Assert
-        Assert.Throws<ArgumentNullException>(() => 
+        Assert.Throws<ArgumentNullException>(() =>
             generator.Generate(null!, new ReportOptions(), new ReportMetadata()));
     }
 
@@ -651,4 +651,3 @@ public class ReportGeneratorTests
         Assert.Contains("badge-success", report);
     }
 }
-

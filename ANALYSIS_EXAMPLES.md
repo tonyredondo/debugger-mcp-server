@@ -175,7 +175,6 @@ analyze_crash(sessionId="session-123", userId="user1", includeWatches=true)
         {"typeName": "Allocation size 4096", "count": 50000, "totalSize": 204800000}
       ],
       "totalHeapBytes": 536870912,
-      "estimatedLeakedBytes": 536870912,
       "potentialIssueIndicators": [
         "Large heap detected (512 MB). Consider investigating memory usage.",
         "High allocation count for 4096 byte blocks - possible unbounded growth."

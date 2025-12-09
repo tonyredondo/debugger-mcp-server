@@ -41,16 +41,16 @@ public static class ServiceCollectionExtensions
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
             return new DebuggerSessionManager(dumpStoragePath, loggerFactory);
         });
-        
+
         // Register symbol manager (depends on environment config)
         services.AddSingleton<SymbolManager>();
-        
+
         // Register watch store with the dump storage path for persistence
         services.AddSingleton(new WatchStore(dumpStoragePath));
-        
+
         // Register background service for session cleanup
         services.AddHostedService<SessionCleanupService>();
-        
+
         return services;
     }
 
@@ -85,10 +85,10 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddDebuggerRateLimiting(this IServiceCollection services, int? requestsPerMinute = null)
     {
         var limit = requestsPerMinute ?? EnvironmentConfig.GetRateLimit();
-        
+
         services.AddRateLimiter(options =>
         {
-            // Create a fixed window rate limiter partitioned by client IP
+            // Partition by client IP so one noisy client does not block others.
             options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(
                 httpContext => RateLimitPartition.GetFixedWindowLimiter(
                     partitionKey: httpContext.Connection.RemoteIpAddress?.ToString() ?? "anonymous",
@@ -97,13 +97,13 @@ public static class ServiceCollectionExtensions
                         PermitLimit = limit,
                         Window = TimeSpan.FromMinutes(1),
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                        QueueLimit = 5 // Allow small burst queuing for better UX
+                        QueueLimit = 5 // Allow small burst queuing for better UX.
                     }));
-            
-            // Return 429 when rate limit is exceeded
+
+            // Return 429 when rate limit is exceeded to signal retry-after behavior to clients.
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
         });
-        
+
         return services;
     }
 
@@ -123,7 +123,7 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddDebuggerCors(this IServiceCollection services, string[]? allowedOrigins = null)
     {
         var origins = allowedOrigins ?? EnvironmentConfig.GetCorsAllowedOrigins();
-        
+
         services.AddCors(options =>
         {
             options.AddDefaultPolicy(policy =>
@@ -131,21 +131,21 @@ public static class ServiceCollectionExtensions
                 // Check if specific origins are configured
                 if (origins.Length > 0)
                 {
-                    // Production: Use configured origins only
+                    // Production: restrict to explicit origins to prevent unintended cross-site access.
                     policy.WithOrigins(origins)
                           .AllowAnyMethod()
                           .AllowAnyHeader();
                 }
                 else
                 {
-                    // Development: Allow any origin (when CORS_ALLOWED_ORIGINS is not set)
+                    // Development: allow any origin when no override is provided to simplify local use.
                     policy.AllowAnyOrigin()
                           .AllowAnyMethod()
                           .AllowAnyHeader();
                 }
             });
         });
-        
+
         return services;
     }
 
@@ -163,21 +163,20 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection ConfigureKestrelForLargeUploads(this IServiceCollection services, long? maxRequestBodySize = null)
     {
         var maxSize = maxRequestBodySize ?? EnvironmentConfig.GetMaxRequestBodySize();
-        
+
         services.Configure<Microsoft.AspNetCore.Server.Kestrel.Core.KestrelServerOptions>(options =>
         {
             // Set maximum request body size for dump uploads
             options.Limits.MaxRequestBodySize = maxSize;
         });
-        
+
         // Also configure FormOptions for multipart uploads (IFormFile)
         // Default ASP.NET Core limit is 128MB, but we need to match Kestrel's limit
         services.Configure<Microsoft.AspNetCore.Http.Features.FormOptions>(options =>
         {
             options.MultipartBodyLengthLimit = maxSize;
         });
-        
+
         return services;
     }
 }
-

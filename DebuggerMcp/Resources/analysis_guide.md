@@ -112,7 +112,7 @@ analyze_crash(sessionId: "your-session-id", userId: "your-user-id")
   ],
   "memoryLeakInfo": {
     "detected": true,
-    "estimatedLeakedBytes": 536870912,
+    "totalHeapBytes": 536870912,
     "topConsumers": [
       {"typeName": "Allocation size 4096", "count": 50000, "totalSize": 204800000}
     ]
@@ -1281,4 +1281,3 @@ For PDF output:
 - `debugger://lldb-commands` - LLDB command reference
 - `debugger://sos-commands` - SOS command reference
 - `debugger://troubleshooting` - Troubleshooting guide
-

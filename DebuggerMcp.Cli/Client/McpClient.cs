@@ -99,7 +99,7 @@ public class McpClient : IMcpClient
         {
             // Dispose any existing SSE client
             _sseClient?.Dispose();
-            
+
             // Create a separate client for SSE that stays open
             _sseClient = new HttpClient
             {
@@ -321,7 +321,7 @@ public class McpClient : IMcpClient
             _sseListenerCts.Dispose();
             _sseListenerCts = null;
         }
-        
+
         // Wait for SSE listener task to complete (with timeout)
         if (_sseListenerTask != null)
         {
@@ -350,7 +350,7 @@ public class McpClient : IMcpClient
         // Dispose SSE client (separate from main HTTP client)
         _sseClient?.Dispose();
         _sseClient = null;
-        
+
         _httpClient?.Dispose();
         _httpClient = null;
         _serverUrl = null;
@@ -462,7 +462,6 @@ public class McpClient : IMcpClient
         }
     }
 
-    #region Session Tools
 
     /// <inheritdoc/>
     public async Task<string> CreateSessionAsync(string userId, CancellationToken cancellationToken = default)
@@ -513,9 +512,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Dump Tools
 
     /// <inheritdoc/>
     public async Task<string> OpenDumpAsync(string sessionId, string userId, string dumpId, CancellationToken cancellationToken = default)
@@ -559,9 +556,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Analysis Tools
 
     /// <inheritdoc/>
     public async Task<string> AnalyzeCrashAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
@@ -583,9 +578,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Object Inspection Tools
 
     /// <summary>
     /// Inspects a .NET object at the given address and returns its structure as JSON.
@@ -618,9 +611,7 @@ public class McpClient : IMcpClient
         return await CallToolAsync("inspect_object", args, cancellationToken);
     }
 
-    #endregion
 
-    #region Performance Analysis Tools
 
     /// <inheritdoc/>
     public async Task<string> AnalyzePerformanceAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
@@ -672,9 +663,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Security Analysis Tools
 
     /// <inheritdoc/>
     public async Task<string> AnalyzeSecurityAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
@@ -686,9 +675,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Comparison Tools
 
     /// <inheritdoc/>
     public async Task<string> CompareDumpsAsync(
@@ -758,9 +745,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Watch Tools
 
     /// <inheritdoc/>
     public async Task<string> AddWatchAsync(string sessionId, string userId, string expression, string? name = null, CancellationToken cancellationToken = default)
@@ -830,9 +815,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Report Tools
 
     /// <inheritdoc/>
     public async Task<string> GenerateReportAsync(string sessionId, string userId, string format = "markdown", bool includeWatches = true, bool includeComparison = false, CancellationToken cancellationToken = default)
@@ -858,9 +841,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Source Link Tools
 
     /// <inheritdoc/>
     public async Task<string> ResolveSourceLinkAsync(string sessionId, string userId, string sourceFile, int? lineNumber = null, CancellationToken cancellationToken = default)
@@ -888,9 +869,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Symbol Tools
 
     /// <inheritdoc/>
     public async Task<string> ConfigureAdditionalSymbolsAsync(string sessionId, string userId, string symbolPath, CancellationToken cancellationToken = default)
@@ -929,9 +908,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Datadog Symbols
 
     /// <inheritdoc/>
     public async Task<string> DownloadDatadogSymbolsAsync(
@@ -1013,9 +990,7 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
-    #endregion
 
-    #region Generic Tool Invocation
 
     /// <inheritdoc/>
     public async Task<string> CallToolAsync(string toolName, Dictionary<string, object?> arguments, CancellationToken cancellationToken = default)
@@ -1084,7 +1059,6 @@ public class McpClient : IMcpClient
         }
     }
 
-    #endregion
 
     /// <inheritdoc/>
     public async ValueTask DisposeAsync()
@@ -1100,7 +1074,6 @@ public class McpClient : IMcpClient
     }
 }
 
-#region MCP Protocol Types
 
 /// <summary>
 /// MCP JSON-RPC request.
@@ -1207,7 +1180,6 @@ internal class ContentItem
     public string? Text { get; set; }
 }
 
-#endregion
 
 /// <summary>
 /// Exception thrown when an MCP operation fails.

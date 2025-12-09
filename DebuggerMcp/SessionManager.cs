@@ -100,7 +100,7 @@ public class DebuggerSessionManager
         // 1. Use explicit sessionStoragePath if provided
         // 2. If custom dumpStoragePath was provided, use sessions subdirectory (for test isolation)
         // 3. Otherwise use centralized configuration
-        var effectiveSessionPath = sessionStoragePath 
+        var effectiveSessionPath = sessionStoragePath
             ?? (dumpStoragePath != null ? Path.Combine(dumpStoragePath, "sessions") : null);
 
         // Initialize persistent session store with resolved path
@@ -111,7 +111,7 @@ public class DebuggerSessionManager
         // Read session limits from centralized configuration
         _maxSessionsPerUser = EnvironmentConfig.GetMaxSessionsPerUser();
         _maxTotalSessions = EnvironmentConfig.GetMaxTotalSessions();
-        
+
         _logger.LogInformation(
             "Session manager initialized. Max per user: {MaxPerUser}, Max total: {MaxTotal}, Storage: {StoragePath}",
             _maxSessionsPerUser, _maxTotalSessions, _sessionStore.StoragePath);
@@ -146,20 +146,20 @@ public class DebuggerSessionManager
             var persistedSessions = _sessionStore.LoadAll()
                 .Where(m => now - m.LastAccessedAt <= inactivityThreshold) // Only count non-expired
                 .ToList();
-            
+
             // Get non-expired in-memory session IDs
             var activeInMemorySessionIds = new HashSet<string>(
                 _sessions.Values
                     .Where(s => now - s.LastAccessedAt <= inactivityThreshold)
                     .Select(s => s.SessionId));
-            
+
             // Merge persisted and in-memory session IDs to avoid double counting
             var allSessionIds = new HashSet<string>(activeInMemorySessionIds);
             foreach (var persisted in persistedSessions)
             {
                 allSessionIds.Add(persisted.SessionId);
             }
-            
+
             // Count unique sessions per user (combining in-memory and persisted)
             var userSessionCount = _sessions.Values
                 .Count(s => s.UserId == userId && now - s.LastAccessedAt <= inactivityThreshold);
@@ -167,10 +167,11 @@ public class DebuggerSessionManager
             {
                 if (!activeInMemorySessionIds.Contains(persisted.SessionId))
                 {
+                    // Only count persisted sessions not already tracked in-memory to prevent double counting.
                     userSessionCount++;
                 }
             }
-            
+
             if (userSessionCount >= _maxSessionsPerUser)
             {
                 throw new InvalidOperationException(
@@ -219,7 +220,7 @@ public class DebuggerSessionManager
                 _logger.LogError(ex, "Failed to persist new session {SessionId}, rolling back", sessionId);
                 throw;
             }
-            
+
             _logger.LogInformation("Created session {SessionId} for user {UserId}", sessionId, userId);
 
             return sessionId;
@@ -260,30 +261,31 @@ public class DebuggerSessionManager
         {
             // Session not in memory - check if it exists on disk first
             var metadata = _sessionStore.Load(sessionId);
-            
+
             if (metadata == null)
             {
                 throw new InvalidOperationException($"Session '{sessionId}' not found");
             }
-            
+
             // Validate user ownership before attempting restore
             if (metadata.UserId != userId)
             {
                 throw new UnauthorizedAccessException(
                     $"User '{userId}' does not have access to session '{sessionId}'");
             }
-            
+
             // Check if session has expired
             var inactivityThreshold = EnvironmentConfig.GetSessionInactivityThreshold();
             if (DateTime.UtcNow - metadata.LastAccessedAt > inactivityThreshold)
             {
+                // Remove stale disk entry so future lookups do not keep retrying it.
                 _sessionStore.Delete(sessionId);
                 throw new InvalidOperationException($"Session '{sessionId}' has expired");
             }
-            
+
             // Now restore the session (pass pre-validated metadata to avoid redundant disk read)
             session = RestoreSessionFromDisk(sessionId, userId, metadata);
-            
+
             if (session == null)
             {
                 throw new InvalidOperationException($"Failed to restore session '{sessionId}'");
@@ -299,7 +301,7 @@ public class DebuggerSessionManager
 
         // Update last accessed time
         session.LastAccessedAt = DateTime.UtcNow;
-        
+
         // Persist the updated access time
         // Note: If this fails, the session still works (just with stale LastAccessedAt on disk)
         try
@@ -325,7 +327,7 @@ public class DebuggerSessionManager
     private DebuggerSession? RestoreSessionFromDisk(string sessionId, string userId, SessionMetadata? preloadedMetadata = null)
     {
         var metadata = preloadedMetadata ?? _sessionStore.Load(sessionId);
-        
+
         if (metadata == null)
         {
             return null;
@@ -349,7 +351,7 @@ public class DebuggerSessionManager
                 _logger.LogInformation(
                     "Session {SessionId} found on disk but has expired (last accessed: {LastAccessed})",
                     sessionId, metadata.LastAccessedAt);
-                _sessionStore.Delete(sessionId);
+                _sessionStore.Delete(sessionId); // Delete expired disk artifacts to keep storage tidy.
                 return null;
             }
         }
@@ -389,11 +391,11 @@ public class DebuggerSessionManager
                     _logger.LogInformation("Initializing debugger for restored session {SessionId}", sessionId);
                     Task.Run(() => session.Manager.InitializeAsync()).GetAwaiter().GetResult();
                 }
-                
+
                 _logger.LogInformation("Reopening dump file: {DumpPath}", metadata.CurrentDumpPath);
                 session.Manager.OpenDumpFile(metadata.CurrentDumpPath);
                 // Note: SOS is now auto-loaded by OpenDumpFile if .NET runtime is detected
-                
+
                 // Open ClrMD for metadata enrichment (after debugger opens the dump)
                 try
                 {
@@ -414,7 +416,7 @@ public class DebuggerSessionManager
                     // Don't fail session restore if ClrMD fails - it's optional enrichment
                     _logger.LogDebug(clrMdEx, "[SessionManager] ClrMD initialization failed, continuing without metadata enrichment");
                 }
-                
+
                 // Note: Symbol paths are NOT automatically reconfigured during session restore.
                 // The SymbolManager is not available in SessionManager. Users may need to manually
                 // reconfigure symbols if using custom symbol paths. Default symbol servers will still work.
@@ -470,19 +472,19 @@ public class DebuggerSessionManager
         {
             // Session not in memory - check if it exists on disk first
             var metadata = _sessionStore.Load(sessionId);
-            
+
             if (metadata == null)
             {
                 throw new InvalidOperationException($"Session '{sessionId}' not found");
             }
-            
+
             // Validate user ownership before attempting restore
             if (metadata.UserId != userId)
             {
                 throw new UnauthorizedAccessException(
                     $"User '{userId}' does not have access to session '{sessionId}'");
             }
-            
+
             // Check if session has expired
             var inactivityThreshold = EnvironmentConfig.GetSessionInactivityThreshold();
             if (DateTime.UtcNow - metadata.LastAccessedAt > inactivityThreshold)
@@ -490,10 +492,10 @@ public class DebuggerSessionManager
                 _sessionStore.Delete(sessionId);
                 throw new InvalidOperationException($"Session '{sessionId}' has expired");
             }
-            
+
             // Now restore the session (pass pre-validated metadata to avoid redundant disk read)
             session = RestoreSessionFromDisk(sessionId, userId, metadata);
-            
+
             if (session == null)
             {
                 throw new InvalidOperationException($"Failed to restore session '{sessionId}'");
@@ -552,7 +554,7 @@ public class DebuggerSessionManager
             {
                 throw new InvalidOperationException($"Session '{sessionId}' not found");
             }
-            
+
             // Validate ownership using disk metadata
             if (metadata.UserId != userId)
             {
@@ -577,9 +579,9 @@ public class DebuggerSessionManager
 
         // Always remove from disk
         _sessionStore.Delete(sessionId);
-        
+
         _logger.LogInformation("Closed session {SessionId} for user {UserId}", sessionId, userId);
-        
+
         // Notify listeners to clean up related resources (e.g., symbol paths)
         OnSessionClosed?.Invoke(sessionId);
     }
@@ -615,7 +617,7 @@ public class DebuggerSessionManager
             .ToDictionary(s => s.SessionId);
 
         // Get persisted sessions and merge
-        
+
         foreach (var metadata in _sessionStore.LoadAll().Where(m => m.UserId == userId))
         {
             // Skip expired sessions
@@ -623,7 +625,7 @@ public class DebuggerSessionManager
             {
                 continue;
             }
-            
+
             // Skip if already in memory
             if (inMemorySessions.ContainsKey(metadata.SessionId))
             {
@@ -641,7 +643,7 @@ public class DebuggerSessionManager
                 LastAccessedAt = metadata.LastAccessedAt,
                 CurrentDumpId = metadata.CurrentDumpId
             };
-            
+
             inMemorySessions[metadata.SessionId] = session;
         }
 
@@ -665,7 +667,7 @@ public class DebuggerSessionManager
     {
         var now = DateTime.UtcNow;
         var cleanedCount = 0;
-        
+
         // Track which sessions we clean up in-memory to avoid redundant disk operations
         var cleanedSessionIds = new HashSet<string>();
 
@@ -679,16 +681,16 @@ public class DebuggerSessionManager
             if (_sessions.TryRemove(session.SessionId, out var removedSession))
             {
                 removedSession.Dispose();
-                
+
                 // Also remove from disk
                 _sessionStore.Delete(session.SessionId);
                 cleanedSessionIds.Add(session.SessionId);
-                
+
                 // Notify listeners to clean up related resources (e.g., symbol paths)
                 OnSessionClosed?.Invoke(session.SessionId);
-                
+
                 cleanedCount++;
-                
+
                 _logger.LogDebug("Cleaned up inactive in-memory session {SessionId}", session.SessionId);
             }
         }
@@ -703,7 +705,7 @@ public class DebuggerSessionManager
             {
                 continue;
             }
-            
+
             // Check if expired
             if (now - metadata.LastAccessedAt > inactivityThreshold)
             {
@@ -750,7 +752,7 @@ public class DebuggerSessionManager
         var allMetadata = _sessionStore.LoadAll();
         var inactivityThreshold = EnvironmentConfig.GetSessionInactivityThreshold();
         var now = DateTime.UtcNow;
-        
+
         // Filter out expired sessions
         var activeSessions = allMetadata
             .Where(m => now - m.LastAccessedAt <= inactivityThreshold)
@@ -815,7 +817,7 @@ public class DebuggerSessionManager
             }
             return session.UserId;
         }
-        
+
         // Try to load from disk
         var metadata = _sessionStore.Load(sessionId);
         if (metadata != null)
@@ -861,7 +863,7 @@ public class DebuggerSessionManager
         if (!File.Exists(filePath))
         {
             throw new FileNotFoundException(
-                $"Dump file not found for dumpId '{sanitizedDumpId}' and userId '{sanitizedUserId}'", 
+                $"Dump file not found for dumpId '{sanitizedDumpId}' and userId '{sanitizedUserId}'",
                 filePath);
         }
 
@@ -897,4 +899,3 @@ public class DebuggerSessionManager
     public string GetDumpStoragePath() => _dumpStoragePath;
 
 }
-

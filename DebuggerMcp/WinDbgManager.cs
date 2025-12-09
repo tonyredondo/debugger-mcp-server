@@ -22,22 +22,22 @@ public class WinDbgManager : IDebuggerManager
     /// The main debugger client interface.
     /// </summary>
     private IDebugClient? _client;
-    
+
     /// <summary>
     /// The debugger control interface for executing commands.
     /// </summary>
     private IDebugControl? _control;
-    
+
     /// <summary>
     /// Callbacks for capturing debugger output.
     /// </summary>
     private OutputCallbacks? _outputCallbacks;
-    
+
     /// <summary>
     /// COM interface pointer for output callbacks (must be released on disposal).
     /// </summary>
     private IntPtr _outputCallbacksPtr;
-    
+
     /// <summary>
     /// Indicates whether this instance has been disposed.
     /// </summary>
@@ -65,7 +65,7 @@ public class WinDbgManager : IDebuggerManager
     /// <c>true</c> if both the client and control interfaces are available; otherwise, <c>false</c>.
     /// </value>
     public bool IsInitialized => _client != null && _control != null;
-    
+
     /// <summary>
     /// Gets a value indicating whether a dump file is currently open.
     /// </summary>
@@ -147,31 +147,31 @@ public class WinDbgManager : IDebuggerManager
         // Check if already initialized to avoid redundant initialization
         if (IsInitialized)
             return Task.CompletedTask;
-            
+
         try
         {
             // Create the debug client using the native DebugCreate function
             var iid = DbgEng.IID_IDebugClient;
             int hr = DbgEng.DebugCreate(ref iid, out object clientObj);
-            
+
             // Check if creation succeeded
             if (hr != 0)
             {
                 throw new COMException($"Failed to create IDebugClient. HRESULT: 0x{hr:X8}", hr);
             }
-            
+
             // Cast to the IDebugClient interface
             _client = (IDebugClient)clientObj;
-            
+
             // Query for IDebugControl interface from the client
             // Both interfaces point to the same underlying COM object
             _control = (IDebugControl)_client;
-            
+
             // Set up output callbacks to capture debugger output
             _outputCallbacks = new OutputCallbacks();
             _outputCallbacksPtr = Marshal.GetComInterfaceForObject(_outputCallbacks, typeof(IDebugOutputCallbacks));
             _client.SetOutputCallbacks(_outputCallbacksPtr);
-            
+
             return Task.CompletedTask;
         }
         catch (Exception ex)
@@ -180,7 +180,7 @@ public class WinDbgManager : IDebuggerManager
             throw new InvalidOperationException($"Failed to initialize WinDbg Manager: {ex.Message}", ex);
         }
     }
-    
+
     /// <summary>
     /// Opens a crash dump file for analysis.
     /// </summary>
@@ -203,54 +203,54 @@ public class WinDbgManager : IDebuggerManager
         {
             throw new InvalidOperationException("WinDbg Manager is not initialized");
         }
-        
+
         // Check if a dump is already open
         if (IsDumpOpen)
         {
             throw new InvalidOperationException("A dump file is already open. Close it first.");
         }
-        
+
         // Validate that the dump file exists
         if (!File.Exists(dumpFilePath))
         {
             throw new FileNotFoundException($"Dump file not found: {dumpFilePath}");
         }
-        
+
         try
         {
             // Clear any previous output to avoid confusion
             _outputCallbacks?.ClearOutput();
-            
+
             // Open the dump file using the IDebugClient interface
             int hr = _client!.OpenDumpFile(dumpFilePath);
-            
+
             // Check if opening succeeded
             if (hr != 0)
             {
                 throw new COMException($"Failed to open dump file. HRESULT: 0x{hr:X8}", hr);
             }
-            
+
             // Mark the dump as open and store the path
             IsDumpOpen = true;
             _currentDumpPath = dumpFilePath;
-            
+
             // Wait for the debugger to process the dump
             // This is essential for the dump to be ready for commands
             hr = _control!.WaitForEvent(0, WaitForEventTimeoutMs);
-            
+
             // Check if the wait succeeded
             if (hr != 0)
             {
                 throw new COMException($"Failed to wait for event. HRESULT: 0x{hr:X8}", hr);
             }
-            
+
             // Execute a simple command to verify the dump is ready
             ExecuteCommand(".echo Dump file opened successfully");
-            
+
             // Enable command caching for the entire dump session
             // Dump files are static, so all commands can be safely cached
             EnableCommandCache();
-            
+
             // Detect if this is a .NET dump by checking loaded modules
             IsDotNetDump = DetectDotNetDump();
             if (IsDotNetDump)
@@ -275,7 +275,7 @@ public class WinDbgManager : IDebuggerManager
             throw new InvalidOperationException($"Failed to open dump file: {ex.Message}", ex);
         }
     }
-    
+
     /// <summary>
     /// Closes the currently open dump file and ends the debugging session.
     /// </summary>
@@ -293,19 +293,19 @@ public class WinDbgManager : IDebuggerManager
         {
             throw new InvalidOperationException("WinDbg Manager is not initialized");
         }
-        
+
         try
         {
             // Clear command cache when closing dump (cache is dump-specific)
             _commandCache.Clear();
-            
+
             // Only attempt to close if a dump is actually open
             if (IsDumpOpen)
             {
                 // End the session with DEBUG_END_PASSIVE flag
                 // This flag indicates a passive end without terminating processes
                 _client!.EndSession(DebugEndPassive);
-                
+
                 // Mark the dump as closed and reset all dump-specific state
                 IsDumpOpen = false;
                 IsSosLoaded = false;
@@ -344,7 +344,7 @@ public class WinDbgManager : IDebuggerManager
         _commandCache.Clear();
         ObjectInspection.ObjectInspector.ClearCache();
     }
-    
+
     /// <summary>
     /// Executes a WinDbg command on the currently open dump.
     /// </summary>
@@ -370,13 +370,13 @@ public class WinDbgManager : IDebuggerManager
         {
             throw new InvalidOperationException("WinDbg Manager is not initialized");
         }
-        
+
         // Validate that a dump is open
         if (!IsDumpOpen)
         {
             throw new InvalidOperationException("No dump file is currently open");
         }
-        
+
         // Check cache first (significant performance improvement for analysis operations)
         if (_commandCache.TryGetCachedResult(command, out var cachedResult))
         {
@@ -386,7 +386,7 @@ public class WinDbgManager : IDebuggerManager
         // Execute and cache the result
         var result = ExecuteCommandInternal(command);
         _commandCache.CacheResult(command, result);
-        
+
         return result;
     }
 
@@ -409,12 +409,12 @@ public class WinDbgManager : IDebuggerManager
         {
             throw new InvalidOperationException("WinDbg Manager is not initialized");
         }
-        
+
         try
         {
             // Clear previous output to avoid mixing results from different commands
             _outputCallbacks?.ClearOutput();
-            
+
             // Execute the command using IDebugControl.Execute
             // - DEBUG_OUTCTL_ALL_CLIENTS: Send output to all connected clients
             // - command: The command string to execute
@@ -424,16 +424,16 @@ public class WinDbgManager : IDebuggerManager
                 command,
                 DbgEngConstants.DEBUG_EXECUTE_DEFAULT
             );
-            
+
             // Check if execution succeeded
             if (hr != 0)
             {
                 throw new COMException($"Failed to execute command. HRESULT: 0x{hr:X8}", hr);
             }
-            
+
             // Retrieve the captured output from the callbacks
             var output = _outputCallbacks?.GetOutput() ?? string.Empty;
-            
+
             return output;
         }
         catch (Exception ex)
@@ -442,7 +442,7 @@ public class WinDbgManager : IDebuggerManager
             throw new InvalidOperationException($"Failed to execute command '{command}': {ex.Message}", ex);
         }
     }
-    
+
     /// <summary>
     /// Configures the symbol path for the debugger.
     /// </summary>
@@ -503,45 +503,45 @@ public class WinDbgManager : IDebuggerManager
         {
             throw new InvalidOperationException("WinDbg Manager is not initialized");
         }
-        
+
         // Validate that a dump is open
         if (!IsDumpOpen)
         {
             throw new InvalidOperationException("No dump file is currently open");
         }
-        
+
         // Idempotent: if SOS is already loaded, nothing to do
         if (IsSosLoaded)
         {
             return;
         }
-        
+
         try
         {
             // Try to load SOS extension for CoreCLR (.NET Core/.NET 5+)
             // .loadby automatically finds the correct SOS.dll matching the runtime
             var result = ExecuteCommand(".loadby sos coreclr");
-            
+
             // Check if CoreCLR loading failed
-            var coreclrFailed = result.Contains("Unable to find module", StringComparison.OrdinalIgnoreCase) || 
+            var coreclrFailed = result.Contains("Unable to find module", StringComparison.OrdinalIgnoreCase) ||
                                result.Contains("error", StringComparison.OrdinalIgnoreCase);
-            
+
             if (coreclrFailed)
             {
                 // Fall back to CLR for .NET Framework dumps
                 var clrResult = ExecuteCommand(".loadby sos clr");
-                
+
                 // Check if CLR loading also failed
-                var clrFailed = clrResult.Contains("Unable to find module", StringComparison.OrdinalIgnoreCase) || 
+                var clrFailed = clrResult.Contains("Unable to find module", StringComparison.OrdinalIgnoreCase) ||
                                clrResult.Contains("error", StringComparison.OrdinalIgnoreCase);
-                
+
                 if (clrFailed)
                 {
                     throw new InvalidOperationException(
                         $"Failed to load SOS extension. CoreCLR result: {result.Trim()}. CLR result: {clrResult.Trim()}");
                 }
             }
-            
+
             // Verify SOS is actually loaded by running a simple command
             // In WinDbg, SOS commands use !prefix (e.g., !help, !threads) - not !sos prefix
             var verifyResult = ExecuteCommand("!help");
@@ -552,7 +552,7 @@ public class WinDbgManager : IDebuggerManager
                 throw new InvalidOperationException(
                     $"SOS extension loaded but commands are not available. Verify result: {verifyResult.Trim()}");
             }
-            
+
             // Mark SOS as loaded only after verification
             IsSosLoaded = true;
         }
@@ -578,13 +578,13 @@ public class WinDbgManager : IDebuggerManager
         {
             // Get list of loaded modules
             var moduleList = ExecuteCommand("lm");
-            
+
             // Check for .NET Core/.NET 5+ runtime (most common modern case)
             if (moduleList.Contains("coreclr", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
-            
+
             // Check for .NET Framework runtime - look for clr module name with word boundary
             // Pattern: "clr " at start of module name or " clr " as whole word
             // The lm output format is: "start end module_name"
@@ -594,7 +594,7 @@ public class WinDbgManager : IDebuggerManager
             {
                 // Check if line contains " clr " as a word (module name with spaces around it)
                 // Or ends with " clr" (end of line)
-                if (System.Text.RegularExpressions.Regex.IsMatch(line, @"\bclr\b", 
+                if (System.Text.RegularExpressions.Regex.IsMatch(line, @"\bclr\b",
                     System.Text.RegularExpressions.RegexOptions.IgnoreCase))
                 {
                     // Make sure it's not clrjit (which is a separate module)
@@ -604,7 +604,7 @@ public class WinDbgManager : IDebuggerManager
                     }
                 }
             }
-            
+
             // Check for other .NET indicators
             var dotNetIndicators = new[]
             {
@@ -614,7 +614,7 @@ public class WinDbgManager : IDebuggerManager
                 "hostfxr",       // .NET Core framework resolver
                 "System.Private.CoreLib", // .NET Core BCL
             };
-            
+
             foreach (var indicator in dotNetIndicators)
             {
                 if (moduleList.Contains(indicator, StringComparison.OrdinalIgnoreCase))
@@ -622,7 +622,7 @@ public class WinDbgManager : IDebuggerManager
                     return true;
                 }
             }
-            
+
             return false;
         }
         catch
@@ -646,7 +646,7 @@ public class WinDbgManager : IDebuggerManager
         // Avoid redundant disposal
         if (_disposed)
             return;
-            
+
         try
         {
             // Close any open dump before disposing
@@ -654,28 +654,28 @@ public class WinDbgManager : IDebuggerManager
             {
                 CloseDump();
             }
-            
+
             // Release the COM interface for the client
             if (_client != null)
             {
                 Marshal.ReleaseComObject(_client);
                 _client = null;
             }
-            
+
             // Release the COM interface for the control
             if (_control != null)
             {
                 Marshal.ReleaseComObject(_control);
                 _control = null;
             }
-            
+
             // Release the COM interface pointer for output callbacks
             if (_outputCallbacksPtr != IntPtr.Zero)
             {
                 Marshal.Release(_outputCallbacksPtr);
                 _outputCallbacksPtr = IntPtr.Zero;
             }
-            
+
             // Clear the output callbacks reference
             _outputCallbacks = null;
         }
@@ -746,7 +746,7 @@ public class OutputCallbacks : IDebugOutputCallbacks
     /// StringBuilder for accumulating output text.
     /// </summary>
     private readonly StringBuilder _output = new();
-    
+
     /// <summary>
     /// Lock object for thread-safe access to the output buffer.
     /// </summary>
@@ -771,7 +771,7 @@ public class OutputCallbacks : IDebugOutputCallbacks
         {
             _output.Append(text);
         }
-        
+
         // Return S_OK to indicate success
         return 0;
     }
@@ -793,7 +793,7 @@ public class OutputCallbacks : IDebugOutputCallbacks
             return _output.ToString();
         }
     }
-    
+
     /// <summary>
     /// Clears the accumulated output text.
     /// </summary>
@@ -811,4 +811,3 @@ public class OutputCallbacks : IDebugOutputCallbacks
     }
 
 }
-

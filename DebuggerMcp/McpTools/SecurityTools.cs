@@ -60,20 +60,20 @@ public class SecurityTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
         // Create security analyzer and perform analysis
         var analyzer = new SecurityAnalyzer(manager);
         var result = await analyzer.AnalyzeSecurityAsync();
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(result, JsonOptions);
     }

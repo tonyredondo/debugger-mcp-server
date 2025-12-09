@@ -14,7 +14,6 @@ namespace DebuggerMcp.Tests;
 /// </remarks>
 public class WinDbgManagerTests
 {
-    #region Constructor Tests
 
     /// <summary>
     /// Tests that a new WinDbgManager instance is not initialized by default.
@@ -28,14 +27,12 @@ public class WinDbgManagerTests
         // Assert
         // A newly created manager should not be initialized
         Assert.False(manager.IsInitialized);
-        
+
         // A newly created manager should not have a dump open
         Assert.False(manager.IsDumpOpen);
     }
 
-    #endregion
 
-    #region Property Tests
 
     /// <summary>
     /// Tests that IsInitialized returns false when not initialized.
@@ -69,9 +66,7 @@ public class WinDbgManagerTests
         Assert.False(isDumpOpen);
     }
 
-    #endregion
 
-    #region OpenDumpFile Tests
 
     /// <summary>
     /// Tests that OpenDumpFile throws when manager is not initialized.
@@ -86,7 +81,7 @@ public class WinDbgManagerTests
         // Act & Assert
         // Attempting to open a dump without initialization should throw
         var exception = Assert.Throws<InvalidOperationException>(() => manager.OpenDumpFile(dumpPath));
-        
+
         // The exception message should indicate the manager is not initialized
         Assert.Contains("not initialized", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -104,16 +99,14 @@ public class WinDbgManagerTests
         // Note: We can't actually initialize the manager without DbgEng being available,
         // but we can verify the file existence check happens before COM interaction
         // by checking that FileNotFoundException would be thrown for non-existent files
-        
+
         // Act & Assert
         // This will throw InvalidOperationException because not initialized,
         // but in a real scenario with initialization, it would throw FileNotFoundException
         Assert.Throws<InvalidOperationException>(() => manager.OpenDumpFile(nonExistentPath));
     }
 
-    #endregion
 
-    #region CloseDump Tests
 
     /// <summary>
     /// Tests that CloseDump throws when manager is not initialized.
@@ -127,14 +120,12 @@ public class WinDbgManagerTests
         // Act & Assert
         // Attempting to close a dump without initialization should throw
         var exception = Assert.Throws<InvalidOperationException>(() => manager.CloseDump());
-        
+
         // The exception message should indicate the manager is not initialized
         Assert.Contains("not initialized", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    #endregion
 
-    #region ExecuteCommand Tests
 
     /// <summary>
     /// Tests that ExecuteCommand throws when manager is not initialized.
@@ -149,7 +140,7 @@ public class WinDbgManagerTests
         // Act & Assert
         // Attempting to execute a command without initialization should throw
         var exception = Assert.Throws<InvalidOperationException>(() => manager.ExecuteCommand(command));
-        
+
         // The exception message should indicate the manager is not initialized
         Assert.Contains("not initialized", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -172,14 +163,12 @@ public class WinDbgManagerTests
         // Even if initialized, executing a command without an open dump should throw
         // (We can't test this fully without actual initialization, but the logic is there)
         var exception = Assert.Throws<InvalidOperationException>(() => manager.ExecuteCommand(command));
-        
+
         // Should fail on initialization check first
         Assert.Contains("not initialized", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    #endregion
 
-    #region LoadSosExtension Tests
 
     /// <summary>
     /// Tests that LoadSosExtension throws when manager is not initialized.
@@ -193,14 +182,12 @@ public class WinDbgManagerTests
         // Act & Assert
         // Attempting to load SOS without initialization should throw
         var exception = Assert.Throws<InvalidOperationException>(() => manager.LoadSosExtension());
-        
+
         // The exception message should indicate the manager is not initialized
         Assert.Contains("not initialized", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    #endregion
 
-    #region ConfigureSymbolPath Tests
 
     /// <summary>
     /// Tests that ConfigureSymbolPath throws when manager is not initialized.
@@ -215,7 +202,7 @@ public class WinDbgManagerTests
         // Act & Assert
         // Attempting to configure symbol path without initialization should throw
         var exception = Assert.Throws<InvalidOperationException>(() => manager.ConfigureSymbolPath(symbolPath));
-        
+
         // The exception message should indicate the manager is not initialized
         Assert.Contains("not initialized", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
@@ -281,9 +268,7 @@ public class WinDbgManagerTests
         Assert.Contains("Symbol path", exception.Message);
     }
 
-    #endregion
 
-    #region Dispose Tests
 
     /// <summary>
     /// Tests that Dispose can be called multiple times safely.
@@ -316,7 +301,6 @@ public class WinDbgManagerTests
         Assert.Null(exception);
     }
 
-    #endregion
 }
 
 /// <summary>
@@ -327,7 +311,6 @@ public class WinDbgManagerTests
 /// </remarks>
 public class OutputCallbacksTests
 {
-    #region Output Tests
 
     /// <summary>
     /// Tests that Output method appends text correctly.
@@ -348,7 +331,7 @@ public class OutputCallbacksTests
         // Output should return S_OK (0)
         Assert.Equal(0, result1);
         Assert.Equal(0, result2);
-        
+
         // The accumulated output should contain both lines
         var output = callbacks.GetOutput();
         Assert.Contains("First line", output);
@@ -371,7 +354,7 @@ public class OutputCallbacksTests
         // Assert
         // Output should return S_OK (0) even for empty strings
         Assert.Equal(0, result);
-        
+
         // The output should be empty
         var output = callbacks.GetOutput();
         Assert.Equal(string.Empty, output);
@@ -408,15 +391,13 @@ public class OutputCallbacksTests
         // Assert
         // The output should contain all lines from all threads
         var output = callbacks.GetOutput();
-        
+
         // We should have 10 threads * 100 iterations = 1000 lines
         var lineCount = output.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length;
         Assert.Equal(1000, lineCount);
     }
 
-    #endregion
 
-    #region GetOutput Tests
 
     /// <summary>
     /// Tests that GetOutput returns empty string initially.
@@ -473,9 +454,7 @@ public class OutputCallbacksTests
         Assert.Equal("Test output\n", output1);
     }
 
-    #endregion
 
-    #region ClearOutput Tests
 
     /// <summary>
     /// Tests that ClearOutput removes all accumulated text.
@@ -512,7 +491,7 @@ public class OutputCallbacksTests
         callbacks.ClearOutput();
         callbacks.ClearOutput();
         callbacks.ClearOutput();
-        
+
         // Output should still be empty
         var output = callbacks.GetOutput();
         Assert.Equal(string.Empty, output);
@@ -575,5 +554,4 @@ public class OutputCallbacksTests
         Assert.Null(exception);
     }
 
-    #endregion
 }

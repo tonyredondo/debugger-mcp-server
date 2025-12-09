@@ -12,19 +12,19 @@ public enum DatadogArtifactType
     /// Example: linux-tracer-symbols-linux-musl-arm64
     /// </summary>
     TracerSymbols,
-    
+
     /// <summary>
     /// Profiler symbols (*.debug files for Linux, *.pdb for Windows).
     /// Example: linux-profiler-symbols-linux-musl-arm64
     /// </summary>
     ProfilerSymbols,
-    
+
     /// <summary>
     /// Monitoring home with binaries and managed symbols.
     /// Example: linux-monitoring-home-linux-musl-arm64
     /// </summary>
     MonitoringHome,
-    
+
     /// <summary>
     /// Universal symbols (native .debug files with flat structure).
     /// Example: linux-universal-symbols-linux-arm64
@@ -47,7 +47,7 @@ public static class DatadogArtifactMapper
     {
         var os = platform.Os.ToLowerInvariant();
         var arch = NormalizeArchitecture(platform.Architecture);
-        
+
         return os switch
         {
             "linux" => platform.IsAlpine == true ? $"linux-musl-{arch}" : $"linux-{arch}",
@@ -56,7 +56,7 @@ public static class DatadogArtifactMapper
             _ => $"{os}-{arch}"
         };
     }
-    
+
     /// <summary>
     /// Gets the artifact names to download for a given platform.
     /// </summary>
@@ -68,10 +68,11 @@ public static class DatadogArtifactMapper
         var os = platform.Os.ToLowerInvariant();
         var arch = NormalizeArchitecture(platform.Architecture);
         var osPrefix = GetOsPrefix(os);
-        
+
         // Windows uses simpler artifact names without full platform suffix
         if (os == "windows")
         {
+            // Windows artifacts are not split by musl/glibc, so use the compact names published by Datadog
             return new Dictionary<DatadogArtifactType, string>
             {
                 [DatadogArtifactType.MonitoringHome] = "windows-monitoring-home",
@@ -79,30 +80,30 @@ public static class DatadogArtifactMapper
                 [DatadogArtifactType.ProfilerSymbols] = "windows-profiler-symbols"
             };
         }
-        
+
         // Linux and macOS use full platform suffix
         var artifacts = new Dictionary<DatadogArtifactType, string>
         {
             // Monitoring home - contains managed assemblies with TFM folders
             [DatadogArtifactType.MonitoringHome] = $"{osPrefix}-monitoring-home-{suffix}",
-            
+
             // Tracer symbols - native .debug files
             [DatadogArtifactType.TracerSymbols] = $"{osPrefix}-tracer-symbols-{suffix}",
-            
+
             // Profiler symbols - native .debug files
             [DatadogArtifactType.ProfilerSymbols] = $"{osPrefix}-profiler-symbols-{suffix}",
         };
-        
+
         // Universal symbols only for Linux - contains native .debug files
         // Note: Universal symbols use just arch without musl suffix (flat structure)
         if (os == "linux")
         {
             artifacts[DatadogArtifactType.UniversalSymbols] = $"{osPrefix}-universal-symbols-linux-{arch}";
         }
-        
+
         return artifacts;
     }
-    
+
     /// <summary>
     /// Gets the target TFM folder based on the runtime target framework.
     /// </summary>
@@ -112,44 +113,44 @@ public static class DatadogArtifactMapper
     {
         if (string.IsNullOrEmpty(targetFramework))
             return "net6.0"; // Default
-        
+
         var tf = targetFramework.ToLowerInvariant().Trim();
-        
+
         // .NET 8.0, .NET 9.0 -> net8.0, net9.0 (use net6.0 as fallback)
         if (tf.Contains("8.0") || tf.Contains("9.0") || tf.Contains("10.0"))
             return "net8.0";
-        
+
         // .NET 6.0, .NET 7.0 -> net6.0
         if (tf.Contains("6.0") || tf.Contains("7.0"))
             return "net6.0";
-        
+
         // .NET 5.0 -> net6.0 (closest compatible)
         if (tf.Contains("5.0"))
             return "net6.0";
-        
+
         // .NET Core 3.1, 3.0 -> netcoreapp3.1
         if (tf.Contains("core 3.") || tf.Contains("core3.") || tf.Contains("coreapp3."))
             return "netcoreapp3.1";
-        
+
         // .NET Core 2.x -> netstandard2.0
         if (tf.Contains("core 2.") || tf.Contains("core2.") || tf.Contains("coreapp2."))
             return "netstandard2.0";
-        
+
         // .NET Framework -> netstandard2.0
         if (tf.Contains("framework") || tf.StartsWith("4."))
             return "netstandard2.0";
-        
+
         // Default to net6.0 for modern runtimes
         return "net6.0";
     }
-    
+
     /// <summary>
     /// Normalizes architecture string to match artifact naming.
     /// </summary>
     private static string NormalizeArchitecture(string architecture)
     {
         var arch = architecture.ToLowerInvariant();
-        
+
         return arch switch
         {
             "x64" or "amd64" => "x64",
@@ -159,7 +160,7 @@ public static class DatadogArtifactMapper
             _ => arch
         };
     }
-    
+
     /// <summary>
     /// Gets the OS prefix for artifact names.
     /// </summary>
@@ -174,4 +175,3 @@ public static class DatadogArtifactMapper
         };
     }
 }
-

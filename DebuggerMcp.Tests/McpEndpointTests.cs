@@ -38,17 +38,17 @@ public class McpEndpointTests
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         // Act
         var app = builder.Build();
-        
+
         // Map the MCP endpoint
         // This should not throw an exception
         app.MapMcp("/mcp");
-        
+
         // Assert
         Assert.NotNull(app);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -65,16 +65,16 @@ public class McpEndpointTests
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         // Act
         var app = builder.Build();
-        
+
         // Map the MCP endpoint with default route
         app.MapMcp();
-        
+
         // Assert
         Assert.NotNull(app);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -91,16 +91,16 @@ public class McpEndpointTests
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         // Act
         var app = builder.Build();
-        
+
         // Map the MCP endpoint with custom route
         app.MapMcp("/custom-mcp-endpoint");
-        
+
         // Assert
         Assert.NotNull(app);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -113,20 +113,20 @@ public class McpEndpointTests
     {
         // Arrange
         var builder = WebApplication.CreateBuilder();
-        
+
         // Act
         var serviceCollection = builder.Services
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         var app = builder.Build();
-        
+
         // Assert
         // If no exception is thrown, tools are discovered correctly
         Assert.NotNull(app);
         Assert.NotNull(serviceCollection);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -139,19 +139,19 @@ public class McpEndpointTests
     {
         // Arrange
         var builder = WebApplication.CreateBuilder();
-        
+
         // Act
         builder.Services
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         var app = builder.Build();
         app.MapMcp("/mcp");
-        
+
         // Assert
         Assert.NotNull(app);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -168,18 +168,18 @@ public class McpEndpointTests
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         var app = builder.Build();
-        
+
         // Act
         app.MapMcp("/mcp");
-        
+
         // Mapping the same endpoint twice should not cause issues
         // (ASP.NET Core will handle this gracefully)
-        
+
         // Assert
         Assert.NotNull(app);
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -192,7 +192,7 @@ public class McpEndpointTests
     {
         // Arrange
         var builder = WebApplication.CreateBuilder();
-        
+
         // Add all services as in production
         builder.Services.AddControllers();
         builder.Services.AddEndpointsApiExplorer();
@@ -207,25 +207,25 @@ public class McpEndpointTests
                       .AllowAnyHeader();
             });
         });
-        
+
         // Add MCP server
         builder.Services
             .AddMcpServer()
             .WithHttpTransport()
             .WithToolsFromAssembly();
-        
+
         // Act
         var app = builder.Build();
-        
+
         // Configure middleware
         app.UseCors();
         app.MapControllers();
         app.MapMcp("/mcp");
-        
+
         // Assert
         Assert.NotNull(app);
         Assert.NotNull(app.Services.GetService<DebuggerSessionManager>());
-        
+
         // Cleanup
         await app.DisposeAsync();
     }
@@ -240,13 +240,13 @@ public class McpEndpointTests
         var sessionManager = CreateIsolatedSessionManager();
         var symbolManager = new SymbolManager(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
         var watchStore = new WatchStore(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
-        
+
         // Act
         var sessionTools = new SessionTools(sessionManager, symbolManager, watchStore, NullLogger<SessionTools>.Instance);
         var dumpTools = new DumpTools(sessionManager, symbolManager, watchStore, NullLogger<DumpTools>.Instance);
         var symbolTools = new SymbolTools(sessionManager, symbolManager, watchStore, NullLogger<SymbolTools>.Instance);
         var analysisTools = new AnalysisTools(sessionManager, symbolManager, watchStore, NullLogger<AnalysisTools>.Instance);
-        
+
         // Assert
         Assert.NotNull(sessionTools);
         Assert.NotNull(dumpTools);
@@ -274,7 +274,7 @@ public class McpEndpointTests
             typeof(SourceLinkTools),
             typeof(SecurityTools)
         };
-        
+
         // Act
         var totalMethods = 0;
         foreach (var toolsType in toolClasses)
@@ -283,12 +283,11 @@ public class McpEndpointTests
             totalMethods += publicMethods.Length;
             Assert.NotEmpty(publicMethods);
         }
-        
+
         // Assert - all tool classes combined should have at least 30 methods
         Assert.True(totalMethods >= 30, $"MCP tool classes should have at least 30 public methods combined (found {totalMethods})");
     }
 
-    #region User ID Validation Tests (Issue #2 - Security)
 
     /// <summary>
     /// Verifies that OpenDump throws ArgumentException when userId is null or empty.
@@ -684,5 +683,4 @@ public class McpEndpointTests
         Assert.Contains("closed successfully", result);
     }
 
-    #endregion
 }

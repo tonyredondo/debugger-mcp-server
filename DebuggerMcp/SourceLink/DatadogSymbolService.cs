@@ -12,27 +12,27 @@ public class DatadogAssemblyInfo
     /// Gets or sets the assembly name (e.g., "Datadog.Trace").
     /// </summary>
     public string Name { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the full version from InformationalVersion.
     /// </summary>
     public string? InformationalVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the extracted commit SHA (first 40 hex chars from version).
     /// </summary>
     public string? CommitSha { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the target framework (e.g., ".NET 6.0").
     /// </summary>
     public string? TargetFramework { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the repository URL from metadata.
     /// </summary>
     public string? RepositoryUrl { get; set; }
-    
+
     /// <summary>
     /// Extracts the version part from InformationalVersion (e.g., "3.31.0" from "3.31.0+14fd3a2f...").
     /// </summary>
@@ -42,12 +42,12 @@ public class DatadogAssemblyInfo
         {
             if (string.IsNullOrEmpty(InformationalVersion))
                 return null;
-            
+
             // Handle formats like "3.31.0+14fd3a2f..." or "3.31.0.14fd3a2f..."
             var plusIndex = InformationalVersion.IndexOf('+');
             if (plusIndex > 0)
                 return InformationalVersion[..plusIndex];
-            
+
             // If no +, check for pattern like "3.31.0.abc123..." where last part is SHA
             var parts = InformationalVersion.Split('.');
             if (parts.Length >= 3)
@@ -60,7 +60,7 @@ public class DatadogAssemblyInfo
                     return string.Join(".", parts[..^1]);
                 }
             }
-            
+
             return InformationalVersion;
         }
     }
@@ -75,32 +75,32 @@ public class DatadogSymbolPreparationResult
     /// Gets or sets whether symbols were successfully prepared.
     /// </summary>
     public bool Success { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the list of Datadog assemblies found.
     /// </summary>
     public List<DatadogAssemblyInfo> DatadogAssemblies { get; set; } = new();
-    
+
     /// <summary>
     /// Gets or sets the download result if symbols were downloaded.
     /// </summary>
     public DatadogSymbolDownloadResult? DownloadResult { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the symbol load result if symbols were loaded.
     /// </summary>
     public SymbolLoadResult? LoadResult { get; set; }
-    
+
     /// <summary>
     /// Gets or sets any error or warning message.
     /// </summary>
     public string? Message { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether symbols were loaded into the debugger.
     /// </summary>
     public bool SymbolsLoaded => LoadResult?.Success == true;
-    
+
     /// <summary>
     /// Gets or sets the PDB patching results when SHA mismatch occurred.
     /// </summary>
@@ -115,7 +115,7 @@ public class DatadogSymbolService
 {
     private readonly ClrMdAnalyzer? _clrMdAnalyzer;
     private readonly ILogger? _logger;
-    
+
     // Known Datadog assembly prefixes
     private static readonly string[] DatadogPrefixes = new[]
     {
@@ -123,7 +123,7 @@ public class DatadogSymbolService
         "Datadog.Profiler",
         "Datadog.AutoInstrumentation"
     };
-    
+
     /// <summary>
     /// Initializes a new instance of the <see cref="DatadogSymbolService"/> class.
     /// </summary>
@@ -134,7 +134,7 @@ public class DatadogSymbolService
         _clrMdAnalyzer = clrMdAnalyzer;
         _logger = logger;
     }
-    
+
     /// <summary>
     /// Quickly scans for Datadog assemblies using ClrMD.
     /// </summary>
@@ -142,45 +142,45 @@ public class DatadogSymbolService
     public List<DatadogAssemblyInfo> ScanForDatadogAssemblies()
     {
         var result = new List<DatadogAssemblyInfo>();
-        
+
         _logger?.LogInformation("[DatadogSymbols] Scanning for Datadog assemblies...");
-        
+
         if (_clrMdAnalyzer == null)
         {
             _logger?.LogWarning("[DatadogSymbols] ClrMD analyzer is null, cannot scan for Datadog assemblies");
             return result;
         }
-        
+
         if (!_clrMdAnalyzer.IsOpen)
         {
             _logger?.LogWarning("[DatadogSymbols] ClrMD analyzer is not open, cannot scan for Datadog assemblies");
             return result;
         }
-        
+
         try
         {
             // Get all modules with attributes in one pass
             var modules = _clrMdAnalyzer.GetAllModulesWithAttributes();
             _logger?.LogInformation("[DatadogSymbols] ClrMD found {Count} modules in dump", modules.Count);
-            
+
             var datadogModulesFound = 0;
             var datadogModulesWithCommit = 0;
-            
+
             foreach (var module in modules)
             {
                 // Check if this is a Datadog assembly
                 if (!IsDatadogAssembly(module.Name))
                     continue;
-                
+
                 datadogModulesFound++;
-                _logger?.LogDebug("Found Datadog module: {Name}, Attributes: {AttrCount}", 
+                _logger?.LogDebug("Found Datadog module: {Name}, Attributes: {AttrCount}",
                     module.Name, module.Attributes?.Count ?? 0);
-                
+
                 var info = new DatadogAssemblyInfo
                 {
                     Name = module.Name
                 };
-                
+
                 // Extract metadata from attributes
                 // Attribute types are stored with full namespace (e.g., "System.Reflection.AssemblyInformationalVersionAttribute")
                 if (module.Attributes != null)
@@ -188,10 +188,10 @@ public class DatadogSymbolService
                     foreach (var attr in module.Attributes)
                     {
                         _logger?.LogDebug("  Attribute: {Type} = {Value}", attr.AttributeType, attr.Value);
-                        
+
                         // Match by suffix since full type name includes namespace
                         var attrType = attr.AttributeType ?? "";
-                        
+
                         if (attrType.EndsWith("AssemblyInformationalVersionAttribute"))
                         {
                             info.InformationalVersion = attr.Value;
@@ -208,33 +208,33 @@ public class DatadogSymbolService
                         }
                     }
                 }
-                
+
                 // Only add if we have a commit SHA (needed for download)
                 if (!string.IsNullOrEmpty(info.CommitSha))
                 {
                     datadogModulesWithCommit++;
                     result.Add(info);
-                    _logger?.LogInformation("[DatadogSymbols] Found: {Name} commit={Commit} (from: {Version})", 
+                    _logger?.LogInformation("[DatadogSymbols] Found: {Name} commit={Commit} (from: {Version})",
                         info.Name, DatadogTraceSymbolsConfig.GetShortSha(info.CommitSha), info.InformationalVersion);
                 }
                 else
                 {
-                    _logger?.LogWarning("[DatadogSymbols] Module {Name} has no commit SHA - InformationalVersion: '{Version}' (attrs: {AttrCount})", 
+                    _logger?.LogWarning("[DatadogSymbols] Module {Name} has no commit SHA - InformationalVersion: '{Version}' (attrs: {AttrCount})",
                         module.Name, info.InformationalVersion ?? "(null)", module.Attributes?.Count ?? 0);
                 }
             }
-            
-            _logger?.LogInformation("[DatadogSymbols] Scan complete: {Found} Datadog modules found, {WithCommit} with commit SHA", 
+
+            _logger?.LogInformation("[DatadogSymbols] Scan complete: {Found} Datadog modules found, {WithCommit} with commit SHA",
                 datadogModulesFound, datadogModulesWithCommit);
         }
         catch (Exception ex)
         {
             _logger?.LogWarning(ex, "Error scanning for Datadog assemblies");
         }
-        
+
         return result;
     }
-    
+
     /// <summary>
     /// Prepares Datadog symbols: scans, downloads, and loads into debugger.
     /// </summary>
@@ -254,42 +254,42 @@ public class DatadogSymbolService
         CancellationToken ct = default)
     {
         var result = new DatadogSymbolPreparationResult();
-        
+
         // Check if feature is enabled
         if (!DatadogTraceSymbolsConfig.IsEnabled())
         {
             result.Message = "Datadog symbol download is disabled";
             return result;
         }
-        
+
         // Phase A: Quick scan for Datadog assemblies
         result.DatadogAssemblies = ScanForDatadogAssemblies();
-        
+
         if (result.DatadogAssemblies.Count == 0)
         {
             result.Message = "No Datadog assemblies found in dump";
             result.Success = true; // Not an error, just nothing to do
             return result;
         }
-        
+
         // Get the primary assembly (Datadog.Trace if available)
         var primaryAssembly = result.DatadogAssemblies
             .FirstOrDefault(a => a.Name.Equals("Datadog.Trace", StringComparison.OrdinalIgnoreCase))
             ?? result.DatadogAssemblies.First();
-        
+
         if (string.IsNullOrEmpty(primaryAssembly.CommitSha))
         {
             result.Message = "Could not extract commit SHA from Datadog assembly";
             return result;
         }
-        
+
         _logger?.LogInformation("Found {Count} Datadog assemblies, using commit {Commit} for symbol download",
             result.DatadogAssemblies.Count, DatadogTraceSymbolsConfig.GetShortSha(primaryAssembly.CommitSha));
-        
+
         // Determine target TFM
         var targetTfm = DatadogArtifactMapper.GetTargetTfmFolder(
             primaryAssembly.TargetFramework ?? platform.RuntimeVersion ?? ".NET 6.0");
-        
+
         // Phase B: Download symbols using lookup strategy:
         // Default (SHA only): 1. Azure Pipelines with SHA, 2. GitHub Releases with SHA
         // With forceVersion: + 3. Azure Pipelines with version/tag, 4. GitHub Releases with version/tag
@@ -303,13 +303,13 @@ public class DatadogSymbolService
                 targetTfm,
                 forceVersion,
                 ct);
-            
+
             if (!result.DownloadResult.Success)
             {
                 result.Message = result.DownloadResult.ErrorMessage ?? "Symbol download failed";
                 return result;
             }
-            
+
             _logger?.LogInformation("Downloaded Datadog symbols: {Count} artifacts",
                 result.DownloadResult.DownloadedArtifacts.Count);
         }
@@ -319,28 +319,28 @@ public class DatadogSymbolService
             result.Message = $"Symbol download error: {ex.Message}";
             return result;
         }
-        
+
         // Phase B.5: If there's a SHA mismatch (using forceVersion), patch the PDBs to match the DLLs in the dump
         // This allows SOS to load the symbols even when the exact build doesn't match
-        if (result.DownloadResult?.Success == true && 
-            result.DownloadResult.ShaMismatch && 
+        if (result.DownloadResult?.Success == true &&
+            result.DownloadResult.ShaMismatch &&
             result.DownloadResult.MergeResult?.ManagedSymbolDirectory != null)
         {
             _logger?.LogInformation("[DatadogSymbols] SHA mismatch detected, extracting PDB GUIDs from dump modules...");
-            
+
             // Extract PDB GUIDs from the Datadog modules in the dump
             var moduleGuids = ExtractModuleGuidsFromDump(result.DatadogAssemblies);
-            
+
             if (moduleGuids.Count > 0)
             {
-                _logger?.LogInformation("[DatadogSymbols] Found {Count} module GUIDs from dump, patching PDBs in {Dir}...", 
+                _logger?.LogInformation("[DatadogSymbols] Found {Count} module GUIDs from dump, patching PDBs in {Dir}...",
                     moduleGuids.Count, result.DownloadResult.MergeResult.ManagedSymbolDirectory);
-                
+
                 var patcher = new PdbPatcher(_logger);
                 result.PatchResults = patcher.PatchPdbsToMatchModuleGuids(
-                    result.DownloadResult.MergeResult.ManagedSymbolDirectory, 
+                    result.DownloadResult.MergeResult.ManagedSymbolDirectory,
                     moduleGuids);
-                
+
                 var patchedCount = result.PatchResults.Count(r => r.WasPatched);
                 var totalCount = result.PatchResults.Count;
                 _logger?.LogInformation("[DatadogSymbols] PDB patching complete: {Patched}/{Total} files patched", patchedCount, totalCount);
@@ -355,7 +355,7 @@ public class DatadogSymbolService
             _logger?.LogDebug("[DatadogSymbols] PDB patching check: Success={Success}, ShaMismatch={ShaMismatch}, ManagedDir={ManagedDir}",
                 result.DownloadResult?.Success, result.DownloadResult?.ShaMismatch, result.DownloadResult?.MergeResult?.ManagedSymbolDirectory ?? "(null)");
         }
-        
+
         // Phase C: Load symbols into debugger
         if (loadIntoDebugger && result.DownloadResult?.MergeResult != null)
         {
@@ -365,7 +365,7 @@ public class DatadogSymbolService
                 result.LoadResult = await loader.LoadSymbolsAsync(
                     result.DownloadResult.MergeResult,
                     executeCommand);
-                
+
                 if (result.LoadResult.Success)
                 {
                     _logger?.LogInformation("Loaded Datadog symbols: {Native} native, {Managed} managed paths",
@@ -384,15 +384,15 @@ public class DatadogSymbolService
         {
             _logger?.LogDebug("Skipping symbol loading as requested");
         }
-        
+
         result.Success = result.DownloadResult?.Success == true;
-        result.Message = result.Success 
+        result.Message = result.Success
             ? $"Downloaded and loaded symbols for {primaryAssembly.Name} ({DatadogTraceSymbolsConfig.GetShortSha(primaryAssembly.CommitSha)})"
             : result.Message;
-        
+
         return result;
     }
-    
+
     /// <summary>
     /// Extracts PDB GUIDs from Datadog modules loaded in the dump.
     /// </summary>
@@ -405,20 +405,20 @@ public class DatadogSymbolService
             _logger?.LogWarning("[DatadogSymbols] ClrMD analyzer not available, cannot extract module GUIDs");
             return new Dictionary<string, Guid>();
         }
-        
+
         var moduleNames = datadogAssemblies.Select(a => a.Name).ToList();
         return _clrMdAnalyzer.GetModulePdbGuids(moduleNames);
     }
-    
+
     /// <summary>
     /// Checks if an assembly name is a Datadog assembly.
     /// </summary>
     private static bool IsDatadogAssembly(string assemblyName)
     {
-        return DatadogPrefixes.Any(prefix => 
+        return DatadogPrefixes.Any(prefix =>
             assemblyName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
-    
+
     /// <summary>
     /// Extracts commit SHA from InformationalVersion.
     /// Expected format: "3.10.0+abc123def456..." or "3.10.0.abc123def456..."
@@ -427,13 +427,13 @@ public class DatadogSymbolService
     {
         if (string.IsNullOrEmpty(informationalVersion))
             return null;
-        
+
         // Look for + or . followed by hex characters
         var plusIndex = informationalVersion.IndexOf('+');
         var dotIndex = informationalVersion.LastIndexOf('.');
-        
+
         string? candidate = null;
-        
+
         if (plusIndex >= 0 && plusIndex < informationalVersion.Length - 1)
         {
             candidate = informationalVersion[(plusIndex + 1)..];
@@ -451,10 +451,10 @@ public class DatadogSymbolService
                 }
             }
         }
-        
+
         if (candidate == null)
             return null;
-        
+
         // Clean up: remove any non-hex suffix
         var hexChars = new List<char>();
         foreach (var c in candidate)
@@ -464,16 +464,16 @@ public class DatadogSymbolService
             else
                 break;
         }
-        
+
         // Need at least 7 characters for a valid short SHA
         if (hexChars.Count >= 7)
         {
             return new string(hexChars.ToArray()).ToLowerInvariant();
         }
-        
+
         return null;
     }
-    
+
     /// <summary>
     /// Tries to download symbols using the lookup strategy:
     /// Default (SHA only): 1. Azure Pipelines with SHA, 2. GitHub Releases with SHA
@@ -496,7 +496,7 @@ public class DatadogSymbolService
         CancellationToken ct)
     {
         var errors = new List<string>();
-        
+
         // Step 1: Azure Pipelines with SHA
         _logger?.LogInformation("[DatadogSymbols] Step 1: Trying Azure Pipelines with commit SHA {Sha}", DatadogTraceSymbolsConfig.GetShortSha(commitSha));
         using (var azureResolver = new AzurePipelinesResolver(DatadogTraceSymbolsConfig.GetCacheDirectory(), _logger))
@@ -509,9 +509,9 @@ public class DatadogSymbolService
                 version: null,  // Don't use version fallback in Azure resolver - we'll do it ourselves
                 overrideBuildId: null,
                 ct);
-            
+
             azureResolver.SaveCache();
-            
+
             if (azureResult.Success)
             {
                 _logger?.LogInformation("[DatadogSymbols] Success: Downloaded from Azure Pipelines (build {Build})", azureResult.BuildNumber);
@@ -519,10 +519,10 @@ public class DatadogSymbolService
                 azureResult.ShaMismatch = false;  // Exact SHA match
                 return azureResult;
             }
-            
+
             errors.Add($"Azure Pipelines (SHA): {azureResult.ErrorMessage}");
         }
-        
+
         // Step 2: GitHub Releases with SHA
         _logger?.LogInformation("[DatadogSymbols] Step 2: Trying GitHub Releases with commit SHA {Sha}", DatadogTraceSymbolsConfig.GetShortSha(commitSha));
         using (var githubResolver = new GitHubReleasesResolver(DatadogTraceSymbolsConfig.GetCacheDirectory(), logger: _logger))
@@ -548,28 +548,28 @@ public class DatadogSymbolService
             }
             githubResolver.SaveCache();
         }
-        
+
         // If forceVersion is not enabled, stop here and suggest using --force-version
         if (!forceVersion)
         {
-            var shaOnlyError = $"No symbols found for commit SHA {DatadogTraceSymbolsConfig.GetShortSha(commitSha)}. Tried:\n" + 
+            var shaOnlyError = $"No symbols found for commit SHA {DatadogTraceSymbolsConfig.GetShortSha(commitSha)}. Tried:\n" +
                 string.Join("\n", errors.Select(e => $"  - {e}"));
-            
+
             if (!string.IsNullOrEmpty(version))
             {
                 shaOnlyError += $"\n\nTip: Use --force-version to try downloading symbols by version tag (v{version}) instead.\n" +
                     "Note: Version-based symbols may not exactly match your binary.";
             }
-            
+
             _logger?.LogWarning("[DatadogSymbols] {Error}", shaOnlyError);
-            
+
             return new DatadogSymbolDownloadResult
             {
                 Success = false,
                 ErrorMessage = shaOnlyError
             };
         }
-        
+
         // Step 3: Azure Pipelines with version/tag (only if we have a version and forceVersion is enabled)
         if (!string.IsNullOrEmpty(version))
         {
@@ -584,9 +584,9 @@ public class DatadogSymbolService
                     version: version,  // Use version for tag lookup
                     overrideBuildId: null,
                     ct);
-                
+
                 azureResolver.SaveCache();
-                
+
                 if (azureResult.Success)
                 {
                     _logger?.LogInformation("[DatadogSymbols] Success: Downloaded from Azure Pipelines via version tag (build {Build})", azureResult.BuildNumber);
@@ -594,10 +594,10 @@ public class DatadogSymbolService
                     azureResult.ShaMismatch = true;  // Used version tag instead of exact SHA
                     return azureResult;
                 }
-                
+
                 errors.Add($"Azure Pipelines (version): {azureResult.ErrorMessage}");
             }
-            
+
             // Step 4: GitHub Releases with version/tag
             _logger?.LogInformation("[DatadogSymbols] Step 4: Trying GitHub Releases with version tag v{Version}", version);
             using (var githubResolver = new GitHubReleasesResolver(DatadogTraceSymbolsConfig.GetCacheDirectory(), logger: _logger))
@@ -624,18 +624,18 @@ public class DatadogSymbolService
                 githubResolver.SaveCache();
             }
         }
-        
+
         // All steps failed
         var combinedError = $"All symbol sources exhausted. Tried:\n" + string.Join("\n", errors.Select(e => $"  - {e}"));
         _logger?.LogWarning("[DatadogSymbols] {Error}", combinedError);
-        
+
         return new DatadogSymbolDownloadResult
         {
             Success = false,
             ErrorMessage = combinedError
         };
     }
-    
+
     /// <summary>
     /// Downloads symbols for a known commit SHA, with optional version fallback.
     /// </summary>
@@ -658,7 +658,7 @@ public class DatadogSymbolService
     {
         return await TryDownloadSymbolsAsync(commitSha, version, platform, outputDirectory, targetTfm, forceVersion, ct);
     }
-    
+
     /// <summary>
     /// Converts a GitHub result to a Datadog result for consistent return type.
     /// </summary>

@@ -164,9 +164,9 @@ public class LldbManagerTests
 
         // Act & Assert
         // Attempting to configure symbol path without initialization should throw
-        var exception = Assert.Throws<InvalidOperationException>(() => 
+        var exception = Assert.Throws<InvalidOperationException>(() =>
             manager.ConfigureSymbolPath(symbolPath));
-        
+
         // The exception message should indicate LLDB is not initialized
         Assert.Contains("not initialized", exception.Message, StringComparison.OrdinalIgnoreCase);
     }

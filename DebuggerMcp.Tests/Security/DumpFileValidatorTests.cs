@@ -116,9 +116,9 @@ public class DumpFileValidatorTests
         var dumpData = new byte[] { 0x4D, 0x44, 0x4D, 0x50, 0x00, 0x00, 0x00, 0x00 };
         using var stream = new MemoryStream(dumpData);
         stream.Position = 2; // Set initial position
-        
+
         DumpFileValidator.IsValidDumpStream(stream);
-        
+
         Assert.Equal(2, stream.Position); // Position should be restored
     }
 }

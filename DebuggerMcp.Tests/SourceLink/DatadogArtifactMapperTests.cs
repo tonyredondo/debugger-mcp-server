@@ -79,7 +79,7 @@ public class DatadogArtifactMapperTests
         Assert.Contains(DatadogArtifactType.TracerSymbols, artifacts.Keys);
         Assert.Contains(DatadogArtifactType.ProfilerSymbols, artifacts.Keys);
         Assert.Contains(DatadogArtifactType.UniversalSymbols, artifacts.Keys);
-        
+
         Assert.Equal("linux-monitoring-home-linux-x64", artifacts[DatadogArtifactType.MonitoringHome]);
         Assert.Equal("linux-tracer-symbols-linux-x64", artifacts[DatadogArtifactType.TracerSymbols]);
         Assert.Equal("linux-profiler-symbols-linux-x64", artifacts[DatadogArtifactType.ProfilerSymbols]);

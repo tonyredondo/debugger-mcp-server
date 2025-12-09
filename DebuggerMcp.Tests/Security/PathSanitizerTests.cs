@@ -24,7 +24,7 @@ public class PathSanitizerTests
     [InlineData("user\\..\\admin")]
     public void SanitizeIdentifier_PathTraversalAttempt_ThrowsArgumentException(string identifier)
     {
-        var ex = Assert.Throws<ArgumentException>(() => 
+        var ex = Assert.Throws<ArgumentException>(() =>
             PathSanitizer.SanitizeIdentifier(identifier, "userId"));
         Assert.Contains("invalid characters", ex.Message.ToLower());
     }
@@ -35,7 +35,7 @@ public class PathSanitizerTests
     [InlineData("   ")]
     public void SanitizeIdentifier_NullOrEmpty_ThrowsArgumentException(string? identifier)
     {
-        var ex = Assert.Throws<ArgumentException>(() => 
+        var ex = Assert.Throws<ArgumentException>(() =>
             PathSanitizer.SanitizeIdentifier(identifier!, "userId"));
         Assert.Contains("cannot be null or empty", ex.Message.ToLower());
     }
@@ -48,7 +48,7 @@ public class PathSanitizerTests
     [InlineData("user\"name")]
     public void SanitizeIdentifier_InvalidCharacters_ThrowsArgumentException(string identifier)
     {
-        var ex = Assert.Throws<ArgumentException>(() => 
+        var ex = Assert.Throws<ArgumentException>(() =>
             PathSanitizer.SanitizeIdentifier(identifier, "userId"));
         Assert.Contains("invalid characters", ex.Message.ToLower());
     }
@@ -57,7 +57,7 @@ public class PathSanitizerTests
     public void SanitizeIdentifier_TooLongIdentifier_ThrowsArgumentException()
     {
         var longIdentifier = new string('a', 300);
-        var ex = Assert.Throws<ArgumentException>(() => 
+        var ex = Assert.Throws<ArgumentException>(() =>
             PathSanitizer.SanitizeIdentifier(longIdentifier, "userId"));
         Assert.Contains("exceeds maximum length", ex.Message.ToLower());
     }

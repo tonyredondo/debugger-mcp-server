@@ -179,13 +179,13 @@ public static partial class DumpObjParser
         {
             var attrValue = match.Groups[6].Value;
             var valueAndName = match.Groups[7].Value.Trim();
-            
+
             // Parse Value and Name from the captured group
             // TLstatic and null-MT-static fields may only have Name (no Value)
             // Normal fields have "Value Name" (space-separated)
             string fieldValue;
             string fieldName;
-            
+
             var spaceIndex = valueAndName.IndexOf(' ');
             if (spaceIndex > 0)
             {
@@ -199,7 +199,7 @@ public static partial class DumpObjParser
                 fieldValue = string.Empty;
                 fieldName = valueAndName;
             }
-            
+
             var field = new DumpFieldInfo
             {
                 MethodTable = match.Groups[1].Value.Trim(),

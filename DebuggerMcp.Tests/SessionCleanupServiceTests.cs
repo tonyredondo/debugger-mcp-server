@@ -56,7 +56,7 @@ public class SessionCleanupServiceTests : IDisposable
         var task = service.StartAsync(cts.Token);
         await Task.Delay(100);
         cts.Cancel();
-        
+
         try
         {
             await task;
@@ -109,20 +109,20 @@ public class SessionCleanupServiceTests : IDisposable
 
         // Arrange
         var sessionManager = new DebuggerSessionManager(_testStoragePath);
-        
+
         // Create a session and mark it old
         var session = sessionManager.CreateSession("test-user");
-        
+
         var service = new SessionCleanupService(sessionManager, _loggerMock.Object);
         var cts = new CancellationTokenSource();
 
         // Act
         await service.StartAsync(cts.Token);
-        
+
         // Wait for at least one cleanup cycle (default interval is 5 minutes, but we can't wait that long)
         // This test mostly verifies the service starts and runs without errors
         await Task.Delay(100);
-        
+
         cts.Cancel();
         await service.StopAsync(CancellationToken.None);
 
@@ -141,7 +141,7 @@ public class SessionCleanupServiceTests : IDisposable
         await service.StartAsync(cts.Token);
         await Task.Delay(100);
         cts.Cancel();
-        
+
         // Should not throw
         await service.StopAsync(CancellationToken.None);
 
@@ -153,7 +153,7 @@ public class SessionCleanupServiceTests : IDisposable
     public async Task ExecuteAsync_RespectsCleanupInterval()
     {
         // This test verifies that the service waits between cleanup cycles
-        
+
         // Arrange
         var service = new SessionCleanupService(_sessionManager, _loggerMock.Object);
         var cts = new CancellationTokenSource();
@@ -161,11 +161,11 @@ public class SessionCleanupServiceTests : IDisposable
 
         // Act
         await service.StartAsync(cts.Token);
-        
+
         // Wait a short time
         await Task.Delay(50);
         var elapsed = DateTime.UtcNow - startTime;
-        
+
         cts.Cancel();
         await service.StopAsync(CancellationToken.None);
 

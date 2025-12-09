@@ -89,18 +89,18 @@ public static class DebuggerFactory
         // Detect the operating system and create the appropriate debugger
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
-            // Windows: Use WinDbg with DbgEng COM API
+            // Windows: Use WinDbg with DbgEng COM API because LLDB is not first-class here.
             return new WinDbgManager();
         }
         else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {
-            // Linux: Use LLDB with process-based communication
+            // Linux: Use LLDB with process-based communication; WinDbg is unavailable.
             var logger = loggerFactory.CreateLogger<LldbManager>();
             return new LldbManager(logger);
         }
         else if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
         {
-            // macOS: Use LLDB with process-based communication
+            // macOS: Use LLDB; WinDbg is Windows-only.
             var logger = loggerFactory.CreateLogger<LldbManager>();
             return new LldbManager(logger);
         }
@@ -140,6 +140,7 @@ public static class DebuggerFactory
         }
         else
         {
+            // Explicit throw keeps callers honest about unsupported platforms.
             throw new PlatformNotSupportedException(
                 $"Debugging is not supported on this platform");
         }

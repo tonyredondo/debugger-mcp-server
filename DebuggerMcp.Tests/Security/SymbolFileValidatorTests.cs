@@ -8,7 +8,6 @@ namespace DebuggerMcp.Tests.Security;
 /// </summary>
 public class SymbolFileValidatorTests
 {
-    #region Portable PDB Tests
 
     [Fact]
     public void IsValidSymbolHeader_PortablePdb_ReturnsTrue()
@@ -31,9 +30,7 @@ public class SymbolFileValidatorTests
         Assert.Equal("Portable PDB (.NET)", format);
     }
 
-    #endregion
 
-    #region Windows PDB MSF 7.0 Tests
 
     [Fact]
     public void IsValidSymbolHeader_WindowsPdbMsf70_ReturnsTrue()
@@ -68,9 +65,7 @@ public class SymbolFileValidatorTests
         Assert.Equal("Windows PDB (MSF 7.0, Native)", format);
     }
 
-    #endregion
 
-    #region Windows PDB MSF 2.0 Tests
 
     [Fact]
     public void IsValidSymbolHeader_WindowsPdbMsf20_ReturnsTrue()
@@ -109,9 +104,7 @@ public class SymbolFileValidatorTests
         Assert.Equal("Windows PDB (MSF 2.0, Legacy)", format);
     }
 
-    #endregion
 
-    #region ELF Tests
 
     [Fact]
     public void IsValidSymbolHeader_ElfFile_ReturnsTrue()
@@ -144,9 +137,7 @@ public class SymbolFileValidatorTests
         Assert.Equal("ELF (Linux)", format);
     }
 
-    #endregion
 
-    #region Mach-O Tests
 
     [Fact]
     public void IsValidSymbolHeader_MachO64LittleEndian_ReturnsTrue()
@@ -233,9 +224,7 @@ public class SymbolFileValidatorTests
         Assert.Equal("Mach-O Universal Binary (macOS)", format);
     }
 
-    #endregion
 
-    #region Archive Tests
 
     [Fact]
     public void IsValidSymbolHeader_ArArchive_ReturnsTrue()
@@ -258,9 +247,7 @@ public class SymbolFileValidatorTests
         Assert.Equal("ar Archive", format);
     }
 
-    #endregion
 
-    #region Invalid Input Tests
 
     [Fact]
     public void IsValidSymbolHeader_NullHeader_ReturnsFalse()
@@ -328,9 +315,7 @@ public class SymbolFileValidatorTests
         Assert.Equal("Unknown", format);
     }
 
-    #endregion
 
-    #region Extension-Based Validation Tests
 
     [Fact]
     public void IsValidSymbolHeader_PdbExtension_OnlyAcceptsPdbFormats()
@@ -389,9 +374,7 @@ public class SymbolFileValidatorTests
         Assert.True(SymbolFileValidator.IsValidSymbolHeader(machOHeader, "test.xyz"));
     }
 
-    #endregion
 
-    #region Constants Tests
 
     [Fact]
     public void MinimumBytesNeeded_Is8()
@@ -423,6 +406,5 @@ public class SymbolFileValidatorTests
         Assert.Equal(40, SymbolFileValidator.MaxHeaderSize);
     }
 
-    #endregion
 }
 

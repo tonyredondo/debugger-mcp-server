@@ -60,16 +60,16 @@ public class SourceLinkResolver
             _logger?.LogWarning("[SourceLink] AddSymbolSearchPath called with empty path, ignoring");
             return;
         }
-        
+
         if (!Directory.Exists(path))
         {
             _logger?.LogWarning("[SourceLink] Symbol search path does not exist: {Path}", path);
             return;
         }
-        
+
         _symbolSearchPaths.Add(path);
         _logger?.LogInformation("[SourceLink] Added symbol search path: {Path}", path);
-        
+
         // List PDB files in this path for debugging
         try
         {
@@ -119,9 +119,9 @@ public class SourceLinkResolver
     /// </remarks>
     public SourceLocation Resolve(string modulePath, string sourceFile, int lineNumber, int? columnNumber = null)
     {
-        _logger?.LogInformation("[SourceLink] Resolve called: Module={Module}, SourceFile={SourceFile}, Line={Line}", 
+        _logger?.LogInformation("[SourceLink] Resolve called: Module={Module}, SourceFile={SourceFile}, Line={Line}",
             modulePath, sourceFile, lineNumber);
-        
+
         // Initialize result with input parameters
         var result = new SourceLocation
         {
@@ -134,7 +134,7 @@ public class SourceLinkResolver
         {
             var moduleName = Path.GetFileNameWithoutExtension(modulePath);
             _logger?.LogDebug("[SourceLink] Module name extracted: {ModuleName}", moduleName);
-            
+
             // Step 1: Get Source Link information from the module's PDB
             // This uses caching to avoid re-reading PDB files
             var sourceLink = GetSourceLinkForModule(modulePath);
@@ -147,13 +147,13 @@ public class SourceLinkResolver
                 _logger?.LogWarning("[SourceLink] No Source Link info found for module: {Module}", modulePath);
                 return result;
             }
-            
+
             _logger?.LogInformation("[SourceLink] Found Source Link with {Count} document patterns", sourceLink.Documents?.Count ?? 0);
 
             // Step 2: Try to match the source file path against document patterns
             // Source Link uses glob patterns to map local paths to repository URLs
             var rawUrl = ResolveRawUrl(sourceLink, sourceFile);
-            
+
             // If no pattern matched, the source file may be from a different project
             // or the Source Link configuration was incomplete at build time
             if (rawUrl == null)
@@ -174,12 +174,12 @@ public class SourceLinkResolver
             // Step 3: Process the raw URL
             result.RawUrl = rawUrl;
             _logger?.LogDebug("[SourceLink] Raw URL resolved: {RawUrl}", rawUrl);
-            
+
             // Detect which source control provider hosts this URL
             // This is needed to format the URL with the correct line number syntax
             result.Provider = DetectProvider(rawUrl);
             _logger?.LogDebug("[SourceLink] Provider detected: {Provider}", result.Provider);
-            
+
             // Convert the raw content URL to a browsable URL with line number anchor
             // Each provider has different URL formats (e.g., GitHub uses #L123, Bitbucket uses #lines-123)
             result.Url = ConvertToBrowsableUrl(rawUrl, lineNumber, result.Provider);
@@ -229,15 +229,15 @@ public class SourceLinkResolver
 
         if (_cache.TryGetValue(moduleName, out var cached))
         {
-            _logger?.LogDebug("[SourceLink] Cache hit for {ModuleName}: HasSourceLink={HasSourceLink}, PdbPath={PdbPath}", 
+            _logger?.LogDebug("[SourceLink] Cache hit for {ModuleName}: HasSourceLink={HasSourceLink}, PdbPath={PdbPath}",
                 moduleName, cached.HasSourceLink, cached.PdbPath ?? "null");
             return cached.SourceLink;
         }
-        
+
         _logger?.LogDebug("[SourceLink] Cache miss for {ModuleName}, searching for PDB...", moduleName);
 
         var pdbPath = FindPdbFile(modulePath);
-        
+
         if (pdbPath == null)
         {
             _logger?.LogWarning("[SourceLink] No PDB found for module: {ModuleName}", moduleName);
@@ -246,7 +246,7 @@ public class SourceLinkResolver
         {
             _logger?.LogInformation("[SourceLink] Found PDB for {ModuleName}: {PdbPath}", moduleName, pdbPath);
         }
-        
+
         var sourceLink = pdbPath != null ? ExtractSourceLinkFromPdb(pdbPath) : null;
 
         var cacheEntry = new ModuleSourceLinkCache
@@ -278,7 +278,7 @@ public class SourceLinkResolver
         var pdbName = Path.GetFileNameWithoutExtension(modulePath) + ".pdb";
         _logger?.LogDebug("[SourceLink] FindPdbFile: Looking for {PdbName}", pdbName);
         _logger?.LogDebug("[SourceLink] FindPdbFile: {Count} symbol search paths configured", _symbolSearchPaths.Count);
-        
+
         // Strategy 1: PDB next to module (exact path)
         var pdbPath = Path.ChangeExtension(modulePath, ".pdb");
         _logger?.LogDebug("[SourceLink] Strategy 1 - Check next to module: {Path}", pdbPath);
@@ -295,7 +295,7 @@ public class SourceLinkResolver
         foreach (var searchPath in _symbolSearchPaths)
         {
             _logger?.LogDebug("[SourceLink] Searching in: {SearchPath}", searchPath);
-            
+
             // Search case-insensitively by enumerating all PDB files
             // This handles:
             // - Different casing (Module.pdb vs module.pdb)
@@ -330,12 +330,12 @@ public class SourceLinkResolver
     private SourceLinkInfo? ExtractSourceLinkFromPdb(string pdbPath)
     {
         _logger?.LogDebug("[SourceLink] ExtractSourceLinkFromPdb: {Path}", pdbPath);
-        
+
         try
         {
             var fileInfo = new FileInfo(pdbPath);
             _logger?.LogDebug("[SourceLink] PDB file size: {Size} bytes", fileInfo.Length);
-            
+
             using var stream = File.OpenRead(pdbPath);
 
             // Check if it's a Portable PDB by looking at the magic number
@@ -346,7 +346,7 @@ public class SourceLinkResolver
                 return null;
             }
             stream.Position = 0;
-            
+
             var magicStr = System.Text.Encoding.ASCII.GetString(magic);
             _logger?.LogDebug("[SourceLink] PDB magic bytes: {Magic} (0x{Hex})", magicStr, BitConverter.ToString(magic).Replace("-", ""));
 
@@ -388,7 +388,7 @@ public class SourceLinkResolver
         try
         {
             _logger?.LogDebug("[SourceLink] Parsing Portable PDB metadata...");
-            
+
             using var peReader = MetadataReaderProvider.FromPortablePdbStream(stream, MetadataStreamOptions.LeaveOpen);
             var reader = peReader.GetMetadataReader();
 
@@ -401,22 +401,22 @@ public class SourceLinkResolver
             {
                 var info = reader.GetCustomDebugInformation(handle);
                 var kind = reader.GetGuid(info.Kind);
-                
+
                 _logger?.LogDebug("[SourceLink] Entry {Index}: GUID={Guid}", entryIndex++, kind);
 
                 if (kind == SourceLinkGuid)
                 {
                     _logger?.LogInformation("[SourceLink] ✓ Found Source Link entry (GUID: {Guid})", SourceLinkGuid);
-                    
+
                     var blob = reader.GetBlobBytes(info.Value);
                     var json = System.Text.Encoding.UTF8.GetString(blob);
 
-                    _logger?.LogInformation("[SourceLink] Source Link JSON ({Length} bytes): {Json}", 
-                        json.Length, 
+                    _logger?.LogInformation("[SourceLink] Source Link JSON ({Length} bytes): {Json}",
+                        json.Length,
                         json.Length > 500 ? json.Substring(0, 500) + "..." : json);
 
                     var sourceLink = JsonSerializer.Deserialize<SourceLinkInfo>(json);
-                    
+
                     if (sourceLink?.Documents != null)
                     {
                         _logger?.LogInformation("[SourceLink] Parsed {Count} document mappings:", sourceLink.Documents.Count);
@@ -425,7 +425,7 @@ public class SourceLinkResolver
                             _logger?.LogDebug("[SourceLink]   {Pattern} -> {Url}", pattern, url);
                         }
                     }
-                    
+
                     return sourceLink;
                 }
             }

@@ -302,7 +302,7 @@ public class McpResourcesTests
         // Act - call each method twice
         var workflow1 = DebuggerResources.GetWorkflowGuide();
         var workflow2 = DebuggerResources.GetWorkflowGuide();
-        
+
         var analysis1 = DebuggerResources.GetAnalysisGuide();
         var analysis2 = DebuggerResources.GetAnalysisGuide();
 

@@ -71,12 +71,13 @@ public class ObjectInspectionTools(
 
         if (string.IsNullOrWhiteSpace(address))
         {
+            // Avoid sending empty commands to the debugger
             return "Error: Address is required";
         }
 
         // Get session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
@@ -96,6 +97,7 @@ public class ObjectInspectionTools(
 
             if (result == null)
             {
+                // Keep response structured so clients can handle failure cases uniformly
                 return JsonSerializer.Serialize(new
                 {
                     error = "Failed to inspect object",
@@ -120,4 +122,3 @@ public class ObjectInspectionTools(
         }
     }
 }
-

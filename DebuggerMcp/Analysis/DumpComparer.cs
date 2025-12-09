@@ -73,6 +73,7 @@ public class DumpComparer
         }
         catch (Exception ex)
         {
+            // Avoid throwing to the caller; return a summary with the failure reason.
             result.Summary = $"Comparison failed: {ex.Message}";
         }
 
@@ -112,6 +113,7 @@ public class DumpComparer
         {
             if (!baselineTypes.ContainsKey(type.Key))
             {
+                // Only present in comparison: likely newly introduced allocations.
                 result.NewTypes.Add(type.Value);
             }
         }
@@ -121,6 +123,7 @@ public class DumpComparer
         {
             if (!comparisonTypes.ContainsKey(type.Key))
             {
+                // Missing in comparison: indicates release/absence vs baseline.
                 result.RemovedTypes.Add(type.Value);
             }
         }
@@ -703,12 +706,12 @@ public class DumpComparer
                 // 1. .dSYM in path (macOS debug symbols)
                 // 2. Check if next line has .debug/.dbg file (Linux debug symbols)
                 var hasSymbols = fullPath.Contains(".dSYM", StringComparison.OrdinalIgnoreCase);
-                
+
                 // Check next line for debug info (Linux format)
                 if (!hasSymbols && i + 1 < lines.Length)
                 {
                     var nextLine = lines[i + 1];
-                    if (!nextLine.TrimStart().StartsWith("[") && 
+                    if (!nextLine.TrimStart().StartsWith("[") &&
                         (nextLine.Contains(".debug", StringComparison.OrdinalIgnoreCase) ||
                          nextLine.Contains(".dbg", StringComparison.OrdinalIgnoreCase) ||
                          nextLine.Contains("/debug/", StringComparison.OrdinalIgnoreCase)))
@@ -852,7 +855,7 @@ public class DumpComparer
             if (heap.MemoryLeakSuspected)
             {
                 summary.Add($"⚠️ MEMORY LEAK SUSPECTED (Confidence: {heap.LeakConfidence})");
-                
+
                 // Add specific leak indicators as recommendations
                 foreach (var indicator in heap.LeakIndicators.Take(5))
                 {
@@ -966,4 +969,3 @@ public class DumpComparer
         public string RawOutput { get; set; } = string.Empty;
     }
 }
-

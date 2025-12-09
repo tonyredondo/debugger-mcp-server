@@ -73,6 +73,7 @@ public class PerformanceAnalyzer
         }
         catch (Exception ex)
         {
+            // Keep a partial result rather than throwing so callers get error context.
             result.Summary = $"Performance analysis failed: {ex.Message}";
             result.Recommendations.Add("Ensure the dump file is valid and symbols are loaded.");
         }
@@ -108,6 +109,7 @@ public class PerformanceAnalyzer
         }
         catch (Exception ex)
         {
+            // Capture failure as a recommendation so the rest of the analysis can proceed.
             result.Recommendations.Add($"CPU analysis failed: {ex.Message}");
         }
 
@@ -142,6 +144,7 @@ public class PerformanceAnalyzer
         }
         catch (Exception ex)
         {
+            // Record failure but keep returning a result to the caller.
             result.Recommendations.Add($"Allocation analysis failed: {ex.Message}");
         }
 
@@ -176,6 +179,7 @@ public class PerformanceAnalyzer
         }
         catch (Exception ex)
         {
+            // Surface failure as a recommendation to avoid failing the entire analysis.
             result.Recommendations.Add($"GC analysis failed: {ex.Message}");
         }
 
@@ -210,6 +214,7 @@ public class PerformanceAnalyzer
         }
         catch (Exception ex)
         {
+            // Preserve partial results; caller can see the failure message.
             result.Recommendations.Add($"Contention analysis failed: {ex.Message}");
         }
 
@@ -531,19 +536,19 @@ public class PerformanceAnalyzer
         // Each generation section starts with "generation N:" and contains segment rows
         // Segment rows have: segment begin allocated committed allocated_size committed_size
         // allocated_size is in format: 0x26c1e8 (2540008)
-        
+
         // Parse Gen0 - sum all segments under "generation 0:"
         result.Gen0SizeBytes = ParseLldbGenerationSize(output, "generation 0:");
-        
+
         // Parse Gen1 - sum all segments under "generation 1:"
         result.Gen1SizeBytes = ParseLldbGenerationSize(output, "generation 1:");
-        
+
         // Parse Gen2 - sum all segments under "generation 2:"
         result.Gen2SizeBytes = ParseLldbGenerationSize(output, "generation 2:");
-        
+
         // Parse LOH - sum all segments under "Large object heap"
         result.LohSizeBytes = ParseLldbGenerationSize(output, "Large object heap");
-        
+
         // Parse POH - sum all segments under "Pinned object heap"
         result.PohSizeBytes = ParseLldbGenerationSize(output, "Pinned object heap");
 
@@ -574,14 +579,14 @@ public class PerformanceAnalyzer
         // Find the end of this section (next section header or end of heap info)
         var sectionEnd = output.Length;
         var nextSections = new[] { "generation 0:", "generation 1:", "generation 2:", "Large object heap", "Pinned object heap", "NonGC heap", "GC Allocated Heap Size", "---" };
-        
+
         foreach (var nextSection in nextSections)
         {
             if (string.Equals(sectionHeader, nextSection, StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
-            
+
             var nextIndex = output.IndexOf(nextSection, sectionIndex + sectionHeader.Length, StringComparison.OrdinalIgnoreCase);
             if (nextIndex > 0 && nextIndex < sectionEnd)
             {
@@ -590,7 +595,7 @@ public class PerformanceAnalyzer
         }
 
         var sectionText = output.Substring(sectionIndex, sectionEnd - sectionIndex);
-        
+
         // Parse segment rows to extract allocated sizes
         // Format for non-empty segments: segment begin allocated committed 0x26c1e8 (2540008) 0x281000 (2625536)
         // Format for empty segments:     segment begin allocated committed                    0x1000 (4096)
@@ -600,7 +605,7 @@ public class PerformanceAnalyzer
         // - Empty segments have ONE "0xHEX (DECIMAL)" pattern (just committed)
         // - We only want to count allocated sizes, not committed sizes for empty segments
         long totalSize = 0;
-        
+
         var lines = sectionText.Split('\n');
         foreach (var line in lines)
         {
@@ -609,11 +614,11 @@ public class PerformanceAnalyzer
             {
                 continue;
             }
-            
+
             // Match "0xHEX (DECIMAL)" patterns - we need at least 2 for allocated size to exist
             // Pattern: 0x26c1e8 (2540008) 0x281000 (2625536)
             var hexDecimalMatches = Regex.Matches(line, @"0x([0-9a-f]+)\s*\((\d+)\)", RegexOptions.IgnoreCase);
-            
+
             if (hexDecimalMatches.Count >= 2)
             {
                 // First match is allocated size, second is committed size
@@ -624,7 +629,7 @@ public class PerformanceAnalyzer
             }
             // If only one match, it's committed size only (empty segment) - skip it
         }
-        
+
         return totalSize;
     }
 
@@ -721,10 +726,10 @@ public class PerformanceAnalyzer
             else
             {
                 // Alternative format: "Finalizer Queue Length: 123"
-            var queueMatch = Regex.Match(output, @"Finalizer Queue Length:\s*(\d+)", RegexOptions.IgnoreCase);
-            if (queueMatch.Success)
-            {
-                result.FinalizerQueueLength = int.Parse(queueMatch.Groups[1].Value);
+                var queueMatch = Regex.Match(output, @"Finalizer Queue Length:\s*(\d+)", RegexOptions.IgnoreCase);
+                if (queueMatch.Success)
+                {
+                    result.FinalizerQueueLength = int.Parse(queueMatch.Groups[1].Value);
                 }
             }
         }
@@ -783,12 +788,12 @@ public class PerformanceAnalyzer
         //       1    f7150583f8b8           1         1        f7158ec00028      f7158ee6c210 System.Object
         //
         // We use a flexible approach: match the first 4 numeric/hex fields, then capture the rest.
-        
+
         var lines = output.Split('\n');
         foreach (var line in lines)
         {
             // Skip header lines and summary lines (Total, Free, dashes)
-            if (line.Contains("Index") || line.Contains("---") || 
+            if (line.Contains("Index") || line.Contains("---") ||
                 line.Contains("Total") || line.Contains("Free") ||
                 string.IsNullOrWhiteSpace(line))
             {
@@ -797,10 +802,10 @@ public class PerformanceAnalyzer
 
             // Try WinDbg extended format first (9 groups):
             // Index SyncBlock MonitorHeld Recursion ThreadPtr ThreadHexId ThreadDecId ObjAddr ObjType
-            var winDbgMatch = Regex.Match(line, 
-                @"^\s*(\d+)\s+([0-9a-f]+)\s+(\d+)\s+(\d+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+(\d+)\s+([0-9a-f]+)\s+(.+)$", 
+            var winDbgMatch = Regex.Match(line,
+                @"^\s*(\d+)\s+([0-9a-f]+)\s+(\d+)\s+(\d+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+(\d+)\s+([0-9a-f]+)\s+(.+)$",
                 RegexOptions.IgnoreCase);
-            
+
             if (winDbgMatch.Success)
             {
                 var index = int.Parse(winDbgMatch.Groups[1].Value);
@@ -812,13 +817,13 @@ public class PerformanceAnalyzer
 
                 if (monitorHeld > 0)
                 {
-                result.SyncBlocks.Add(new SyncBlockInfo
-                {
-                    Index = index,
+                    result.SyncBlocks.Add(new SyncBlockInfo
+                    {
+                        Index = index,
                         ObjectAddress = objectAddress,
                         OwnerThreadId = ownerThread,
-                    ObjectType = objectType
-                });
+                        ObjectType = objectType
+                    });
                     result.TotalLockCount++;
                 }
                 continue;
@@ -826,10 +831,10 @@ public class PerformanceAnalyzer
 
             // Try LLDB/simpler format (6 groups):
             // Index SyncBlock MonitorHeld Recursion ThreadInfo Rest(ObjAddr+Type)
-            var lldbMatch = Regex.Match(line, 
-                @"^\s*(\d+)\s+([0-9a-f]+)\s+(\d+)\s+(\d+)\s+([0-9a-f]+)\s+(.+)$", 
+            var lldbMatch = Regex.Match(line,
+                @"^\s*(\d+)\s+([0-9a-f]+)\s+(\d+)\s+(\d+)\s+([0-9a-f]+)\s+(.+)$",
                 RegexOptions.IgnoreCase);
-            
+
             if (lldbMatch.Success)
             {
                 var index = int.Parse(lldbMatch.Groups[1].Value);
@@ -841,7 +846,7 @@ public class PerformanceAnalyzer
                 // Try to extract object type (ClassName with dots or just any word)
                 var typeMatch = Regex.Match(rest, @"(\S+\.\S+|\S+)$");
                 var objectType = typeMatch.Success ? typeMatch.Groups[1].Value : null;
-                
+
                 // Try to extract object address (hex at start of rest)
                 var objAddrMatch = Regex.Match(rest, @"^([0-9a-f]+)", RegexOptions.IgnoreCase);
                 var objectAddress = objAddrMatch.Success ? objAddrMatch.Groups[1].Value : syncBlock;
@@ -965,13 +970,13 @@ public class PerformanceAnalyzer
             @"stop reason\s*=\s*watchpoint",         // watchpoint
             @"stop reason\s*=\s*EXC_",               // macOS exceptions (EXC_BAD_ACCESS, EXC_CRASH, etc.)
         };
-        
+
         var stoppedCount = 0;
         foreach (var pattern in stoppedPatterns)
         {
             stoppedCount += Regex.Matches(threadOutput, pattern, RegexOptions.IgnoreCase).Count;
         }
-        
+
         // Active threads = total - stopped (but at least 0)
         result.ActiveThreads = Math.Max(0, result.TotalThreads - stoppedCount);
 
@@ -1106,7 +1111,7 @@ public class PerformanceAnalyzer
         //
         // Module names can contain dots (libcoreclr.so, System.Private.CoreLib.dll)
         // Function names can contain dots, underscores, angle brackets (generic types)
-        
+
         // Pattern explanation:
         // ([\w.\-]+) - Module name: word chars, dots, hyphens (e.g., libcoreclr.so, System.Private.CoreLib.dll)
         // [!`]       - Separator: ! for WinDbg, ` for LLDB
@@ -1118,14 +1123,14 @@ public class PerformanceAnalyzer
         {
             var moduleName = match.Groups[1].Value;
             var functionName = match.Groups[2].Value;
-            
+
             // Clean up function name - remove trailing backtick if present (LLDB artifact)
             functionName = functionName.TrimEnd('`');
-            
+
             // Skip if we got invalid matches
             if (string.IsNullOrWhiteSpace(moduleName) || string.IsNullOrWhiteSpace(functionName))
                 continue;
-                
+
             var fullName = $"{moduleName}!{functionName}";
 
             if (!functionCounts.ContainsKey(fullName))
@@ -1407,4 +1412,3 @@ public class PerformanceAnalyzer
         });
     }
 }
-

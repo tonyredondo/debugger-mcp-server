@@ -36,7 +36,6 @@ public class WatchStoreTests : IDisposable
         }
     }
 
-    #region AddWatchAsync Tests
 
     [Fact]
     public async Task AddWatchAsync_WithValidWatch_ReturnsWatchWithId()
@@ -105,9 +104,7 @@ public class WatchStoreTests : IDisposable
             _store.AddWatchAsync("", "dump1", watch));
     }
 
-    #endregion
 
-    #region GetWatchesAsync Tests
 
     [Fact]
     public async Task GetWatchesAsync_WithNoWatches_ReturnsEmptyList()
@@ -169,9 +166,7 @@ public class WatchStoreTests : IDisposable
         Assert.Single(user2Watches);
     }
 
-    #endregion
 
-    #region GetWatchAsync Tests
 
     [Fact]
     public async Task GetWatchAsync_WithExistingId_ReturnsWatch()
@@ -198,9 +193,7 @@ public class WatchStoreTests : IDisposable
         Assert.Null(watch);
     }
 
-    #endregion
 
-    #region RemoveWatchAsync Tests
 
     [Fact]
     public async Task RemoveWatchAsync_WithExistingId_ReturnsTrue()
@@ -237,16 +230,14 @@ public class WatchStoreTests : IDisposable
             _store.RemoveWatchAsync("user1", "dump1", ""));
     }
 
-    #endregion
 
-    #region UpdateWatchAsync Tests
 
     [Fact]
     public async Task UpdateWatchAsync_WithExistingWatch_ReturnsTrue()
     {
         // Arrange
-        var added = await _store.AddWatchAsync("user1", "dump1", new WatchExpression 
-        { 
+        var added = await _store.AddWatchAsync("user1", "dump1", new WatchExpression
+        {
             Expression = "var1",
             Description = "Original"
         });
@@ -280,9 +271,7 @@ public class WatchStoreTests : IDisposable
         Assert.False(result);
     }
 
-    #endregion
 
-    #region ClearWatchesAsync Tests
 
     [Fact]
     public async Task ClearWatchesAsync_WithWatches_ReturnsCount()
@@ -313,9 +302,7 @@ public class WatchStoreTests : IDisposable
         Assert.Equal(0, count);
     }
 
-    #endregion
 
-    #region HasWatchesAsync Tests
 
     [Fact]
     public async Task HasWatchesAsync_WithWatches_ReturnsTrue()
@@ -340,9 +327,7 @@ public class WatchStoreTests : IDisposable
         Assert.False(result);
     }
 
-    #endregion
 
-    #region GetWatchCountAsync Tests
 
     [Fact]
     public async Task GetWatchCountAsync_WithWatches_ReturnsCount()
@@ -358,9 +343,7 @@ public class WatchStoreTests : IDisposable
         Assert.Equal(2, count);
     }
 
-    #endregion
 
-    #region Persistence Tests
 
     [Fact]
     public async Task Watches_ArePersisted_AcrossStoreInstances()
@@ -379,9 +362,7 @@ public class WatchStoreTests : IDisposable
         Assert.Equal("var1", watches[0].Expression);
     }
 
-    #endregion
 
-    #region Cache Tests
 
     [Fact]
     public void InvalidateCache_ClearsSpecificCache()
@@ -397,6 +378,5 @@ public class WatchStoreTests : IDisposable
         _store.InvalidateAllCaches();
     }
 
-    #endregion
 }
 

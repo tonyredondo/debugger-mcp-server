@@ -456,7 +456,7 @@ public class CollectionEntry
     /// </summary>
     [JsonPropertyName("key")]
     public object? Key { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the value.
     /// Can be: primitive value, string, InspectedObject, or null.

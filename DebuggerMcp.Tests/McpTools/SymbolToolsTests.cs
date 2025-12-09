@@ -22,7 +22,7 @@ public class SymbolToolsTests : IDisposable
     {
         _tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempPath);
-        
+
         _sessionManager = new DebuggerSessionManager(_tempPath);
         _symbolManager = new SymbolManager(_tempPath);
         _watchStore = new WatchStore(_tempPath);
@@ -77,7 +77,7 @@ public class SymbolToolsTests : IDisposable
     public void ConfigureAdditionalSymbols_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
         // Act & Assert
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             _tools.ConfigureAdditionalSymbols(sessionId!, "user", "/path/to/symbols"));
     }
 
@@ -91,7 +91,7 @@ public class SymbolToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             _tools.ConfigureAdditionalSymbols(sessionId, userId!, "/path/to/symbols"));
     }
 
@@ -106,7 +106,7 @@ public class SymbolToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             _tools.ConfigureAdditionalSymbols(sessionId, userId, paths!));
     }
 
@@ -117,7 +117,7 @@ public class SymbolToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        Assert.Throws<UnauthorizedAccessException>(() => 
+        Assert.Throws<UnauthorizedAccessException>(() =>
             _tools.ConfigureAdditionalSymbols(sessionId, "wrong-user", "/path/to/symbols"));
     }
 
@@ -125,7 +125,7 @@ public class SymbolToolsTests : IDisposable
     public void ConfigureAdditionalSymbols_WithNonExistentSession_ThrowsInvalidOperationException()
     {
         // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => 
+        Assert.Throws<InvalidOperationException>(() =>
             _tools.ConfigureAdditionalSymbols("non-existent-session", "user", "/path/to/symbols"));
     }
 

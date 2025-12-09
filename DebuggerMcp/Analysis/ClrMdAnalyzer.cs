@@ -17,7 +17,7 @@ public class ClrMdAnalyzer : IDisposable
     private DataTarget? _dataTarget;
     private ClrRuntime? _runtime;
     private readonly object _lock = new();
-    
+
     /// <summary>
     /// Skip modules with metadata larger than 50MB to avoid memory issues.
     /// </summary>
@@ -49,9 +49,9 @@ public class ClrMdAnalyzer : IDisposable
             try
             {
                 CloseDump();
-                
+
                 _dataTarget = DataTarget.LoadDump(dumpPath);
-                
+
                 var clrInfo = _dataTarget.ClrVersions.FirstOrDefault();
                 if (clrInfo == null)
                 {
@@ -59,9 +59,9 @@ public class ClrMdAnalyzer : IDisposable
                     CloseDump();
                     return false;
                 }
-                
+
                 _runtime = clrInfo.CreateRuntime();
-                _logger?.LogInformation("[ClrMD] Opened dump: {Path}, CLR: {Version}", 
+                _logger?.LogInformation("[ClrMD] Opened dump: {Path}, CLR: {Version}",
                     dumpPath, clrInfo.Version);
                 return true;
             }
@@ -95,12 +95,12 @@ public class ClrMdAnalyzer : IDisposable
     public List<EnrichedModuleInfo> GetAllModulesWithAttributes()
     {
         var result = new List<EnrichedModuleInfo>();
-        
+
         lock (_lock)
         {
             if (_runtime == null || _dataTarget == null)
                 return result;
-            
+
             foreach (var module in _runtime.EnumerateModules())
             {
                 try
@@ -114,7 +114,7 @@ public class ClrMdAnalyzer : IDisposable
                         IsDynamic = module.IsDynamic,
                         IsPEFile = module.IsPEFile
                     };
-                    
+
                     // Only read attributes from PE files with metadata
                     if (module.IsPEFile && !module.IsDynamic && module.MetadataAddress != 0)
                     {
@@ -122,7 +122,7 @@ public class ClrMdAnalyzer : IDisposable
                         info.Attributes = attributes;
                         info.AssemblyVersion = version;
                     }
-                    
+
                     result.Add(info);
                 }
                 catch (Exception ex)
@@ -131,7 +131,7 @@ public class ClrMdAnalyzer : IDisposable
                 }
             }
         }
-        
+
         return result;
     }
 
@@ -146,19 +146,19 @@ public class ClrMdAnalyzer : IDisposable
         {
             if (_runtime == null || _dataTarget == null)
                 return new List<AssemblyAttributeInfo>();
-            
+
             var module = _runtime.EnumerateModules()
-                .FirstOrDefault(m => 
+                .FirstOrDefault(m =>
                     Path.GetFileNameWithoutExtension(m.Name)
-                        ?.Equals(Path.GetFileNameWithoutExtension(moduleName), 
+                        ?.Equals(Path.GetFileNameWithoutExtension(moduleName),
                             StringComparison.OrdinalIgnoreCase) == true);
-            
+
             if (module == null)
             {
                 _logger?.LogDebug("[ClrMD] Module not found: {Name}", moduleName);
                 return new List<AssemblyAttributeInfo>();
             }
-            
+
             return ReadAttributesFromMemory(module).attributes;
         }
     }
@@ -170,42 +170,42 @@ public class ClrMdAnalyzer : IDisposable
     {
         var result = new List<AssemblyAttributeInfo>();
         string? version = null;
-        
+
         try
         {
             var metadataAddress = module.MetadataAddress;
             var metadataLength = module.MetadataLength;
-            
+
             if (metadataAddress == 0 || metadataLength == 0)
             {
                 _logger?.LogDebug("[ClrMD] No metadata for: {Name}", module.Name);
                 return (result, version);
             }
-            
+
             // Skip very large metadata to avoid memory issues
             if (metadataLength > MaxMetadataSize)
             {
-                _logger?.LogDebug("[ClrMD] Metadata too large ({Size}MB): {Name}", 
+                _logger?.LogDebug("[ClrMD] Metadata too large ({Size}MB): {Name}",
                     metadataLength / 1024 / 1024, module.Name);
                 return (result, version);
             }
-            
+
             // Read metadata bytes from dump memory
             // Safe to cast to int since we checked against MaxMetadataSize above
             var metadataBytes = new byte[(int)metadataLength];
             int bytesRead = _dataTarget!.DataReader.Read(metadataAddress, metadataBytes);
-            
+
             if (bytesRead == 0)
             {
                 _logger?.LogDebug("[ClrMD] Could not read metadata for: {Name}", module.Name);
                 return (result, version);
             }
-            
+
             if (bytesRead != (int)metadataLength)
             {
                 Array.Resize(ref metadataBytes, bytesRead);
             }
-            
+
             // Parse with MetadataReader
             unsafe
             {
@@ -224,7 +224,7 @@ public class ClrMdAnalyzer : IDisposable
         {
             _logger?.LogDebug(ex, "[ClrMD] Error reading metadata for: {Name}", module.Name);
         }
-        
+
         return (result, version);
     }
 
@@ -235,19 +235,19 @@ public class ClrMdAnalyzer : IDisposable
     {
         var result = new List<AssemblyAttributeInfo>();
         string? version = null;
-        
+
         if (!reader.IsAssembly)
             return (result, version);
-        
+
         var assemblyDef = reader.GetAssemblyDefinition();
-        
+
         // Extract assembly version from the assembly definition
         var ver = assemblyDef.Version;
         if (ver.Major != 0 || ver.Minor != 0 || ver.Build != 0 || ver.Revision != 0)
         {
             version = ver.ToString();
         }
-        
+
         foreach (var attrHandle in assemblyDef.GetCustomAttributes())
         {
             try
@@ -264,7 +264,7 @@ public class ClrMdAnalyzer : IDisposable
                 // Skip malformed attributes
             }
         }
-        
+
         return (result, version);
     }
 
@@ -274,7 +274,7 @@ public class ClrMdAnalyzer : IDisposable
     private AssemblyAttributeInfo? DecodeAttribute(MetadataReader reader, CustomAttribute attr)
     {
         string? typeName = null;
-        
+
         if (attr.Constructor.Kind == HandleKind.MemberReference)
         {
             var memberRef = reader.GetMemberReference((MemberReferenceHandle)attr.Constructor);
@@ -294,12 +294,12 @@ public class ClrMdAnalyzer : IDisposable
             var name = reader.GetString(typeDef.Name);
             typeName = string.IsNullOrEmpty(ns) ? name : $"{ns}.{name}";
         }
-        
+
         if (string.IsNullOrEmpty(typeName))
             return null;
-        
+
         var (value, key) = DecodeBlob(reader, attr, typeName);
-        
+
         return new AssemblyAttributeInfo
         {
             AttributeType = typeName,
@@ -317,14 +317,14 @@ public class ClrMdAnalyzer : IDisposable
         try
         {
             var blob = reader.GetBlobReader(attr.Value);
-            
+
             if (blob.Length < 2)
                 return (null, null);
-            
+
             var prolog = blob.ReadUInt16();
             if (prolog != 0x0001)
                 return (null, null);
-            
+
             // Handle known attribute types with specific signatures
             return typeName switch
             {
@@ -355,11 +355,11 @@ public class ClrMdAnalyzer : IDisposable
     /// Decodes AssemblyMetadataAttribute which has two string params (key, value).
     /// </summary>
     private (string? Value, string? Key) DecodeKeyValueString(ref BlobReader blob)
-            {
-                var key = ReadString(ref blob);
-                var value = ReadString(ref blob);
-                return (value, key);
-            }
+    {
+        var key = ReadString(ref blob);
+        var value = ReadString(ref blob);
+        return (value, key);
+    }
 
     /// <summary>
     /// Decodes DebuggableAttribute(DebuggingModes modes) - int32 enum flags.
@@ -375,24 +375,24 @@ public class ClrMdAnalyzer : IDisposable
     }
 
     private (string? Value, string? Key) DecodeDebuggable(ref BlobReader blob)
-            {
+    {
         // DebuggableAttribute has two constructors:
         // 1. DebuggableAttribute(DebuggingModes modes) - 4 bytes (int32 enum) - modern, handled here
         // 2. DebuggableAttribute(bool, bool) - 2 bytes - legacy (.NET Framework), returns <binary>
-        
+
         if (blob.RemainingBytes < 4) return ("<binary>", null);
-        
+
         var modes = (DebuggingModes)blob.ReadInt32();
-        
+
         if (modes == DebuggingModes.None)
             return ("None", null);
-        
+
         var flags = new List<string>();
         if (modes.HasFlag(DebuggingModes.Default)) flags.Add("Default");
         if (modes.HasFlag(DebuggingModes.DisableOptimizations)) flags.Add("DisableOptimizations");
         if (modes.HasFlag(DebuggingModes.IgnoreSymbolStoreSequencePoints)) flags.Add("IgnoreSymbolStoreSequencePoints");
         if (modes.HasFlag(DebuggingModes.EnableEditAndContinue)) flags.Add("EnableEditAndContinue");
-        
+
         return (flags.Count > 0 ? string.Join(", ", flags) : modes.ToString(), null);
     }
 
@@ -422,9 +422,9 @@ public class ClrMdAnalyzer : IDisposable
         if (blob.RemainingBytes < 2) return ("<binary>", null);
         var numNamed = blob.ReadUInt16();
         if (numNamed == 0) return ("Default", null);
-        
+
         var properties = new List<string>();
-        
+
         // Each named arg: Kind (Field/Property), Type, Name (string), Value
         for (int i = 0; i < numNamed && blob.RemainingBytes > 2; i++)
         {
@@ -433,10 +433,10 @@ public class ClrMdAnalyzer : IDisposable
                 var kind = blob.ReadByte(); // SERIALIZATION_TYPE_FIELD or SERIALIZATION_TYPE_PROPERTY
                 var fieldType = blob.ReadByte();
                 var name = ReadString(ref blob);
-                
+
                 if (string.IsNullOrEmpty(name) || blob.RemainingBytes < 1)
                     break;
-                
+
                 switch (fieldType)
                 {
                     case ELEMENT_TYPE_BOOLEAN:
@@ -499,8 +499,8 @@ public class ClrMdAnalyzer : IDisposable
                 break;
             }
         }
-        exitLoop:
-        
+    exitLoop:
+
         return (properties.Count > 0 ? string.Join(", ", properties) : "Default", null);
     }
 
@@ -529,8 +529,8 @@ public class ClrMdAnalyzer : IDisposable
     /// </summary>
     private (string? Value, string? Key) DecodeStringAttribute(ref BlobReader blob)
     {
-                var value = ReadString(ref blob);
-                return (value, null);
+        var value = ReadString(ref blob);
+        return (value, null);
     }
 
     /// <summary>
@@ -539,7 +539,7 @@ public class ClrMdAnalyzer : IDisposable
     private (string? Value, string? Key) DecodeTargetFramework(ref BlobReader blob)
     {
         var frameworkName = ReadString(ref blob);
-        
+
         // Try to read optional FrameworkDisplayName named parameter
         if (blob.RemainingBytes >= 2)
         {
@@ -556,15 +556,15 @@ public class ClrMdAnalyzer : IDisposable
                         var displayName = ReadString(ref blob);
                         if (!string.IsNullOrEmpty(displayName))
                             return ($"{frameworkName} ({displayName})", null);
-            }
-        }
-        catch
-        {
+                    }
+                }
+                catch
+                {
                     // Ignore parsing errors for optional part
                 }
             }
         }
-        
+
         return (frameworkName, null);
     }
 
@@ -574,14 +574,14 @@ public class ClrMdAnalyzer : IDisposable
     private (string? Value, string? Key) DecodeStringOrBinary(ref BlobReader blob)
     {
         var value = ReadString(ref blob);
-        
+
         if (value == null)
             return ("<binary>", null);
-        
+
         // Check if it contains control characters (likely binary data incorrectly read as string)
         if (value.Any(c => char.IsControl(c) && c != '\n' && c != '\r' && c != '\t'))
             return ("<binary>", null);
-        
+
         return (value, null);
     }
 
@@ -592,11 +592,11 @@ public class ClrMdAnalyzer : IDisposable
     {
         if (blob.RemainingBytes == 0)
             return null;
-        
+
         var firstByte = blob.ReadByte();
         if (firstByte == 0xFF)
             return null;
-        
+
         int length;
         if ((firstByte & 0x80) == 0)
         {
@@ -615,17 +615,17 @@ public class ClrMdAnalyzer : IDisposable
             // 4-byte length - need 3 more bytes
             if (blob.RemainingBytes < 3)
                 return null;
-            length = ((firstByte & 0x1F) << 24) | (blob.ReadByte() << 16) | 
+            length = ((firstByte & 0x1F) << 24) | (blob.ReadByte() << 16) |
                      (blob.ReadByte() << 8) | blob.ReadByte();
         }
-        
+
         if (length == 0)
             return string.Empty;
-        
+
         // Validate we have enough bytes before reading
         if (blob.RemainingBytes < length)
             return null;
-        
+
         var bytes = blob.ReadBytes(length);
         return Encoding.UTF8.GetString(bytes);
     }
@@ -637,11 +637,11 @@ public class ClrMdAnalyzer : IDisposable
     {
         CloseDump();
     }
-    
+
     // ============================================================================
     // Phase 2 ClrMD Enrichment Methods
     // ============================================================================
-    
+
     /// <summary>
     /// Gets GC heap summary using ClrMD 3.x APIs.
     /// </summary>
@@ -652,19 +652,19 @@ public class ClrMdAnalyzer : IDisposable
             try
             {
                 if (_runtime == null) return null;
-                
+
                 var heap = _runtime.Heap;
-                
+
                 // Calculate generation sizes by iterating segments
                 var genSizes = new GenerationSizes();
                 var segments = new List<GcSegmentInfo>();
                 long totalSize = 0;
-                
+
                 foreach (var segment in heap.Segments)
                 {
                     var segmentSize = (long)segment.Length;
                     totalSize += segmentSize;
-                    
+
                     // Categorize by segment kind (GCSegmentKind enum in ClrMD 3.x)
                     switch (segment.Kind)
                     {
@@ -688,7 +688,7 @@ public class ClrMdAnalyzer : IDisposable
                             genSizes.Gen2 += segmentSize;
                             break;
                     }
-                    
+
                     segments.Add(new GcSegmentInfo
                     {
                         Address = $"0x{segment.Start:X16}",
@@ -696,7 +696,7 @@ public class ClrMdAnalyzer : IDisposable
                         Kind = segment.Kind.ToString()
                     });
                 }
-                
+
                 // Get finalizable object count
                 int finalizableCount = 0;
                 try
@@ -707,10 +707,10 @@ public class ClrMdAnalyzer : IDisposable
                 {
                     // Some dumps may not have finalization data
                 }
-                
+
                 // Note: Fragmentation is calculated more accurately during the combined heap analysis
                 // which is always run. GcSummary.Fragmentation will be updated by DotNetCrashAnalyzer.
-                
+
                 return new GcSummary
                 {
                     HeapCount = heap.SubHeaps.Length,
@@ -729,7 +729,7 @@ public class ClrMdAnalyzer : IDisposable
             }
         }
     }
-    
+
     /// <summary>
     /// Gets enhanced thread information from ClrMD.
     /// Returns a dictionary keyed by OS thread ID.
@@ -737,13 +737,13 @@ public class ClrMdAnalyzer : IDisposable
     public Dictionary<uint, ClrMdThreadInfo> GetEnhancedThreadInfo()
     {
         var result = new Dictionary<uint, ClrMdThreadInfo>();
-        
+
         lock (_lock)
         {
             try
             {
                 if (_runtime == null) return result;
-                
+
                 foreach (var thread in _runtime.Threads)
                 {
                     var info = new ClrMdThreadInfo
@@ -751,11 +751,11 @@ public class ClrMdAnalyzer : IDisposable
                         IsGC = thread.IsGc,
                         StackBase = thread.StackBase != 0 ? $"0x{thread.StackBase:X16}" : null,
                         StackLimit = thread.StackLimit != 0 ? $"0x{thread.StackLimit:X16}" : null,
-                        StackUsageBytes = thread.StackBase != 0 && thread.StackLimit != 0 
-                            ? (long)(thread.StackBase - thread.StackLimit) 
+                        StackUsageBytes = thread.StackBase != 0 && thread.StackLimit != 0
+                            ? (long)(thread.StackBase - thread.StackLimit)
                             : 0
                     };
-                    
+
                     result[thread.OSThreadId] = info;
                 }
             }
@@ -764,12 +764,12 @@ public class ClrMdAnalyzer : IDisposable
                 _logger?.LogWarning(ex, "[ClrMD] Failed to get enhanced thread info");
             }
         }
-        
+
         return result;
     }
-    
+
     // === Phase 2b: Top Memory Consumers ===
-    
+
     /// <summary>
     /// Gets top memory consumers by walking the heap.
     /// </summary>
@@ -782,7 +782,7 @@ public class ClrMdAnalyzer : IDisposable
             try
             {
                 if (_runtime == null) return null;
-                
+
                 var heap = _runtime.Heap;
                 var typeStats = new Dictionary<string, (int Count, long Size, long Largest)>();
                 var largeObjects = new List<LargeObjectInfo>();
@@ -790,10 +790,10 @@ public class ClrMdAnalyzer : IDisposable
                 long freeSize = 0;
                 int totalCount = 0;
                 bool wasAborted = false;
-                
+
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 const long LargeObjectThreshold = 85000; // LOH threshold
-                
+
                 foreach (var obj in heap.EnumerateObjects())
                 {
                     // Check timeout
@@ -803,22 +803,22 @@ public class ClrMdAnalyzer : IDisposable
                         _logger?.LogWarning("[ClrMD] Heap walk aborted after {Ms}ms", sw.ElapsedMilliseconds);
                         break;
                     }
-                    
+
                     if (!obj.IsValid) continue;
-                    
+
                     var size = (long)obj.Size;
-                    
+
                     // Track free space for fragmentation calculation
                     if (obj.IsFree)
                     {
                         freeSize += size;
                         continue;
                     }
-                    
+
                     var typeName = obj.Type?.Name ?? "<Unknown>";
                     totalSize += size;
                     totalCount++;
-                    
+
                     // Track type stats
                     if (typeStats.TryGetValue(typeName, out var stats))
                     {
@@ -828,13 +828,13 @@ public class ClrMdAnalyzer : IDisposable
                     {
                         typeStats[typeName] = (1, size, size);
                     }
-                    
+
                     // Track large objects (>= 85KB threshold)
                     if (size >= LargeObjectThreshold && largeObjects.Count < 50)
                     {
                         var segment = heap.GetSegmentByAddress(obj.Address);
                         var generation = segment?.Kind.ToString() ?? "Unknown";
-                        
+
                         largeObjects.Add(new LargeObjectInfo
                         {
                             Address = $"0x{obj.Address:X16}",
@@ -844,9 +844,9 @@ public class ClrMdAnalyzer : IDisposable
                         });
                     }
                 }
-                
+
                 sw.Stop();
-                
+
                 // Build result
                 var bySize = typeStats
                     .OrderByDescending(kvp => kvp.Value.Size)
@@ -861,7 +861,7 @@ public class ClrMdAnalyzer : IDisposable
                         Percentage = totalSize > 0 ? Math.Round(kvp.Value.Size * 100.0 / totalSize, 2) : 0
                     })
                     .ToList();
-                
+
                 var byCount = typeStats
                     .OrderByDescending(kvp => kvp.Value.Count)
                     .Take(topN)
@@ -875,7 +875,7 @@ public class ClrMdAnalyzer : IDisposable
                         Percentage = totalSize > 0 ? Math.Round(kvp.Value.Size * 100.0 / totalSize, 2) : 0
                     })
                     .ToList();
-                
+
                 return new TopMemoryConsumers
                 {
                     BySize = bySize,
@@ -889,8 +889,8 @@ public class ClrMdAnalyzer : IDisposable
                         AnalysisTimeMs = sw.ElapsedMilliseconds,
                         WasAborted = wasAborted,
                         FreeBytes = freeSize,
-                        FragmentationRatio = (totalSize + freeSize) > 0 
-                            ? Math.Round(freeSize * 1.0 / (totalSize + freeSize), 4) 
+                        FragmentationRatio = (totalSize + freeSize) > 0
+                            ? Math.Round(freeSize * 1.0 / (totalSize + freeSize), 4)
                             : 0
                     }
                 };
@@ -902,14 +902,14 @@ public class ClrMdAnalyzer : IDisposable
             }
         }
     }
-    
+
     // === Phase 2c: Async Analysis ===
-    
+
     // Task state flags from System.Threading.Tasks.Task
     private const int TASK_STATE_RAN_TO_COMPLETION = 0x1000000;
     private const int TASK_STATE_CANCELED = 0x400000;
     private const int TASK_STATE_FAULTED = 0x200000;
-    
+
     private static string GetTaskStatus(int stateFlags)
     {
         if ((stateFlags & TASK_STATE_RAN_TO_COMPLETION) != 0) return "RanToCompletion";
@@ -917,7 +917,7 @@ public class ClrMdAnalyzer : IDisposable
         if ((stateFlags & TASK_STATE_CANCELED) != 0) return "Canceled";
         return "Pending";
     }
-    
+
     private FaultedTaskInfo ExtractFaultedTaskInfo(ClrObject taskObj)
     {
         var info = new FaultedTaskInfo
@@ -926,7 +926,7 @@ public class ClrMdAnalyzer : IDisposable
             TaskType = taskObj.Type?.Name ?? "<Unknown>",
             Status = "Faulted"
         };
-        
+
         try
         {
             var contingentProps = taskObj.ReadObjectField("m_contingentProperties");
@@ -939,7 +939,7 @@ public class ClrMdAnalyzer : IDisposable
                     if (!faultException.IsNull && faultException.Type != null)
                     {
                         info.ExceptionType = faultException.Type.Name;
-                        
+
                         var msgField = faultException.Type.GetFieldByName("_message");
                         if (msgField != null)
                         {
@@ -957,10 +957,10 @@ public class ClrMdAnalyzer : IDisposable
         {
             // Ignore errors reading exception details
         }
-        
+
         return info;
     }
-    
+
     private StateMachineInfo ExtractStateMachineInfo(ClrObject smObj)
     {
         var info = new StateMachineInfo
@@ -969,7 +969,7 @@ public class ClrMdAnalyzer : IDisposable
             StateMachineType = smObj.Type?.Name ?? "<Unknown>",
             CurrentState = -99
         };
-        
+
         try
         {
             var stateField = smObj.Type?.GetFieldByName("<>1__state");
@@ -982,10 +982,10 @@ public class ClrMdAnalyzer : IDisposable
         {
             // Ignore errors reading state
         }
-        
+
         return info;
     }
-    
+
     /// <summary>
     /// Analyzes async tasks and state machines.
     /// </summary>
@@ -997,7 +997,7 @@ public class ClrMdAnalyzer : IDisposable
             try
             {
                 if (_runtime == null) return null;
-                
+
                 var heap = _runtime.Heap;
                 var analysis = new AsyncAnalysis
                 {
@@ -1005,9 +1005,9 @@ public class ClrMdAnalyzer : IDisposable
                     FaultedTasks = new List<FaultedTaskInfo>(),
                     PendingStateMachines = new List<StateMachineInfo>()
                 };
-                
+
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                
+
                 foreach (var obj in heap.EnumerateObjects())
                 {
                     if (timeoutMs > 0 && sw.ElapsedMilliseconds > timeoutMs)
@@ -1016,23 +1016,23 @@ public class ClrMdAnalyzer : IDisposable
                         _logger?.LogWarning("[ClrMD] Async analysis aborted after {Ms}ms", sw.ElapsedMilliseconds);
                         break;
                     }
-                    
+
                     if (!obj.IsValid || obj.Type == null) continue;
-                    
+
                     var typeName = obj.Type.Name;
-                    
+
                     // Check for Task or Task<T> (but not TaskCompletionSource, TaskScheduler, etc.)
-                    if (typeName != null && 
-                        (typeName == "System.Threading.Tasks.Task" || 
+                    if (typeName != null &&
+                        (typeName == "System.Threading.Tasks.Task" ||
                          typeName.StartsWith("System.Threading.Tasks.Task`1")))
                     {
                         analysis.Summary!.TotalTasks++;
-                        
+
                         try
                         {
                             var stateFlags = obj.ReadField<int>("m_stateFlags");
                             var status = GetTaskStatus(stateFlags);
-                            
+
                             switch (status)
                             {
                                 case "RanToCompletion":
@@ -1058,7 +1058,7 @@ public class ClrMdAnalyzer : IDisposable
                             // Skip if can't read state
                         }
                     }
-                    
+
                     // Check for async state machines
                     if (typeName != null && typeName.Contains("+<") && typeName.Contains(">d__"))
                     {
@@ -1068,10 +1068,10 @@ public class ClrMdAnalyzer : IDisposable
                         }
                     }
                 }
-                
+
                 sw.Stop();
                 analysis.AnalysisTimeMs = sw.ElapsedMilliseconds;
-                
+
                 return analysis;
             }
             catch (Exception ex)
@@ -1081,36 +1081,36 @@ public class ClrMdAnalyzer : IDisposable
             }
         }
     }
-    
+
     // === Phase 2d: String Analysis ===
-    
+
     private static string GetStringSuggestion(string value)
     {
         if (string.IsNullOrEmpty(value))
             return "Use string.Empty instead of \"\"";
-        
+
         if (value.Equals("true", StringComparison.OrdinalIgnoreCase))
             return "Use bool.TrueString";
-        
+
         if (value.Equals("false", StringComparison.OrdinalIgnoreCase))
             return "Use bool.FalseString";
-        
+
         if (value.Equals("null", StringComparison.OrdinalIgnoreCase))
             return "Consider using a constant";
-        
+
         if (value.StartsWith("http://") || value.StartsWith("https://"))
             return "Consider caching URL prefixes";
-        
+
         if (value.Length <= 8)
             return "Consider string.Intern() for frequently used short strings";
-        
+
         return "Consider caching or using StringPool";
     }
-    
+
     private static string EscapeControlCharacters(string value)
     {
         if (string.IsNullOrEmpty(value)) return value;
-        
+
         var sb = new StringBuilder(value.Length);
         foreach (var c in value)
         {
@@ -1130,7 +1130,7 @@ public class ClrMdAnalyzer : IDisposable
         }
         return sb.ToString();
     }
-    
+
     /// <summary>
     /// Analyzes string duplicates in the heap.
     /// </summary>
@@ -1144,7 +1144,7 @@ public class ClrMdAnalyzer : IDisposable
             try
             {
                 if (_runtime == null) return null;
-                
+
                 var heap = _runtime.Heap;
                 var stringCounts = new Dictionary<string, (int Count, long Size)>();
                 var analysis = new StringAnalysis
@@ -1152,9 +1152,9 @@ public class ClrMdAnalyzer : IDisposable
                     Summary = new StringAnalysisSummary(),
                     ByLength = new StringLengthDistribution()
                 };
-                
+
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                
+
                 foreach (var obj in heap.EnumerateObjects())
                 {
                     if (timeoutMs > 0 && sw.ElapsedMilliseconds > timeoutMs)
@@ -1163,20 +1163,20 @@ public class ClrMdAnalyzer : IDisposable
                         _logger?.LogWarning("[ClrMD] String analysis aborted after {Ms}ms", sw.ElapsedMilliseconds);
                         break;
                     }
-                    
+
                     if (!obj.IsValid || obj.Type?.Name != "System.String") continue;
-                    
+
                     var str = obj.AsString();
                     if (str == null) continue;
-                    
-                    var truncatedStr = str.Length > maxStringLength 
-                        ? str.Substring(0, maxStringLength) 
+
+                    var truncatedStr = str.Length > maxStringLength
+                        ? str.Substring(0, maxStringLength)
                         : str;
-                    
+
                     var size = (long)obj.Size;
                     analysis.Summary!.TotalStrings++;
                     analysis.Summary.TotalSize += size;
-                    
+
                     // Categorize by length
                     var len = str.Length;
                     if (len == 0) analysis.ByLength!.Empty++;
@@ -1184,7 +1184,7 @@ public class ClrMdAnalyzer : IDisposable
                     else if (len <= 100) analysis.ByLength!.Medium++;
                     else if (len <= 1000) analysis.ByLength!.Long++;
                     else analysis.ByLength!.VeryLong++;
-                    
+
                     // Track duplicates
                     if (stringCounts.TryGetValue(truncatedStr, out var stats))
                     {
@@ -1195,35 +1195,38 @@ public class ClrMdAnalyzer : IDisposable
                         stringCounts[truncatedStr] = (1, size);
                     }
                 }
-                
+
                 sw.Stop();
                 analysis.AnalysisTimeMs = sw.ElapsedMilliseconds;
-                
+
                 // Calculate summary
                 analysis.Summary!.UniqueStrings = stringCounts.Count;
                 analysis.Summary.DuplicateStrings = stringCounts.Values.Sum(v => Math.Max(0, v.Count - 1));
                 analysis.Summary.WastedSize = stringCounts
                     .Where(kvp => kvp.Value.Count > 1)
-                    .Sum(kvp => {
+                    .Sum(kvp =>
+                    {
                         var sizePerInstance = kvp.Value.Size / kvp.Value.Count;
                         return kvp.Value.Size - sizePerInstance;
                     });
-                analysis.Summary.WastedPercentage = analysis.Summary.TotalSize > 0 
-                    ? Math.Round(analysis.Summary.WastedSize * 100.0 / analysis.Summary.TotalSize, 2) 
+                analysis.Summary.WastedPercentage = analysis.Summary.TotalSize > 0
+                    ? Math.Round(analysis.Summary.WastedSize * 100.0 / analysis.Summary.TotalSize, 2)
                     : 0;
-                
+
                 // Top duplicates (by wasted bytes)
                 analysis.TopDuplicates = stringCounts
                     .Where(kvp => kvp.Value.Count > 1)
-                    .OrderByDescending(kvp => {
+                    .OrderByDescending(kvp =>
+                    {
                         var sizePerInstance = kvp.Value.Size / kvp.Value.Count;
                         return kvp.Value.Size - sizePerInstance;
                     })
                     .Take(topN)
-                    .Select(kvp => {
+                    .Select(kvp =>
+                    {
                         var sizePerInstance = kvp.Value.Size / kvp.Value.Count;
                         var displayValue = EscapeControlCharacters(kvp.Key);
-                        
+
                         return new StringDuplicateInfo
                         {
                             Value = displayValue,
@@ -1234,7 +1237,7 @@ public class ClrMdAnalyzer : IDisposable
                         };
                     })
                     .ToList();
-                
+
                 return analysis;
             }
             catch (Exception ex)
@@ -1244,9 +1247,9 @@ public class ClrMdAnalyzer : IDisposable
             }
         }
     }
-    
+
     // === Optimized Single-Pass Combined Analysis ===
-    
+
     /// <summary>
     /// Performs all deep heap analysis in a single pass with optional parallelization.
     /// This is significantly faster than calling GetTopMemoryConsumers, GetAsyncAnalysis,
@@ -1262,16 +1265,16 @@ public class ClrMdAnalyzer : IDisposable
             try
             {
                 if (_runtime == null) return null;
-                
+
                 var heap = _runtime.Heap;
                 var segments = heap.Segments.ToArray();
                 var useParallel = heap.IsServer && segments.Length > 1;
-                
-                _logger?.LogInformation("[ClrMD] Starting combined heap analysis (parallel={Parallel}, segments={Segments})", 
+
+                _logger?.LogInformation("[ClrMD] Starting combined heap analysis (parallel={Parallel}, segments={Segments})",
                     useParallel, segments.Length);
-                
+
                 var sw = System.Diagnostics.Stopwatch.StartNew();
-                
+
                 CombinedHeapAnalysis result;
                 if (useParallel)
                 {
@@ -1281,15 +1284,15 @@ public class ClrMdAnalyzer : IDisposable
                 {
                     result = GetCombinedHeapAnalysisSequential(heap, topN, maxStringLength, timeoutMs, sw);
                 }
-                
+
                 sw.Stop();
                 result.TotalAnalysisTimeMs = sw.ElapsedMilliseconds;
                 result.UsedParallel = useParallel;
                 result.SegmentsProcessed = segments.Length;
-                
-                _logger?.LogInformation("[ClrMD] Combined heap analysis completed in {Ms}ms (parallel={Parallel})", 
+
+                _logger?.LogInformation("[ClrMD] Combined heap analysis completed in {Ms}ms (parallel={Parallel})",
                     sw.ElapsedMilliseconds, useParallel);
-                
+
                 return result;
             }
             catch (Exception ex)
@@ -1299,7 +1302,7 @@ public class ClrMdAnalyzer : IDisposable
             }
         }
     }
-    
+
     private CombinedHeapAnalysis GetCombinedHeapAnalysisSequential(
         ClrHeap heap, int topN, int maxStringLength, int timeoutMs, System.Diagnostics.Stopwatch sw)
     {
@@ -1308,19 +1311,19 @@ public class ClrMdAnalyzer : IDisposable
         var largeObjects = new List<LargeObjectInfo>();
         var faultedTasks = new List<FaultedTaskInfo>();
         var stateMachines = new List<StateMachineInfo>();
-        
+
         long totalSize = 0;
         long freeSize = 0;
         int totalCount = 0;
         bool wasAborted = false;
-        
+
         var asyncSummary = new AsyncSummary();
         var stringLengthDist = new StringLengthDistribution();
         long stringTotalSize = 0;
         int stringTotalCount = 0;
-        
+
         const long LargeObjectThreshold = 85000;
-        
+
         foreach (var obj in heap.EnumerateObjects())
         {
             if (timeoutMs > 0 && sw.ElapsedMilliseconds > timeoutMs)
@@ -1329,24 +1332,24 @@ public class ClrMdAnalyzer : IDisposable
                 _logger?.LogWarning("[ClrMD] Combined analysis aborted after {Ms}ms", sw.ElapsedMilliseconds);
                 break;
             }
-            
+
             if (!obj.IsValid) continue;
-            
+
             var size = (long)obj.Size;
-            
+
             // Track free objects for fragmentation
             if (obj.IsFree)
             {
                 freeSize += size;
                 continue;
             }
-            
+
             var typeName = obj.Type?.Name;
             if (typeName == null) continue;
-            
+
             totalSize += size;
             totalCount++;
-            
+
             // === Memory Consumer Tracking ===
             if (typeStats.TryGetValue(typeName, out var stats))
             {
@@ -1356,7 +1359,7 @@ public class ClrMdAnalyzer : IDisposable
             {
                 typeStats[typeName] = (1, size, size);
             }
-            
+
             // Large objects
             if (size >= LargeObjectThreshold && largeObjects.Count < 50)
             {
@@ -1369,7 +1372,7 @@ public class ClrMdAnalyzer : IDisposable
                     Generation = segment?.Kind.ToString() ?? "Unknown"
                 });
             }
-            
+
             // === String Analysis ===
             if (typeName == "System.String")
             {
@@ -1378,7 +1381,7 @@ public class ClrMdAnalyzer : IDisposable
                 {
                     stringTotalCount++;
                     stringTotalSize += size;
-                    
+
                     // Length distribution
                     var len = str.Length;
                     if (len == 0) stringLengthDist.Empty++;
@@ -1386,7 +1389,7 @@ public class ClrMdAnalyzer : IDisposable
                     else if (len <= 100) stringLengthDist.Medium++;
                     else if (len <= 1000) stringLengthDist.Long++;
                     else stringLengthDist.VeryLong++;
-                    
+
                     // Track duplicates
                     var truncatedStr = str.Length > maxStringLength ? str.Substring(0, maxStringLength) : str;
                     if (stringCounts.TryGetValue(truncatedStr, out var sStats))
@@ -1399,9 +1402,9 @@ public class ClrMdAnalyzer : IDisposable
                     }
                 }
             }
-            
+
             // === Task Analysis ===
-            if (typeName == "System.Threading.Tasks.Task" || 
+            if (typeName == "System.Threading.Tasks.Task" ||
                 typeName.StartsWith("System.Threading.Tasks.Task`1"))
             {
                 asyncSummary.TotalTasks++;
@@ -1409,7 +1412,7 @@ public class ClrMdAnalyzer : IDisposable
                 {
                     var stateFlags = obj.ReadField<int>("m_stateFlags");
                     var status = GetTaskStatus(stateFlags);
-                    
+
                     switch (status)
                     {
                         case "RanToCompletion":
@@ -1430,7 +1433,7 @@ public class ClrMdAnalyzer : IDisposable
                 }
                 catch { }
             }
-            
+
             // === State Machine Analysis ===
             if (typeName.Contains("+<") && typeName.Contains(">d__"))
             {
@@ -1438,14 +1441,14 @@ public class ClrMdAnalyzer : IDisposable
                     stateMachines.Add(ExtractStateMachineInfo(obj));
             }
         }
-        
+
         return BuildCombinedResult(
             typeStats, stringCounts, largeObjects, faultedTasks, stateMachines,
-            asyncSummary, stringLengthDist, 
+            asyncSummary, stringLengthDist,
             totalSize, freeSize, totalCount, stringTotalSize, stringTotalCount,
             wasAborted, sw.ElapsedMilliseconds, topN);
     }
-    
+
     private CombinedHeapAnalysis GetCombinedHeapAnalysisParallel(
         ClrHeap heap, ClrSegment[] segments, int topN, int maxStringLength, int timeoutMs, System.Diagnostics.Stopwatch sw)
     {
@@ -1454,20 +1457,20 @@ public class ClrMdAnalyzer : IDisposable
         var allLargeObjects = new System.Collections.Concurrent.ConcurrentBag<LargeObjectInfo>();
         var allFaultedTasks = new System.Collections.Concurrent.ConcurrentBag<FaultedTaskInfo>();
         var allStateMachines = new System.Collections.Concurrent.ConcurrentBag<StateMachineInfo>();
-        
+
         long totalSize = 0;
         long freeSize = 0;
         int totalCount = 0;
         int wasAbortedFlag = 0;
-        
+
         int totalTasks = 0, completedTasks = 0, faultedTaskCount = 0, canceledTasks = 0, pendingTasks = 0;
         int emptyStrings = 0, shortStrings = 0, mediumStrings = 0, longStrings = 0, veryLongStrings = 0;
         long stringTotalSize = 0;
         int stringTotalCount = 0;
-        
+
         const long LargeObjectThreshold = 85000;
-        
-        System.Threading.Tasks.Parallel.ForEach(segments, 
+
+        System.Threading.Tasks.Parallel.ForEach(segments,
             new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount },
             segment =>
         {
@@ -1477,37 +1480,37 @@ public class ClrMdAnalyzer : IDisposable
                 System.Threading.Interlocked.Exchange(ref wasAbortedFlag, 1);
                 return;
             }
-            
+
             var localTypeStats = new Dictionary<string, (int Count, long Size, long Largest)>();
             var localStringCounts = new Dictionary<string, (int Count, long Size)>();
-            
+
             long localTotalSize = 0, localFreeSize = 0;
             int localTotalCount = 0;
             int localTotalTasks = 0, localCompletedTasks = 0, localFaultedTasks = 0, localCanceledTasks = 0, localPendingTasks = 0;
             int localEmpty = 0, localShort = 0, localMedium = 0, localLong = 0, localVeryLong = 0;
             long localStringTotalSize = 0;
             int localStringTotalCount = 0;
-            
+
             foreach (var obj in segment.EnumerateObjects())
             {
                 if (wasAbortedFlag == 1) break;
-                
+
                 if (!obj.IsValid) continue;
-                
+
                 var size = (long)obj.Size;
-                
+
                 if (obj.IsFree)
                 {
                     localFreeSize += size;
                     continue;
                 }
-                
+
                 var typeName = obj.Type?.Name;
                 if (typeName == null) continue;
-                
+
                 localTotalSize += size;
                 localTotalCount++;
-                
+
                 // Memory stats
                 if (localTypeStats.TryGetValue(typeName, out var stats))
                 {
@@ -1517,7 +1520,7 @@ public class ClrMdAnalyzer : IDisposable
                 {
                     localTypeStats[typeName] = (1, size, size);
                 }
-                
+
                 // Large objects
                 if (size >= LargeObjectThreshold && allLargeObjects.Count < 50)
                 {
@@ -1529,7 +1532,7 @@ public class ClrMdAnalyzer : IDisposable
                         Generation = segment.Kind.ToString()
                     });
                 }
-                
+
                 // String analysis
                 if (typeName == "System.String")
                 {
@@ -1538,14 +1541,14 @@ public class ClrMdAnalyzer : IDisposable
                     {
                         localStringTotalCount++;
                         localStringTotalSize += size;
-                        
+
                         var len = str.Length;
                         if (len == 0) localEmpty++;
                         else if (len <= 10) localShort++;
                         else if (len <= 100) localMedium++;
                         else if (len <= 1000) localLong++;
                         else localVeryLong++;
-                        
+
                         var truncatedStr = str.Length > maxStringLength ? str.Substring(0, maxStringLength) : str;
                         if (localStringCounts.TryGetValue(truncatedStr, out var sStats))
                         {
@@ -1557,9 +1560,9 @@ public class ClrMdAnalyzer : IDisposable
                         }
                     }
                 }
-                
+
                 // Task analysis
-                if (typeName == "System.Threading.Tasks.Task" || 
+                if (typeName == "System.Threading.Tasks.Task" ||
                     typeName.StartsWith("System.Threading.Tasks.Task`1"))
                 {
                     localTotalTasks++;
@@ -1567,7 +1570,7 @@ public class ClrMdAnalyzer : IDisposable
                     {
                         var stateFlags = obj.ReadField<int>("m_stateFlags");
                         var status = GetTaskStatus(stateFlags);
-                        
+
                         switch (status)
                         {
                             case "RanToCompletion": localCompletedTasks++; break;
@@ -1582,7 +1585,7 @@ public class ClrMdAnalyzer : IDisposable
                     }
                     catch { }
                 }
-                
+
                 // State machines
                 if (typeName.Contains("+<") && typeName.Contains(">d__"))
                 {
@@ -1590,11 +1593,11 @@ public class ClrMdAnalyzer : IDisposable
                         allStateMachines.Add(ExtractStateMachineInfo(obj));
                 }
             }
-            
+
             // Add local results to concurrent collections
             allTypeStats.Add(localTypeStats);
             allStringCounts.Add(localStringCounts);
-            
+
             // Aggregate counters atomically
             System.Threading.Interlocked.Add(ref totalSize, localTotalSize);
             System.Threading.Interlocked.Add(ref freeSize, localFreeSize);
@@ -1612,7 +1615,7 @@ public class ClrMdAnalyzer : IDisposable
             System.Threading.Interlocked.Add(ref stringTotalSize, localStringTotalSize);
             System.Threading.Interlocked.Add(ref stringTotalCount, localStringTotalCount);
         });
-        
+
         // Merge type stats
         var mergedTypeStats = new Dictionary<string, (int Count, long Size, long Largest)>();
         foreach (var localStats in allTypeStats)
@@ -1632,7 +1635,7 @@ public class ClrMdAnalyzer : IDisposable
                 }
             }
         }
-        
+
         // Merge string counts
         var mergedStringCounts = new Dictionary<string, (int Count, long Size)>();
         foreach (var localStrings in allStringCounts)
@@ -1649,7 +1652,7 @@ public class ClrMdAnalyzer : IDisposable
                 }
             }
         }
-        
+
         var asyncSummary = new AsyncSummary
         {
             TotalTasks = totalTasks,
@@ -1658,7 +1661,7 @@ public class ClrMdAnalyzer : IDisposable
             CanceledTasks = canceledTasks,
             PendingTasks = pendingTasks
         };
-        
+
         var stringLengthDist = new StringLengthDistribution
         {
             Empty = emptyStrings,
@@ -1667,15 +1670,15 @@ public class ClrMdAnalyzer : IDisposable
             Long = longStrings,
             VeryLong = veryLongStrings
         };
-        
+
         return BuildCombinedResult(
-            mergedTypeStats, mergedStringCounts, 
+            mergedTypeStats, mergedStringCounts,
             allLargeObjects.ToList(), allFaultedTasks.ToList(), allStateMachines.ToList(),
             asyncSummary, stringLengthDist,
             totalSize, freeSize, totalCount, stringTotalSize, stringTotalCount,
             wasAbortedFlag == 1, sw.ElapsedMilliseconds, topN);
     }
-    
+
     private CombinedHeapAnalysis BuildCombinedResult(
         Dictionary<string, (int Count, long Size, long Largest)> typeStats,
         Dictionary<string, (int Count, long Size)> stringCounts,
@@ -1702,7 +1705,7 @@ public class ClrMdAnalyzer : IDisposable
                 Percentage = totalSize > 0 ? Math.Round(kvp.Value.Size * 100.0 / totalSize, 2) : 0
             })
             .ToList();
-        
+
         var byCount = typeStats
             .OrderByDescending(kvp => kvp.Value.Count)
             .Take(topN)
@@ -1716,28 +1719,31 @@ public class ClrMdAnalyzer : IDisposable
                 Percentage = totalSize > 0 ? Math.Round(kvp.Value.Size * 100.0 / totalSize, 2) : 0
             })
             .ToList();
-        
+
         // Build string analysis
         var stringUniqueCount = stringCounts.Count;
         var stringDuplicateCount = stringCounts.Values.Sum(v => Math.Max(0, v.Count - 1));
         var stringWastedSize = stringCounts
             .Where(kvp => kvp.Value.Count > 1)
-            .Sum(kvp => {
+            .Sum(kvp =>
+            {
                 var sizePerInstance = kvp.Value.Size / kvp.Value.Count;
                 return kvp.Value.Size - sizePerInstance;
             });
-        
+
         var topDuplicates = stringCounts
             .Where(kvp => kvp.Value.Count > 1)
-            .OrderByDescending(kvp => {
+            .OrderByDescending(kvp =>
+            {
                 var sizePerInstance = kvp.Value.Size / kvp.Value.Count;
                 return kvp.Value.Size - sizePerInstance;
             })
             .Take(topN)
-            .Select(kvp => {
+            .Select(kvp =>
+            {
                 var sizePerInstance = kvp.Value.Size / kvp.Value.Count;
                 var displayValue = EscapeControlCharacters(kvp.Key);
-                
+
                 return new StringDuplicateInfo
                 {
                     Value = displayValue,
@@ -1748,11 +1754,11 @@ public class ClrMdAnalyzer : IDisposable
                 };
             })
             .ToList();
-        
-        var fragmentationRatio = (totalSize + freeSize) > 0 
-            ? Math.Round(freeSize * 1.0 / (totalSize + freeSize), 4) 
+
+        var fragmentationRatio = (totalSize + freeSize) > 0
+            ? Math.Round(freeSize * 1.0 / (totalSize + freeSize), 4)
             : 0;
-        
+
         return new CombinedHeapAnalysis
         {
             TopMemoryConsumers = new TopMemoryConsumers
@@ -1788,8 +1794,8 @@ public class ClrMdAnalyzer : IDisposable
                     DuplicateStrings = stringDuplicateCount,
                     TotalSize = stringTotalSize,
                     WastedSize = stringWastedSize,
-                    WastedPercentage = stringTotalSize > 0 
-                        ? Math.Round(stringWastedSize * 100.0 / stringTotalSize, 2) 
+                    WastedPercentage = stringTotalSize > 0
+                        ? Math.Round(stringWastedSize * 100.0 / stringTotalSize, 2)
                         : 0
                 },
                 TopDuplicates = topDuplicates,
@@ -1801,7 +1807,7 @@ public class ClrMdAnalyzer : IDisposable
             FragmentationRatio = fragmentationRatio
         };
     }
-    
+
     /// <summary>
     /// Gets PDB GUIDs for the specified module names from the dump.
     /// </summary>
@@ -1810,7 +1816,7 @@ public class ClrMdAnalyzer : IDisposable
     public Dictionary<string, Guid> GetModulePdbGuids(IEnumerable<string> moduleNames)
     {
         var guids = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
-        
+
         lock (_lock)
         {
             if (_runtime == null)
@@ -1818,9 +1824,9 @@ public class ClrMdAnalyzer : IDisposable
                 _logger?.LogWarning("[ClrMD] Runtime not available, cannot extract PDB GUIDs");
                 return guids;
             }
-            
+
             var moduleNameSet = new HashSet<string>(moduleNames, StringComparer.OrdinalIgnoreCase);
-            
+
             foreach (var module in _runtime.EnumerateModules())
             {
                 try
@@ -1828,7 +1834,7 @@ public class ClrMdAnalyzer : IDisposable
                     var moduleName = Path.GetFileNameWithoutExtension(module.Name);
                     if (string.IsNullOrEmpty(moduleName) || !moduleNameSet.Contains(moduleName))
                         continue;
-                    
+
                     // Get PDB info from the module
                     var pdbInfo = module.Pdb;
                     if (pdbInfo == null || pdbInfo.Guid == Guid.Empty)
@@ -1836,7 +1842,7 @@ public class ClrMdAnalyzer : IDisposable
                         _logger?.LogDebug("[ClrMD] No PDB info for module: {Name}", moduleName);
                         continue;
                     }
-                    
+
                     guids[moduleName] = pdbInfo.Guid;
                     _logger?.LogInformation("[ClrMD] PDB GUID for {Name}: {Guid}", moduleName, pdbInfo.Guid);
                 }
@@ -1846,7 +1852,7 @@ public class ClrMdAnalyzer : IDisposable
                 }
             }
         }
-        
+
         return guids;
     }
 }
@@ -1860,37 +1866,37 @@ public class EnrichedModuleInfo
     /// Gets or sets the module name (without extension).
     /// </summary>
     public string Name { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the full path to the module.
     /// </summary>
     public string? FullPath { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the image base address.
     /// </summary>
     public ulong ImageBase { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the module size.
     /// </summary>
     public ulong Size { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether this is a dynamic assembly.
     /// </summary>
     public bool IsDynamic { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether this is a PE file.
     /// </summary>
     public bool IsPEFile { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the assembly version from the assembly definition metadata.
     /// </summary>
     public string? AssemblyVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the assembly attributes.
     /// </summary>
@@ -1906,12 +1912,12 @@ public class AssemblyAttributeInfo
     /// Gets or sets the full attribute type name.
     /// </summary>
     public string AttributeType { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the attribute value.
     /// </summary>
     public string? Value { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the key for key-value attributes (like AssemblyMetadataAttribute).
     /// </summary>

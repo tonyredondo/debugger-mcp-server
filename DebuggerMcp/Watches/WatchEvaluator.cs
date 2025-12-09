@@ -151,7 +151,7 @@ public class WatchEvaluator
             // Build the debugger command appropriate for this watch type
             // Different types use different commands (db, dv, !do, etc.)
             var command = BuildEvaluationCommand(watch);
-            
+
             // Execute the command asynchronously to avoid blocking
             // Task.Run ensures we don't block the calling async context
             var output = await Task.Run(() => _manager.ExecuteCommand(command));
@@ -195,7 +195,7 @@ public class WatchEvaluator
     public async Task<WatchEvaluationReport> EvaluateAllAsync(string userId, string dumpId)
     {
         var watches = await _watchStore.GetWatchesAsync(userId, dumpId);
-        
+
         var report = new WatchEvaluationReport
         {
             DumpId = dumpId,
@@ -374,7 +374,7 @@ public class WatchEvaluator
             "Unable to find target"
         };
 
-        return errorPatterns.Any(pattern => 
+        return errorPatterns.Any(pattern =>
             output.Contains(pattern, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -448,7 +448,7 @@ public class WatchEvaluator
             if (watch.Value != null)
             {
                 var valueLower = watch.Value.ToLowerInvariant();
-                
+
                 if (valueLower.Contains("null") || valueLower.Contains("00000000`00000000"))
                 {
                     report.Insights.Add($"⚠️ Watch '{watch.Expression}' is NULL - may be relevant to crash");

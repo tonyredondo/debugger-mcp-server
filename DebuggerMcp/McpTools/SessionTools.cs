@@ -48,7 +48,7 @@ public class SessionTools(
             // Create a new session through the SessionManager
             // This will allocate a new debugger instance for this session
             var sessionId = SessionManager.CreateSession(sanitizedUserId);
-            
+
             return $"Session created successfully. SessionId: {sessionId}. Use this sessionId in all subsequent operations.";
         }
         catch (InvalidOperationException ex)
@@ -94,13 +94,13 @@ public class SessionTools(
         {
             // Validate input parameters
             ValidateSessionId(sessionId);
-            
+
             // Sanitize userId to prevent path traversal attacks
             var sanitizedUserId = SanitizeUserId(userId);
 
             // Close the session with user ownership validation
             SessionManager.CloseSession(sessionId, sanitizedUserId);
-            
+
             return $"Session {sessionId} closed successfully. All resources have been released.";
         }
         catch (ArgumentException ex)
@@ -147,13 +147,14 @@ public class SessionTools(
 
             // Get sessions for the user
             var sessions = SessionManager.ListUserSessions(sanitizedUserId);
-            
+
             // Format the response - no sessions case
             if (sessions.Count == 0)
             {
+                // Explicitly signal absence instead of empty string for better UX
                 return $"No active sessions found for user: {sanitizedUserId}";
             }
-            
+
             // Format the response - sessions found
             var result = $"Active sessions for user {sanitizedUserId} ({sessions.Count} total):\n";
             foreach (var session in sessions)
@@ -161,7 +162,7 @@ public class SessionTools(
                 var dumpInfo = !string.IsNullOrEmpty(session.CurrentDumpId) ? $", Dump: {session.CurrentDumpId}" : "";
                 result += $"  - SessionId: {session.SessionId}, Created: {session.CreatedAt:yyyy-MM-dd HH:mm:ss}, LastActivity: {session.LastAccessedAt:yyyy-MM-dd HH:mm:ss}{dumpInfo}\n";
             }
-            
+
             return result;
         }
         catch (ArgumentException ex)
@@ -197,18 +198,18 @@ public class SessionTools(
         {
             // Validate input parameters
             ValidateSessionId(sessionId);
-            
+
             // Sanitize userId to prevent path traversal attacks
             var sanitizedUserId = SanitizeUserId(userId);
 
             // Get the session with user ownership validation
             var manager = GetSessionManager(sessionId, sanitizedUserId);
-            
+
             // Get debugger information
             var debuggerType = manager.DebuggerType;
             var isInitialized = manager.IsInitialized;
             var hasDumpOpen = manager.IsDumpOpen;
-            
+
             return $"Debugger Type: {debuggerType}\n" +
                    $"Operating System: {Environment.OSVersion}\n" +
                    $"Initialized: {isInitialized}\n" +
@@ -259,31 +260,33 @@ public class SessionTools(
         {
             // Validate input parameters
             ValidateSessionId(sessionId);
-            
+
             // Sanitize userId to prevent path traversal attacks
             var sanitizedUserId = SanitizeUserId(userId);
 
             // Try to get the session - this will restore from disk if needed
             var session = SessionManager.GetSessionInfo(sessionId, sanitizedUserId);
-            
+
             // Build status message
             var result = $"Session restored successfully.\n" +
                          $"  SessionId: {session.SessionId}\n" +
                          $"  Created: {session.CreatedAt:yyyy-MM-dd HH:mm:ss}\n" +
                          $"  LastActivity: {session.LastAccessedAt:yyyy-MM-dd HH:mm:ss}\n";
-            
+
             if (!string.IsNullOrEmpty(session.CurrentDumpId))
             {
+                // Include dump info only when present so clients know whether they can run dump tools immediately
                 result += $"  CurrentDump: {session.CurrentDumpId}\n";
-                result += session.Manager?.IsDumpOpen == true 
+                result += session.Manager?.IsDumpOpen == true
                     ? "  DumpStatus: Open and ready\n"
                     : "  DumpStatus: Reopened automatically\n";
             }
             else
             {
+                // nudge clients toward next action when no dump is loaded
                 result += "  CurrentDump: None (use open_dump to load a dump)\n";
             }
-            
+
             return result;
         }
         catch (ArgumentException ex)

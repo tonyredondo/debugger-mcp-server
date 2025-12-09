@@ -73,7 +73,7 @@ public class DumpController : ControllerBase
         _watchStore = watchStore;
         _logger = logger;
         _loggerFactory = loggerFactory;
-        
+
         // Ensure the storage directory exists (path comes from SessionManager)
         Directory.CreateDirectory(_sessionManager.GetDumpStoragePath());
     }
@@ -140,9 +140,9 @@ public class DumpController : ControllerBase
             // This prevents disk exhaustion attacks and ensures reasonable upload times
             if (file.Length > MaxDumpFileSize)
             {
-                return BadRequest(new 
-                { 
-                    error = $"File size exceeds maximum allowed size of {MaxDumpFileSize / (1024 * 1024 * 1024)}GB" 
+                return BadRequest(new
+                {
+                    error = $"File size exceeds maximum allowed size of {MaxDumpFileSize / (1024 * 1024 * 1024)}GB"
                 });
             }
 
@@ -151,13 +151,13 @@ public class DumpController : ControllerBase
             using var headerStream = file.OpenReadStream();
             var header = new byte[DumpFileValidator.MinimumBytesNeeded];
             var bytesRead = await headerStream.ReadAsync(header.AsMemory(0, header.Length));
-            
+
             // If we couldn't read enough bytes or the header doesn't match known formats, reject
             if (bytesRead < DumpFileValidator.MinimumBytesNeeded || !DumpFileValidator.IsValidDumpHeader(header))
             {
                 var detectedFormat = DumpFileValidator.GetDumpFormat(header);
-                return BadRequest(new 
-                { 
+                return BadRequest(new
+                {
                     error = "Invalid dump file format. File must be a valid memory dump (Windows MDMP/PAGE, Linux ELF core, or macOS Mach-O core).",
                     detectedFormat
                 });
@@ -189,7 +189,7 @@ public class DumpController : ControllerBase
             {
                 // First, write the header bytes we already consumed for validation
                 await stream.WriteAsync(header.AsMemory(0, bytesRead));
-                
+
                 // Then stream the rest of the file content
                 await headerStream.CopyToAsync(stream);
             }
@@ -229,7 +229,7 @@ public class DumpController : ControllerBase
                 RuntimeVersion = analysisResult.RuntimeVersion,
                 Architecture = analysisResult.Architecture
             };
-            await System.IO.File.WriteAllTextAsync(metadataPath, 
+            await System.IO.File.WriteAllTextAsync(metadataPath,
                 System.Text.Json.JsonSerializer.Serialize(metadata, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
 
             _logger.LogInformation(
@@ -326,7 +326,7 @@ public class DumpController : ControllerBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Error retrieving dump info for user {UserId}, dumpId {DumpId}", 
+            _logger.LogError(ex, "Error retrieving dump info for user {UserId}, dumpId {DumpId}",
                 userId, dumpId);
             return StatusCode(500, new { error = "Internal server error" });
         }
@@ -369,7 +369,7 @@ public class DumpController : ControllerBase
 
             // Create response list (without exposing internal file paths)
             var dumps = new List<DumpInfoResponse>();
-            
+
             foreach (var filePath in dumpFiles)
             {
                 var fileInfo = new FileInfo(filePath);
@@ -500,15 +500,15 @@ public class DumpController : ControllerBase
     public IActionResult GetSessionStatistics()
     {
         var stats = _sessionManager.GetStatistics();
-        
+
         // Calculate dump statistics
         var (totalDumps, storageUsed) = CalculateDumpStatistics();
-        
+
         // Calculate uptime
         var uptime = CalculateUptime();
-        
+
         var totalSessions = (int)stats["TotalSessions"];
-        
+
         return Ok(new SessionStatisticsResponse
         {
             ActiveSessions = totalSessions,
@@ -561,7 +561,7 @@ public class DumpController : ControllerBase
     private static string CalculateUptime()
     {
         var uptime = DateTime.UtcNow - ServerStartTime;
-        
+
         if (uptime.TotalDays >= 1)
         {
             return $"{(int)uptime.TotalDays}d {uptime.Hours}h {uptime.Minutes}m";
@@ -838,7 +838,7 @@ public class DumpController : ControllerBase
             // Run crash analysis
             var analyzer = new CrashAnalyzer(manager, sourceLinkResolver);
             var analysisResult = await analyzer.AnalyzeCrashAsync();
-            
+
             // Run security analysis and include in results
             var securityAnalyzer = new SecurityAnalyzer(manager);
             var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
@@ -984,7 +984,7 @@ public class DumpUploadResponse
     /// </summary>
     /// <example>Windows Minidump</example>
     public string? DumpFormat { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether this dump is from an Alpine Linux system (musl libc).
     /// </summary>
@@ -993,13 +993,13 @@ public class DumpUploadResponse
     /// </remarks>
     /// <example>true</example>
     public bool? IsAlpineDump { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the detected .NET runtime version required to debug this dump.
     /// </summary>
     /// <example>9.0.10</example>
     public string? RuntimeVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the processor architecture of the dump.
     /// </summary>
@@ -1014,32 +1014,32 @@ public class DumpMetadata
 {
     /// <summary>Gets or sets the dump identifier.</summary>
     public string DumpId { get; set; } = string.Empty;
-    
+
     /// <summary>Gets or sets the user identifier.</summary>
     public string UserId { get; set; } = string.Empty;
-    
+
     /// <summary>Gets or sets the original file name.</summary>
     public string? FileName { get; set; }
-    
+
     /// <summary>Gets or sets the file size in bytes.</summary>
     public long Size { get; set; }
-    
+
     /// <summary>Gets or sets the upload timestamp.</summary>
     public DateTime UploadedAt { get; set; }
-    
+
     /// <summary>Gets or sets the optional description.</summary>
     public string? Description { get; set; }
-    
+
     /// <summary>Gets or sets the detected dump format.</summary>
     public string? DumpFormat { get; set; }
-    
+
     /// <summary>Gets or sets the detected .NET runtime version (e.g., "9.0.10").</summary>
     /// <remarks>
     /// This is populated by dotnet-symbol when analyzing the dump.
     /// Used by LLDB/SOS to find the correct DAC for debugging.
     /// </remarks>
     public string? RuntimeVersion { get; set; }
-    
+
     /// <summary>Gets or sets whether this dump is from an Alpine Linux system (musl libc).</summary>
     /// <remarks>
     /// This is critical because Alpine Linux uses musl libc instead of glibc,
@@ -1047,10 +1047,10 @@ public class DumpMetadata
     /// Detected by checking for musl indicators in module paths (e.g., ld-musl, linux-musl).
     /// </remarks>
     public bool? IsAlpineDump { get; set; }
-    
+
     /// <summary>Gets or sets the processor architecture of the dump (e.g., "arm64", "x64").</summary>
     public string? Architecture { get; set; }
-    
+
     /// <summary>Gets or sets the list of symbol files downloaded by dotnet-symbol.</summary>
     /// <remarks>
     /// This list is used to verify that all required symbol files are present.
@@ -1131,7 +1131,7 @@ public class DumpInfoResponse
     /// </summary>
     /// <example>2024-01-15T11:00:00Z</example>
     public DateTime LastAccessedAt { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether this dump is from an Alpine Linux system (musl libc).
     /// </summary>
@@ -1140,13 +1140,13 @@ public class DumpInfoResponse
     /// </remarks>
     /// <example>true</example>
     public bool? IsAlpineDump { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the detected .NET runtime version required to debug this dump.
     /// </summary>
     /// <example>9.0.10</example>
     public string? RuntimeVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the processor architecture of the dump.
     /// </summary>
@@ -1287,12 +1287,12 @@ public class DumpAnalysisResult
     /// Whether the dump is from an Alpine Linux system (musl libc).
     /// </summary>
     public bool? IsAlpine { get; set; }
-    
+
     /// <summary>
     /// The detected .NET runtime version required to debug this dump (e.g., "9.0.10").
     /// </summary>
     public string? RuntimeVersion { get; set; }
-    
+
     /// <summary>
     /// The processor architecture of the dump (e.g., "arm64", "x64").
     /// </summary>
@@ -1334,7 +1334,7 @@ public static class DumpAnalyzer
     public static async Task<DumpAnalysisResult> AnalyzeDumpAsync(string dumpFilePath, ILogger? logger = null)
     {
         var result = new DumpAnalysisResult();
-        
+
         try
         {
             // Find dotnet-symbol tool
@@ -1357,7 +1357,7 @@ public static class DumpAnalyzer
 
             using var process = new System.Diagnostics.Process { StartInfo = startInfo };
             var output = new System.Text.StringBuilder();
-            
+
             process.OutputDataReceived += (_, e) =>
             {
                 if (e.Data != null)
@@ -1371,12 +1371,12 @@ public static class DumpAnalyzer
 
             // Wait up to 30 seconds for the verification
             var completed = await Task.Run(() => process.WaitForExit(30000));
-            
+
             if (!completed)
             {
-                try 
-                { 
-                    process.Kill(); 
+                try
+                {
+                    process.Kill();
                 }
                 catch (Exception ex)
                 {
@@ -1391,7 +1391,7 @@ public static class DumpAnalyzer
             }
 
             var outputStr = output.ToString();
-            
+
             // Check for musl indicators (Alpine detection)
             // Alpine uses musl libc, which shows up as:
             // - /lib/ld-musl-aarch64.so.1 or /lib/ld-musl-x86_64.so.1
@@ -1411,7 +1411,7 @@ public static class DumpAnalyzer
             // Detect architecture using file command
             result.Architecture = await DetectArchitectureAsync(dumpFilePath, logger);
 
-            logger?.LogInformation("Dump analysis for {DumpFile}: IsAlpine={IsAlpine}, RuntimeVersion={RuntimeVersion}, Architecture={Architecture}", 
+            logger?.LogInformation("Dump analysis for {DumpFile}: IsAlpine={IsAlpine}, RuntimeVersion={RuntimeVersion}, Architecture={Architecture}",
                 System.IO.Path.GetFileName(dumpFilePath), result.IsAlpine, result.RuntimeVersion ?? "(not detected)", result.Architecture ?? "(not detected)");
 
             return result;
@@ -1498,9 +1498,9 @@ public static class DumpAnalyzer
 
             if (!completed)
             {
-                try 
-                { 
-                    process.Kill(); 
+                try
+                {
+                    process.Kill();
                 }
                 catch (Exception ex)
                 {
@@ -1515,7 +1515,7 @@ public static class DumpAnalyzer
             }
 
             var outputStr = output.ToString();
-            
+
             // Parse architecture from file output
             // Examples:
             // "ELF 64-bit LSB core file, ARM aarch64, version 1 (GNU/Linux)"
@@ -1525,7 +1525,7 @@ public static class DumpAnalyzer
             if (match.Success)
             {
                 var arch = match.Groups[1].Value.ToLowerInvariant();
-                
+
                 // Normalize architecture names
                 var normalizedArch = arch switch
                 {
@@ -1550,4 +1550,3 @@ public static class DumpAnalyzer
         }
     }
 }
-

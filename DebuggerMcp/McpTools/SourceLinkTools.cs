@@ -63,13 +63,14 @@ public class SourceLinkTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Validate sourceFile is not empty
         if (string.IsNullOrWhiteSpace(sourceFile))
         {
+            // Fail early rather than handing a meaningless lookup to the resolver
             throw new ArgumentException("sourceFile cannot be null or empty", nameof(sourceFile));
         }
 
@@ -90,6 +91,7 @@ public class SourceLinkTools(
             }
             else
             {
+                // Warn so the user knows Source Link may fail due to missing PDBs
                 Logger.LogWarning("[SourceLinkTools] Symbol path does not exist: {SymbolPath}", symbolPath);
             }
         }
@@ -108,6 +110,7 @@ public class SourceLinkTools(
         }
         else
         {
+            // Provide guidance so the caller can fix missing Source Link info
             return $"Could not resolve Source Link for: {sourceFile}\n\n" +
                    "Possible reasons:\n" +
                    "- PDB files don't contain Source Link information\n" +
@@ -134,7 +137,7 @@ public class SourceLinkTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
@@ -156,8 +159,8 @@ public class SourceLinkTools(
                 "Azure DevOps (dev.azure.com)",
                 "Bitbucket (bitbucket.org)"
             },
-            SymbolSearchPaths = symbolPath != null && Directory.Exists(symbolPath) 
-                ? new[] { symbolPath } 
+            SymbolSearchPaths = symbolPath != null && Directory.Exists(symbolPath)
+                ? new[] { symbolPath }
                 : Array.Empty<string>(),
             HasSymbolPath = symbolPath != null && Directory.Exists(symbolPath),
             CurrentDumpId = session.CurrentDumpId,

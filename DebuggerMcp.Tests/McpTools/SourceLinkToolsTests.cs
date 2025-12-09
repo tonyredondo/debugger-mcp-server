@@ -21,7 +21,7 @@ public class SourceLinkToolsTests : IDisposable
     {
         _tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempPath);
-        
+
         _sessionManager = new DebuggerSessionManager(_tempPath);
         _symbolManager = new SymbolManager(_tempPath);
         _watchStore = new WatchStore(_tempPath);
@@ -46,14 +46,14 @@ public class SourceLinkToolsTests : IDisposable
     [InlineData("   ")]
     public void ResolveSourceLink_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             _tools.ResolveSourceLink(sessionId!, "user", "/path/to/file.cs"));
     }
 
     [Fact]
     public void ResolveSourceLink_WithPathTraversalInUserId_ThrowsArgumentException()
     {
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             _tools.ResolveSourceLink("session", "../etc/passwd", "/path/to/file.cs"));
     }
 
@@ -65,15 +65,15 @@ public class SourceLinkToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
-        Assert.Throws<ArgumentException>(() => 
+
+        Assert.Throws<ArgumentException>(() =>
             _tools.ResolveSourceLink(sessionId, userId, sourceFile!));
     }
 
     [Fact]
     public void ResolveSourceLink_WithNonExistentSession_ThrowsInvalidOperationException()
     {
-        Assert.Throws<InvalidOperationException>(() => 
+        Assert.Throws<InvalidOperationException>(() =>
             _tools.ResolveSourceLink("non-existent", "user", "/path/to/file.cs"));
     }
 
@@ -81,8 +81,8 @@ public class SourceLinkToolsTests : IDisposable
     public void ResolveSourceLink_WithWrongUserId_ThrowsUnauthorizedAccessException()
     {
         var sessionId = _sessionManager.CreateSession("owner");
-        
-        Assert.Throws<UnauthorizedAccessException>(() => 
+
+        Assert.Throws<UnauthorizedAccessException>(() =>
             _tools.ResolveSourceLink(sessionId, "wrong-user", "/path/to/file.cs"));
     }
 
@@ -91,9 +91,9 @@ public class SourceLinkToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
+
         var result = _tools.ResolveSourceLink(sessionId, userId, "/path/to/file.cs");
-        
+
         Assert.Contains("Could not resolve Source Link", result);
         Assert.Contains("Possible reasons", result);
         Assert.Contains("PDB files", result);
@@ -104,10 +104,10 @@ public class SourceLinkToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
+
         // Even though it won't resolve, the error message should work
         var result = _tools.ResolveSourceLink(sessionId, userId, "/path/to/file.cs", lineNumber: 42);
-        
+
         Assert.Contains("Could not resolve Source Link", result);
     }
 
@@ -121,21 +121,21 @@ public class SourceLinkToolsTests : IDisposable
     [InlineData("   ")]
     public void GetSourceLinkInfo_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             _tools.GetSourceLinkInfo(sessionId!, "user"));
     }
 
     [Fact]
     public void GetSourceLinkInfo_WithPathTraversalInUserId_ThrowsArgumentException()
     {
-        Assert.Throws<ArgumentException>(() => 
+        Assert.Throws<ArgumentException>(() =>
             _tools.GetSourceLinkInfo("session", "..\\..\\Windows"));
     }
 
     [Fact]
     public void GetSourceLinkInfo_WithNonExistentSession_ThrowsInvalidOperationException()
     {
-        Assert.Throws<InvalidOperationException>(() => 
+        Assert.Throws<InvalidOperationException>(() =>
             _tools.GetSourceLinkInfo("non-existent", "user"));
     }
 
@@ -143,8 +143,8 @@ public class SourceLinkToolsTests : IDisposable
     public void GetSourceLinkInfo_WithWrongUserId_ThrowsUnauthorizedAccessException()
     {
         var sessionId = _sessionManager.CreateSession("owner");
-        
-        Assert.Throws<UnauthorizedAccessException>(() => 
+
+        Assert.Throws<UnauthorizedAccessException>(() =>
             _tools.GetSourceLinkInfo(sessionId, "wrong-user"));
     }
 
@@ -153,9 +153,9 @@ public class SourceLinkToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
+
         var result = _tools.GetSourceLinkInfo(sessionId, userId);
-        
+
         Assert.NotNull(result);
         Assert.Contains("SupportedProviders", result);
         Assert.Contains("GitHub", result);
@@ -169,9 +169,9 @@ public class SourceLinkToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
+
         var result = _tools.GetSourceLinkInfo(sessionId, userId);
-        
+
         Assert.Contains("Tips", result);
         Assert.Contains("PublishRepositoryUrl", result);
         Assert.Contains("Microsoft.SourceLink", result);
@@ -182,9 +182,9 @@ public class SourceLinkToolsTests : IDisposable
     {
         var userId = "test-user";
         var sessionId = _sessionManager.CreateSession(userId);
-        
+
         var result = _tools.GetSourceLinkInfo(sessionId, userId);
-        
+
         Assert.Contains("HasSymbolPath", result);
         Assert.Contains("false", result);
     }

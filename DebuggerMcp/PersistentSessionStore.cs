@@ -46,10 +46,10 @@ public class PersistentSessionStore
         _logger = logger;
         _storagePath = storagePath ?? EnvironmentConfig.GetSessionStoragePath();
         _serverId = $"{Environment.MachineName}-{Environment.ProcessId}";
-        
+
         // Ensure storage directory exists
         Directory.CreateDirectory(_storagePath);
-        
+
         _logger.LogInformation("Session store initialized at: {Path} (Server: {ServerId})", _storagePath, _serverId);
     }
 
@@ -72,23 +72,24 @@ public class PersistentSessionStore
         var filePath = GetFilePath(metadata.SessionId);
         if (filePath == null)
         {
+            // Bail out early when the session ID cannot be mapped to a safe filename.
             _logger.LogError("Cannot save session with invalid ID: {SessionId}", metadata.SessionId);
             throw new ArgumentException($"Invalid session ID format: {metadata.SessionId}");
         }
-        
+
         var tempPath = filePath + ".tmp";
-        
+
         try
         {
             var json = JsonSerializer.Serialize(metadata, JsonOptions);
-            
+
             lock (_fileLock)
             {
-                // Write to temp file first, then rename for atomic operation
+                // Write to temp file first, then rename for atomic operation to avoid partial writes.
                 File.WriteAllText(tempPath, json);
                 File.Move(tempPath, filePath, overwrite: true);
             }
-            
+
             _logger.LogDebug("Saved session {SessionId} to disk", metadata.SessionId);
         }
         catch (Exception ex)
@@ -98,6 +99,7 @@ public class PersistentSessionStore
             {
                 if (File.Exists(tempPath))
                 {
+                    // Remove stray temp files so future saves don't see stale data.
                     File.Delete(tempPath);
                 }
             }
@@ -105,7 +107,7 @@ public class PersistentSessionStore
             {
                 // Ignore cleanup errors
             }
-            
+
             _logger.LogError(ex, "Failed to save session {SessionId} to disk", metadata.SessionId);
             throw;
         }
@@ -119,13 +121,14 @@ public class PersistentSessionStore
     public SessionMetadata? Load(string sessionId)
     {
         var filePath = GetFilePath(sessionId);
-        
+
         // Invalid session ID format - cannot exist
         if (filePath == null)
         {
+            // Treat invalid IDs as not found instead of throwing in load path.
             return null;
         }
-        
+
         if (!File.Exists(filePath))
         {
             return null;
@@ -138,18 +141,19 @@ public class PersistentSessionStore
             {
                 json = File.ReadAllText(filePath);
             }
-            
+
             var metadata = JsonSerializer.Deserialize<SessionMetadata>(json, JsonOptions);
-            
+
             if (metadata == null)
             {
+                // Corrupt or empty JSON; avoid throwing to keep cleanup resilient.
                 _logger.LogWarning("Session file {SessionId} contained invalid or empty JSON", sessionId);
                 return null;
             }
-            
-            _logger.LogDebug("Loaded session {SessionId} from disk (last server: {LastServerId})", 
+
+            _logger.LogDebug("Loaded session {SessionId} from disk (last server: {LastServerId})",
                 sessionId, metadata.LastServerId);
-            
+
             return metadata;
         }
         catch (Exception ex)
@@ -166,20 +170,21 @@ public class PersistentSessionStore
     public List<SessionMetadata> LoadAll()
     {
         var sessions = new List<SessionMetadata>();
-        
+
         try
         {
             var files = Directory.GetFiles(_storagePath, "*.json");
-            
+
             foreach (var file in files)
             {
                 try
                 {
                     var sessionId = Path.GetFileNameWithoutExtension(file);
                     var metadata = Load(sessionId);
-                    
+
                     if (metadata != null)
                     {
+                        // Skip any corrupt/invalid sessions; only add valid metadata.
                         sessions.Add(metadata);
                     }
                 }
@@ -188,7 +193,7 @@ public class PersistentSessionStore
                     _logger.LogWarning(ex, "Failed to load session file: {File}", file);
                 }
             }
-            
+
             if (sessions.Count > 0)
             {
                 _logger.LogDebug("Loaded {Count} sessions from disk", sessions.Count);
@@ -196,9 +201,10 @@ public class PersistentSessionStore
         }
         catch (Exception ex)
         {
+            // Keep the service running even if directory enumeration fails.
             _logger.LogError(ex, "Failed to enumerate session files");
         }
-        
+
         return sessions;
     }
 
@@ -209,13 +215,13 @@ public class PersistentSessionStore
     public void Delete(string sessionId)
     {
         var filePath = GetFilePath(sessionId);
-        
+
         // Invalid session ID format - nothing to delete
         if (filePath == null)
         {
             return;
         }
-        
+
         try
         {
             lock (_fileLock)
@@ -253,7 +259,7 @@ public class PersistentSessionStore
     {
         var now = DateTime.UtcNow;
         var cleaned = 0;
-        
+
         foreach (var metadata in LoadAll())
         {
             if (now - metadata.LastAccessedAt > inactivityThreshold)
@@ -264,7 +270,7 @@ public class PersistentSessionStore
                     metadata.SessionId, metadata.LastAccessedAt);
             }
         }
-        
+
         return cleaned;
     }
 
@@ -283,7 +289,7 @@ public class PersistentSessionStore
             _logger.LogDebug("Invalid session ID format (not a GUID): {SessionId}", sessionId);
             return null;
         }
-        
+
         return Path.Combine(_storagePath, $"{sessionId}.json");
     }
 
@@ -297,4 +303,3 @@ public class PersistentSessionStore
     /// </summary>
     public string StoragePath => _storagePath;
 }
-

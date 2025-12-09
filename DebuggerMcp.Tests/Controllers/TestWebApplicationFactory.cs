@@ -24,12 +24,12 @@ public class TestWebApplicationFactory : IDisposable
     private readonly string _tempDir;
     private readonly IHost _host;
     private bool _disposed;
-    
+
     /// <summary>
     /// Gets the path to the temporary directory used for test data.
     /// </summary>
     public string TempDirectory => _tempDir;
-    
+
     /// <summary>
     /// Initializes a new instance of the <see cref="TestWebApplicationFactory"/> class.
     /// </summary>
@@ -37,7 +37,7 @@ public class TestWebApplicationFactory : IDisposable
     {
         _tempDir = Path.Combine(Path.GetTempPath(), $"DebuggerMcpTests_{Guid.NewGuid()}");
         Directory.CreateDirectory(_tempDir);
-        
+
         var builder = Host.CreateDefaultBuilder()
             .ConfigureWebHostDefaults(webBuilder =>
             {
@@ -56,56 +56,56 @@ public class TestWebApplicationFactory : IDisposable
                                 manager.ApplicationParts.Add(part);
                             }
                         });
-                    
+
                     services.AddEndpointsApiExplorer();
-                    
+
                     // Add session manager with test temp directory
                     services.AddSingleton(new DebuggerSessionManager(_tempDir));
-                    
+
                     // Add symbol manager
                     services.AddSingleton<SymbolManager>();
-                    
+
                     // Add watch store
                     services.AddSingleton(new WatchStore(_tempDir));
-                    
+
                     // Add authentication with anonymous access allowed (for testing)
                     services.AddAuthentication(ApiKeyAuthenticationOptions.SchemeName)
                         .AddScheme<ApiKeyAuthenticationOptions, TestApiKeyAuthenticationHandler>(
                             ApiKeyAuthenticationOptions.SchemeName,
                             options => { options.ApiKey = null; }); // No API key = anonymous access
-                    
+
                     services.AddAuthorization();
-                    
+
                     // Configure logging to suppress noise in tests
                     services.AddLogging(logging =>
                     {
                         logging.SetMinimumLevel(LogLevel.Warning);
                     });
                 });
-                
+
                 webBuilder.Configure(app =>
                 {
                     // Configure middleware pipeline
                     app.UseRouting();
-                    
+
                     // Use authentication and authorization
                     app.UseAuthentication();
                     app.UseAuthorization();
-                    
+
                     app.UseEndpoints(endpoints =>
                     {
                         endpoints.MapControllers();
-                        
+
                         // Add health endpoint
                         endpoints.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
                     });
                 });
             });
-        
+
         _host = builder.Build();
         _host.Start();
     }
-    
+
     /// <summary>
     /// Creates a new HTTP client for testing the application.
     /// Each call returns a new client to avoid disposal issues in tests.
@@ -118,7 +118,7 @@ public class TestWebApplicationFactory : IDisposable
         }
         return _host.GetTestClient();
     }
-    
+
     /// <summary>
     /// Disposes of resources used by the factory.
     /// </summary>
@@ -126,9 +126,9 @@ public class TestWebApplicationFactory : IDisposable
     {
         if (_disposed) return;
         _disposed = true;
-        
+
         _host.Dispose();
-        
+
         // Clean up temp directory
         try
         {

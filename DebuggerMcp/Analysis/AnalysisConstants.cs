@@ -9,7 +9,6 @@ namespace DebuggerMcp.Analysis;
 /// </remarks>
 public static class AnalysisConstants
 {
-    #region Memory Thresholds
 
     /// <summary>
     /// Threshold in bytes for large heap detection (500 MB).
@@ -35,9 +34,7 @@ public static class AnalysisConstants
     /// </summary>
     public const int ExtremeStringGrowthCountThreshold = 100_000;
 
-    #endregion
 
-    #region Instance Count Thresholds
 
     /// <summary>
     /// Threshold for high instance count that may indicate a memory leak.
@@ -60,9 +57,7 @@ public static class AnalysisConstants
     /// </summary>
     public const int HighEventHandlerCountThreshold = 1_000;
 
-    #endregion
 
-    #region Security Analysis Thresholds
 
     /// <summary>
     /// Memory addresses below this threshold indicate null/near-null pointer access.
@@ -82,9 +77,7 @@ public static class AnalysisConstants
     /// </summary>
     public const long SuspiciousStackExecutionDistance = 0x1000000;
 
-    #endregion
 
-    #region Performance Thresholds
 
     /// <summary>
     /// Threshold for high CPU thread detection.
@@ -104,9 +97,7 @@ public static class AnalysisConstants
     /// </summary>
     public const int GcFragmentationThresholdPercent = 50;
 
-    #endregion
 
-    #region Comparison Thresholds
 
     /// <summary>
     /// Minimum memory growth in bytes to flag as significant (10 MB).
@@ -118,6 +109,5 @@ public static class AnalysisConstants
     /// </summary>
     public const int SignificantGrowthPercent = 20;
 
-    #endregion
 }
 

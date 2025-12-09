@@ -34,7 +34,7 @@ public class DatadogSymbolsToolsTests
     {
         // Act
         var timeout = DatadogTraceSymbolsConfig.GetTimeoutSeconds();
-        
+
         // Assert
         Assert.True(timeout > 0);
     }
@@ -44,7 +44,7 @@ public class DatadogSymbolsToolsTests
     {
         // Act
         var maxSize = DatadogTraceSymbolsConfig.GetMaxArtifactSize();
-        
+
         // Assert
         Assert.True(maxSize > 0);
     }
@@ -54,7 +54,7 @@ public class DatadogSymbolsToolsTests
     {
         // Act
         var result = DatadogTraceSymbolsConfig.GetShortSha("1234567890abcdef");
-        
+
         // Assert
         Assert.Equal("12345678", result);
     }
@@ -64,7 +64,7 @@ public class DatadogSymbolsToolsTests
     {
         // Act
         var result = DatadogTraceSymbolsConfig.GetShortSha("abc");
-        
+
         // Assert
         Assert.Equal("abc", result);
     }
@@ -74,7 +74,7 @@ public class DatadogSymbolsToolsTests
     {
         // Act
         var result = DatadogTraceSymbolsConfig.GetShortSha(null);
-        
+
         // Assert
         Assert.Equal("(unknown)", result);
     }
@@ -84,7 +84,7 @@ public class DatadogSymbolsToolsTests
     {
         // Act
         var result = DatadogTraceSymbolsConfig.GetShortSha("");
-        
+
         // Assert
         Assert.Equal("(unknown)", result);
     }

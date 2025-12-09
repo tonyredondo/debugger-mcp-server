@@ -13,13 +13,13 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
 {
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
-    
+
     public SymbolControllerTests(TestWebApplicationFactory factory)
     {
         _factory = factory;
         _client = _factory.CreateClient();
     }
-    
+
     public void Dispose()
     {
         _client.Dispose();
@@ -47,7 +47,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     {
         // Arrange
         var pdbContent = CreateValidPortablePdbHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("../../../etc/passwd"), "dumpId"); // Path traversal attempt
         var fileContent = new ByteArrayContent(pdbContent);
@@ -68,7 +68,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     {
         // Arrange - Create an invalid file (not a valid symbol)
         var invalidContent = Encoding.UTF8.GetBytes("This is not a valid symbol file");
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("test-dump-id"), "dumpId");
         var fileContent = new ByteArrayContent(invalidContent);
@@ -89,7 +89,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     {
         // Arrange - Create a file that's too small
         var smallContent = new byte[2]; // Too small to be valid
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("test-dump-id"), "dumpId");
         var fileContent = new ByteArrayContent(smallContent);
@@ -110,7 +110,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     {
         // Arrange
         var pdbContent = CreateValidPortablePdbHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("valid-dump-id"), "dumpId");
         var fileContent = new ByteArrayContent(pdbContent);
@@ -124,7 +124,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("dumpId", out var dumpId));
         Assert.Equal("valid-dump-id", dumpId.GetString());
         Assert.True(result.TryGetProperty("fileName", out var fileName));
@@ -138,7 +138,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     {
         // Arrange
         var pdbContent = CreateValidWindowsPdbHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("windows-dump-id"), "dumpId");
         var fileContent = new ByteArrayContent(pdbContent);
@@ -152,7 +152,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("format", out var format));
         Assert.Contains("Windows PDB", format.GetString());
     }
@@ -162,7 +162,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     {
         // Arrange
         var elfContent = CreateValidElfHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("linux-dump-id"), "dumpId");
         var fileContent = new ByteArrayContent(elfContent);
@@ -176,7 +176,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("format", out var format));
         Assert.Contains("ELF", format.GetString());
     }
@@ -186,7 +186,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     {
         // Arrange
         var machoContent = CreateValidMachOHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("macos-dump-id"), "dumpId");
         var fileContent = new ByteArrayContent(machoContent);
@@ -200,7 +200,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("format", out var format));
         Assert.Contains("Mach-O", format.GetString());
     }
@@ -229,13 +229,13 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         // Arrange
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("batch-dump-id"), "dumpId");
-        
+
         // Add first PDB
         var pdb1Content = CreateValidPortablePdbHeader();
         var file1Content = new ByteArrayContent(pdb1Content);
         file1Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         content.Add(file1Content, "files", "App1.pdb");
-        
+
         // Add second PDB
         var pdb2Content = CreateValidPortablePdbHeader();
         var file2Content = new ByteArrayContent(pdb2Content);
@@ -249,7 +249,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("filesUploaded", out var filesUploaded));
         Assert.Equal(2, filesUploaded.GetInt32());
     }
@@ -260,7 +260,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         // Arrange
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("../../../etc"), "dumpId");
-        
+
         var pdbContent = CreateValidPortablePdbHeader();
         var fileContent = new ByteArrayContent(pdbContent);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
@@ -307,7 +307,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         var fileContent = new ByteArrayContent(pdbContent);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         uploadContent.Add(fileContent, "file", "Test.pdb");
-        
+
         await _client.PostAsync("/api/symbols/upload", uploadContent);
 
         // Act
@@ -317,7 +317,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("symbols", out var symbols));
         Assert.True(symbols.GetArrayLength() >= 1);
     }
@@ -335,7 +335,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("hasSymbols", out var hasSymbols));
         Assert.False(hasSymbols.GetBoolean());
     }
@@ -351,7 +351,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         var fileContent = new ByteArrayContent(pdbContent);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         uploadContent.Add(fileContent, "file", "ExistingFile.pdb");
-        
+
         var uploadResponse = await _client.PostAsync("/api/symbols/upload", uploadContent);
         Assert.Equal(HttpStatusCode.OK, uploadResponse.StatusCode);
 
@@ -362,7 +362,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("hasSymbols", out var hasSymbols));
         Assert.True(hasSymbols.GetBoolean());
     }
@@ -401,7 +401,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         var fileContent = new ByteArrayContent(pdbContent);
         fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
         uploadContent.Add(fileContent, "file", "ToDelete.pdb");
-        
+
         var uploadResponse = await _client.PostAsync("/api/symbols/upload", uploadContent);
         Assert.Equal(HttpStatusCode.OK, uploadResponse.StatusCode);
 
@@ -410,7 +410,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        
+
         // Verify it's actually deleted
         var existsResponse = await _client.GetAsync($"/api/symbols/dump/{uniqueDumpId}/exists");
         var body = await existsResponse.Content.ReadAsStringAsync();
@@ -440,7 +440,7 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("servers", out var servers));
         Assert.True(servers.GetArrayLength() > 0);
     }

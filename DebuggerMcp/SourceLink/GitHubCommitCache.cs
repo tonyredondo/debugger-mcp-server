@@ -13,13 +13,13 @@ public class GitHubCommitCache
     /// </summary>
     [JsonPropertyName("version")]
     public int Version { get; set; } = 1;
-    
+
     /// <summary>
     /// When the cache was last updated.
     /// </summary>
     [JsonPropertyName("lastUpdated")]
     public DateTime LastUpdated { get; set; }
-    
+
     /// <summary>
     /// Cached commit information keyed by "owner/repo/commitHash" (lowercase).
     /// </summary>

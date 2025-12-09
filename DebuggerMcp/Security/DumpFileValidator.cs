@@ -92,7 +92,7 @@ public static class DumpFileValidator
             var header = new byte[MinimumBytesNeeded];
             int totalBytesRead = 0;
             int bytesRead;
-            while (totalBytesRead < header.Length && 
+            while (totalBytesRead < header.Length &&
                    (bytesRead = stream.Read(header, totalBytesRead, header.Length - totalBytesRead)) > 0)
             {
                 totalBytesRead += bytesRead;

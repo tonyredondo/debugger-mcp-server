@@ -251,7 +251,7 @@ public class GitHubCommitResolverTests
         // Arrange
         var longMessage = new string('x', 2000);
         var json = GetSampleCommitJson(message: longMessage);
-        
+
         var mockHandler = new MockHttpMessageHandler();
         mockHandler.SetupResponse(HttpStatusCode.OK, json);
         var httpClient = new HttpClient(mockHandler);
@@ -336,7 +336,7 @@ public class GitHubCommitResolverTests
 
         // First call - this sets rate limit to 0
         await resolver.FetchCommitInfoAsync("owner/repo", "first");
-        
+
         // Second call should be blocked by rate limit check
         var result = await resolver.FetchCommitInfoAsync("owner/repo2", "second");
 
@@ -382,7 +382,7 @@ public class GitHubCommitResolverTests
     {
         // Arrange
         var tempDir = Path.Combine(Path.GetTempPath(), $"github_cache_test_{Guid.NewGuid()}");
-        
+
         try
         {
             var mockHandler = new MockHttpMessageHandler();
@@ -409,7 +409,7 @@ public class GitHubCommitResolverTests
             using (var resolver2 = new GitHubCommitResolver(tempDir, null, null, failClient))
             {
                 var result = await resolver2.FetchCommitInfoAsync("owner/repo", "abc123");
-                
+
                 // Should get cached result, not call HTTP
                 Assert.NotNull(result);
                 Assert.Equal("andrewlock", result.AuthorName);
@@ -474,7 +474,7 @@ public class GitHubCommitResolverTests
             "commit": {}
         }
         """;
-        
+
         var mockHandler = new MockHttpMessageHandler();
         mockHandler.SetupResponse(HttpStatusCode.OK, json);
         var httpClient = new HttpClient(mockHandler);

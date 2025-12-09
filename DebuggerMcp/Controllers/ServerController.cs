@@ -15,7 +15,7 @@ namespace DebuggerMcp.Controllers;
 public class ServerController : ControllerBase
 {
     private readonly ILogger<ServerController> _logger;
-    
+
     // Cache the capabilities since they don't change at runtime
     private static readonly ServerCapabilities _capabilities = new();
 
@@ -43,9 +43,10 @@ public class ServerController : ControllerBase
     [ProducesResponseType(typeof(ServerCapabilities), StatusCodes.Status200OK)]
     public ActionResult<ServerCapabilities> GetCapabilities()
     {
+        // Log at debug to aid diagnostics without polluting normal logs.
         _logger.LogDebug("Server capabilities requested: Platform={Platform}, Arch={Arch}, Alpine={IsAlpine}",
             _capabilities.Platform, _capabilities.Architecture, _capabilities.IsAlpine);
-        
+
         return Ok(_capabilities);
     }
 
@@ -68,4 +69,3 @@ public class ServerController : ControllerBase
         });
     }
 }
-

@@ -283,7 +283,7 @@ public class SessionManagerTests : IDisposable
         // Arrange
         var callbackInvoked = false;
         var closedSessionId = string.Empty;
-        
+
         _sessionManager.OnSessionClosed = (id) =>
         {
             callbackInvoked = true;
@@ -360,10 +360,10 @@ public class SessionManagerTests : IDisposable
     {
         // Arrange
         var sessionId = _sessionManager.CreateSession("user1");
-        
+
         // Wait a small amount of time so the session becomes inactive
         await Task.Delay(10);
-        
+
         // Act - cleanup sessions inactive for more than 1 millisecond
         var count = _sessionManager.CleanupInactiveSessions(TimeSpan.FromMilliseconds(1));
 

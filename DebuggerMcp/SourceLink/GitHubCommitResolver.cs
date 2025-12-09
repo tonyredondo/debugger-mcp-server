@@ -20,17 +20,17 @@ public class GitHubCommitResolver : IDisposable
     private readonly bool _ownsHttpClient;
     private GitHubCommitCache _cache;
     private bool _cacheModified;
-    
+
     // Rate limit tracking
     private int _remainingRequests = 60;
     private DateTime _rateLimitReset = DateTime.MinValue;
-    
+
     // Constants
     private const int MaxCommitMessageLength = 1000;
     private const string CacheFileName = "github_commit_cache.json";
     private const string GitHubApiBase = "https://api.github.com";
     private const string UserAgent = "DebuggerMcp/1.0";
-    
+
     /// <summary>
     /// Regex for parsing GitHub URLs.
     /// Matches: github.com/owner/repo, github.com:owner/repo, etc.
@@ -47,8 +47,8 @@ public class GitHubCommitResolver : IDisposable
     /// <param name="logger">Optional logger for diagnostics.</param>
     /// <param name="httpClient">Optional HttpClient for testing.</param>
     public GitHubCommitResolver(
-        string? cacheDirectory = null, 
-        string? githubToken = null, 
+        string? cacheDirectory = null,
+        string? githubToken = null,
         ILogger? logger = null,
         HttpClient? httpClient = null)
     {
@@ -56,7 +56,7 @@ public class GitHubCommitResolver : IDisposable
         _githubToken = githubToken;
         _logger = logger;
         _cache = new GitHubCommitCache();
-        
+
         if (httpClient != null)
         {
             _httpClient = httpClient;
@@ -67,7 +67,7 @@ public class GitHubCommitResolver : IDisposable
             _httpClient = new HttpClient();
             _ownsHttpClient = true;
         }
-        
+
         LoadCache();
     }
 
@@ -84,17 +84,18 @@ public class GitHubCommitResolver : IDisposable
         {
             return sourceCommitUrl;
         }
-        
+
         // Priority 2: Construct from repositoryUrl + commitHash
         if (!string.IsNullOrEmpty(assembly.RepositoryUrl) && !string.IsNullOrEmpty(assembly.CommitHash))
         {
             var ownerRepo = ExtractGitHubOwnerRepo(assembly.RepositoryUrl);
             if (ownerRepo != null)
             {
+                // Build a tree URL when we know both repo and commit hash
                 return $"https://github.com/{ownerRepo}/tree/{assembly.CommitHash}";
             }
         }
-        
+
         return null;
     }
 
@@ -107,18 +108,21 @@ public class GitHubCommitResolver : IDisposable
     {
         if (string.IsNullOrEmpty(url))
             return null;
-        
+
         var match = GitHubUrlRegex.Match(url);
         if (!match.Success)
             return null;
-        
+
         var owner = match.Groups[1].Value;
         var repo = match.Groups[2].Value;
-        
+
         // Remove .git suffix if present
         if (repo.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            // Normalize to repository name without clone suffix
             repo = repo[..^4];
-        
+        }
+
         return $"{owner}/{repo}";
     }
 
@@ -131,41 +135,43 @@ public class GitHubCommitResolver : IDisposable
     public async Task<GitHubCommitInfo?> FetchCommitInfoAsync(string ownerRepo, string commitHash)
     {
         var cacheKey = $"{ownerRepo}/{commitHash}".ToLowerInvariant();
-        
+
         // Check cache first
         if (_cache.Commits.TryGetValue(cacheKey, out var cached))
         {
+            // Avoid hitting GitHub when we already have a result (including null)
             _logger?.LogDebug("GitHub cache hit for {Key}", cacheKey);
             return cached;
         }
-        
+
         // Check rate limit
         if (_remainingRequests <= 1 && DateTime.UtcNow < _rateLimitReset)
         {
-            _logger?.LogWarning("GitHub API rate limit reached ({Remaining} remaining), reset at {Reset}", 
+            // Stop early when GitHub told us to back off
+            _logger?.LogWarning("GitHub API rate limit reached ({Remaining} remaining), reset at {Reset}",
                 _remainingRequests, _rateLimitReset);
             return null;
         }
-        
+
         var url = $"{GitHubApiBase}/repos/{ownerRepo}/commits/{commitHash}";
-        
+
         try
         {
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.Add("User-Agent", UserAgent);
             request.Headers.Add("Accept", "application/vnd.github.v3+json");
-            
+
             if (!string.IsNullOrEmpty(_githubToken))
             {
                 request.Headers.Add("Authorization", $"Bearer {_githubToken}");
             }
-            
+
             _logger?.LogDebug("Fetching GitHub commit: {Url}", url);
             var response = await _httpClient.SendAsync(request);
-            
+
             // Update rate limit info
             UpdateRateLimitFromHeaders(response.Headers);
-            
+
             if (response.StatusCode == HttpStatusCode.NotFound)
             {
                 _logger?.LogDebug("GitHub commit not found: {OwnerRepo}/{Hash}", ownerRepo, commitHash);
@@ -174,29 +180,31 @@ public class GitHubCommitResolver : IDisposable
                 _cacheModified = true;
                 return null;
             }
-            
+
             if (response.StatusCode == HttpStatusCode.Forbidden && _remainingRequests <= 0)
             {
+                // Stop hammering API when GitHub has already blocked us
                 _logger?.LogWarning("GitHub API rate limit exceeded");
                 return null;
             }
-            
+
             if (!response.IsSuccessStatusCode)
             {
+                // Avoid caching here so transient errors can succeed later
                 _logger?.LogWarning("GitHub API returned {Status} for {Url}", response.StatusCode, url);
                 return null;
             }
-            
+
             var json = await response.Content.ReadAsStringAsync();
             var info = ParseCommitResponse(json, ownerRepo, commitHash);
-            
+
             if (info != null)
             {
                 _cache.Commits[cacheKey] = info;
                 _cacheModified = true;
                 _logger?.LogDebug("Cached GitHub commit: {Key}", cacheKey);
             }
-            
+
             return info;
         }
         catch (HttpRequestException ex)
@@ -225,40 +233,44 @@ public class GitHubCommitResolver : IDisposable
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
-            
+
             if (!root.TryGetProperty("commit", out var commit))
+                // Unexpected payload shape
                 return null;
-            
+
             if (!commit.TryGetProperty("author", out var author))
+                // Missing author block means the commit payload is incomplete
                 return null;
-            
+
             if (!commit.TryGetProperty("committer", out var committer))
+                // Same for committer data
                 return null;
-            
-            var message = commit.TryGetProperty("message", out var msgProp) 
-                ? msgProp.GetString() 
+
+            var message = commit.TryGetProperty("message", out var msgProp)
+                ? msgProp.GetString()
                 : null;
-            
+
             // Truncate long messages
             if (message?.Length > MaxCommitMessageLength)
             {
+                // Avoid large payloads bloating our cache or UI
                 message = message[..MaxCommitMessageLength] + "...";
             }
-            
+
             return new GitHubCommitInfo
             {
                 Sha = commitHash,
-                AuthorName = author.TryGetProperty("name", out var authorName) 
-                    ? authorName.GetString() 
+                AuthorName = author.TryGetProperty("name", out var authorName)
+                    ? authorName.GetString()
                     : null,
-                AuthorDate = author.TryGetProperty("date", out var authorDate) 
-                    ? authorDate.GetString() 
+                AuthorDate = author.TryGetProperty("date", out var authorDate)
+                    ? authorDate.GetString()
                     : null,
-                CommitterName = committer.TryGetProperty("name", out var committerName) 
-                    ? committerName.GetString() 
+                CommitterName = committer.TryGetProperty("name", out var committerName)
+                    ? committerName.GetString()
                     : null,
-                CommitterDate = committer.TryGetProperty("date", out var committerDate) 
-                    ? committerDate.GetString() 
+                CommitterDate = committer.TryGetProperty("date", out var committerDate)
+                    ? committerDate.GetString()
                     : null,
                 Message = message,
                 TreeUrl = $"https://github.com/{ownerRepo}/tree/{commitHash}"
@@ -280,18 +292,20 @@ public class GitHubCommitResolver : IDisposable
         {
             if (int.TryParse(remaining.FirstOrDefault(), out var value))
             {
+                // Track how many requests we can still make
                 _remainingRequests = value;
             }
         }
-        
+
         if (headers.TryGetValues("X-RateLimit-Reset", out var reset))
         {
             if (long.TryParse(reset.FirstOrDefault(), out var unixTime))
             {
+                // GitHub returns epoch seconds; convert to UTC timestamp
                 _rateLimitReset = DateTimeOffset.FromUnixTimeSeconds(unixTime).UtcDateTime;
             }
         }
-        
+
         _logger?.LogDebug("GitHub rate limit: {Remaining} remaining, resets at {Reset}",
             _remainingRequests, _rateLimitReset);
     }
@@ -302,20 +316,20 @@ public class GitHubCommitResolver : IDisposable
     private void LoadCache()
     {
         _cache = new GitHubCommitCache();
-        
+
         if (string.IsNullOrEmpty(_cacheDirectory))
             return;
-        
+
         var cachePath = Path.Combine(_cacheDirectory, CacheFileName);
-        
+
         if (!File.Exists(cachePath))
             return;
-        
+
         try
         {
             var json = File.ReadAllText(cachePath);
             _cache = JsonSerializer.Deserialize<GitHubCommitCache>(json) ?? new GitHubCommitCache();
-            _logger?.LogDebug("Loaded GitHub commit cache with {Count} entries from {Path}", 
+            _logger?.LogDebug("Loaded GitHub commit cache with {Count} entries from {Path}",
                 _cache.Commits.Count, cachePath);
         }
         catch (Exception ex)
@@ -332,20 +346,20 @@ public class GitHubCommitResolver : IDisposable
     {
         if (!_cacheModified || string.IsNullOrEmpty(_cacheDirectory))
             return;
-        
+
         var cachePath = Path.Combine(_cacheDirectory, CacheFileName);
-        
+
         try
         {
             Directory.CreateDirectory(_cacheDirectory);
             _cache.LastUpdated = DateTime.UtcNow;
-            
+
             var options = new JsonSerializerOptions { WriteIndented = true };
             var json = JsonSerializer.Serialize(_cache, options);
             File.WriteAllText(cachePath, json);
-            
+
             _cacheModified = false;
-            _logger?.LogDebug("Saved GitHub commit cache with {Count} entries to {Path}", 
+            _logger?.LogDebug("Saved GitHub commit cache with {Count} entries to {Path}",
                 _cache.Commits.Count, cachePath);
         }
         catch (Exception ex)
@@ -375,4 +389,3 @@ public class GitHubCommitResolver : IDisposable
         }
     }
 }
-

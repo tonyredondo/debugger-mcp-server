@@ -26,7 +26,7 @@ public class HelpSystemTests
         // Assert
         foreach (var category in HelpSystem.Categories.Keys)
         {
-            Assert.True(HelpSystem.CommandsByCategory.ContainsKey(category), 
+            Assert.True(HelpSystem.CommandsByCategory.ContainsKey(category),
                 $"CommandsByCategory should contain '{category}'");
         }
     }
@@ -111,7 +111,7 @@ public class HelpSystemTests
         // Assert
         foreach (var (category, description) in HelpSystem.Categories)
         {
-            Assert.False(string.IsNullOrWhiteSpace(description), 
+            Assert.False(string.IsNullOrWhiteSpace(description),
                 $"Category '{category}' should have a description");
         }
     }
@@ -124,7 +124,7 @@ public class HelpSystemTests
         {
             foreach (var command in commands)
             {
-                Assert.False(string.IsNullOrWhiteSpace(command.Description), 
+                Assert.False(string.IsNullOrWhiteSpace(command.Description),
                     $"Command '{command.Name}' in category '{category}' should have a description");
             }
         }

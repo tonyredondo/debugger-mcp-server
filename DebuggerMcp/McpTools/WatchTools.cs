@@ -61,14 +61,14 @@ public class WatchTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session to validate ownership and get current dump
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open - watches are associated with dumps
         ValidateDumpIsOpen(manager);
 
@@ -119,14 +119,14 @@ public class WatchTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session to validate ownership and get current dump
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
@@ -162,14 +162,14 @@ public class WatchTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session to validate ownership and get current dump
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
@@ -200,7 +200,7 @@ public class WatchTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
@@ -213,7 +213,7 @@ public class WatchTools(
         // Get the session to validate ownership and get current dump
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
@@ -250,7 +250,7 @@ public class WatchTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
@@ -263,7 +263,7 @@ public class WatchTools(
         // Get the session to validate ownership and get current dump
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
@@ -296,20 +296,20 @@ public class WatchTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session to validate ownership and get current dump
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
         // Get count before clearing for the message
         var count = await WatchStore.GetWatchCountAsync(sanitizedUserId, session.CurrentDumpId!);
-        
+
         // Return early if no watches to clear
         if (count == 0)
         {

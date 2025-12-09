@@ -212,7 +212,7 @@ public class ShellReadLine
     {
         var promptLength = PromptBuilder.GetPromptLength(_state);
         Console.Write(_currentLine);
-        
+
         // Position cursor correctly
         var targetPosition = promptLength + _cursorPosition;
         Console.CursorLeft = targetPosition;

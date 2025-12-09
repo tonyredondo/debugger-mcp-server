@@ -21,8 +21,8 @@ public class HtmlReportGenerator : IReportGenerator
             throw new ArgumentNullException(nameof(analysis));
         }
 
-        options ??= ReportOptions.FullReport;
-        metadata ??= new ReportMetadata();
+        options ??= ReportOptions.FullReport; // ensure sane defaults so callers can pass null
+        metadata ??= new ReportMetadata();    // allow optional metadata input
 
         var sb = new StringBuilder();
 
@@ -49,6 +49,7 @@ public class HtmlReportGenerator : IReportGenerator
         var threads = analysis.Threads?.All ?? new List<ThreadInfo>();
         if (options.IncludeCallStacks && threads.Any(t => t.CallStack.Any()))
         {
+            // Only render stack section when there is at least one frame to avoid empty headings
             AppendAllThreadCallStacks(sb, analysis, options);
         }
 
@@ -62,62 +63,63 @@ public class HtmlReportGenerator : IReportGenerator
         var threadsForInfo = analysis.Threads?.All ?? new List<ThreadInfo>();
         if (options.IncludeThreadInfo && threadsForInfo.Any())
         {
+            // Skip thread summary when no thread objects exist to keep report concise
             AppendThreadInfo(sb, analysis, options);
         }
 
         // .NET Info (from new hierarchical structure)
-        var hasDotNetInfo = analysis.Environment?.Runtime != null || 
+        var hasDotNetInfo = analysis.Environment?.Runtime != null ||
                             analysis.Exception?.Analysis != null ||
                             analysis.Assemblies?.Items?.Any() == true ||
                             analysis.Memory?.Gc != null;
         if (options.IncludeDotNetInfo && hasDotNetInfo)
         {
             AppendDotNetInfoFromHierarchy(sb, analysis);
-            
+
             // Exception Deep Analysis
             if (analysis.Exception?.Analysis != null)
             {
                 AppendExceptionAnalysis(sb, analysis.Exception.Analysis);
             }
-            
+
             // Type Resolution Analysis
             if (analysis.Exception?.Analysis?.TypeResolution != null)
             {
                 AppendTypeResolutionAnalysis(sb, analysis.Exception.Analysis.TypeResolution);
             }
-            
+
             // NativeAOT / Trimming Analysis
             if (analysis.Environment?.NativeAot != null)
             {
                 AppendNativeAotAnalysis(sb, analysis.Environment.NativeAot);
             }
-            
+
             // Assembly Versions
             if (analysis.Assemblies?.Items?.Any() == true)
             {
                 AppendAssemblyVersions(sb, analysis.Assemblies.Items);
             }
-            
+
             // === Phase 2 ClrMD Enrichment ===
-            
+
             // GC Summary
             if (analysis.Memory?.Gc != null)
             {
                 AppendGcSummaryHtml(sb, analysis.Memory.Gc);
             }
-            
+
             // Top Memory Consumers (deep analysis)
             if (analysis.Memory?.TopConsumers != null)
             {
                 AppendTopMemoryConsumersHtml(sb, analysis.Memory.TopConsumers);
             }
-            
+
             // Async Analysis (deep analysis) - use AsyncInfo
             if (analysis.Async != null)
             {
                 AppendAsyncInfoFromHierarchyHtml(sb, analysis.Async);
             }
-            
+
             // String Analysis (deep analysis)
             if (analysis.Memory?.Strings != null)
             {
@@ -185,7 +187,7 @@ public class HtmlReportGenerator : IReportGenerator
     private static void AppendHtmlHeader(StringBuilder sb, ReportOptions options, ReportMetadata metadata)
     {
         var title = HttpUtility.HtmlEncode(options.Title ?? "Crash Analysis Report");
-        
+
         sb.AppendLine("<!DOCTYPE html>");
         sb.AppendLine("<html lang=\"en\">");
         sb.AppendLine("<head>");
@@ -381,7 +383,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         sb.AppendLine($"<tr><td>Generated</td><td>{metadata.GeneratedAt:yyyy-MM-dd HH:mm:ss} UTC</td></tr>");
         sb.AppendLine($"<tr><td>Dump ID</td><td><code>{HttpUtility.HtmlEncode(metadata.DumpId)}</code></td></tr>");
         sb.AppendLine($"<tr><td>Debugger</td><td>{HttpUtility.HtmlEncode(metadata.DebuggerType)}</td></tr>");
-        
+
         // Add platform info if available - use new structure first, fall back to old
         var platform = analysis.Environment?.Platform;
         if (platform != null)
@@ -399,14 +401,14 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             {
                 osInfo += " - glibc";
             }
-            
+
             sb.AppendLine($"<tr><td>Platform</td><td>{HttpUtility.HtmlEncode(osInfo)}</td></tr>");
-            
+
             if (!string.IsNullOrEmpty(platform.Architecture))
             {
                 sb.AppendLine($"<tr><td>Architecture</td><td>{HttpUtility.HtmlEncode(platform.Architecture)} ({platform.PointerSize ?? 64}-bit)</td></tr>");
             }
-            
+
             // Runtime version from new Environment.Runtime or old Platform.RuntimeVersion
             var runtimeVersion = analysis.Environment?.Runtime?.Version ?? platform.RuntimeVersion;
             if (!string.IsNullOrEmpty(runtimeVersion))
@@ -414,7 +416,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine($"<tr><td>.NET Runtime</td><td>{HttpUtility.HtmlEncode(runtimeVersion)}</td></tr>");
             }
         }
-        
+
         sb.AppendLine("</table>");
     }
 
@@ -454,7 +456,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
 
         // Show exception details if available
         var exception = analysis.Exception;
-        
+
         if (exception != null)
         {
             sb.AppendLine("<h3>Exception Details</h3>");
@@ -474,7 +476,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             }
             sb.AppendLine("</table>");
         }
-        
+
         // If no crash info at all, show a message
         if (string.IsNullOrEmpty(crashType) && string.IsNullOrEmpty(summaryText) && exception == null)
         {
@@ -501,7 +503,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             var faultingClass = thread.IsFaulting ? " faulting-thread" : "";
             var faultingBadge = thread.IsFaulting ? "<span class=\"badge badge-danger\">⚠️ Faulting</span> " : "";
             var stateInfo = !string.IsNullOrEmpty(thread.State) ? $" <span class=\"thread-state\">({HttpUtility.HtmlEncode(thread.State)})</span>" : "";
-            
+
             // CLR thread info
             var clrInfo = "";
             if (!string.IsNullOrEmpty(thread.ThreadType))
@@ -512,13 +514,13 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             {
                 clrInfo += $" <span class=\"badge badge-danger\">🔥 {HttpUtility.HtmlEncode(thread.CurrentException)}</span>";
             }
-            
+
             sb.AppendLine($"<div class=\"card thread-callstack{faultingClass}\">");
             sb.AppendLine($"<h3>{faultingBadge}Thread #{HttpUtility.HtmlEncode(thread.ThreadId)}{stateInfo}{clrInfo}</h3>");
-            
+
             // Show parameters for faulting thread
             AppendThreadCallStack(sb, thread.CallStack, options, showParameters: thread.IsFaulting);
-            
+
             sb.AppendLine("</div>");
         }
     }
@@ -538,7 +540,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         sb.AppendLine("<table class=\"callstack-table\">");
         sb.AppendLine("<thead><tr><th></th><th>#</th><th>Module</th><th>Function</th><th>Source</th></tr></thead>");
         sb.AppendLine("<tbody>");
-        
+
         for (int i = 0; i < frames.Count; i++)
         {
             var frame = frames[i];
@@ -546,7 +548,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             var func = HttpUtility.HtmlEncode(frame.Function ?? "???");
             var frameTypeClass = frame.IsManaged ? "managed-frame" : "native-frame";
             var frameTypeIcon = frame.IsManaged ? "🟢" : "🔵";
-            
+
             // Build the source info - clean up [opt] markers
             string sourceCell = "";
             if (!string.IsNullOrEmpty(frame.SourceUrl))
@@ -563,7 +565,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 var cleanSource = CleanSourceInfo(frame.Source);
                 sourceCell = $"<span class=\"source-info\">{HttpUtility.HtmlEncode(cleanSource)}</span>";
             }
-            
+
             sb.AppendLine($"<tr class=\"{frameTypeClass}\">");
             sb.AppendLine($"<td class=\"frame-type\">{frameTypeIcon}</td>");
             sb.AppendLine($"<td class=\"frame-num\">{i:D2}</td>");
@@ -572,35 +574,35 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine($"<td class=\"frame-source\">{sourceCell}</td>");
             sb.AppendLine("</tr>");
         }
-        
+
         sb.AppendLine("</tbody></table>");
         sb.AppendLine("</div>"); // Close table-container
-        
+
         // Show parameters and locals for faulting thread
         if (showParameters)
         {
-            var framesWithVars = frames.Where(f => 
-                (f.Parameters != null && f.Parameters.Count > 0) || 
+            var framesWithVars = frames.Where(f =>
+                (f.Parameters != null && f.Parameters.Count > 0) ||
                 (f.Locals != null && f.Locals.Count > 0)).ToList();
-            
+
             if (framesWithVars.Any())
             {
                 sb.AppendLine("<h4>📍 Frame Variables</h4>");
-                
+
                 foreach (var frame in framesWithVars)
                 {
                     var funcName = HttpUtility.HtmlEncode(frame.Function ?? "???");
-                    
+
                     sb.AppendLine("<details>");
                     sb.AppendLine($"<summary><strong>Frame {frame.FrameNumber:D2}:</strong> {funcName}</summary>");
-                    
+
                     if (frame.Parameters != null && frame.Parameters.Count > 0)
                     {
                         sb.AppendLine("<p><strong>Parameters:</strong></p>");
                         sb.AppendLine("<table class=\"data-table compact\">");
                         sb.AppendLine("<thead><tr><th>Name</th><th>Type</th><th>Value</th></tr></thead>");
                         sb.AppendLine("<tbody>");
-                        
+
                         foreach (var param in frame.Parameters)
                         {
                             var name = HttpUtility.HtmlEncode(param.Name ?? "[unnamed]");
@@ -612,17 +614,17 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                             var value = FormatHtmlVariableValue(param.Value);
                             sb.AppendLine($"<tr><td><code>{name}</code></td><td><code>{type}</code></td><td>{value}</td></tr>");
                         }
-                        
+
                         sb.AppendLine("</tbody></table>");
                     }
-                    
+
                     if (frame.Locals != null && frame.Locals.Count > 0)
                     {
                         sb.AppendLine("<p><strong>Local Variables:</strong></p>");
                         sb.AppendLine("<table class=\"data-table compact\">");
                         sb.AppendLine("<thead><tr><th>Name</th><th>Type</th><th>Value</th></tr></thead>");
                         sb.AppendLine("<tbody>");
-                        
+
                         foreach (var local in frame.Locals)
                         {
                             var name = HttpUtility.HtmlEncode(local.Name ?? "[unnamed]");
@@ -630,23 +632,23 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                             var value = FormatHtmlVariableValue(local.Value);
                             sb.AppendLine($"<tr><td><code>{name}</code></td><td><code>{type}</code></td><td>{value}</td></tr>");
                         }
-                        
+
                         sb.AppendLine("</tbody></table>");
                     }
-                    
+
                     sb.AppendLine("</details>");
                 }
             }
         }
     }
-    
+
     private static string FormatHtmlVariableValue(object? value)
     {
         if (value == null)
         {
             return "<em>null</em>";
         }
-        
+
         // If value is an expanded object (from showobj), format it as JSON
         if (value is not string)
         {
@@ -665,17 +667,17 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 return HttpUtility.HtmlEncode(value.ToString() ?? "");
             }
         }
-        
+
         var stringValue = value as string ?? value.ToString() ?? "";
-        
+
         if (string.IsNullOrEmpty(stringValue) || stringValue == "[NO DATA]")
         {
             return "<em>no data</em>";
         }
-        
+
         var truncated = stringValue;
         var encoded2 = HttpUtility.HtmlEncode(truncated);
-        
+
         // Format based on value type
         if (truncated.StartsWith("\"") && truncated.EndsWith("\""))
         {
@@ -697,7 +699,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             // Numeric
             return $"<code class=\"numeric-value\">{encoded2}</code>";
         }
-        
+
         return encoded2;
     }
 
@@ -708,18 +710,18 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         // Memory consumption alert
         var leakAnalysis = analysis.Memory?.LeakAnalysis;
         var detected = leakAnalysis?.Detected ?? false;
-        
+
         if (detected)
         {
             var severity = leakAnalysis?.Severity ?? "Elevated";
             var totalHeapBytes = leakAnalysis?.TotalHeapBytes ?? 0;
-            var estimatedLeakedBytes = leakAnalysis?.EstimatedLeakedBytes ?? 0;
-            var heapSize = totalHeapBytes > 0 ? totalHeapBytes : estimatedLeakedBytes;
+            var topConsumerBytes = leakAnalysis?.TopConsumers?.Sum(c => c.TotalSize) ?? 0;
+            var heapSize = totalHeapBytes > 0 ? totalHeapBytes : topConsumerBytes;
             var potentialIssueIndicators = leakAnalysis?.PotentialIssueIndicators;
-            
+
             sb.AppendLine("<div class=\"alert alert-warning\">");
             sb.AppendLine($"<strong>⚠️ Memory Consumption: {severity}</strong> - Total Heap: {AsciiCharts.FormatBytes(heapSize)}");
-            
+
             if (potentialIssueIndicators?.Any() == true)
             {
                 sb.AppendLine("<ul style=\"margin-top:8px; margin-bottom:0\">");
@@ -742,7 +744,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         {
             sb.AppendLine("<div class=\"card\">");
             sb.AppendLine("<h3>Top Memory Consumers</h3>");
-            
+
             var consumers = topConsumers.Take(10).ToList();
             var maxSize = consumers.Max(c => c.TotalSize);
 
@@ -766,12 +768,12 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     {
         sb.AppendLine("<h2>🧵 Thread Information</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         // Use new structure if available
         var allThreads = analysis.Threads?.All ?? new List<ThreadInfo>();
         var threadSummary = analysis.Threads?.Summary;
         var threadCount = threadSummary?.Total ?? allThreads.Count;
-        
+
         sb.AppendLine($"<p><strong>Total Threads:</strong> {threadCount}</p>");
 
         // Thread state chart
@@ -830,23 +832,23 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<h3>🔥 Managed Exception</h3>");
             sb.AppendLine("<div class=\"exception-details\">");
             sb.AppendLine($"<p><strong>Type:</strong> <code>{HttpUtility.HtmlEncode(exception.Type)}</code></p>");
-            
+
             if (!string.IsNullOrEmpty(exception.Message))
             {
                 sb.AppendLine($"<p><strong>Message:</strong> {HttpUtility.HtmlEncode(exception.Message)}</p>");
             }
-            
+
             if (!string.IsNullOrEmpty(exception.HResult))
             {
                 sb.AppendLine($"<p><strong>HResult:</strong> 0x{HttpUtility.HtmlEncode(exception.HResult)}</p>");
             }
-            
+
             if (exception.HasInnerException == true)
             {
                 var count = exception.NestedExceptionCount > 0 ? exception.NestedExceptionCount : 1;
                 sb.AppendLine($"<p><strong>Inner Exceptions:</strong> {count} nested exception(s)</p>");
             }
-            
+
             if (exception.StackTrace != null && exception.StackTrace.Count > 0)
             {
                 sb.AppendLine("<p><strong>Stack Trace:</strong></p>");
@@ -874,7 +876,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<strong>⚠️ Async Deadlock Detected</strong> - Potential async/await deadlock pattern found.");
             sb.AppendLine("</div>");
         }
-        
+
         // Thread Pool Information from Threads.ThreadPool
         var tp = analysis.Threads?.ThreadPool;
         if (tp != null)
@@ -883,7 +885,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<table class=\"data-table\">");
             sb.AppendLine("<thead><tr><th>Metric</th><th>Value</th></tr></thead>");
             sb.AppendLine("<tbody>");
-            
+
             if (tp.CpuUtilization.HasValue)
                 sb.AppendLine($"<tr><td>CPU Utilization</td><td>{tp.CpuUtilization}%</td></tr>");
             if (tp.WorkersTotal.HasValue)
@@ -898,9 +900,9 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine($"<tr><td>Max Threads</td><td>{tp.WorkerMaxLimit:N0}</td></tr>");
             if (tp.IsPortableThreadPool == true)
                 sb.AppendLine($"<tr><td>Thread Pool Type</td><td>Portable</td></tr>");
-            
+
             sb.AppendLine("</tbody></table>");
-            
+
             // Warnings
             if (tp.WorkersRunning == tp.WorkersTotal && tp.WorkersTotal > 0)
             {
@@ -908,7 +910,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine("<strong>⚠️ Thread Pool Saturation:</strong> All worker threads are busy.");
                 sb.AppendLine("</div>");
             }
-            
+
             if (tp.CpuUtilization > 90)
             {
                 sb.AppendLine("<div class=\"alert alert-warning\">");
@@ -916,25 +918,25 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine("</div>");
             }
         }
-        
+
         // Timer Information from Async.Timers
         var timers = analysis.Async?.Timers;
         if (timers != null && timers.Count > 0)
         {
             sb.AppendLine("<h3>⏱️ Active Timers</h3>");
             sb.AppendLine($"<p><strong>Total Active Timers:</strong> {timers.Count}</p>");
-            
+
             // Group by state type
             var timerGroups = timers
                 .GroupBy(t => t.StateType ?? "Unknown")
                 .OrderByDescending(g => g.Count())
                 .Take(10)
                 .ToList();
-            
+
             sb.AppendLine("<table class=\"data-table\">");
             sb.AppendLine("<thead><tr><th>State Type</th><th>Count</th><th>Due Time</th><th>Period</th></tr></thead>");
             sb.AppendLine("<tbody>");
-            
+
             foreach (var group in timerGroups)
             {
                 var sample = group.First();
@@ -944,9 +946,9 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 var stateType = group.Key;
                 sb.AppendLine($"<tr><td><code>{HttpUtility.HtmlEncode(stateType)}</code></td><td>{count}</td><td>{dueTime}</td><td>{period}</td></tr>");
             }
-            
+
             sb.AppendLine("</tbody></table>");
-            
+
             // Warnings
             if (timers.Count > 50)
             {
@@ -954,7 +956,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine($"<strong>⚠️ High Timer Count ({timers.Count}):</strong> May indicate timer leaks.");
                 sb.AppendLine("</div>");
             }
-            
+
             var shortTimers = timers.Where(t => t.PeriodMs.HasValue && t.PeriodMs < 100).ToList();
             if (shortTimers.Count > 0)
             {
@@ -971,7 +973,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     {
         sb.AppendLine("<h2>⚡ Async Analysis</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         if (asyncInfo.Summary != null)
         {
             sb.AppendLine("<h3>Task Summary</h3>");
@@ -989,7 +991,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine($"<tr><td>Canceled</td><td>{asyncInfo.Summary.CanceledTasks}</td></tr>");
             sb.AppendLine("</tbody></table>");
         }
-        
+
         if (asyncInfo.StateMachines?.Count > 0)
         {
             sb.AppendLine("<h3>Pending State Machines</h3>");
@@ -1006,7 +1008,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             }
             sb.AppendLine("</tbody></table>");
         }
-        
+
         if (asyncInfo.FaultedTasks?.Count > 0)
         {
             sb.AppendLine("<h3>Faulted Tasks</h3>");
@@ -1017,7 +1019,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             }
             sb.AppendLine("</ul>");
         }
-        
+
         if (asyncInfo.AnalysisTimeMs.HasValue)
         {
             sb.AppendLine($"<p class=\"text-muted\">Analysis completed in {asyncInfo.AnalysisTimeMs}ms</p>");
@@ -1034,11 +1036,11 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     {
         sb.AppendLine("<h2>🔎 Exception Deep Analysis</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         // Basic exception info
         sb.AppendLine("<h3>Exception Details</h3>");
         sb.AppendLine("<table class=\"meta-table\">");
-        
+
         if (!string.IsNullOrEmpty(exceptionAnalysis.FullTypeName))
             sb.AppendLine($"<tr><td>Type</td><td><code>{HttpUtility.HtmlEncode(exceptionAnalysis.FullTypeName)}</code></td></tr>");
         if (!string.IsNullOrEmpty(exceptionAnalysis.Message))
@@ -1049,9 +1051,9 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine($"<tr><td>Address</td><td><code>0x{HttpUtility.HtmlEncode(exceptionAnalysis.ExceptionAddress)}</code></td></tr>");
         if (!string.IsNullOrEmpty(exceptionAnalysis.Source))
             sb.AppendLine($"<tr><td>Source</td><td>{HttpUtility.HtmlEncode(exceptionAnalysis.Source)}</td></tr>");
-        
+
         sb.AppendLine("</table>");
-        
+
         // Target Site
         if (exceptionAnalysis.TargetSite != null)
         {
@@ -1064,18 +1066,18 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine($"<li><strong>Signature:</strong> <code>{HttpUtility.HtmlEncode(exceptionAnalysis.TargetSite.Signature)}</code></li>");
             sb.AppendLine("</ul>");
         }
-        
+
         // Exception Chain
         if (exceptionAnalysis.ExceptionChain?.Any() == true)
         {
             sb.AppendLine("<h3>Exception Chain</h3>");
             sb.AppendLine("<div class=\"exception-chain\">");
-            
+
             foreach (var entry in exceptionAnalysis.ExceptionChain)
             {
                 var depthClass = entry.Depth == 0 ? "root-exception" : "inner-exception";
                 var indent = entry.Depth * 20;
-                
+
                 sb.AppendLine($"<div class=\"{depthClass}\" style=\"margin-left: {indent}px; padding: 10px; border-left: 3px solid var(--accent); margin-bottom: 8px;\">");
                 sb.AppendLine($"<strong>{HttpUtility.HtmlEncode(entry.Type ?? "?")}</strong>");
                 if (!string.IsNullOrEmpty(entry.Message))
@@ -1084,10 +1086,10 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                     sb.AppendLine($"<span class=\"badge badge-info\">HResult: {HttpUtility.HtmlEncode(entry.HResult)}</span>");
                 sb.AppendLine("</div>");
             }
-            
+
             sb.AppendLine("</div>");
         }
-        
+
         // Custom Properties
         if (exceptionAnalysis.CustomProperties?.Any() == true)
         {
@@ -1095,7 +1097,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<table class=\"data-table\">");
             sb.AppendLine("<thead><tr><th>Property</th><th>Value</th></tr></thead>");
             sb.AppendLine("<tbody>");
-            
+
             foreach (var (key, value) in exceptionAnalysis.CustomProperties)
             {
                 var displayValue = value?.ToString() ?? "<em>null</em>";
@@ -1103,10 +1105,10 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                     displayValue = displayValue[..100] + "...";
                 sb.AppendLine($"<tr><td><code>{HttpUtility.HtmlEncode(key)}</code></td><td>{HttpUtility.HtmlEncode(displayValue)}</td></tr>");
             }
-            
+
             sb.AppendLine("</tbody></table>");
         }
-        
+
         sb.AppendLine("</div>");
     }
 
@@ -1114,12 +1116,12 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     {
         sb.AppendLine("<h2>🔍 Type/Method Resolution Analysis</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         // Failed Type Info
         if (!string.IsNullOrEmpty(typeResolution.FailedType))
         {
             sb.AppendLine($"<p><strong>Failed Type:</strong> <code>{HttpUtility.HtmlEncode(typeResolution.FailedType)}</code></p>");
-            
+
             if (!string.IsNullOrEmpty(typeResolution.MethodTable) || !string.IsNullOrEmpty(typeResolution.EEClass))
             {
                 sb.AppendLine("<ul>");
@@ -1130,7 +1132,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine("</ul>");
             }
         }
-        
+
         // Expected Member
         if (typeResolution.ExpectedMember != null)
         {
@@ -1143,29 +1145,29 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine($"<li><strong>Member Type:</strong> {HttpUtility.HtmlEncode(typeResolution.ExpectedMember.MemberType)}</li>");
             sb.AppendLine("</ul>");
         }
-        
+
         // Similar Methods
         if (typeResolution.SimilarMethods?.Any() == true)
         {
             sb.AppendLine("<h3>Similar Methods (Potential Matches)</h3>");
             sb.AppendLine("<p>These methods have similar names - check for signature mismatches:</p>");
             sb.AppendLine("<ul>");
-            
+
             foreach (var method in typeResolution.SimilarMethods)
             {
                 sb.AppendLine($"<li><code>{HttpUtility.HtmlEncode(method.Signature ?? method.Name ?? "?")}</code> <span class=\"badge badge-info\">{HttpUtility.HtmlEncode(method.JitStatus ?? "?")}</span></li>");
             }
-            
+
             sb.AppendLine("</ul>");
         }
-        
+
         // Diagnosis
         if (!string.IsNullOrEmpty(typeResolution.Diagnosis))
         {
             sb.AppendLine("<h3>Diagnosis</h3>");
             sb.AppendLine($"<div class=\"alert alert-info\">{HttpUtility.HtmlEncode(typeResolution.Diagnosis)}</div>");
         }
-        
+
         // Actual Methods (collapsible)
         if (typeResolution.ActualMethods?.Any() == true)
         {
@@ -1174,17 +1176,17 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<table class=\"data-table compact\">");
             sb.AppendLine("<thead><tr><th>Method</th><th>JIT Status</th></tr></thead>");
             sb.AppendLine("<tbody>");
-            
+
             foreach (var method in typeResolution.ActualMethods)
             {
                 var sig = method.Signature ?? method.Name ?? "???";
                 sb.AppendLine($"<tr><td><code>{HttpUtility.HtmlEncode(sig)}</code></td><td>{HttpUtility.HtmlEncode(method.JitStatus ?? "-")}</td></tr>");
             }
-            
+
             sb.AppendLine("</tbody></table>");
             sb.AppendLine("</details>");
         }
-        
+
         sb.AppendLine("</div>");
     }
 
@@ -1192,25 +1194,25 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     {
         sb.AppendLine("<h2>🚀 NativeAOT / Trimming Analysis</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         // Status table
-        var aotBadge = nativeAot.IsNativeAot 
-            ? "<span class=\"badge badge-danger\">🔴 NativeAOT Detected</span>" 
+        var aotBadge = nativeAot.IsNativeAot
+            ? "<span class=\"badge badge-danger\">🔴 NativeAOT Detected</span>"
             : "<span class=\"badge badge-success\">🟢 Not NativeAOT</span>";
-        var jitBadge = nativeAot.HasJitCompiler 
-            ? "<span class=\"badge badge-success\">✅ JIT Present</span>" 
+        var jitBadge = nativeAot.HasJitCompiler
+            ? "<span class=\"badge badge-success\">✅ JIT Present</span>"
             : "<span class=\"badge badge-warning\">❌ No JIT</span>";
-        
+
         sb.AppendLine("<table class=\"meta-table\">");
         sb.AppendLine($"<tr><td>NativeAOT</td><td>{aotBadge}</td></tr>");
         sb.AppendLine($"<tr><td>JIT Compiler</td><td>{jitBadge}</td></tr>");
         sb.AppendLine("</table>");
-        
+
         // Indicators
         if (nativeAot.Indicators?.Any() == true)
         {
             sb.AppendLine("<h3>Detection Indicators</h3>");
-            
+
             foreach (var indicator in nativeAot.Indicators)
             {
                 sb.AppendLine("<div style=\"padding: 8px; margin: 8px 0; background: var(--bg-secondary); border-radius: 4px;\">");
@@ -1222,27 +1224,27 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine("</div>");
             }
         }
-        
+
         // Trimming Analysis
         if (nativeAot.TrimmingAnalysis != null)
         {
             var trimming = nativeAot.TrimmingAnalysis;
-            
+
             var alertClass = trimming.Confidence switch
             {
                 "high" => "alert-danger",
                 "medium" => "alert-warning",
                 _ => "alert-info"
             };
-            
+
             sb.AppendLine("<h3>Trimming Analysis</h3>");
-            
-            var issueText = trimming.PotentialTrimmingIssue 
+
+            var issueText = trimming.PotentialTrimmingIssue
                 ? $"<strong>Potential Trimming Issue Detected</strong> (Confidence: {trimming.Confidence})"
                 : $"Possible version mismatch or configuration issue (Confidence: {trimming.Confidence})";
-            
+
             sb.AppendLine($"<div class=\"alert {alertClass}\">{issueText}</div>");
-            
+
             sb.AppendLine("<ul>");
             if (!string.IsNullOrEmpty(trimming.ExceptionType))
                 sb.AppendLine($"<li><strong>Exception Type:</strong> <code>{HttpUtility.HtmlEncode(trimming.ExceptionType)}</code></li>");
@@ -1261,14 +1263,14 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 }
             }
             sb.AppendLine("</ul>");
-            
+
             if (!string.IsNullOrEmpty(trimming.Recommendation))
             {
                 sb.AppendLine("<h4>Recommendations</h4>");
                 sb.AppendLine($"<div class=\"code-block\">{HttpUtility.HtmlEncode(trimming.Recommendation)}</div>");
             }
         }
-        
+
         // Reflection Usage
         if (nativeAot.ReflectionUsage?.Any() == true)
         {
@@ -1277,7 +1279,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<table class=\"data-table\">");
             sb.AppendLine("<thead><tr><th>Location</th><th>Pattern</th><th>Risk</th></tr></thead>");
             sb.AppendLine("<tbody>");
-            
+
             foreach (var usage in nativeAot.ReflectionUsage)
             {
                 var riskClass = (usage.Risk ?? "").ToLowerInvariant() switch
@@ -1288,10 +1290,10 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 };
                 sb.AppendLine($"<tr><td><code>{HttpUtility.HtmlEncode(usage.Location ?? "-")}</code></td><td>{HttpUtility.HtmlEncode(usage.Pattern ?? "-")}</td><td><span class=\"badge {riskClass}\">{HttpUtility.HtmlEncode(usage.Risk ?? "-")}</span></td></tr>");
             }
-            
+
             sb.AppendLine("</tbody></table>");
         }
-        
+
         sb.AppendLine("</div>");
     }
 
@@ -1299,20 +1301,20 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     {
         sb.AppendLine("<h2>📦 Assembly Versions</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         if (!assemblies.Any())
         {
             sb.AppendLine("<p class=\"dim\">No assembly information available.</p>");
             sb.AppendLine("</div>");
             return;
         }
-        
+
         sb.AppendLine("<details>");
         sb.AppendLine($"<summary>View all {assemblies.Count} assemblies</summary>");
         sb.AppendLine("<table class=\"data-table\">");
         sb.AppendLine("<thead><tr><th>Assembly</th><th>Version</th><th>Info Version</th><th>Config</th><th>Company</th><th>Repository</th></tr></thead>");
         sb.AppendLine("<tbody>");
-        
+
         foreach (var asm in assemblies)
         {
             var name = asm.Name;
@@ -1320,7 +1322,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 name = name[..50] + "...";
             var asmVersion = HttpUtility.HtmlEncode(asm.AssemblyVersion ?? "-");
             var dynamicBadge = asm.IsDynamic == true ? " <span class=\"badge badge-info\">🔄 Dynamic</span>" : "";
-            
+
             // Build info version with optional commit link
             var infoVersion = HttpUtility.HtmlEncode(asm.InformationalVersion ?? "-");
             if (!string.IsNullOrEmpty(asm.CommitHash) && !string.IsNullOrEmpty(asm.RepositoryUrl))
@@ -1329,23 +1331,23 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 // URL-encode commit hash for href, HTML-encode for display text
                 infoVersion += $" <a href=\"{HttpUtility.HtmlEncode(asm.RepositoryUrl)}/commit/{HttpUtility.UrlEncode(asm.CommitHash)}\" target=\"_blank\" class=\"commit-link\">{HttpUtility.HtmlEncode(shortHash)}</a>";
             }
-            
+
             // Repository link
             var repoLink = !string.IsNullOrEmpty(asm.RepositoryUrl)
                 ? $"<a href=\"{HttpUtility.HtmlEncode(asm.RepositoryUrl)}\" target=\"_blank\">🔗</a>" : "-";
-            
+
             // Configuration badge
             var config = HttpUtility.HtmlEncode(asm.Configuration ?? "-");
-            
+
             // Company
             var company = asm.Company ?? "-";
             if (company.Length > 25)
                 company = company[..25] + "...";
             company = HttpUtility.HtmlEncode(company);
-            
+
             sb.AppendLine($"<tr><td><code>{HttpUtility.HtmlEncode(name)}</code>{dynamicBadge}</td><td>{asmVersion}</td><td>{infoVersion}</td><td><span class=\"badge\">{config}</span></td><td>{company}</td><td>{repoLink}</td></tr>");
         }
-        
+
         sb.AppendLine("</tbody></table>");
         sb.AppendLine("</details>");
         sb.AppendLine("</div>");
@@ -1385,11 +1387,11 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         {
             var statusClass = watch.Success ? "badge-success" : "badge-error";
             var status = watch.Success ? "✓" : "✗";
-            
+
             sb.AppendLine("<div class=\"watch-item\">");
             sb.AppendLine($"<span class=\"badge {statusClass}\">{status}</span> ");
             sb.AppendLine($"<span class=\"watch-expr\">{HttpUtility.HtmlEncode(watch.Expression)}</span>");
-            
+
             if (!string.IsNullOrEmpty(watch.Description))
             {
                 sb.AppendLine($"<div class=\"watch-desc\">{HttpUtility.HtmlEncode(watch.Description)}</div>");
@@ -1422,7 +1424,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     private static void AppendSecurityInfo(StringBuilder sb, SecurityInfo security)
     {
         sb.AppendLine("<h2>🔒 Security Analysis</h2>");
-        
+
         // Risk Level Alert
         var riskClass = security.OverallRisk?.ToLowerInvariant() switch
         {
@@ -1431,7 +1433,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             "medium" or "low" => "alert-success",
             _ => "alert-info"
         };
-        
+
         sb.AppendLine($"<div class=\"alert {riskClass}\">");
         sb.AppendLine($"<strong>Overall Risk: {HttpUtility.HtmlEncode(security.OverallRisk ?? "Unknown")}</strong>");
         if (!string.IsNullOrEmpty(security.Summary))
@@ -1470,7 +1472,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     private static void AppendSecurityAnalysis(StringBuilder sb, SecurityAnalysisResult security)
     {
         sb.AppendLine("<h2>🔒 Security Analysis</h2>");
-        
+
         // Risk Level Alert
         var (riskClass, riskEmoji) = security.OverallRisk switch
         {
@@ -1505,10 +1507,10 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 };
                 var severityText = vuln.Severity.ToString().ToUpper();
                 var cweLinks = vuln.CweIds.Any()
-                    ? string.Join(", ", vuln.CweIds.Select(c => 
+                    ? string.Join(", ", vuln.CweIds.Select(c =>
                         $"<a href=\"https://cwe.mitre.org/data/definitions/{c.Replace("CWE-", "")}.html\" target=\"_blank\">{HttpUtility.HtmlEncode(c)}</a>"))
                     : "-";
-                
+
                 sb.AppendLine($"<tr>");
                 sb.AppendLine($"<td><span class=\"badge {badgeClass}\">{severityText}</span></td>");
                 sb.AppendLine($"<td>{HttpUtility.HtmlEncode(vuln.Type.ToString())}</td>");
@@ -1533,7 +1535,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                     sb.AppendLine("<div class=\"vuln-detail\">");
                     sb.AppendLine($"<h4>{HttpUtility.HtmlEncode(vuln.Type.ToString())}</h4>");
                     sb.AppendLine($"<p>{HttpUtility.HtmlEncode(vuln.Description)}</p>");
-                    
+
                     if (!string.IsNullOrEmpty(vuln.Address))
                     {
                         sb.AppendLine($"<p><strong>Address:</strong> <code>{HttpUtility.HtmlEncode(vuln.Address)}</code></p>");
@@ -1569,7 +1571,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine($"<tr><td>Stack Canaries</td><td>{(security.MemoryProtections.StackCanariesPresent ? "<span class=\"badge badge-success\">✅ Present</span>" : "<span class=\"badge badge-info\">⚠️ Unknown</span>")}</td></tr>");
             sb.AppendLine("</tbody>");
             sb.AppendLine("</table>");
-            
+
             if (security.MemoryProtections.ModulesWithoutAslr.Any())
             {
                 sb.AppendLine($"<p class=\"warning\"><strong>⚠️ Modules without ASLR:</strong> {HttpUtility.HtmlEncode(string.Join(", ", security.MemoryProtections.ModulesWithoutAslr.Take(5)))}</p>");
@@ -1595,7 +1597,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
     private static void AppendModules(StringBuilder sb, CrashAnalysisResult analysis, ReportOptions options)
     {
         if (analysis.Modules == null) return;
-        
+
         sb.AppendLine("<h2>📦 Loaded Modules</h2>");
         sb.AppendLine("<div class=\"card\">");
 
@@ -1610,8 +1612,8 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         sb.AppendLine("<tr><th>Module</th><th>Base Address</th><th>Symbols</th></tr>");
         foreach (var module in modules)
         {
-            var symbolBadge = module.HasSymbols 
-                ? "<span class=\"badge badge-success\">✓</span>" 
+            var symbolBadge = module.HasSymbols
+                ? "<span class=\"badge badge-success\">✓</span>"
                 : "<span class=\"badge badge-error\">✗</span>";
             sb.AppendLine($"<tr><td>{HttpUtility.HtmlEncode(module.Name)}</td><td><code>{HttpUtility.HtmlEncode(module.BaseAddress ?? "-")}</code></td><td>{symbolBadge}</td></tr>");
         }
@@ -1630,7 +1632,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<h3>Command Line Arguments</h3>");
             sb.AppendLine("<table>");
             sb.AppendLine("<tr><th>#</th><th>Argument</th></tr>");
-            
+
             for (var i = 0; i < process.Arguments.Count; i++)
             {
                 var arg = HttpUtility.HtmlEncode(process.Arguments[i]);
@@ -1648,25 +1650,25 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         if (process.EnvironmentVariables.Any())
         {
             var envVars = process.EnvironmentVariables;
-            var maxEnvVars = options.MaxEnvironmentVariables > 0 
-                ? options.MaxEnvironmentVariables 
+            var maxEnvVars = options.MaxEnvironmentVariables > 0
+                ? options.MaxEnvironmentVariables
                 : envVars.Count;
-            
+
             sb.AppendLine($"<h3>Environment Variables ({envVars.Count} total)</h3>");
-            
+
             if (maxEnvVars < envVars.Count)
             {
                 sb.AppendLine($"<p class=\"dim\">Showing {maxEnvVars} of {envVars.Count} environment variables</p>");
             }
-            
+
             sb.AppendLine("<table>");
             sb.AppendLine("<tr><th>Variable</th><th>Value</th></tr>");
-            
+
             foreach (var envVar in envVars.Take(maxEnvVars))
             {
                 var equalsIndex = envVar.IndexOf('=');
                 string name, value;
-                
+
                 if (equalsIndex > 0)
                 {
                     name = envVar[..equalsIndex];
@@ -1677,7 +1679,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                     name = envVar;
                     value = "";
                 }
-                
+
                 // HTML encode
                 name = HttpUtility.HtmlEncode(name);
                 value = HttpUtility.HtmlEncode(value);
@@ -1685,7 +1687,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 {
                     value = value[..100] + "...";
                 }
-                
+
                 sb.AppendLine($"<tr><td><code>{name}</code></td><td>{value}</td></tr>");
             }
             sb.AppendLine("</table>");
@@ -1732,7 +1734,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         sb.AppendLine("<h2>📝 Raw Debugger Output</h2>");
         sb.AppendLine("<div class=\"card\">");
         sb.AppendLine("<p class=\"dim\">Raw output from debugger commands (for advanced troubleshooting)</p>");
-        
+
         // Use new structure if available
         var rawOutput = analysis.RawCommands ?? new Dictionary<string, string>();
         foreach (var (command, output) in rawOutput)
@@ -1740,7 +1742,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine($"<h3><code>{HttpUtility.HtmlEncode(command)}</code></h3>");
             sb.AppendLine($"<pre class=\"code-block\">{HttpUtility.HtmlEncode(output)}</pre>");
         }
-        
+
         sb.AppendLine("</div>");
     }
 
@@ -1774,32 +1776,32 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
 
         // Remove common debugger markers
         var result = source;
-        
+
         // Remove [opt] - optimization marker
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s*\[opt\]", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        
+
         // Remove [inlined] marker
         result = System.Text.RegularExpressions.Regex.Replace(result, @"\s*\[inlined\]", "", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        
+
         // Remove trailing whitespace
         result = result.Trim();
-        
+
         // Remove surrounding brackets if present
         if (result.StartsWith("[") && result.EndsWith("]"))
         {
             result = result.Substring(1, result.Length - 2);
         }
-        
+
         return result;
     }
-    
+
     // === Phase 2 ClrMD Enrichment Methods ===
-    
+
     private static void AppendGcSummaryHtml(StringBuilder sb, GcSummary gc)
     {
         sb.AppendLine("<h2>🗑️ GC Heap Summary (ClrMD)</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         // Summary cards
         sb.AppendLine("<div class=\"summary-cards\" style=\"display:flex;gap:1rem;flex-wrap:wrap;margin-bottom:1rem;\">");
         sb.AppendLine($"<div style=\"background:#f0f0f0;padding:0.5rem 1rem;border-radius:4px;\"><strong>Mode:</strong> {HttpUtility.HtmlEncode(gc.GcMode)}</div>");
@@ -1812,11 +1814,11 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         }
         sb.AppendLine($"<div style=\"background:#f0f0f0;padding:0.5rem 1rem;border-radius:4px;\"><strong>Finalizable:</strong> {gc.FinalizableObjectCount:N0}</div>");
         sb.AppendLine("</div>");
-        
+
         // Generation sizes as bar chart
         if (gc.GenerationSizes != null)
         {
-            var total = gc.GenerationSizes.Gen0 + gc.GenerationSizes.Gen1 + 
+            var total = gc.GenerationSizes.Gen0 + gc.GenerationSizes.Gen1 +
                         gc.GenerationSizes.Gen2 + gc.GenerationSizes.Loh + gc.GenerationSizes.Poh;
             if (total > 0)
             {
@@ -1830,10 +1832,10 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
                 sb.AppendLine("</div>");
             }
         }
-        
+
         sb.AppendLine("</div>");
     }
-    
+
     private static void AppendGenBarHtml(StringBuilder sb, string name, long size, long total, string color)
     {
         var pct = total > 0 ? (size * 100.0 / total) : 0;
@@ -1845,12 +1847,12 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         sb.AppendLine($"  <span style=\"width:80px;text-align:right;\">{FormatBytesCompact(size)}</span>");
         sb.AppendLine($"</div>");
     }
-    
+
     private static void AppendTopMemoryConsumersHtml(StringBuilder sb, TopMemoryConsumers mem)
     {
         sb.AppendLine("<h2>📊 Top Memory Consumers (ClrMD)</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         if (mem.Summary != null)
         {
             sb.AppendLine($"<p><em>{mem.Summary.TotalObjects:N0} objects, {FormatBytesCompact(mem.Summary.TotalSize)}, {mem.Summary.UniqueTypes:N0} unique types</em></p>");
@@ -1858,7 +1860,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             if (mem.Summary.WasAborted)
                 sb.AppendLine("<p class=\"warning\">⚠️ Analysis was aborted due to timeout</p>");
         }
-        
+
         if (mem.BySize?.Count > 0)
         {
             sb.AppendLine("<h3>By Total Size</h3>");
@@ -1870,7 +1872,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             }
             sb.AppendLine("</table>");
         }
-        
+
         if (mem.LargeObjects?.Count > 0)
         {
             sb.AppendLine("<h3>Large Objects (&gt;85KB)</h3>");
@@ -1882,15 +1884,15 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             }
             sb.AppendLine("</table>");
         }
-        
+
         sb.AppendLine("</div>");
     }
-    
+
     private static void AppendAsyncAnalysisHtml(StringBuilder sb, AsyncAnalysis async)
     {
         sb.AppendLine("<h2>⏳ Async/Task Analysis (ClrMD)</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         if (async.Summary != null)
         {
             sb.AppendLine("<table class=\"compact-table\">");
@@ -1903,11 +1905,11 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("</tbody>");
             sb.AppendLine("</table>");
         }
-        
+
         sb.AppendLine($"<p class=\"dim\">Analysis time: {async.AnalysisTimeMs:N0}ms</p>");
         if (async.WasAborted)
             sb.AppendLine("<p class=\"warning\">⚠️ Analysis was aborted due to timeout</p>");
-        
+
         if (async.FaultedTasks?.Count > 0)
         {
             sb.AppendLine("<h3>🔥 Faulted Tasks</h3>");
@@ -1915,14 +1917,14 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<tr><th>Address</th><th>Type</th><th>Exception</th></tr>");
             foreach (var task in async.FaultedTasks.Take(10))
             {
-                var exInfo = !string.IsNullOrEmpty(task.ExceptionType) 
-                    ? $"{HttpUtility.HtmlEncode(task.ExceptionType)}" 
+                var exInfo = !string.IsNullOrEmpty(task.ExceptionType)
+                    ? $"{HttpUtility.HtmlEncode(task.ExceptionType)}"
                     : "-";
                 sb.AppendLine($"<tr><td><code>{HttpUtility.HtmlEncode(task.Address)}</code></td><td>{HttpUtility.HtmlEncode(task.TaskType)}</td><td>{exInfo}</td></tr>");
             }
             sb.AppendLine("</table>");
         }
-        
+
         if (async.PendingStateMachines?.Count > 0)
         {
             sb.AppendLine("<h3>🔄 Pending State Machines</h3>");
@@ -1941,15 +1943,15 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             }
             sb.AppendLine("</table>");
         }
-        
+
         sb.AppendLine("</div>");
     }
-    
+
     private static void AppendStringAnalysisHtml(StringBuilder sb, StringAnalysis str)
     {
         sb.AppendLine("<h2>📝 String Duplicate Analysis (ClrMD)</h2>");
         sb.AppendLine("<div class=\"card\">");
-        
+
         if (str.Summary != null)
         {
             sb.AppendLine("<table class=\"compact-table\">");
@@ -1962,11 +1964,11 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("</tbody>");
             sb.AppendLine("</table>");
         }
-        
+
         sb.AppendLine($"<p class=\"dim\">Analysis time: {str.AnalysisTimeMs:N0}ms</p>");
         if (str.WasAborted)
             sb.AppendLine("<p class=\"warning\">⚠️ Analysis was aborted due to timeout</p>");
-        
+
         if (str.ByLength != null)
         {
             sb.AppendLine("<h3>Length Distribution</h3>");
@@ -1980,7 +1982,7 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("</tbody>");
             sb.AppendLine("</table>");
         }
-        
+
         if (str.TopDuplicates?.Count > 0)
         {
             sb.AppendLine("<h3>Top Duplicates (by wasted bytes)</h3>");
@@ -1988,17 +1990,17 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
             sb.AppendLine("<tr><th>Value</th><th>Count</th><th>Wasted</th><th>Suggestion</th></tr>");
             foreach (var dup in str.TopDuplicates.Take(15))
             {
-                var displayValue = dup.Value.Length > 40 
-                    ? HttpUtility.HtmlEncode(dup.Value[..40]) + "..." 
+                var displayValue = dup.Value.Length > 40
+                    ? HttpUtility.HtmlEncode(dup.Value[..40]) + "..."
                     : HttpUtility.HtmlEncode(dup.Value);
                 sb.AppendLine($"<tr><td><code>{displayValue}</code></td><td>{dup.Count:N0}</td><td>{FormatBytesCompact(dup.WastedBytes)}</td><td class=\"dim\">{HttpUtility.HtmlEncode(dup.Suggestion ?? "")}</td></tr>");
             }
             sb.AppendLine("</table>");
         }
-        
+
         sb.AppendLine("</div>");
     }
-    
+
     private static string FormatBytesCompact(long bytes)
     {
         string[] sizes = { "B", "KB", "MB", "GB", "TB" };
@@ -2012,4 +2014,3 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         return $"{len:0.##} {sizes[order]}";
     }
 }
-

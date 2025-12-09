@@ -30,42 +30,42 @@ public class PdbPatcher
         /// Whether the patching was successful.
         /// </summary>
         public bool Success { get; set; }
-        
+
         /// <summary>
         /// The PDB file that was patched.
         /// </summary>
         public string PdbPath { get; set; } = string.Empty;
-        
+
         /// <summary>
         /// The DLL file used as the source of the GUID.
         /// </summary>
         public string DllPath { get; set; } = string.Empty;
-        
+
         /// <summary>
         /// The original GUID in the PDB.
         /// </summary>
         public Guid OriginalGuid { get; set; }
-        
+
         /// <summary>
         /// The new GUID from the DLL (what we patched to).
         /// </summary>
         public Guid NewGuid { get; set; }
-        
+
         /// <summary>
         /// Whether patching was needed (GUIDs were different).
         /// </summary>
         public bool WasPatched { get; set; }
-        
+
         /// <summary>
         /// Whether the patch was verified by re-reading the PDB after patching.
         /// </summary>
         public bool Verified { get; set; }
-        
+
         /// <summary>
         /// The GUID read from the PDB after patching (for verification).
         /// </summary>
         public Guid? VerifiedGuid { get; set; }
-        
+
         /// <summary>
         /// Error message if patching failed.
         /// </summary>
@@ -125,11 +125,11 @@ public class PdbPatcher
             if (patched)
             {
                 result.WasPatched = true;
-                
+
                 // Verify the patch by re-reading the PDB
                 var verifiedGuid = ReadGuidFromPdb(pdbPath);
                 result.VerifiedGuid = verifiedGuid;
-                
+
                 if (verifiedGuid == dllGuid.Value)
                 {
                     result.Success = true;
@@ -203,7 +203,7 @@ public class PdbPatcher
             using var stream = File.OpenRead(pdbPath);
             using var provider = MetadataReaderProvider.FromPortablePdbStream(stream);
             var reader = provider.GetMetadataReader();
-            
+
             var id = reader.DebugMetadataHeader?.Id;
             if (id == null || id.Value.IsEmpty)
                 return null;
@@ -241,7 +241,7 @@ public class PdbPatcher
             // In a Portable PDB, the ID is stored in the #Pdb stream
             // The structure is: metadata signature, then streams
             // We need to find the offset of the PDB ID
-            
+
             var offset = FindPdbIdOffset(pdbBytes);
             if (offset < 0)
             {
@@ -277,7 +277,7 @@ public class PdbPatcher
         // - Metadata root: starts with signature 0x424A5342 ("BSJB")
         // - After the metadata root header, there are stream headers
         // - One of the streams is #Pdb which contains the PDB ID at offset 0
-        
+
         // Look for "BSJB" signature
         int metadataStart = -1;
         for (int i = 0; i < pdbBytes.Length - 4; i++)
@@ -342,9 +342,9 @@ public class PdbPatcher
             int nameStart = offset;
             while (offset < pdbBytes.Length && pdbBytes[offset] != 0)
                 offset++;
-            
+
             string streamName = System.Text.Encoding.ASCII.GetString(pdbBytes, nameStart, offset - nameStart);
-            
+
             // Skip null terminator and padding
             offset++;
             offset = (offset + 3) & ~3;
@@ -399,7 +399,7 @@ public class PdbPatcher
 
         return results;
     }
-    
+
     /// <summary>
     /// Patches PDB files to match the GUIDs of modules loaded in the dump.
     /// This is used when the downloaded PDBs are from a different build than the DLLs in the dump.
@@ -419,13 +419,13 @@ public class PdbPatcher
 
         // Find all PDB files
         var pdbFiles = Directory.GetFiles(symbolsDirectory, "*.pdb", SearchOption.AllDirectories);
-        _logger?.LogInformation("[PdbPatcher] Found {Count} PDB files, checking against {ModuleCount} module GUIDs", 
+        _logger?.LogInformation("[PdbPatcher] Found {Count} PDB files, checking against {ModuleCount} module GUIDs",
             pdbFiles.Length, moduleGuids.Count);
 
         foreach (var pdbPath in pdbFiles)
         {
             var pdbName = Path.GetFileNameWithoutExtension(pdbPath);
-            
+
             // Check if we have a target GUID for this module
             if (!moduleGuids.TryGetValue(pdbName, out var expectedGuid))
             {
@@ -471,11 +471,11 @@ public class PdbPatcher
                 if (patched)
                 {
                     result.WasPatched = true;
-                    
+
                     // Verify the patch by re-reading the PDB
                     var verifiedGuid = ReadGuidFromPdb(pdbPath);
                     result.VerifiedGuid = verifiedGuid;
-                    
+
                     if (verifiedGuid == expectedGuid)
                     {
                         result.Success = true;

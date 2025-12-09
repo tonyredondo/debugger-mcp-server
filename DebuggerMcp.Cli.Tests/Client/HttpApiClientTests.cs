@@ -172,7 +172,6 @@ public class HttpApiClientTests
         client.Dispose();
     }
 
-    #region File Upload Tests
 
     [Fact]
     public async Task UploadDumpAsync_FileNotFound_ThrowsFileNotFoundException()
@@ -293,6 +292,5 @@ public class HttpApiClientTests
             () => client.GetStatisticsAsync());
     }
 
-    #endregion
 }
 

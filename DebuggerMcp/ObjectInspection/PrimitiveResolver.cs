@@ -114,7 +114,7 @@ public static class PrimitiveResolver
     private static string MatchTruncatedType(string truncated)
     {
         var prefix = truncated[..^3].ToLowerInvariant();
-        
+
         if ("boolean".StartsWith(prefix)) return "Boolean";
         if ("byte".StartsWith(prefix)) return "Byte";
         if ("sbyte".StartsWith(prefix)) return "SByte";
@@ -276,13 +276,13 @@ public static class PrimitiveResolver
                 // Invalid ticks value
             }
         }
-        
+
         // Try to parse as a date string
         if (DateTime.TryParse(rawValue, out var parsed))
         {
             return parsed.ToString("o");
         }
-        
+
         return rawValue;
     }
 
@@ -301,13 +301,13 @@ public static class PrimitiveResolver
                 // Invalid ticks value
             }
         }
-        
+
         // Try to parse as a timespan string
         if (TimeSpan.TryParse(rawValue, out var parsed))
         {
             return parsed.ToString();
         }
-        
+
         return rawValue;
     }
 
@@ -318,7 +318,7 @@ public static class PrimitiveResolver
         {
             return guid.ToString();
         }
-        
+
         // Try to parse as hex without dashes
         if (rawValue.Length == 32 && rawValue.All(c => char.IsAsciiHexDigit(c)))
         {
@@ -332,7 +332,7 @@ public static class PrimitiveResolver
                 // Invalid hex
             }
         }
-        
+
         return rawValue;
     }
 
@@ -357,7 +357,7 @@ public static class PrimitiveResolver
         // - Not a System.* primitive type
         // - Is a value type
         // - Usually has a short name or namespace.TypeName pattern
-        
+
         // Exclude known non-enum value types
         var nonEnumValueTypes = new[]
         {
@@ -428,7 +428,7 @@ public static class PrimitiveResolver
         {
             normalized = normalized[2..];
         }
-        
+
         // If empty or all zeros, it's null
         normalized = normalized.TrimStart('0');
         return string.IsNullOrEmpty(normalized);

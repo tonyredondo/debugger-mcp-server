@@ -38,7 +38,6 @@ public partial class CollectionInspector
         public string? Error { get; set; }
     }
 
-    #region List<T> Support
 
     /// <summary>
     /// Extracts elements from a List&lt;T&gt; collection.
@@ -89,7 +88,7 @@ public partial class CollectionInspector
             var itemsAddress = itemsField.Value;
             if (string.IsNullOrEmpty(itemsAddress) || PrimitiveResolver.IsNullAddress(itemsAddress))
             {
-                // Empty list - success with 0 elements
+                // Empty list - return success with zero elements instead of erroring
                 result.ElementsReturned = 0;
                 return result;
             }
@@ -100,6 +99,7 @@ public partial class CollectionInspector
 
             if (actualCount == 0)
             {
+                // Nothing to fetch; keep result empty
                 result.ElementsReturned = 0;
                 return result;
             }
@@ -157,9 +157,7 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 
-    #region Stack<T> Support
 
     /// <summary>
     /// Extracts elements from a Stack&lt;T&gt; collection.
@@ -218,7 +216,7 @@ public partial class CollectionInspector
 
             // Parse all elements first
             var allElements = ParseArrayElementsByIndex(output);
-            
+
             // Stack elements are in reverse order (LIFO) - top of stack is at index _size-1
             for (int i = count - 1; i >= 0 && result.Elements!.Count < actualCount; i--)
             {
@@ -252,9 +250,7 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 
-    #region Queue<T> Support
 
     /// <summary>
     /// Extracts elements from a Queue&lt;T&gt; collection (circular buffer).
@@ -363,9 +359,7 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 
-    #region HashSet<T> Support
 
     /// <summary>
     /// Extracts elements from a HashSet&lt;T&gt; collection.
@@ -421,7 +415,7 @@ public partial class CollectionInspector
 
             // Try to get Entry MethodTable from dumparray output first
             var entryMt = ExtractMethodTableFromDumpArray(output);
-            
+
             // Fallback: try CollectionTypeDetector method
             if (string.IsNullOrEmpty(entryMt))
             {
@@ -440,7 +434,7 @@ public partial class CollectionInspector
             {
                 entrySize = CollectionTypeDetector.GetTypeSize(manager, entryMt);
             }
-            
+
             if (entrySize <= 0)
             {
                 result.Error = "Could not determine Entry size";
@@ -458,7 +452,7 @@ public partial class CollectionInspector
             var extractedCount = 0;
             var validEntriesFound = 0;
             var isInlineable = elementType != null && CollectionTypeDetector.IsInlineableType(elementType);
-            
+
             for (int i = 0; i < arrayLength && extractedCount < maxElements && validEntriesFound < count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -531,9 +525,7 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 
-    #region Dictionary<K,V> Support
 
     /// <summary>
     /// Extracts entries from a Dictionary&lt;K,V&gt; collection.
@@ -591,7 +583,7 @@ public partial class CollectionInspector
             // dumparray for value type arrays shows: "Name:        System.Collections.Generic.Dictionary`2+Entry[[...]]"
             // and "MethodTable: 00007ff..."
             var entryMt = ExtractMethodTableFromDumpArray(output);
-            
+
             // Fallback: try CollectionTypeDetector method
             if (string.IsNullOrEmpty(entryMt))
             {
@@ -610,7 +602,7 @@ public partial class CollectionInspector
             {
                 entrySize = CollectionTypeDetector.GetTypeSize(manager, entryMt);
             }
-            
+
             if (entrySize <= 0)
             {
                 result.Error = "Could not determine Entry size";
@@ -628,7 +620,7 @@ public partial class CollectionInspector
             // Free slots have next pointing to free list (negative values indicate free)
             var extractedCount = 0;
             var validEntriesFound = 0;
-            
+
             for (int i = 0; i < arrayLength && extractedCount < maxElements && validEntriesFound < count; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -675,7 +667,7 @@ public partial class CollectionInspector
                     validEntriesFound++;
 
                     // Resolve key and value
-                    var resolvedKey = keyField != null 
+                    var resolvedKey = keyField != null
                         ? await ResolveElementAsync(
                             manager, keyField.Value, kvTypes?.KeyType, keyInlineable,
                             depth, maxDepth, maxElements, maxStringLength,
@@ -734,23 +726,23 @@ public partial class CollectionInspector
     private static string? ExtractMethodTableFromDumpArray(string dumparrayOutput)
     {
         // First try: "Element Methodtable:" or "Element Type:" (what we need for value type arrays)
-        var elementMtMatch = Regex.Match(dumparrayOutput, 
-            @"Element\s+(?:Methodtable|Type):\s+([0-9a-fA-Fx]+)", 
+        var elementMtMatch = Regex.Match(dumparrayOutput,
+            @"Element\s+(?:Methodtable|Type):\s+([0-9a-fA-Fx]+)",
             RegexOptions.IgnoreCase);
         if (elementMtMatch.Success)
         {
             return elementMtMatch.Groups[1].Value;
         }
-        
+
         // Fallback: "ComponentMethodTable:" (alternative naming)
-        var componentMtMatch = Regex.Match(dumparrayOutput, 
-            @"ComponentMethodTable:\s+([0-9a-fA-Fx]+)", 
+        var componentMtMatch = Regex.Match(dumparrayOutput,
+            @"ComponentMethodTable:\s+([0-9a-fA-Fx]+)",
             RegexOptions.IgnoreCase);
         if (componentMtMatch.Success)
         {
             return componentMtMatch.Groups[1].Value;
         }
-        
+
         return null;
     }
 
@@ -765,21 +757,19 @@ public partial class CollectionInspector
         {
             return elementSize;
         }
-        
+
         // Fallback: "ComponentSize:" in hex
         var componentSizeMatch = Regex.Match(dumparrayOutput, @"ComponentSize:\s+0x([0-9a-fA-F]+)", RegexOptions.IgnoreCase);
-        if (componentSizeMatch.Success && int.TryParse(componentSizeMatch.Groups[1].Value, 
+        if (componentSizeMatch.Success && int.TryParse(componentSizeMatch.Groups[1].Value,
             System.Globalization.NumberStyles.HexNumber, null, out var compSize))
         {
             return compSize;
         }
-        
+
         return -1;
     }
 
-    #endregion
 
-    #region ConcurrentDictionary<K,V> Support
 
     /// <summary>
     /// Extracts entries from a ConcurrentDictionary&lt;K,V&gt; collection.
@@ -982,9 +972,7 @@ public partial class CollectionInspector
         }
     }
 
-    #endregion
 
-    #region ImmutableArray<T> Support
 
     /// <summary>
     /// Extracts elements from an ImmutableArray&lt;T&gt;.
@@ -1070,9 +1058,7 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 
-    #region ImmutableList<T> Support
 
     /// <summary>
     /// Extracts elements from an ImmutableList&lt;T&gt; using in-order tree traversal.
@@ -1202,9 +1188,7 @@ public partial class CollectionInspector
         }
     }
 
-    #endregion
 
-    #region ConcurrentQueue<T> Support
 
     /// <summary>
     /// Extracts elements from a ConcurrentQueue&lt;T&gt;.
@@ -1322,9 +1306,7 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 
-    #region ConcurrentStack<T> Support
 
     /// <summary>
     /// Extracts elements from a ConcurrentStack&lt;T&gt;.
@@ -1414,9 +1396,7 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 
-    #region ConcurrentBag<T> Support
 
     /// <summary>
     /// Extracts elements from a ConcurrentBag&lt;T&gt;.
@@ -1536,9 +1516,7 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 
-    #region ImmutableDictionary<K,V> Support
 
     /// <summary>
     /// Extracts entries from an ImmutableDictionary&lt;K,V&gt;.
@@ -1679,9 +1657,7 @@ public partial class CollectionInspector
         }
     }
 
-    #endregion
 
-    #region ImmutableHashSet<T> Support
 
     /// <summary>
     /// Extracts elements from an ImmutableHashSet&lt;T&gt;.
@@ -1812,9 +1788,7 @@ public partial class CollectionInspector
         }
     }
 
-    #endregion
 
-    #region Helpers
 
     /// <summary>
     /// Parses dumparray output and resolves element values.
@@ -2118,6 +2092,4 @@ public partial class CollectionInspector
         return result;
     }
 
-    #endregion
 }
-

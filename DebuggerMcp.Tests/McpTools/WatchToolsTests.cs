@@ -21,7 +21,7 @@ public class WatchToolsTests : IDisposable
     {
         _tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempPath);
-        
+
         _sessionManager = new DebuggerSessionManager(_tempPath);
         _symbolManager = new SymbolManager(_tempPath);
         _watchStore = new WatchStore(_tempPath);
@@ -47,7 +47,7 @@ public class WatchToolsTests : IDisposable
     public async Task AddWatch_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.AddWatch(sessionId!, "user", "0x12345678"));
     }
 
@@ -61,7 +61,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.AddWatch(sessionId, userId!, "0x12345678"));
     }
 
@@ -76,7 +76,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert - Without a dump open, it should fail first on that
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.AddWatch(sessionId, userId, expression!));
     }
 
@@ -88,7 +88,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.AddWatch(sessionId, userId, "0x12345678"));
     }
 
@@ -99,7 +99,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => 
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             _tools.AddWatch(sessionId, "wrong-user", "0x12345678"));
     }
 
@@ -114,7 +114,7 @@ public class WatchToolsTests : IDisposable
     public async Task ListWatches_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.ListWatches(sessionId!, "user"));
     }
 
@@ -128,7 +128,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.ListWatches(sessionId, userId!));
     }
 
@@ -140,7 +140,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.ListWatches(sessionId, userId));
     }
 
@@ -151,7 +151,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => 
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             _tools.ListWatches(sessionId, "wrong-user"));
     }
 
@@ -166,7 +166,7 @@ public class WatchToolsTests : IDisposable
     public async Task EvaluateWatches_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.EvaluateWatches(sessionId!, "user"));
     }
 
@@ -180,7 +180,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.EvaluateWatches(sessionId, userId!));
     }
 
@@ -192,7 +192,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.EvaluateWatches(sessionId, userId));
     }
 
@@ -207,7 +207,7 @@ public class WatchToolsTests : IDisposable
     public async Task EvaluateWatch_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.EvaluateWatch(sessionId!, "user", "watch-id"));
     }
 
@@ -221,7 +221,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.EvaluateWatch(sessionId, userId!, "watch-id"));
     }
 
@@ -236,7 +236,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.EvaluateWatch(sessionId, userId, watchId!));
     }
 
@@ -248,7 +248,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.EvaluateWatch(sessionId, userId, "watch-id"));
     }
 
@@ -263,7 +263,7 @@ public class WatchToolsTests : IDisposable
     public async Task RemoveWatch_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.RemoveWatch(sessionId!, "user", "watch-id"));
     }
 
@@ -277,7 +277,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.RemoveWatch(sessionId, userId!, "watch-id"));
     }
 
@@ -292,7 +292,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.RemoveWatch(sessionId, userId, watchId!));
     }
 
@@ -304,7 +304,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.RemoveWatch(sessionId, userId, "watch-id"));
     }
 
@@ -319,7 +319,7 @@ public class WatchToolsTests : IDisposable
     public async Task ClearWatches_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.ClearWatches(sessionId!, "user"));
     }
 
@@ -333,7 +333,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.ClearWatches(sessionId, userId!));
     }
 
@@ -345,7 +345,7 @@ public class WatchToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<InvalidOperationException>(() => 
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.ClearWatches(sessionId, userId));
     }
 }

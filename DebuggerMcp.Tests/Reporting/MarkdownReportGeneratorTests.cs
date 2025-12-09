@@ -1,6 +1,7 @@
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Reporting;
 using DebuggerMcp.Watches;
+#pragma warning disable CS8602 // Test data intentionally initializes just enough fields
 
 namespace DebuggerMcp.Tests.Reporting;
 
@@ -10,6 +11,7 @@ namespace DebuggerMcp.Tests.Reporting;
 public class MarkdownReportGeneratorTests
 {
     private readonly MarkdownReportGenerator _generator;
+    private readonly ReportMetadata _metadata = new();
 
     public MarkdownReportGeneratorTests()
     {
@@ -34,7 +36,7 @@ public class MarkdownReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.NotNull(result);
@@ -49,7 +51,7 @@ public class MarkdownReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.NotNull(result);
@@ -63,7 +65,7 @@ public class MarkdownReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, ReportOptions.FullReport, null!);
+        var result = _generator.Generate(analysis, ReportOptions.FullReport, _metadata);
 
         // Assert
         Assert.NotNull(result);
@@ -87,7 +89,7 @@ public class MarkdownReportGeneratorTests
         };
 
         // Act
-        var result = _generator.Generate(analysis, null!, metadata);
+        var result = _generator.Generate(analysis, ReportOptions.FullReport, metadata);
 
         // Assert
         Assert.Contains("test-dump-123", result);
@@ -103,7 +105,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { Title = "My Custom Report Title" };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("# My Custom Report Title", result);
@@ -121,7 +123,7 @@ public class MarkdownReportGeneratorTests
         analysis.Summary = new AnalysisSummary { Description = "This is the crash summary." };
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.Contains("This is the crash summary.", result);
@@ -135,7 +137,7 @@ public class MarkdownReportGeneratorTests
         analysis.Summary = new AnalysisSummary { Description = "" };
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.Contains("No summary available.", result);
@@ -159,7 +161,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeCrashInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("System.NullReferenceException", result);
@@ -176,7 +178,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeCrashInfo = false };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.DoesNotContain("TestException", result);
@@ -192,9 +194,9 @@ public class MarkdownReportGeneratorTests
         // Arrange
         var analysis = CreateMinimalAnalysis();
         analysis.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
-        analysis.Threads.All.Add(new ThreadInfo 
-        { 
-            ThreadId = "1", 
+        analysis.Threads.All.Add(new ThreadInfo
+        {
+            ThreadId = "1",
             IsFaulting = true,
             CallStack = new List<StackFrame>
         {
@@ -205,7 +207,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeCallStacks = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Call Stack", result);
@@ -219,9 +221,9 @@ public class MarkdownReportGeneratorTests
         // Arrange
         var analysis = CreateMinimalAnalysis();
         analysis.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
-        analysis.Threads.All.Add(new ThreadInfo 
-        { 
-            ThreadId = "1", 
+        analysis.Threads.All.Add(new ThreadInfo
+        {
+            ThreadId = "1",
             IsFaulting = true,
             CallStack = Enumerable.Range(0, 20)
             .Select(i => new StackFrame { FrameNumber = i, Module = "mod", Function = $"Func{i}" })
@@ -230,7 +232,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeCallStacks = true, MaxCallStackFrames = 5 };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("5 frames of 20 total", result);
@@ -242,9 +244,9 @@ public class MarkdownReportGeneratorTests
         // Arrange
         var analysis = CreateMinimalAnalysis();
         analysis.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
-        analysis.Threads.All.Add(new ThreadInfo 
-        { 
-            ThreadId = "1", 
+        analysis.Threads.All.Add(new ThreadInfo
+        {
+            ThreadId = "1",
             IsFaulting = true,
             CallStack = new List<StackFrame>
         {
@@ -262,7 +264,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeCallStacks = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Program.cs:42", result);
@@ -289,7 +291,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeThreadInfo = true, IncludeCharts = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Thread Information", result);
@@ -311,7 +313,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeThreadInfo = true, MaxThreadsToShow = 10 };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("10 of 50 threads", result);
@@ -342,7 +344,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeDotNetInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains(".NET Runtime Information", result);
@@ -362,7 +364,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeDotNetInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Async Deadlock Detected", result);
@@ -388,7 +390,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeHeapStats = true, IncludeCharts = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Memory Analysis", result);
@@ -403,10 +405,10 @@ public class MarkdownReportGeneratorTests
         analysis.Memory = new MemoryInfo
         {
             LeakAnalysis = new LeakAnalysis
-        {
-            Detected = true,
-            EstimatedLeakedBytes = 10 * 1024 * 1024,
-            TopConsumers = new List<MemoryConsumer>
+            {
+                Detected = true,
+                TotalHeapBytes = 10 * 1024 * 1024,
+                TopConsumers = new List<MemoryConsumer>
             {
                 new MemoryConsumer { TypeName = "LeakyClass", Count = 1000, TotalSize = 5 * 1024 * 1024 }
                 }
@@ -415,7 +417,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeMemoryLeakInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Memory Analysis", result);
@@ -435,10 +437,10 @@ public class MarkdownReportGeneratorTests
         {
             All = new List<ThreadInfo>(),
             Deadlock = new DeadlockInfo
-        {
-            Detected = true,
-            InvolvedThreads = new List<string> { "1", "2" },
-            Locks = new List<LockInfo>
+            {
+                Detected = true,
+                InvolvedThreads = new List<string> { "1", "2" },
+                Locks = new List<LockInfo>
             {
                 new LockInfo { Address = "0x12345678" },
                 new LockInfo { Address = "0x87654321" }
@@ -448,7 +450,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeDeadlockInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("DEADLOCK DETECTED", result);
@@ -464,7 +466,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeDeadlockInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.DoesNotContain("DEADLOCK DETECTED", result);
@@ -505,7 +507,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeWatchResults = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Watch Expression Results", result);
@@ -542,7 +544,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeSecurityAnalysis = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Security Analysis", result);
@@ -567,7 +569,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeModules = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Loaded Modules", result);
@@ -586,7 +588,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeModules = true, MaxModulesToShow = 20 };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("20 of 100 modules", result);
@@ -612,7 +614,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeRecommendations = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Recommendations", result);
@@ -636,7 +638,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeRawOutput = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Raw Debugger Output", result);
@@ -656,7 +658,7 @@ public class MarkdownReportGeneratorTests
         var options = new ReportOptions { IncludeRawOutput = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("truncated", result);
@@ -677,4 +679,3 @@ public class MarkdownReportGeneratorTests
         };
     }
 }
-

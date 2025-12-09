@@ -11,16 +11,16 @@ namespace DebuggerMcp.ObjectInspection;
 public partial class ObjectInspector
 {
     private readonly ILogger _logger;
-    
+
     // Internal caches for resolved data (cleared per inspection session)
     private readonly Dictionary<string, string?> _typeNameCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _enumNameCache = new(StringComparer.OrdinalIgnoreCase);
-    
+
     // Static cache for full inspection results (shared across all ObjectInspector instances)
     // This dramatically speeds up repeated inspections of the same objects during analysis/reports
     private static readonly Dictionary<string, InspectedObject> s_inspectionCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object s_cacheLock = new();
-    
+
     /// <summary>
     /// Gets the current number of cached inspection results.
     /// </summary>
@@ -66,7 +66,7 @@ public partial class ObjectInspector
     {
         _logger = logger;
     }
-    
+
     /// <summary>
     /// Clears the static inspection cache.
     /// Call this when closing a dump or starting a new analysis session.
@@ -100,24 +100,25 @@ public partial class ObjectInspector
         CancellationToken cancellationToken = default)
     {
         var normalizedAddress = PrimitiveResolver.NormalizeAddress(address);
-        
+
         // Create cache key including parameters that affect output
         var cacheKey = $"{normalizedAddress}|{methodTable ?? ""}|{maxDepth}|{maxArrayElements}|{maxStringLength}";
-        
+
         // Check static cache first for full inspection results
         lock (s_cacheLock)
         {
             if (s_inspectionCache.TryGetValue(cacheKey, out var cachedResult))
             {
+                // Short-circuit repeated queries for the same object/limits
                 _logger.LogDebug("[ObjectInspector] Cache HIT for {Address}", normalizedAddress);
                 return cachedResult;
             }
         }
-        
+
         // Clear internal type/enum caches at the start of each inspection session
         _typeNameCache.Clear();
         _enumNameCache.Clear();
-        
+
         var seenAddresses = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         var result = await InspectRecursiveAsync(
@@ -130,18 +131,18 @@ public partial class ObjectInspector
             seenAddresses,
             normalizedAddress, // root address for [this] detection
             cancellationToken);
-        
+
         // Cache successful results
         if (result != null && !result.Type.StartsWith(MarkerErrorPrefix))
         {
             lock (s_cacheLock)
             {
                 s_inspectionCache[cacheKey] = result;
-                _logger.LogDebug("[ObjectInspector] Cached result for {Address} (total cached: {Count})", 
+                _logger.LogDebug("[ObjectInspector] Cached result for {Address} (total cached: {Count})",
                     normalizedAddress, s_inspectionCache.Count);
             }
         }
-        
+
         return result;
     }
 
@@ -193,6 +194,7 @@ public partial class ObjectInspector
         // Check depth limit
         if (depth <= 0)
         {
+            // Stop recursion to avoid exploding output or infinite loops
             _logger.LogDebug("Max depth reached for address {Address}", normalizedAddress);
             return new InspectedObject
             {
@@ -207,6 +209,7 @@ public partial class ObjectInspector
             var marker = normalizedAddress.Equals(rootAddress, StringComparison.OrdinalIgnoreCase)
                 ? MarkerThis
                 : MarkerSeen;
+            // Mark loops explicitly instead of recursing forever
             _logger.LogDebug("Circular reference detected for address {Address}: {Marker}", normalizedAddress, marker);
             return new InspectedObject
             {
@@ -226,12 +229,14 @@ public partial class ObjectInspector
             // If dumpobj failed and we have a method table, try dumpvc
             if (!dumpResult.Success && !string.IsNullOrEmpty(methodTable))
             {
+                // Value types sometimes need dumpvc; try that before giving up
                 _logger.LogDebug("dumpobj failed for {Address}, trying dumpvc with MT {MethodTable}", normalizedAddress, methodTable);
                 dumpResult = await TryDumpValueTypeAsync(manager, methodTable, normalizedAddress, cancellationToken);
             }
 
             if (!dumpResult.Success)
             {
+                // Return structured error instead of throwing so caller can render it
                 _logger.LogWarning("Failed to dump object at {Address}: {Error}", normalizedAddress, dumpResult.ErrorMessage);
                 return new InspectedObject
                 {
@@ -247,6 +252,7 @@ public partial class ObjectInspector
                 var fullTypeName = await ResolveFullTypeNameAsync(manager, dumpResult.MethodTable, cancellationToken);
                 if (!string.IsNullOrEmpty(fullTypeName))
                 {
+                    // Prefer full names so inspectors/clients see complete generic types
                     typeName = fullTypeName;
                 }
             }
@@ -265,18 +271,21 @@ public partial class ObjectInspector
             // Use resolved typeName for detection (handles truncated names)
             if (IsDelegateType(typeName))
             {
+                // Include delegate target/method info for better diagnostics
                 inspected.Delegate = await GetDelegateInfoAsync(manager, normalizedAddress, cancellationToken);
             }
 
             // Handle exceptions - add rich exception info
             if (IsExceptionType(typeName))
             {
+                // Capture exception details to reduce extra !pe calls
                 inspected.Exception = await GetExceptionInfoAsync(manager, normalizedAddress, cancellationToken);
             }
 
             // Handle tasks - add rich task info
             if (IsTaskType(typeName))
             {
+                // Tasks need custom parsing to surface status/async state
                 inspected.Task = await GetTaskInfoAsync(manager, normalizedAddress, dumpResult, cancellationToken);
             }
 
@@ -353,7 +362,7 @@ public partial class ObjectInspector
                     seenAddresses,
                     rootAddress,
                     cancellationToken);
-                
+
                 // Try to format special types like DateTime, TimeSpan, Guid for readability
                 // Use resolved typeName for proper detection
                 inspected.FormattedValue = TryFormatSpecialType(typeName, inspected.Fields);
@@ -443,6 +452,7 @@ public partial class ObjectInspector
                 var fullType = await ResolveFullTypeNameAsync(manager, field.MethodTable, cancellationToken);
                 if (!string.IsNullOrEmpty(fullType))
                 {
+                    // Prefer full names so clients see complete generic/namespace info
                     fieldType = fullType;
                 }
             }
@@ -471,6 +481,7 @@ public partial class ObjectInspector
             catch (Exception ex)
             {
                 _logger.LogDebug(ex, "Error resolving field {FieldName}", field.Name);
+                // Preserve the error in-line so the client knows why this field failed
                 inspectedField.Value = $"{MarkerErrorPrefix}{ex.Message}]";
             }
 
@@ -518,7 +529,7 @@ public partial class ObjectInspector
             {
                 return field.Value; // Return raw address value
             }
-            
+
             if (PrimitiveResolver.IsNullAddress(field.Value))
             {
                 return null;
@@ -555,7 +566,7 @@ public partial class ObjectInspector
                 var enumName = await TryGetEnumNameAsync(manager, field.MethodTable, field.Value, cancellationToken);
                 return PrimitiveResolver.FormatEnumValue(resolvedTypeName, field.Value, enumName);
             }
-            
+
             // For complex value types (DateTime, TimeSpan, Guid, etc.) that need expansion,
             // try to dump them if the value looks like an address
             if (IsComplexValueType(resolvedTypeName) && LooksLikeAddress(field.Value))
@@ -575,9 +586,10 @@ public partial class ObjectInspector
                             seenAddresses,
                             rootAddress,
                             cancellationToken);
-                        
+
                         if (innerObj != null && !innerObj.Type.StartsWith("[error:"))
                         {
+                            // Prefer expanded view for complex statics over raw value
                             return innerObj;
                         }
                     }
@@ -587,7 +599,7 @@ public partial class ObjectInspector
                     _logger.LogDebug(ex, "Error expanding static value type {FieldName}", field.Name);
                 }
             }
-            
+
             // For simple primitives, resolve directly
             return PrimitiveResolver.ResolvePrimitiveValue(resolvedTypeName, field.Value);
         }
@@ -600,7 +612,7 @@ public partial class ObjectInspector
             // The Value field contains the address of the embedded struct
             // We can use it directly with dumpvc
             var embeddedAddrStr = PrimitiveResolver.NormalizeAddress(field.Value);
-            
+
             // Skip if the address is null or invalid
             if (!PrimitiveResolver.IsNullAddress(field.Value) && !string.IsNullOrEmpty(embeddedAddrStr))
             {
@@ -619,6 +631,7 @@ public partial class ObjectInspector
                 // If recursion succeeded and returned a valid object, use it
                 if (innerObj != null && !innerObj.Type.StartsWith("[error:"))
                 {
+                    // Prefer expanded embedded struct over raw primitive for readability
                     return innerObj;
                 }
             }
@@ -681,7 +694,7 @@ public partial class ObjectInspector
             _ => false
         };
     }
-    
+
     /// <summary>
     /// Checks if a type is a native pointer type that cannot be inspected with dumpobj.
     /// </summary>
@@ -706,12 +719,12 @@ public partial class ObjectInspector
     {
         if (string.IsNullOrEmpty(value))
             return false;
-        
+
         var clean = value;
         if (clean.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             clean = clean[2..];
-        
-        // An address is typically a long hex string (8+ characters)
+
+        // Treat longer hex strings as addresses; short numerics are more likely enum/primitive values
         return clean.Length >= 8 && clean.All(c => char.IsAsciiHexDigit(c));
     }
 
@@ -836,7 +849,7 @@ public partial class ObjectInspector
             // Look for enum values in the output
             // Enum fields are typically shown with their constant values
             var enumName = ParseEnumNameFromDumpMt(output, numericValue);
-            
+
             if (string.IsNullOrEmpty(enumName))
             {
                 // Try alternative: use name2ee or other SOS commands
@@ -865,7 +878,7 @@ public partial class ObjectInspector
 
         // This is a simplified parser - real enum values might need more sophisticated parsing
         var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        
+
         foreach (var line in lines)
         {
             // Look for lines that contain "Literal" or "static literal"
@@ -880,7 +893,7 @@ public partial class ObjectInspector
                 {
                     // The last part is often the field name
                     var fieldName = parts[^1];
-                    
+
                     // Check if this line contains our value
                     foreach (var part in parts)
                     {
@@ -913,7 +926,7 @@ public partial class ObjectInspector
             // Use dumpclass or examine the type to find enum members
             // This is a fallback approach
             var output = manager.ExecuteCommand($"dumpmt {methodTable}");
-            
+
             // Check if this is actually an enum by looking for "Parent Class" = System.Enum
             if (!output.Contains("System.Enum", StringComparison.OrdinalIgnoreCase))
             {
@@ -1010,7 +1023,6 @@ public partial class ObjectInspector
         return elements;
     }
 
-    #region Collection Support
 
     /// <summary>
     /// Attempts to handle the object as a collection and populate the inspected object.
@@ -1030,7 +1042,7 @@ public partial class ObjectInspector
         out Task collectionTask)
     {
         var collectionType = CollectionTypeDetector.Detect(typeName);
-        
+
         if (collectionType == CollectionType.None || collectionType == CollectionType.Array)
         {
             collectionTask = Task.CompletedTask;
@@ -1303,9 +1315,7 @@ public partial class ObjectInspector
         return clean.ToLowerInvariant();
     }
 
-    #endregion
 
-    #region Delegate Support
 
     /// <summary>
     /// Checks if a type is a delegate type.
@@ -1380,7 +1390,7 @@ public partial class ObjectInspector
     private static DelegateInfo? ParseDumpDelegate(string output)
     {
         var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        
+
         foreach (var line in lines)
         {
             // Skip header line
@@ -1454,9 +1464,7 @@ public partial class ObjectInspector
         }
     }
 
-    #endregion
 
-    #region Exception Support
 
     /// <summary>
     /// Checks if a type is an exception type.
@@ -1564,9 +1572,7 @@ public partial class ObjectInspector
         return hasData ? info : null;
     }
 
-    #endregion
 
-    #region Task Support
 
     /// <summary>
     /// Checks if a type is a Task type.
@@ -1595,7 +1601,7 @@ public partial class ObjectInspector
             var hasData = false;
 
             // Find m_stateFlags field to determine task status
-            var stateFlagsField = dumpResult.Fields.FirstOrDefault(f => 
+            var stateFlagsField = dumpResult.Fields.FirstOrDefault(f =>
                 f.Name.Equals("m_stateFlags", StringComparison.OrdinalIgnoreCase) ||
                 f.Name.Equals("<m_stateFlags>k__BackingField", StringComparison.OrdinalIgnoreCase));
 
@@ -1606,7 +1612,7 @@ public partial class ObjectInspector
             }
 
             // Find m_taskId field
-            var taskIdField = dumpResult.Fields.FirstOrDefault(f => 
+            var taskIdField = dumpResult.Fields.FirstOrDefault(f =>
                 f.Name.Equals("m_taskId", StringComparison.OrdinalIgnoreCase));
 
             if (taskIdField != null && int.TryParse(taskIdField.Value, out var taskId))
@@ -1616,7 +1622,7 @@ public partial class ObjectInspector
             }
 
             // Find m_result field (for Task<T>)
-            var resultField = dumpResult.Fields.FirstOrDefault(f => 
+            var resultField = dumpResult.Fields.FirstOrDefault(f =>
                 f.Name.Equals("m_result", StringComparison.OrdinalIgnoreCase));
 
             if (resultField != null && !PrimitiveResolver.IsNullAddress(resultField.Value))
@@ -1626,7 +1632,7 @@ public partial class ObjectInspector
             }
 
             // Find exception holder (m_contingentProperties -> m_exceptionsHolder)
-            var contingentField = dumpResult.Fields.FirstOrDefault(f => 
+            var contingentField = dumpResult.Fields.FirstOrDefault(f =>
                 f.Name.Equals("m_contingentProperties", StringComparison.OrdinalIgnoreCase));
 
             if (contingentField != null && !PrimitiveResolver.IsNullAddress(contingentField.Value))
@@ -1735,7 +1741,7 @@ public partial class ObjectInspector
         {
             cancellationToken.ThrowIfCancellationRequested();
             var output = manager.ExecuteCommand($"dumpobj {contingentPropsAddress}");
-            
+
             if (string.IsNullOrWhiteSpace(output) || output.Contains("failed", StringComparison.OrdinalIgnoreCase))
                 return null;
 
@@ -1776,11 +1782,11 @@ public partial class ObjectInspector
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            
+
             // dumpasync -addr <address> shows async state machine for a specific task
             var output = manager.ExecuteCommand($"dumpasync -addr {taskAddress}");
-            
-            if (string.IsNullOrWhiteSpace(output) || 
+
+            if (string.IsNullOrWhiteSpace(output) ||
                 output.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
                 output.Contains("No async", StringComparison.OrdinalIgnoreCase))
             {
@@ -1812,10 +1818,8 @@ public partial class ObjectInspector
         }
     }
 
-    #endregion
 
-    #region Special Type Formatting
-    
+
     /// <summary>
     /// Tries to format special types (DateTime, TimeSpan, Guid, etc.) to a human-readable string.
     /// </summary>
@@ -1823,7 +1827,7 @@ public partial class ObjectInspector
     {
         if (fields == null || fields.Count == 0)
             return null;
-        
+
         try
         {
             return typeName switch
@@ -1842,7 +1846,7 @@ public partial class ObjectInspector
             return null;
         }
     }
-    
+
     /// <summary>
     /// Formats a DateTime from its _dateData field.
     /// </summary>
@@ -1850,40 +1854,40 @@ public partial class ObjectInspector
     {
         // DateTime has a single _dateData field (UInt64)
         // Bits 62-63 are DateTimeKind, bits 0-61 are ticks
-        var dateDataField = fields.FirstOrDefault(f => 
+        var dateDataField = fields.FirstOrDefault(f =>
             f.Name.Equals("_dateData", StringComparison.OrdinalIgnoreCase));
-        
+
         if (dateDataField?.Value == null)
             return null;
-        
+
         if (!TryParseFieldAsUInt64(dateDataField.Value, out var dateData))
             return null;
-        
+
         // Extract ticks (bits 0-61) and kind (bits 62-63)
         const ulong TicksMask = 0x3FFFFFFFFFFFFFFF;
         var ticks = (long)(dateData & TicksMask);
         var kind = (DateTimeKind)(dateData >> 62);
-        
+
         if (ticks < DateTime.MinValue.Ticks || ticks > DateTime.MaxValue.Ticks)
             return null;
-        
+
         var dt = new DateTime(ticks, kind);
         return dt.ToString("O"); // ISO 8601 format
     }
-    
+
     /// <summary>
     /// Formats a DateTimeOffset from its _dateTime and _offsetMinutes fields.
     /// </summary>
     private static string? FormatDateTimeOffset(List<InspectedField> fields)
     {
-        var dateTimeField = fields.FirstOrDefault(f => 
+        var dateTimeField = fields.FirstOrDefault(f =>
             f.Name.Equals("_dateTime", StringComparison.OrdinalIgnoreCase));
-        var offsetField = fields.FirstOrDefault(f => 
+        var offsetField = fields.FirstOrDefault(f =>
             f.Name.Equals("_offsetMinutes", StringComparison.OrdinalIgnoreCase));
-        
+
         if (dateTimeField?.Value == null)
             return null;
-        
+
         // _dateTime is a DateTime struct - need to get its ticks
         if (dateTimeField.Value is InspectedObject dtObj && dtObj.Fields != null)
         {
@@ -1898,26 +1902,26 @@ public partial class ObjectInspector
             }
             return dtFormatted;
         }
-        
+
         return null;
     }
-    
+
     /// <summary>
     /// Formats a TimeSpan from its _ticks field.
     /// </summary>
     private static string? FormatTimeSpan(List<InspectedField> fields)
     {
-        var ticksField = fields.FirstOrDefault(f => 
+        var ticksField = fields.FirstOrDefault(f =>
             f.Name.Equals("_ticks", StringComparison.OrdinalIgnoreCase));
-        
+
         if (ticksField?.Value == null)
             return null;
-        
+
         if (!TryParseFieldAsInt64(ticksField.Value, out var ticks))
             return null;
-        
+
         var ts = new TimeSpan(ticks);
-        
+
         // Use appropriate format based on duration
         if (ts.TotalDays >= 1)
             return ts.ToString(@"d\.hh\:mm\:ss\.fff");
@@ -1928,7 +1932,7 @@ public partial class ObjectInspector
         else
             return ts.ToString(@"s\.fff") + "s";
     }
-    
+
     /// <summary>
     /// Formats a Guid from its fields (_a, _b, _c, _d, _e, _f, _g, _h, _i, _j, _k).
     /// </summary>
@@ -1946,7 +1950,7 @@ public partial class ObjectInspector
         var iField = fields.FirstOrDefault(f => f.Name == "_i");
         var jField = fields.FirstOrDefault(f => f.Name == "_j");
         var kField = fields.FirstOrDefault(f => f.Name == "_k");
-        
+
         if (aField?.Value == null || bField?.Value == null || cField?.Value == null ||
             dField?.Value == null || eField?.Value == null || fField?.Value == null ||
             gField?.Value == null || hField?.Value == null || iField?.Value == null ||
@@ -1954,7 +1958,7 @@ public partial class ObjectInspector
         {
             return null;
         }
-        
+
         try
         {
             if (!TryParseFieldAsInt32(aField.Value, out var a)) return null;
@@ -1968,7 +1972,7 @@ public partial class ObjectInspector
             if (!TryParseFieldAsByte(iField.Value, out var i)) return null;
             if (!TryParseFieldAsByte(jField.Value, out var j)) return null;
             if (!TryParseFieldAsByte(kField.Value, out var k)) return null;
-            
+
             var guid = new Guid(a, b, c, d, e, f, g, h, i, j, k);
             return guid.ToString();
         }
@@ -1977,141 +1981,139 @@ public partial class ObjectInspector
             return null;
         }
     }
-    
+
     /// <summary>
     /// Formats a DateOnly from its _dayNumber field.
     /// </summary>
     private static string? FormatDateOnly(List<InspectedField> fields)
     {
-        var dayNumberField = fields.FirstOrDefault(f => 
+        var dayNumberField = fields.FirstOrDefault(f =>
             f.Name.Equals("_dayNumber", StringComparison.OrdinalIgnoreCase));
-        
+
         if (dayNumberField?.Value == null)
             return null;
-        
+
         if (!TryParseFieldAsInt32(dayNumberField.Value, out var dayNumber))
             return null;
-        
+
         // DateOnly stores day number since 0001-01-01
         var date = DateOnly.FromDayNumber(dayNumber);
         return date.ToString("O"); // ISO 8601 format
     }
-    
+
     /// <summary>
     /// Formats a TimeOnly from its _ticks field.
     /// </summary>
     private static string? FormatTimeOnly(List<InspectedField> fields)
     {
-        var ticksField = fields.FirstOrDefault(f => 
+        var ticksField = fields.FirstOrDefault(f =>
             f.Name.Equals("_ticks", StringComparison.OrdinalIgnoreCase));
-        
+
         if (ticksField?.Value == null)
             return null;
-        
+
         if (!TryParseFieldAsInt64(ticksField.Value, out var ticks))
             return null;
-        
+
         var time = new TimeOnly(ticks);
         return time.ToString("O"); // ISO 8601 format
     }
-    
+
     // Helper methods for parsing field values
-    
+
     private static bool TryParseFieldAsUInt64(object? value, out ulong result)
     {
         result = 0;
         if (value == null) return false;
-        
+
         var str = value.ToString();
         if (string.IsNullOrEmpty(str)) return false;
-        
+
         // Try direct parse
         if (ulong.TryParse(str, out result)) return true;
-        
+
         // Try hex parse
         if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
             return ulong.TryParse(str.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out result);
         }
-        
+
         return false;
     }
-    
+
     private static bool TryParseFieldAsInt64(object? value, out long result)
     {
         result = 0;
         if (value == null) return false;
-        
+
         var str = value.ToString();
         if (string.IsNullOrEmpty(str)) return false;
-        
+
         if (long.TryParse(str, out result)) return true;
-        
+
         if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
             return long.TryParse(str.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out result);
         }
-        
+
         return false;
     }
-    
+
     private static bool TryParseFieldAsInt32(object? value, out int result)
     {
         result = 0;
         if (value == null) return false;
-        
+
         var str = value.ToString();
         if (string.IsNullOrEmpty(str)) return false;
-        
+
         if (int.TryParse(str, out result)) return true;
-        
+
         if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
             return int.TryParse(str.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out result);
         }
-        
+
         return false;
     }
-    
+
     private static bool TryParseFieldAsInt16(object? value, out short result)
     {
         result = 0;
         if (value == null) return false;
-        
+
         var str = value.ToString();
         if (string.IsNullOrEmpty(str)) return false;
-        
+
         if (short.TryParse(str, out result)) return true;
-        
+
         if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
             return short.TryParse(str.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out result);
         }
-        
+
         return false;
     }
-    
+
     private static bool TryParseFieldAsByte(object? value, out byte result)
     {
         result = 0;
         if (value == null) return false;
-        
+
         var str = value.ToString();
         if (string.IsNullOrEmpty(str)) return false;
-        
+
         if (byte.TryParse(str, out result)) return true;
-        
+
         if (str.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
         {
             return byte.TryParse(str.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out result);
         }
-        
+
         return false;
     }
-    
-    #endregion
 
-    #region System.Type Support
+
 
     /// <summary>
     /// Checks if a type is System.Type or RuntimeType.
@@ -2272,7 +2274,7 @@ public partial class ObjectInspector
             output.Contains("System.Enum", StringComparison.OrdinalIgnoreCase))
         {
             info.IsValueType = true;
-            
+
             if (output.Contains("System.Enum", StringComparison.OrdinalIgnoreCase))
             {
                 info.IsEnum = true;
@@ -2299,7 +2301,7 @@ public partial class ObjectInspector
             if (attrMatch.Success)
             {
                 // Interface attribute flag is 0x20 (mdInterface)
-                if (int.TryParse(attrMatch.Groups[1].Value.TrimStart('0', 'x', 'X'), 
+                if (int.TryParse(attrMatch.Groups[1].Value.TrimStart('0', 'x', 'X'),
                     System.Globalization.NumberStyles.HexNumber, null, out var attrs))
                 {
                     info.IsInterface = (attrs & 0x20) != 0;
@@ -2310,6 +2312,4 @@ public partial class ObjectInspector
         return hasData ? info : null;
     }
 
-    #endregion
 }
-

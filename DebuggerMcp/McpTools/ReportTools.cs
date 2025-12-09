@@ -71,20 +71,21 @@ public class ReportTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
         // Parse the format - default to markdown if invalid
         if (!Enum.TryParse<ReportFormat>(format, ignoreCase: true, out var reportFormat))
         {
+            // Fall back to markdown so we always emit a report instead of failing
             reportFormat = ReportFormat.Markdown;
         }
 
@@ -121,6 +122,7 @@ public class ReportTools(
             }
             else
             {
+                // Proceed without Source Link when symbol directory is missing
                 Logger.LogWarning("[ReportTools] Symbol path does not exist: {SymbolPath}", symbolPath);
             }
         }
@@ -141,13 +143,13 @@ public class ReportTools(
             var basicAnalyzer = new CrashAnalyzer(manager, sourceLinkResolver);
             result = await basicAnalyzer.AnalyzeCrashAsync();
         }
-        
+
         // Run security analysis if enabled
         if (includeSecurity)
         {
             var securityAnalyzer = new SecurityAnalyzer(manager);
             var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
-            
+
             // Populate Security structure
             if (securityResult != null)
             {
@@ -169,7 +171,7 @@ public class ReportTools(
                 };
             }
         }
-        
+
         // Include watch evaluations if enabled and dump has watches
         if (includeWatches && !string.IsNullOrEmpty(session.CurrentDumpId))
         {
@@ -227,14 +229,14 @@ public class ReportTools(
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
-        
+
         // Sanitize userId to prevent path traversal attacks
         var sanitizedUserId = SanitizeUserId(userId);
 
         // Get the session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
-        
+
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
@@ -280,11 +282,11 @@ public class ReportTools(
             var basicAnalyzer = new CrashAnalyzer(manager, sourceLinkResolver);
             result = await basicAnalyzer.AnalyzeCrashAsync();
         }
-        
+
         // Run security analysis for critical findings
         var securityAnalyzer = new SecurityAnalyzer(manager);
         var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
-        
+
         // Populate Security structure
         if (securityResult != null)
         {
@@ -338,7 +340,7 @@ internal class JsonReportGenerator : IReportGenerator
         WriteIndented = true,
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
     };
-    
+
     /// <inheritdoc />
     public string Generate(CrashAnalysisResult analysis, ReportOptions options, ReportMetadata metadata)
     {
@@ -347,7 +349,7 @@ internal class JsonReportGenerator : IReportGenerator
             metadata,
             analysis
         };
-        
+
         return JsonSerializer.Serialize(report, JsonOptions);
     }
 }

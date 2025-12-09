@@ -13,13 +13,13 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
 {
     private readonly TestWebApplicationFactory _factory;
     private readonly HttpClient _client;
-    
+
     public DumpControllerTests(TestWebApplicationFactory factory)
     {
         _factory = factory;
         _client = _factory.CreateClient();
     }
-    
+
     public void Dispose()
     {
         _client.Dispose();
@@ -64,7 +64,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
     {
         // Arrange - Create a valid Windows minidump header (MDMP)
         var dumpHeader = CreateValidWindowsDumpHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("../../../etc/passwd"), "userId"); // Path traversal attempt
         var fileContent = new ByteArrayContent(dumpHeader);
@@ -85,7 +85,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
     {
         // Arrange - Create an invalid file (not a valid dump)
         var invalidContent = Encoding.UTF8.GetBytes("This is not a valid dump file");
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("testuser"), "userId");
         var fileContent = new ByteArrayContent(invalidContent);
@@ -106,7 +106,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
     {
         // Arrange - Create a valid Windows minidump header
         var dumpContent = CreateValidWindowsDumpHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("testuser"), "userId");
         content.Add(new StringContent("Test dump description"), "description");
@@ -121,7 +121,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("dumpId", out var dumpId));
         Assert.False(string.IsNullOrEmpty(dumpId.GetString()));
         Assert.True(result.TryGetProperty("userId", out var userId));
@@ -135,7 +135,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
     {
         // Arrange - Create a valid Linux ELF core header
         var dumpContent = CreateValidLinuxElfCoreHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("linuxuser"), "userId");
         var fileContent = new ByteArrayContent(dumpContent);
@@ -149,7 +149,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("dumpFormat", out var format));
         Assert.Contains("Linux", format.GetString());
     }
@@ -159,7 +159,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
     {
         // Arrange - Create a valid macOS Mach-O core header
         var dumpContent = CreateValidMachOCoreHeader();
-        
+
         var content = new MultipartFormDataContent();
         content.Add(new StringContent("macuser"), "userId");
         var fileContent = new ByteArrayContent(dumpContent);
@@ -173,7 +173,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("dumpFormat", out var format));
         Assert.Contains("macOS", format.GetString());
     }
@@ -223,7 +223,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         Assert.True(result.TryGetProperty("dumpId", out var resultDumpId));
         Assert.Equal(dumpId, resultDumpId.GetString());
         Assert.True(result.TryGetProperty("size", out _));
@@ -315,7 +315,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        
+
         // Verify it's actually deleted
         var getResponse = await _client.GetAsync($"/api/dumps/deleteuser/{dumpId}");
         Assert.Equal(HttpStatusCode.NotFound, getResponse.StatusCode);
@@ -343,7 +343,7 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         var result = JsonSerializer.Deserialize<JsonElement>(body);
-        
+
         // The stats endpoint returns TotalSessions and MaxSessionsPerUser (camelCase)
         Assert.True(result.TryGetProperty("totalSessions", out _));
         Assert.True(result.TryGetProperty("maxSessionsPerUser", out _));

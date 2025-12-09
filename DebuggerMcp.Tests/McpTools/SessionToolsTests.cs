@@ -21,7 +21,7 @@ public class SessionToolsTests : IDisposable
     {
         _tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempPath);
-        
+
         _sessionManager = new DebuggerSessionManager(_tempPath);
         _symbolManager = new SymbolManager(_tempPath);
         _watchStore = new WatchStore(_tempPath);

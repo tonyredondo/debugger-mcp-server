@@ -225,7 +225,7 @@ public class SourceLinkResolverTests
     {
         // Arrange
         var resolver = new SourceLinkResolver();
-        
+
         // Pre-populate cache by resolving
         resolver.GetSourceLinkForModule("/test/module.dll");
 
@@ -305,7 +305,7 @@ public class SourceLinkResolverTests
     {
         // This would require a mock PDB file with Source Link
         // For now, we verify the URL conversion logic works through format methods
-        
+
         var location = new SourceLocation
         {
             SourceFile = "src/MyClass.cs",
@@ -317,7 +317,7 @@ public class SourceLinkResolverTests
         };
 
         var markdown = SourceLinkResolver.FormatMarkdownLink(location);
-        
+
         Assert.Contains("github.com", markdown);
         Assert.Contains("#L42", markdown);
     }
@@ -524,7 +524,7 @@ public class SourceLinkResolverTests
         };
 
         var markdown = SourceLinkResolver.FormatMarkdownLink(location);
-        
+
         Assert.Contains("gitlab.com", markdown);
         Assert.Contains("#L100", markdown);
     }
@@ -544,7 +544,7 @@ public class SourceLinkResolverTests
         };
 
         var markdown = SourceLinkResolver.FormatMarkdownLink(location);
-        
+
         Assert.Contains("dev.azure.com", markdown);
         Assert.Contains("line=50", markdown);
     }
@@ -564,7 +564,7 @@ public class SourceLinkResolverTests
         };
 
         var markdown = SourceLinkResolver.FormatMarkdownLink(location);
-        
+
         Assert.Contains("bitbucket.org", markdown);
         Assert.Contains("#lines-75", markdown);
     }

@@ -40,7 +40,7 @@ public class ServerConfig
 public class ServerConfigManager
 {
     private const string ConfigFileName = "servers.json";
-    
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -120,10 +120,10 @@ public class ServerConfigManager
     public bool AddServer(string url, string? apiKey = null)
     {
         var config = Load();
-        
+
         // Normalize URL
         url = NormalizeUrl(url);
-        
+
         // Check if already exists
         if (config.Servers.Any(s => NormalizeUrl(s.Url).Equals(url, StringComparison.OrdinalIgnoreCase)))
         {
@@ -144,15 +144,15 @@ public class ServerConfigManager
     {
         var config = Load();
         url = NormalizeUrl(url);
-        
-        var removed = config.Servers.RemoveAll(s => 
+
+        var removed = config.Servers.RemoveAll(s =>
             NormalizeUrl(s.Url).Equals(url, StringComparison.OrdinalIgnoreCase)) > 0;
-        
+
         if (removed)
         {
             Save(config);
         }
-        
+
         return removed;
     }
 
@@ -189,13 +189,13 @@ public class ServerConfigManager
     private static string NormalizeUrl(string url)
     {
         url = url.Trim().TrimEnd('/');
-        
+
         // Add http:// if no scheme
         if (!url.Contains("://"))
         {
             url = "http://" + url;
         }
-        
+
         return url;
     }
 
@@ -206,13 +206,13 @@ public class ServerConfigManager
     {
         // Get the directory where the CLI binary is located
         var assemblyLocation = System.Reflection.Assembly.GetExecutingAssembly().Location;
-        
+
         // For single-file deployments, Location might be empty
         if (string.IsNullOrEmpty(assemblyLocation))
         {
             assemblyLocation = Environment.ProcessPath ?? AppContext.BaseDirectory;
         }
-        
+
         var directory = Path.GetDirectoryName(assemblyLocation) ?? AppContext.BaseDirectory;
         return Path.Combine(directory, ConfigFileName);
     }

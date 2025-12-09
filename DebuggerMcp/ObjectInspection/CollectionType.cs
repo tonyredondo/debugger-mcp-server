@@ -7,7 +7,7 @@ public enum CollectionType
 {
     /// <summary>Not a recognized collection type.</summary>
     None = 0,
-    
+
     // Tier 1: Simple internal array
     /// <summary>T[] - Native array.</summary>
     Array,
@@ -19,7 +19,7 @@ public enum CollectionType
     Queue,
     /// <summary>HashSet&lt;T&gt; - Unique elements.</summary>
     HashSet,
-    
+
     // Tier 2: Key-Value collections
     /// <summary>Dictionary&lt;K,V&gt; - Key-value pairs.</summary>
     Dictionary,
@@ -27,7 +27,7 @@ public enum CollectionType
     SortedDictionary,
     /// <summary>SortedList&lt;K,V&gt; - Sorted list of key-value pairs.</summary>
     SortedList,
-    
+
     // Tier 3: Concurrent collections
     /// <summary>ConcurrentDictionary&lt;K,V&gt; - Thread-safe dictionary.</summary>
     ConcurrentDictionary,
@@ -37,7 +37,7 @@ public enum CollectionType
     ConcurrentStack,
     /// <summary>ConcurrentBag&lt;T&gt; - Thread-safe unordered collection.</summary>
     ConcurrentBag,
-    
+
     // Tier 4: Immutable collections
     /// <summary>ImmutableArray&lt;T&gt; - Immutable array.</summary>
     ImmutableArray,

@@ -12,42 +12,42 @@ public class ArtifactMergeResult
     /// Gets or sets whether the merge was successful.
     /// </summary>
     public bool Success { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the root symbol directory (e.g., symbols-linux-musl-arm64).
     /// </summary>
     public string? SymbolDirectory { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the native symbol directory containing .debug files.
     /// </summary>
     public string? NativeSymbolDirectory { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the managed symbol directory containing .pdb files for TFM.
     /// </summary>
     public string? ManagedSymbolDirectory { get; set; }
-    
+
     /// <summary>
     /// Gets the list of native .debug files extracted.
     /// </summary>
     public List<string> DebugSymbolFiles { get; } = new();
-    
+
     /// <summary>
     /// Gets the list of managed .pdb files extracted.
     /// </summary>
     public List<string> PdbFiles { get; } = new();
-    
+
     /// <summary>
     /// Gets the list of native library files (*.so, *.dll) extracted.
     /// </summary>
     public List<string> NativeLibraries { get; } = new();
-    
+
     /// <summary>
     /// Gets or sets error message if merge failed.
     /// </summary>
     public string? ErrorMessage { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the total number of files extracted.
     /// </summary>
@@ -73,13 +73,13 @@ public class ArtifactMergeResult
 public class DatadogArtifactProcessor
 {
     private readonly ILogger? _logger;
-    
+
     // File extensions we want to extract
     private static readonly HashSet<string> SymbolExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".debug", ".pdb", ".so", ".dll", ".dylib"
     };
-    
+
     /// <summary>
     /// Initializes a new instance of the <see cref="DatadogArtifactProcessor"/> class.
     /// </summary>
@@ -88,7 +88,7 @@ public class DatadogArtifactProcessor
     {
         _logger = logger;
     }
-    
+
     /// <summary>
     /// Merges multiple artifact ZIPs into a unified symbol directory.
     /// </summary>
@@ -106,49 +106,51 @@ public class DatadogArtifactProcessor
         CancellationToken ct = default)
     {
         var result = new ArtifactMergeResult();
-        
+
         try
         {
             // Create symbol directory structure
             var symbolDir = Path.Combine(baseOutputDirectory, $"symbols-{platformSuffix}");
             var nativeDir = Path.Combine(symbolDir, platformSuffix);
             var managedDir = Path.Combine(symbolDir, targetTfm);
-            
+
             Directory.CreateDirectory(nativeDir);
             Directory.CreateDirectory(managedDir);
-            
+
             result.SymbolDirectory = symbolDir;
             result.NativeSymbolDirectory = nativeDir;
             result.ManagedSymbolDirectory = managedDir;
-            
+
             // Process each artifact type
             foreach (var (artifactType, zipPath) in artifactZips)
             {
                 if (!File.Exists(zipPath))
+                    // Skip missing artifacts instead of failing the whole merge
                     continue;
-                
+
                 _logger?.LogDebug("Processing artifact {Type} from {Path}", artifactType, zipPath);
-                
+
                 var extracted = await ExtractArtifactAsync(
                     zipPath, artifactType, nativeDir, managedDir, targetTfm, platformSuffix, ct);
-                
+
                 result.DebugSymbolFiles.AddRange(extracted.debugFiles);
                 result.PdbFiles.AddRange(extracted.pdbFiles);
                 result.NativeLibraries.AddRange(extracted.nativeLibs);
-                result.TotalFilesExtracted += extracted.debugFiles.Count + 
-                                              extracted.pdbFiles.Count + 
+                result.TotalFilesExtracted += extracted.debugFiles.Count +
+                                              extracted.pdbFiles.Count +
                                               extracted.nativeLibs.Count;
             }
-            
+
             result.Success = result.TotalFilesExtracted > 0;
-            
+
             if (result.Success)
             {
-                _logger?.LogInformation("Merged {Count} files into {Dir}", 
+                _logger?.LogInformation("Merged {Count} files into {Dir}",
                     result.TotalFilesExtracted, symbolDir);
             }
             else
             {
+                // Signal to callers that we could not extract anything useful
                 result.ErrorMessage = "No symbol files were extracted";
             }
         }
@@ -158,10 +160,10 @@ public class DatadogArtifactProcessor
             result.ErrorMessage = ex.Message;
             result.Success = false;
         }
-        
+
         return result;
     }
-    
+
     /// <summary>
     /// Extracts relevant files from an artifact ZIP.
     /// </summary>
@@ -177,50 +179,52 @@ public class DatadogArtifactProcessor
         var debugFiles = new List<string>();
         var pdbFiles = new List<string>();
         var nativeLibs = new List<string>();
-        
+
         await using var zipStream = File.OpenRead(zipPath);
         using var archive = new ZipArchive(zipStream, ZipArchiveMode.Read);
-        
+
         foreach (var entry in archive.Entries)
         {
             ct.ThrowIfCancellationRequested();
-            
+
             // Skip directories
             if (string.IsNullOrEmpty(entry.Name))
                 continue;
-            
+
             var ext = Path.GetExtension(entry.Name);
             if (!SymbolExtensions.Contains(ext))
+                // Ignore non-symbol files to keep output clean
                 continue;
-            
+
             // Determine target directory based on artifact type and file
             var (targetDir, shouldExtract) = GetTargetDirectory(
                 entry.FullName, entry.Name, ext, artifactType, nativeDir, managedDir, targetTfm, platformSuffix);
-            
+
             if (!shouldExtract || targetDir == null)
+                // Skip files that don't belong to the current platform/TFM
                 continue;
-            
+
             // Extract file
             var targetPath = Path.Combine(targetDir, entry.Name);
-            
+
             // Skip if file already exists and is same size
             if (File.Exists(targetPath) && new FileInfo(targetPath).Length == entry.Length)
             {
                 _logger?.LogDebug("Skipping existing file: {Path}", entry.Name);
-                
+
                 // Still track the file
                 TrackFile(targetPath, ext, debugFiles, pdbFiles, nativeLibs);
                 continue;
             }
-            
+
             try
             {
                 await using var entryStream = entry.Open();
                 await using var fileStream = File.Create(targetPath);
                 await entryStream.CopyToAsync(fileStream, ct);
-                
+
                 _logger?.LogDebug("Extracted: {Path}", targetPath);
-                
+
                 // Track extracted file
                 TrackFile(targetPath, ext, debugFiles, pdbFiles, nativeLibs);
             }
@@ -229,10 +233,10 @@ public class DatadogArtifactProcessor
                 _logger?.LogWarning(ex, "Failed to extract {Entry}", entry.FullName);
             }
         }
-        
+
         return (debugFiles, pdbFiles, nativeLibs);
     }
-    
+
     /// <summary>
     /// Determines the target directory for a file based on artifact type and file extension.
     /// </summary>
@@ -258,7 +262,7 @@ public class DatadogArtifactProcessor
         var extLower = extension.ToLowerInvariant();
         var fullNameLower = entryFullName.ToLowerInvariant().Replace('\\', '/');
         var platformFolderLower = platformSuffix.ToLowerInvariant();
-        
+
         switch (artifactType)
         {
             case DatadogArtifactType.TracerSymbols:
@@ -268,36 +272,38 @@ public class DatadogArtifactProcessor
                 if (extLower == ".debug" || extLower == ".pdb")
                 {
                     // Check if in platform subfolder (for Linux) or at root (for Windows)
-                    if (IsInPlatformFolder(fullNameLower, platformFolderLower) || 
+                    if (IsInPlatformFolder(fullNameLower, platformFolderLower) ||
                         !fullNameLower.Contains('/'))
                     {
+                        // Keep these in the native directory for LLDB/sos to pick up
                         return (nativeDir, true);
                     }
                 }
                 break;
-            
+
             case DatadogArtifactType.MonitoringHome:
                 // Monitoring home has both:
                 // - Native binaries in platform subfolder: linux-musl-arm64/*.so
                 // - Managed assemblies in TFM folders: net6.0/*.dll, net6.0/*.pdb
-                
+
                 // Check for managed code in TFM folder
                 if (IsInTfmFolder(fullNameLower, targetTfm))
                 {
                     if (extLower == ".pdb" || extLower == ".dll")
                         return (managedDir, true);
                 }
-                
+
                 // Check for native libraries in platform subfolder
                 if (extLower == ".so" || extLower == ".dylib" || extLower == ".dll")
                 {
                     if (IsInPlatformFolder(fullNameLower, platformFolderLower))
                     {
+                        // Native binaries accompany the tracer and go to the native folder
                         return (nativeDir, true);
                     }
                 }
                 break;
-            
+
             case DatadogArtifactType.UniversalSymbols:
                 // Universal symbols have FLAT structure - .debug files at root level
                 // These are native symbols (Datadog.Linux.ApiWrapper.x64.debug, etc.)
@@ -305,9 +311,10 @@ public class DatadogArtifactProcessor
                 {
                     // Flat structure: files at root level (no subfolder)
                     // Only extract if NOT in a subfolder
-                    if (!fullNameLower.Contains('/') || 
+                    if (!fullNameLower.Contains('/') ||
                         fullNameLower.StartsWith($"{Path.GetFileName(fullNameLower)}"))
                     {
+                        // Universal symbols are root-level; keep them all together
                         return (nativeDir, true);
                     }
                     // Also accept if directly under artifact name folder
@@ -315,15 +322,16 @@ public class DatadogArtifactProcessor
                     var parts = fullNameLower.Split('/');
                     if (parts.Length <= 2)
                     {
+                        // Allow shallow nesting to tolerate packaging differences
                         return (nativeDir, true);
                     }
                 }
                 break;
         }
-        
+
         return (null, false);
     }
-    
+
     /// <summary>
     /// Checks if the entry path is within the platform folder.
     /// </summary>
@@ -332,37 +340,37 @@ public class DatadogArtifactProcessor
         return fullName.Contains($"/{platformFolder}/") ||
                fullName.StartsWith($"{platformFolder}/");
     }
-    
+
     /// <summary>
     /// Checks if the entry path is within the target TFM folder.
     /// </summary>
     private static bool IsInTfmFolder(string fullName, string targetTfm)
     {
         var tfmLower = targetTfm.ToLowerInvariant();
-        
+
         // Match paths like:
         // - monitoring-home/net6.0/Datadog.Trace.dll
         // - universal-symbols/net6.0/Datadog.Trace.pdb
         // - tracer-home/net6.0/publish/...
-        
-        return fullName.Contains($"/{tfmLower}/") || 
+
+        return fullName.Contains($"/{tfmLower}/") ||
                fullName.Contains($"\\{tfmLower}\\") ||
                fullName.Contains($"/{tfmLower}\\") ||
                fullName.Contains($"\\{tfmLower}/");
     }
-    
+
     /// <summary>
     /// Tracks a file in the appropriate list based on extension.
     /// </summary>
     private static void TrackFile(
-        string path, 
+        string path,
         string extension,
         List<string> debugFiles,
         List<string> pdbFiles,
         List<string> nativeLibs)
     {
         var ext = extension.ToLowerInvariant();
-        
+
         switch (ext)
         {
             case ".debug":
@@ -379,4 +387,3 @@ public class DatadogArtifactProcessor
         }
     }
 }
-

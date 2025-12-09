@@ -24,10 +24,11 @@ public static class FileLoggerExtensions
         LogLevel minimumLevel = LogLevel.Information)
     {
         var logPath = logDirectory ?? GetLogStoragePath();
-        
+
         builder.Services.AddSingleton<ILoggerProvider>(
+            // Use singleton provider so multiple ILogger instances reuse the same writer/rotation schedule
             _ => new FileLoggerProvider(logPath, filePrefix, minimumLevel));
-        
+
         return builder;
     }
 
@@ -36,8 +37,7 @@ public static class FileLoggerExtensions
     /// </summary>
     public static string GetLogStoragePath()
     {
-        return Environment.GetEnvironmentVariable("LOG_STORAGE_PATH") 
+        return Environment.GetEnvironmentVariable("LOG_STORAGE_PATH")
             ?? Path.Combine(AppContext.BaseDirectory, "logs");
     }
 }
-

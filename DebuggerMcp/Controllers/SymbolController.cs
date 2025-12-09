@@ -46,6 +46,7 @@ public class SymbolController : ControllerBase
         {
             if (file == null || file.Length == 0)
             {
+                // Nothing to process; return early to avoid allocating streams.
                 return BadRequest(new { error = "No file provided" });
             }
 
@@ -57,6 +58,7 @@ public class SymbolController : ControllerBase
             }
             catch (ArgumentException ex)
             {
+                // Provide specific validation error from sanitizer.
                 return BadRequest(new { error = ex.Message });
             }
 
@@ -64,17 +66,18 @@ public class SymbolController : ControllerBase
             using var stream = file.OpenReadStream();
             var header = new byte[SymbolFileValidator.MaxHeaderSize];
             var bytesRead = await stream.ReadAsync(header.AsMemory(0, SymbolFileValidator.MaxHeaderSize));
-            
+
             if (bytesRead < SymbolFileValidator.MinimumBytesNeeded)
             {
+                // Avoid storing obviously truncated files.
                 return BadRequest(new { error = "File is too small to be a valid symbol file." });
             }
 
             if (!SymbolFileValidator.IsValidSymbolHeader(header, file.FileName))
             {
                 var detectedFormat = SymbolFileValidator.GetSymbolFormat(header);
-                return BadRequest(new 
-                { 
+                return BadRequest(new
+                {
                     error = $"Invalid symbol file format for extension '{Path.GetExtension(file.FileName)}'. Expected a valid symbol file (PDB, ELF, Mach-O, etc.).",
                     detectedFormat
                 });
@@ -131,6 +134,7 @@ public class SymbolController : ControllerBase
         {
             if (file == null || file.Length == 0)
             {
+                // Reject empty submissions to avoid extra IO.
                 return BadRequest(new { error = "No file provided" });
             }
 
@@ -138,6 +142,7 @@ public class SymbolController : ControllerBase
             var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
             if (extension != ".zip")
             {
+                // Only ZIP archives supported here; other formats go through single upload.
                 return BadRequest(new { error = "File must be a ZIP archive (.zip extension)" });
             }
 
@@ -149,6 +154,7 @@ public class SymbolController : ControllerBase
             }
             catch (ArgumentException ex)
             {
+                // Sanitize failure is a client error; surface message.
                 return BadRequest(new { error = ex.Message });
             }
 
@@ -156,24 +162,25 @@ public class SymbolController : ControllerBase
             using var stream = file.OpenReadStream();
             var header = new byte[4];
             var bytesRead = await stream.ReadAsync(header.AsMemory(0, 4));
-            
+
             // ZIP files start with PK\x03\x04 (local file header) or PK\x05\x06 (empty archive)
-            if (bytesRead < 4 || 
+            if (bytesRead < 4 ||
                 (header[0] != 0x50 || header[1] != 0x4B || (header[2] != 0x03 && header[2] != 0x05)))
             {
+                // Prevent treating arbitrary files as ZIP to avoid extraction errors.
                 return BadRequest(new { error = "File does not appear to be a valid ZIP archive" });
             }
 
             // Reset stream position
             stream.Position = 0;
 
-            _logger.LogInformation("[SymbolController] Extracting symbol ZIP for dump {DumpId}, size: {Size} bytes", 
+            _logger.LogInformation("[SymbolController] Extracting symbol ZIP for dump {DumpId}, size: {Size} bytes",
                 sanitizedDumpId, file.Length);
 
             // Extract ZIP
             var result = await _symbolManager.StoreSymbolZipAsync(sanitizedDumpId, stream);
 
-            _logger.LogInformation("[SymbolController] Extracted {FileCount} files into {DirCount} directories for dump {DumpId}", 
+            _logger.LogInformation("[SymbolController] Extracted {FileCount} files into {DirCount} directories for dump {DumpId}",
                 result.ExtractedFilesCount, result.SymbolDirectories.Count, sanitizedDumpId);
 
             // Get symbol files for loading info
@@ -219,6 +226,7 @@ public class SymbolController : ControllerBase
         {
             if (files == null || files.Count == 0)
             {
+                // Avoid running validations when nothing was supplied.
                 return BadRequest(new { error = "No files provided" });
             }
 
@@ -230,6 +238,7 @@ public class SymbolController : ControllerBase
             }
             catch (ArgumentException ex)
             {
+                // Surface sanitization issues as client errors.
                 return BadRequest(new { error = ex.Message });
             }
 
@@ -245,14 +254,15 @@ public class SymbolController : ControllerBase
                     if (file != null && file.Length > 0)
                     {
                         var stream = file.OpenReadStream();
-                        
+
                         // Validate symbol file content
                         var header = new byte[SymbolFileValidator.MaxHeaderSize];
                         var bytesRead = await stream.ReadAsync(header.AsMemory(0, SymbolFileValidator.MaxHeaderSize));
-                        
-                        if (bytesRead < SymbolFileValidator.MinimumBytesNeeded || 
+
+                        if (bytesRead < SymbolFileValidator.MinimumBytesNeeded ||
                             !SymbolFileValidator.IsValidSymbolHeader(header, file.FileName))
                         {
+                            // Skip invalid files but continue processing the rest.
                             validationErrors.Add($"Invalid symbol file: {file.FileName}");
                             stream.Dispose();
                             continue;
@@ -265,10 +275,10 @@ public class SymbolController : ControllerBase
 
                 if (fileDict.Count == 0)
                 {
-                    return BadRequest(new 
-                    { 
+                    return BadRequest(new
+                    {
                         error = "No valid symbol files provided.",
-                        validationErrors 
+                        validationErrors
                     });
                 }
 
@@ -297,8 +307,9 @@ public class SymbolController : ControllerBase
                 // Include validation errors if some files were skipped
                 if (validationErrors.Count > 0)
                 {
-                    return Ok(new 
-                    { 
+                    // Partial success: return OK with skipped list so client can retry just the bad ones.
+                    return Ok(new
+                    {
                         response.DumpId,
                         response.FilesUploaded,
                         response.Files,

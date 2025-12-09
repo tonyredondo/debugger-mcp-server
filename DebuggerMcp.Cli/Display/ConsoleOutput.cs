@@ -206,19 +206,19 @@ public class ConsoleOutput
     {
         T result = default!;
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        
+
         // Create a linked token source that combines external token with Ctrl+C
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        
+
         // Handle Ctrl+C to cancel the operation
         void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
         {
             e.Cancel = true; // Prevent immediate termination
             cts.Cancel();
         }
-        
+
         System.Console.CancelKeyPress += OnCancelKeyPress;
-        
+
         try
         {
             await _console.Status()
@@ -229,7 +229,7 @@ public class ConsoleOutput
                 {
                     // Start the operation
                     var operationTask = operation();
-                    
+
                     // Update status with elapsed time while waiting (every 1 second)
                     while (!operationTask.IsCompleted)
                     {
@@ -239,10 +239,10 @@ public class ConsoleOutput
                             ctx.Status($"{message} [dim](cancelling...)[/]");
                             throw new OperationCanceledException("Operation cancelled by user", cts.Token);
                         }
-                        
+
                         var elapsed = stopwatch.Elapsed;
                         ctx.Status($"{message} [dim]({FormatElapsed(elapsed)})[/]");
-                        
+
                         // Wait 1 second before updating, but also check if task completed or cancelled
                         try
                         {
@@ -256,7 +256,7 @@ public class ConsoleOutput
                             throw new OperationCanceledException("Operation cancelled by user", cts.Token);
                         }
                     }
-                    
+
                     result = await operationTask;
                 });
         }
@@ -280,19 +280,19 @@ public class ConsoleOutput
     public async Task WithSpinnerAsync(string message, Func<Task> operation, CancellationToken cancellationToken = default)
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-        
+
         // Create a linked token source that combines external token with Ctrl+C
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        
+
         // Handle Ctrl+C to cancel the operation
         void OnCancelKeyPress(object? sender, ConsoleCancelEventArgs e)
         {
             e.Cancel = true; // Prevent immediate termination
             cts.Cancel();
         }
-        
+
         System.Console.CancelKeyPress += OnCancelKeyPress;
-        
+
         try
         {
             await _console.Status()
@@ -303,7 +303,7 @@ public class ConsoleOutput
                 {
                     // Start the operation
                     var operationTask = operation();
-                    
+
                     // Update status with elapsed time while waiting (every 1 second)
                     while (!operationTask.IsCompleted)
                     {
@@ -313,10 +313,10 @@ public class ConsoleOutput
                             ctx.Status($"{message} [dim](cancelling...)[/]");
                             throw new OperationCanceledException("Operation cancelled by user", cts.Token);
                         }
-                        
+
                         var elapsed = stopwatch.Elapsed;
                         ctx.Status($"{message} [dim]({FormatElapsed(elapsed)})[/]");
-                        
+
                         // Wait 1 second before updating, but also check if task completed or cancelled
                         try
                         {
@@ -330,7 +330,7 @@ public class ConsoleOutput
                             throw new OperationCanceledException("Operation cancelled by user", cts.Token);
                         }
                     }
-                    
+
                     await operationTask;
                 });
         }
@@ -338,7 +338,7 @@ public class ConsoleOutput
         {
             System.Console.CancelKeyPress -= OnCancelKeyPress;
         }
-        
+
         stopwatch.Stop();
     }
 

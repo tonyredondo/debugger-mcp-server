@@ -36,28 +36,28 @@ public class ApiKeyAuthenticationHandlerTests : IDisposable
                 webBuilder.ConfigureServices(services =>
                 {
                     services.AddControllers();
-                    
+
                     // Configure API key authentication with specified key
                     services.AddAuthentication(ApiKeyAuthenticationOptions.SchemeName)
                         .AddScheme<ApiKeyAuthenticationOptions, ApiKeyAuthenticationHandler>(
                             ApiKeyAuthenticationOptions.SchemeName,
                             options => { options.ApiKey = apiKey; });
-                    
+
                     services.AddAuthorization();
                 });
-                
+
                 webBuilder.Configure(app =>
                 {
                     app.UseRouting();
                     app.UseAuthentication();
                     app.UseAuthorization();
-                    
+
                     app.UseEndpoints(endpoints =>
                     {
                         // Protected endpoint that requires authentication
                         endpoints.MapGet("/protected", () => Results.Ok(new { message = "Success" }))
                             .RequireAuthorization();
-                        
+
                         // Public endpoint (no auth required)
                         endpoints.MapGet("/public", () => Results.Ok(new { message = "Public" }));
                     });

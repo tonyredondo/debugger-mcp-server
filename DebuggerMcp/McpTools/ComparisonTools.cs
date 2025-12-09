@@ -67,7 +67,7 @@ public class ComparisonTools(
         // Validate input parameters
         ValidateSessionId(baselineSessionId);
         ValidateSessionId(comparisonSessionId);
-        
+
         // Sanitize user IDs to prevent path traversal attacks
         var sanitizedBaselineUserId = SanitizeUserId(baselineUserId);
         var sanitizedComparisonUserId = SanitizeUserId(comparisonUserId);
@@ -75,7 +75,7 @@ public class ComparisonTools(
         // Get both sessions with user ownership validation
         var baselineManager = GetSessionManager(baselineSessionId, sanitizedBaselineUserId);
         var comparisonManager = GetSessionManager(comparisonSessionId, sanitizedComparisonUserId);
-        
+
         // Validate that both dumps are open
         ValidateDumpIsOpen(baselineManager, baselineSessionId);
         ValidateDumpIsOpen(comparisonManager, comparisonSessionId);
@@ -83,11 +83,11 @@ public class ComparisonTools(
         // Create comparer and perform full comparison
         var comparer = new DumpComparer(baselineManager, comparisonManager);
         var result = await comparer.CompareAsync();
-        
+
         // Populate session identifiers for result tracking
         result.Baseline.SessionId = baselineSessionId;
         result.Comparison.SessionId = comparisonSessionId;
-        
+
         // Return JSON formatted result
         return DumpComparer.ToJson(result);
     }
@@ -119,7 +119,7 @@ public class ComparisonTools(
         // Validate input parameters
         ValidateSessionId(baselineSessionId);
         ValidateSessionId(comparisonSessionId);
-        
+
         // Sanitize user IDs to prevent path traversal attacks
         var sanitizedBaselineUserId = SanitizeUserId(baselineUserId);
         var sanitizedComparisonUserId = SanitizeUserId(comparisonUserId);
@@ -127,7 +127,7 @@ public class ComparisonTools(
         // Get both sessions with user ownership validation
         var baselineManager = GetSessionManager(baselineSessionId, sanitizedBaselineUserId);
         var comparisonManager = GetSessionManager(comparisonSessionId, sanitizedComparisonUserId);
-        
+
         // Validate that both dumps are open
         ValidateDumpIsOpen(baselineManager, baselineSessionId);
         ValidateDumpIsOpen(comparisonManager, comparisonSessionId);
@@ -135,7 +135,7 @@ public class ComparisonTools(
         // Create comparer and perform heap comparison only
         var comparer = new DumpComparer(baselineManager, comparisonManager);
         var heapComparison = await comparer.CompareHeapsAsync();
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(heapComparison, JsonOptions);
     }
@@ -165,7 +165,7 @@ public class ComparisonTools(
         // Validate input parameters
         ValidateSessionId(baselineSessionId);
         ValidateSessionId(comparisonSessionId);
-        
+
         // Sanitize user IDs to prevent path traversal attacks
         var sanitizedBaselineUserId = SanitizeUserId(baselineUserId);
         var sanitizedComparisonUserId = SanitizeUserId(comparisonUserId);
@@ -173,7 +173,7 @@ public class ComparisonTools(
         // Get both sessions with user ownership validation
         var baselineManager = GetSessionManager(baselineSessionId, sanitizedBaselineUserId);
         var comparisonManager = GetSessionManager(comparisonSessionId, sanitizedComparisonUserId);
-        
+
         // Validate that both dumps are open
         ValidateDumpIsOpen(baselineManager, baselineSessionId);
         ValidateDumpIsOpen(comparisonManager, comparisonSessionId);
@@ -181,7 +181,7 @@ public class ComparisonTools(
         // Create comparer and perform thread comparison only
         var comparer = new DumpComparer(baselineManager, comparisonManager);
         var threadComparison = await comparer.CompareThreadsAsync();
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(threadComparison, JsonOptions);
     }
@@ -211,7 +211,7 @@ public class ComparisonTools(
         // Validate input parameters
         ValidateSessionId(baselineSessionId);
         ValidateSessionId(comparisonSessionId);
-        
+
         // Sanitize user IDs to prevent path traversal attacks
         var sanitizedBaselineUserId = SanitizeUserId(baselineUserId);
         var sanitizedComparisonUserId = SanitizeUserId(comparisonUserId);
@@ -219,7 +219,7 @@ public class ComparisonTools(
         // Get both sessions with user ownership validation
         var baselineManager = GetSessionManager(baselineSessionId, sanitizedBaselineUserId);
         var comparisonManager = GetSessionManager(comparisonSessionId, sanitizedComparisonUserId);
-        
+
         // Validate that both dumps are open
         ValidateDumpIsOpen(baselineManager, baselineSessionId);
         ValidateDumpIsOpen(comparisonManager, comparisonSessionId);
@@ -227,7 +227,7 @@ public class ComparisonTools(
         // Create comparer and perform module comparison only
         var comparer = new DumpComparer(baselineManager, comparisonManager);
         var moduleComparison = await comparer.CompareModulesAsync();
-        
+
         // Return JSON formatted result
         return JsonSerializer.Serialize(moduleComparison, JsonOptions);
     }

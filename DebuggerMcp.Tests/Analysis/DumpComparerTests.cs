@@ -14,7 +14,6 @@ namespace DebuggerMcp.Tests.Analysis;
 /// </summary>
 public class DumpComparerTests
 {
-    #region Constructor Tests
 
     [Fact]
     public void Constructor_WithNullBaselineManager_ThrowsArgumentNullException()
@@ -50,9 +49,7 @@ public class DumpComparerTests
         Assert.NotNull(comparer);
     }
 
-    #endregion
 
-    #region CompareAsync Tests
 
     [Fact]
     public async Task CompareAsync_WithWinDbgManagers_ReturnsComparisonResult()
@@ -108,9 +105,7 @@ public class DumpComparerTests
         Assert.Equal("LLDB", result.Comparison.DebuggerType);
     }
 
-    #endregion
 
-    #region CompareHeapsAsync Tests
 
     [Fact]
     public async Task CompareHeapsAsync_WithMemoryGrowth_DetectsGrowth()
@@ -216,9 +211,7 @@ Total 6500 objects, 650000 bytes";
         Assert.Equal(1000, byteArrayType.Count);
     }
 
-    #endregion
 
-    #region CompareThreadsAsync Tests
 
     [Fact]
     public async Task CompareThreadsAsync_WithNewThreads_DetectsNewThreads()
@@ -309,9 +302,7 @@ Total 6500 objects, 650000 bytes";
         Assert.True(result.PotentialDeadlock);
     }
 
-    #endregion
 
-    #region CompareModulesAsync Tests
 
     [Fact]
     public async Task CompareModulesAsync_WithNewModules_DetectsNewModules()
@@ -398,9 +389,7 @@ Total 6500 objects, 650000 bytes";
         Assert.Contains("AAAA0000", result.RebasedModules[0].ComparisonBaseAddress.ToUpperInvariant());
     }
 
-    #endregion
 
-    #region ToJson Tests
 
     [Fact]
     public void ToJson_WithValidResult_ReturnsValidJson()
@@ -435,9 +424,7 @@ Total 6500 objects, 650000 bytes";
         Assert.Equal("session1", deserialized.Baseline.SessionId);
     }
 
-    #endregion
 
-    #region Summary Generation Tests
 
     [Fact]
     public async Task CompareAsync_GeneratesSummaryWithMemoryLeakWarning()
@@ -488,9 +475,7 @@ Total 6500 objects, 650000 bytes";
         Assert.Contains("new thread", result.Summary.ToLowerInvariant());
     }
 
-    #endregion
 
-    #region Helper Methods
 
     private static Mock<IDebuggerManager> CreateMockWinDbgManager(
         string heapOutput,
@@ -522,7 +507,6 @@ Total 6500 objects, 650000 bytes";
         return mock;
     }
 
-    #endregion
 }
 
 /// <summary>

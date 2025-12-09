@@ -16,23 +16,23 @@ namespace DebuggerMcp.Analysis;
 public class ProcessInfoExtractor
 {
     private readonly ILogger? _logger;
-    
+
     /// <summary>
     /// Default number of pointers to read from memory.
     /// Should be enough for most cases (argv + envp combined).
     /// </summary>
     private const int DefaultPointerCount = 512;
-    
+
     /// <summary>
     /// Maximum number of arguments to extract.
     /// </summary>
     private const int MaxArguments = 1000;
-    
+
     /// <summary>
     /// Maximum number of environment variables to extract.
     /// </summary>
     private const int MaxEnvironmentVariables = 2000;
-    
+
     /// <summary>
     /// Maximum string length to read (truncate longer strings).
     /// </summary>
@@ -130,7 +130,7 @@ public class ProcessInfoExtractor
         // Only works with LLDB on Linux/macOS
         if (debuggerManager.DebuggerType != "LLDB")
         {
-            _logger?.LogDebug("ProcessInfoExtractor: Skipping - not LLDB debugger (type: {Type})", 
+            _logger?.LogDebug("ProcessInfoExtractor: Skipping - not LLDB debugger (type: {Type})",
                 debuggerManager.DebuggerType);
             return null;
         }
@@ -148,7 +148,7 @@ public class ProcessInfoExtractor
                 return null;
             }
 
-            _logger?.LogDebug("ProcessInfoExtractor: Found main frame - argc={Argc}, argv={ArgvAddress}", 
+            _logger?.LogDebug("ProcessInfoExtractor: Found main frame - argc={Argc}, argv={ArgvAddress}",
                 argc, argvAddress);
 
             // Determine pointer size from platform info (default to 64-bit)
@@ -267,7 +267,7 @@ public class ProcessInfoExtractor
             return (envVar, false); // No '=' found or empty key
 
         var key = envVar.Substring(0, equalsIndex);
-        
+
         // Check if key matches any sensitive pattern
         foreach (var regex in SensitiveKeyRegexes)
         {
@@ -300,7 +300,7 @@ public class ProcessInfoExtractor
             return output;
 
         var key = match.Groups[1].Value;
-        
+
         // Check if key matches any sensitive pattern
         foreach (var regex in SensitiveKeyRegexes)
         {
@@ -381,10 +381,10 @@ public class ProcessInfoExtractor
         // Parse LLDB memory read output:
         // 64-bit: 0xffffefcba618: 0x0000ffffefcbbb24 0x0000ffffefcbbb2b
         // 32-bit: 0xffffefcba618: 0x12345678 0x87654321
-        
+
         var pointers = new List<string>();
         var lines = memoryOutput.Split('\n');
-        
+
         // Regex pattern based on pointer size
         // 64-bit: 16 hex digits, 32-bit: 8 hex digits
         var hexDigits = pointerSize == 64 ? 16 : 8;
@@ -395,9 +395,9 @@ public class ProcessInfoExtractor
             // Skip the address prefix (before the colon)
             var colonIndex = line.IndexOf(':');
             var valuePart = colonIndex >= 0 ? line.Substring(colonIndex + 1) : line;
-            
+
             var matches = Regex.Matches(valuePart, pattern, RegexOptions.IgnoreCase);
-            
+
             foreach (Match match in matches)
             {
                 pointers.Add("0x" + match.Groups[1].Value);
@@ -464,12 +464,12 @@ public class ProcessInfoExtractor
     {
         // 64-bit: 0x0000000000000000, 32-bit: 0x00000000
         var nullPattern = pointerSize == 64 ? "0x0000000000000000" : "0x00000000";
-        
+
         if (ptr.Equals(nullPattern, StringComparison.OrdinalIgnoreCase))
         {
             return true;
         }
-        
+
         // Also check for short form or stripped zeros
         var trimmed = ptr.TrimStart('0', 'x', 'X');
         return string.IsNullOrEmpty(trimmed) || trimmed == "0";
@@ -530,7 +530,7 @@ public class ProcessInfoExtractor
     /// <param name="rawCommands">Optional dictionary to store executed commands.</param>
     /// <returns>The string value, or null if reading failed.</returns>
     private async Task<string?> ReadStringAtAddressAsync(
-        IDebuggerManager debuggerManager, 
+        IDebuggerManager debuggerManager,
         string address,
         Dictionary<string, string>? rawCommands = null)
     {
@@ -548,22 +548,22 @@ public class ProcessInfoExtractor
 
             // Parse output: (char *) $317 = 0x0000ffffefcbbb24 "dotnet"
             // Also handle: (char *) $1 = 0x... "value with \"quotes\""
-            var match = Regex.Match(output, @"\(char\s*\*\)\s*\$\d+\s*=\s*0x[0-9a-fA-F]+\s+""(.*)""$", 
+            var match = Regex.Match(output, @"\(char\s*\*\)\s*\$\d+\s*=\s*0x[0-9a-fA-F]+\s+""(.*)""$",
                 RegexOptions.Singleline);
-            
+
             if (match.Success)
             {
                 var value = match.Groups[1].Value;
-                
+
                 // Unescape common escape sequences
                 value = UnescapeString(value);
-                
+
                 // Limit string length
                 if (value.Length > MaxStringLength)
                 {
                     value = value.Substring(0, MaxStringLength) + "...";
                 }
-                
+
                 return value;
             }
 

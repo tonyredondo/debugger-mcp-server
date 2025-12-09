@@ -1,6 +1,7 @@
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Reporting;
 using DebuggerMcp.Watches;
+#pragma warning disable CS8602 // Test data intentionally initializes just enough fields
 
 namespace DebuggerMcp.Tests.Reporting;
 
@@ -10,6 +11,7 @@ namespace DebuggerMcp.Tests.Reporting;
 public class HtmlReportGeneratorTests
 {
     private readonly HtmlReportGenerator _generator;
+    private readonly ReportMetadata _metadata = new();
 
     public HtmlReportGeneratorTests()
     {
@@ -33,7 +35,7 @@ public class HtmlReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.NotNull(result);
@@ -49,7 +51,7 @@ public class HtmlReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.Contains("Executive Summary", result);
@@ -62,7 +64,7 @@ public class HtmlReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, ReportOptions.FullReport, null!);
+        var result = _generator.Generate(analysis, ReportOptions.FullReport, _metadata);
 
         // Assert
         Assert.Contains("Generated", result);
@@ -79,7 +81,7 @@ public class HtmlReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.Contains("<html", result);
@@ -96,7 +98,7 @@ public class HtmlReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.Contains("<style>", result);
@@ -111,7 +113,7 @@ public class HtmlReportGeneratorTests
         var analysis = CreateMinimalAnalysis();
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.Contains("class=\"container\"", result);
@@ -129,7 +131,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { Title = "My Custom Report" };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("<title>My Custom Report</title>", result);
@@ -148,7 +150,7 @@ public class HtmlReportGeneratorTests
         };
 
         // Act
-        var result = _generator.Generate(analysis, null!, metadata);
+        var result = _generator.Generate(analysis, ReportOptions.FullReport, metadata);
 
         // Assert
         Assert.Contains("test-dump-123", result);
@@ -168,7 +170,7 @@ public class HtmlReportGeneratorTests
         analysis.Summary = new AnalysisSummary { Description = "Critical crash due to null pointer." };
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.Contains("Critical crash due to null pointer.", result);
@@ -183,7 +185,7 @@ public class HtmlReportGeneratorTests
         analysis.Summary = null;
 
         // Act
-        var result = _generator.Generate(analysis, null!, null!);
+        var result = _generator.Generate(analysis, null!, _metadata);
 
         // Assert
         Assert.Contains("No summary available.", result);
@@ -207,7 +209,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeCrashInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("System.NullReferenceException", result);
@@ -224,7 +226,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeCrashInfo = false };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.DoesNotContain("TestException", result);
@@ -240,9 +242,9 @@ public class HtmlReportGeneratorTests
         // Arrange
         var analysis = CreateMinimalAnalysis();
         analysis.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
-        analysis.Threads.All.Add(new ThreadInfo 
-        { 
-            ThreadId = "1", 
+        analysis.Threads.All.Add(new ThreadInfo
+        {
+            ThreadId = "1",
             IsFaulting = true,
             CallStack = new List<StackFrame>
         {
@@ -253,7 +255,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeCallStacks = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Call Stack", result);
@@ -268,9 +270,9 @@ public class HtmlReportGeneratorTests
         // Arrange
         var analysis = CreateMinimalAnalysis();
         analysis.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
-        analysis.Threads.All.Add(new ThreadInfo 
-        { 
-            ThreadId = "1", 
+        analysis.Threads.All.Add(new ThreadInfo
+        {
+            ThreadId = "1",
             IsFaulting = true,
             CallStack = Enumerable.Range(0, 20)
             .Select(i => new StackFrame { FrameNumber = i, Module = "mod", Function = $"Func{i}" })
@@ -279,7 +281,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeCallStacks = true, MaxCallStackFrames = 5 };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("5 of 20 frames", result);
@@ -291,9 +293,9 @@ public class HtmlReportGeneratorTests
         // Arrange
         var analysis = CreateMinimalAnalysis();
         analysis.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
-        analysis.Threads.All.Add(new ThreadInfo 
-        { 
-            ThreadId = "1", 
+        analysis.Threads.All.Add(new ThreadInfo
+        {
+            ThreadId = "1",
             IsFaulting = true,
             CallStack = new List<StackFrame>
         {
@@ -311,7 +313,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeCallStacks = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("href=\"https://github.com/user/repo", result);
@@ -325,9 +327,9 @@ public class HtmlReportGeneratorTests
         // Arrange
         var analysis = CreateMinimalAnalysis();
         analysis.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>() };
-        analysis.Threads.All.Add(new ThreadInfo 
-        { 
-            ThreadId = "1", 
+        analysis.Threads.All.Add(new ThreadInfo
+        {
+            ThreadId = "1",
             IsFaulting = true,
             CallStack = new List<StackFrame>
         {
@@ -343,7 +345,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeCallStacks = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Program.cs:42", result);
@@ -370,7 +372,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeThreadInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Thread Information", result);
@@ -392,7 +394,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeThreadInfo = true, MaxThreadsToShow = 10 };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert - table should be present
         Assert.Contains("<table>", result);
@@ -423,7 +425,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeDotNetInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains(".NET Runtime", result);
@@ -443,7 +445,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeDotNetInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Async Deadlock", result);
@@ -462,10 +464,10 @@ public class HtmlReportGeneratorTests
         analysis.Memory = new MemoryInfo
         {
             LeakAnalysis = new LeakAnalysis
-        {
-            Detected = true,
-            EstimatedLeakedBytes = 10 * 1024 * 1024,
-            TopConsumers = new List<MemoryConsumer>
+            {
+                Detected = true,
+                TotalHeapBytes = 10 * 1024 * 1024,
+                TopConsumers = new List<MemoryConsumer>
             {
                 new MemoryConsumer { TypeName = "LeakyClass", Count = 1000, TotalSize = 5 * 1024 * 1024 }
                 }
@@ -474,7 +476,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeMemoryLeakInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Memory Analysis", result);
@@ -495,15 +497,15 @@ public class HtmlReportGeneratorTests
         {
             All = new List<ThreadInfo>(),
             Deadlock = new DeadlockInfo
-        {
-            Detected = true,
-            InvolvedThreads = new List<string> { "1", "2" }
+            {
+                Detected = true,
+                InvolvedThreads = new List<string> { "1", "2" }
             }
         };
         var options = new ReportOptions { IncludeDeadlockInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("DEADLOCK DETECTED", result);
@@ -520,7 +522,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeDeadlockInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.DoesNotContain("DEADLOCK DETECTED", result);
@@ -561,7 +563,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeWatchResults = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Watch Expression", result);
@@ -599,7 +601,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeSecurityAnalysis = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Security Analysis", result);
@@ -619,19 +621,19 @@ public class HtmlReportGeneratorTests
         };
         var options = new ReportOptions { IncludeSecurityAnalysis = true };
 
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
         Assert.Contains("Critical", result);
         Assert.Contains("alert-danger", result);
 
         // Test Low
         analysis.Security.OverallRisk = "Low";
-        result = _generator.Generate(analysis, options, null!);
+        result = _generator.Generate(analysis, options, _metadata);
         Assert.Contains("Low", result);
         Assert.Contains("alert-success", result);
 
         // Test None
         analysis.Security.OverallRisk = "None";
-        result = _generator.Generate(analysis, options, null!);
+        result = _generator.Generate(analysis, options, _metadata);
         Assert.Contains("None", result);
     }
 
@@ -652,7 +654,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeModules = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Loaded Modules", result);
@@ -671,7 +673,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeModules = true, MaxModulesToShow = 20 };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("20 of 100 modules", result);
@@ -697,7 +699,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeRecommendations = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.Contains("Recommendations", result);
@@ -717,7 +719,7 @@ public class HtmlReportGeneratorTests
         var metadata = new ReportMetadata { ServerVersion = "1.2.3" };
 
         // Act
-        var result = _generator.Generate(analysis, null!, metadata);
+        var result = _generator.Generate(analysis, ReportOptions.FullReport, metadata);
 
         // Assert
         Assert.Contains("<footer>", result);
@@ -739,7 +741,7 @@ public class HtmlReportGeneratorTests
         var options = new ReportOptions { IncludeCrashInfo = true };
 
         // Act
-        var result = _generator.Generate(analysis, options, null!);
+        var result = _generator.Generate(analysis, options, _metadata);
 
         // Assert
         Assert.DoesNotContain("<script>", result);
@@ -763,4 +765,3 @@ public class HtmlReportGeneratorTests
         };
     }
 }
-

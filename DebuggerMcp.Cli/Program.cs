@@ -276,7 +276,7 @@ public class Program
                 var statusColor = server.IsOnline ? "green" : "red";
                 var status = server.IsOnline ? "online" : server.ErrorMessage ?? "offline";
                 var arch = server.Capabilities?.Architecture ?? "-";
-                var distro = server.Capabilities?.IsAlpine == true ? "alpine" : 
+                var distro = server.Capabilities?.IsAlpine == true ? "alpine" :
                     (server.Capabilities?.Distribution ?? "-");
                 var name = server.Name;
 
@@ -557,15 +557,15 @@ public class Program
         const string DefaultServerUrl = "http://localhost:5000";
 
         // Auto-connect: use configured URL or try default localhost
-        var serverUrl = !string.IsNullOrEmpty(settings.ServerUrl) 
-            ? settings.ServerUrl 
+        var serverUrl = !string.IsNullOrEmpty(settings.ServerUrl)
+            ? settings.ServerUrl
             : DefaultServerUrl;
 
         try
         {
             output.Dim($"Connecting to {serverUrl}...");
             httpClient.Configure(serverUrl, settings.ApiKey, settings.Timeout);
-            
+
             // Use the normalized URL from the client (has http:// scheme added if missing)
             var normalizedUrl = httpClient.ServerUrl!;
             var health = await httpClient.CheckHealthAsync();
@@ -590,12 +590,12 @@ public class Program
                     }
                     output.KeyValue("Debugger", serverInfo.DebuggerType);
                     output.KeyValue("Runtime", serverInfo.DotNetVersion);
-                    
+
                     if (serverInfo.IsAlpine)
                     {
                         output.Warning("⚠️  Alpine Linux host - can only debug Alpine .NET dumps");
                     }
-                    
+
                     if (serverInfo.InstalledRuntimes.Count > 0)
                     {
                         var majorVersions = serverInfo.InstalledRuntimes
@@ -1694,14 +1694,14 @@ public class Program
         try
         {
             await TextCopy.ClipboardService.SetTextAsync(state.LastCommandResult!);
-            
+
             // Show summary of what was copied
             var resultLength = state.LastCommandResult!.Length;
             var lineCount = state.LastCommandResult.Split('\n').Length;
-            var sizeDisplay = resultLength > 1024 
-                ? $"{resultLength / 1024.0:F1} KB" 
+            var sizeDisplay = resultLength > 1024
+                ? $"{resultLength / 1024.0:F1} KB"
                 : $"{resultLength} bytes";
-            
+
             output.Success($"Copied to clipboard!");
             output.KeyValue("Command", state.LastCommandName ?? "unknown");
             output.KeyValue("Size", sizeDisplay);
@@ -1727,7 +1727,7 @@ public class Program
         if (state.IsConnected)
         {
             output.KeyValue("Server", state.ServerDisplay);
-            
+
             // Show server host info if available
             if (state.ServerInfo != null)
             {
@@ -1735,12 +1735,12 @@ public class Program
                 output.KeyValue("Host", $"{info.Description}{(info.IsDocker ? " (Docker)" : "")}");
                 output.KeyValue("Debugger", info.DebuggerType);
                 output.KeyValue("Runtime", info.DotNetVersion);
-                
+
                 if (info.IsAlpine)
                 {
                     output.Warning("⚠️  Alpine host - can only debug Alpine .NET dumps");
                 }
-                
+
                 if (info.InstalledRuntimes.Count > 0)
                 {
                     var majorVersions = info.InstalledRuntimes
@@ -1828,7 +1828,7 @@ public class Program
         {
             // Configure HTTP client
             httpClient.Configure(serverUrl, apiKey, state.Settings.Timeout);
-            
+
             // Use the normalized URL from the client (has http:// scheme added if missing)
             var normalizedUrl = httpClient.ServerUrl!;
 
@@ -1859,12 +1859,12 @@ public class Program
                     }
                     output.KeyValue("Debugger", serverInfo.DebuggerType);
                     output.KeyValue("Runtime", serverInfo.DotNetVersion);
-                    
+
                     if (serverInfo.IsAlpine)
                     {
                         output.Warning("⚠️  Alpine Linux host - can only debug Alpine .NET dumps");
                     }
-                    
+
                     if (serverInfo.InstalledRuntimes.Count > 0)
                     {
                         // Show major versions available
@@ -2037,7 +2037,6 @@ public class Program
         }
     }
 
-    #region File Operation Handlers
 
     /// <summary>
     /// Handles the upload command.
@@ -2123,7 +2122,7 @@ public class Program
             {
                 output.KeyValue("Runtime", $".NET {result.RuntimeVersion}");
             }
-            
+
             // Show architecture
             if (!string.IsNullOrEmpty(result.Architecture))
             {
@@ -2141,7 +2140,7 @@ public class Program
                 {
                     output.KeyValue("Host Type", "glibc (Debian/Ubuntu/etc.)");
                 }
-                
+
                 // Check for host mismatch with server
                 CheckDumpServerCompatibility(result.IsAlpineDump, result.Architecture, state, output);
             }
@@ -2278,10 +2277,10 @@ public class Program
             {
                 // Show full ID for easy copying, highlight first 8 chars for partial matching
                 var fullId = dump.DumpId;
-                var displayId = fullId.Length > 8 
+                var displayId = fullId.Length > 8
                     ? $"[yellow]{fullId[..8]}[/]{fullId[8..]}"
                     : $"[yellow]{fullId}[/]";
-                
+
                 // Check for host compatibility (Alpine vs glibc)
                 var isHostIncompatible = false;
                 if (dump.IsAlpineDump.HasValue && serverIsAlpine.HasValue)
@@ -2289,7 +2288,7 @@ public class Program
                     isHostIncompatible = dump.IsAlpineDump.Value != serverIsAlpine.Value;
                     if (isHostIncompatible) hasIncompatibleDumps = true;
                 }
-                
+
                 // Check for architecture compatibility
                 var isArchIncompatible = false;
                 if (!string.IsNullOrEmpty(dump.Architecture) && !string.IsNullOrEmpty(serverArch))
@@ -2299,7 +2298,7 @@ public class Program
                     isArchIncompatible = !string.Equals(normalizedDumpArch, normalizedServerArch, StringComparison.OrdinalIgnoreCase);
                     if (isArchIncompatible) hasIncompatibleDumps = true;
                 }
-                
+
                 // Show Alpine/glibc indicator with compatibility warning
                 var hostType = dump.IsAlpineDump switch
                 {
@@ -2309,7 +2308,7 @@ public class Program
                     false => "glibc",
                     null => "-"
                 };
-                
+
                 // Show runtime version (e.g., "9.0.10" -> ".NET 9.0")
                 var runtime = "-";
                 if (!string.IsNullOrEmpty(dump.RuntimeVersion))
@@ -2317,14 +2316,14 @@ public class Program
                     var parts = dump.RuntimeVersion.Split('.');
                     runtime = parts.Length >= 2 ? $".NET {parts[0]}.{parts[1]}" : $".NET {dump.RuntimeVersion}";
                 }
-                
+
                 // Architecture with compatibility warning
                 var arch = dump.Architecture ?? "-";
                 if (isArchIncompatible && !string.IsNullOrEmpty(dump.Architecture))
                 {
                     arch = $"[red]{dump.Architecture} ⚠[/]";
                 }
-                    
+
                 table.AddRow(
                     displayId,
                     dump.FileName ?? "(unknown)",
@@ -2332,13 +2331,13 @@ public class Program
                     runtime,
                     arch,
                     hostType,
-                    dump.UploadedAt == default 
-                        ? "(unknown)" 
+                    dump.UploadedAt == default
+                        ? "(unknown)"
                         : dump.UploadedAt.ToString("yyyy-MM-dd HH:mm"));
             }
 
             console.Write(table);
-            
+
             // Show warning note if there are incompatible dumps
             if (hasIncompatibleDumps && state.ServerInfo != null)
             {
@@ -2456,19 +2455,19 @@ public class Program
             output.KeyValue("File Name", dump.FileName ?? "(unknown)");
             output.KeyValue("Size", dump.FormattedSize);
             output.KeyValue("Format", dump.DumpFormat ?? "(unknown)");
-            
+
             // Show runtime version
             if (!string.IsNullOrEmpty(dump.RuntimeVersion))
             {
                 output.KeyValue("Runtime", $".NET {dump.RuntimeVersion}");
             }
-            
+
             // Show architecture
             if (!string.IsNullOrEmpty(dump.Architecture))
             {
                 output.KeyValue("Architecture", dump.Architecture);
             }
-            
+
             // Show Alpine/glibc host type
             if (dump.IsAlpineDump.HasValue)
             {
@@ -2480,7 +2479,7 @@ public class Program
                 {
                     output.KeyValue("Host Type", "glibc (Debian/Ubuntu/etc.)");
                 }
-                
+
                 // Check for host mismatch with server
                 CheckDumpServerCompatibility(dump.IsAlpineDump, dump.Architecture, state, output);
             }
@@ -2489,7 +2488,7 @@ public class Program
                 // Even if we don't know Alpine status, check architecture
                 CheckDumpServerCompatibility(null, dump.Architecture, state, output);
             }
-            
+
             output.KeyValue("Uploaded At", dump.UploadedAt.ToString("yyyy-MM-dd HH:mm:ss UTC"));
 
             if (!string.IsNullOrEmpty(dump.Description))
@@ -2975,7 +2974,7 @@ public class Program
             // Build and display tree view
             var tree = BuildSymbolTree(result.Symbols, resolvedDumpId);
             console.Write(tree);
-            
+
             output.WriteLine();
             output.Dim($"Total: {result.Symbols.Count} files");
         }
@@ -2992,29 +2991,29 @@ public class Program
             }
         }
     }
-    
+
     /// <summary>
     /// Builds a tree view from a list of symbol file paths.
     /// </summary>
     private static Tree BuildSymbolTree(List<string> symbols, string rootLabel)
     {
         var tree = new Tree($"[yellow]📁 .symbols_{rootLabel.Split('-')[0]}[/]");
-        
+
         // Build directory structure
         var rootNode = new Dictionary<string, object>();
-        
+
         foreach (var symbol in symbols.OrderBy(s => s))
         {
             // Normalize path separators
             var normalizedPath = symbol.Replace('\\', '/');
             var parts = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-            
+
             var currentNode = rootNode;
             for (var i = 0; i < parts.Length; i++)
             {
                 var part = parts[i];
                 var isFile = i == parts.Length - 1;
-                
+
                 if (isFile)
                 {
                     // Store file as a string marker
@@ -3031,13 +3030,13 @@ public class Program
                 }
             }
         }
-        
+
         // Convert to Spectre.Console tree
         AddNodesToTree(tree, rootNode);
-        
+
         return tree;
     }
-    
+
     /// <summary>
     /// Recursively adds nodes to a Spectre.Console tree.
     /// </summary>
@@ -3047,11 +3046,11 @@ public class Program
         var sortedKeys = nodes.Keys
             .OrderBy(k => nodes[k] is string ? 1 : 0) // Directories first
             .ThenBy(k => k);
-        
+
         foreach (var key in sortedKeys)
         {
             var value = nodes[key];
-            
+
             if (value is string) // File
             {
                 var icon = GetFileIcon(key);
@@ -3064,7 +3063,7 @@ public class Program
             }
         }
     }
-    
+
     /// <summary>
     /// Gets an appropriate icon for a file based on its extension.
     /// </summary>
@@ -3329,7 +3328,7 @@ public class Program
             ShowDatadogSymbolsHelp(output);
             return;
         }
-        
+
         // Parse subcommand
         var subcommand = args[0].ToLowerInvariant();
         var subArgs = args.Skip(1).ToArray();
@@ -3383,12 +3382,12 @@ public class Program
     {
         output.Header("Datadog Symbols - Download debug symbols from Azure Pipelines");
         output.WriteLine();
-        
+
         output.Markup("[bold]DESCRIPTION[/]");
         output.Dim("  Download debug symbols for Datadog.Trace and related assemblies from Azure Pipelines.");
         output.Dim("  Symbols enable detailed stack traces in crash dumps containing Datadog libraries.");
         output.WriteLine();
-        
+
         output.Markup("[bold]SUBCOMMANDS[/]");
         output.Markup("  [green]download[/]              Auto-detect assemblies from dump and download symbols");
         output.Markup("  [green]download <sha>[/]        Download symbols for a specific commit SHA");
@@ -3397,7 +3396,7 @@ public class Program
         output.Markup("  [green]config[/]                Show configuration and status");
         output.Markup("  [green]help[/]                  Show this help");
         output.WriteLine();
-        
+
         output.Markup("[bold]OPTIONS (download)[/]");
         output.Markup("  [cyan]--tfm <framework>[/]     Target framework (e.g., net6.0, netcoreapp3.1)");
         output.Markup("  [cyan]--force-version[/]       Enable version/tag fallback if exact SHA not found");
@@ -3406,7 +3405,7 @@ public class Program
         output.Markup("[bold]OPTIONS (clear)[/]");
         output.Markup("  [cyan]--all, -a[/]             Also clear API caches (build/release lookups)");
         output.WriteLine();
-        
+
         output.Markup("[bold]EXAMPLES[/]");
         output.Markup("  [yellow]symbols datadog download[/]");
         output.Dim("    Auto-detect Datadog assemblies and download symbols (SHA match only)");
@@ -3429,7 +3428,7 @@ public class Program
         output.Markup("  [yellow]symbols datadog clear --all[/]");
         output.Dim("    Clear symbols and API caches (force fresh lookup)");
         output.WriteLine();
-        
+
         output.Markup("[bold]ENVIRONMENT VARIABLES[/]");
         output.Markup("  [cyan]DATADOG_TRACE_SYMBOLS_ENABLED[/]         Enable/disable (default: true)");
         output.Markup("  [cyan]DATADOG_TRACE_SYMBOLS_PAT[/]             Azure DevOps PAT for private access");
@@ -3510,11 +3509,11 @@ public class Program
                     var root = doc.RootElement;
 
                     // Check if the operation succeeded
-                    var isSuccess = root.TryGetProperty("success", out var successProp) && 
+                    var isSuccess = root.TryGetProperty("success", out var successProp) &&
                                    successProp.ValueKind == System.Text.Json.JsonValueKind.True;
 
                     // Show detected assemblies
-                    if (root.TryGetProperty("datadogAssemblies", out var assemblies) && 
+                    if (root.TryGetProperty("datadogAssemblies", out var assemblies) &&
                         assemblies.ValueKind == System.Text.Json.JsonValueKind.Array &&
                         assemblies.GetArrayLength() > 0)
                     {
@@ -3542,39 +3541,39 @@ public class Program
                     }
 
                     // Show download result
-                    if (root.TryGetProperty("downloadResult", out var dl) && 
+                    if (root.TryGetProperty("downloadResult", out var dl) &&
                         dl.ValueKind == System.Text.Json.JsonValueKind.Object)
                     {
                         output.Success("Symbols downloaded!");
-                        
+
                         // Show source (GitHub Releases vs Azure Pipelines)
-                        var isGitHub = dl.TryGetProperty("buildUrl", out var urlProp) && 
+                        var isGitHub = dl.TryGetProperty("buildUrl", out var urlProp) &&
                                       urlProp.GetString()?.Contains("github.com") == true;
-                        
+
                         if (dl.TryGetProperty("buildNumber", out var buildNum))
                             output.KeyValue(isGitHub ? "Release" : "Build", buildNum.GetString() ?? "");
-                        
-                        if (dl.TryGetProperty("buildId", out var dlBuildId) && 
+
+                        if (dl.TryGetProperty("buildId", out var dlBuildId) &&
                             dlBuildId.ValueKind == System.Text.Json.JsonValueKind.Number)
                             output.KeyValue("Build ID", dlBuildId.GetInt32().ToString());
-                        
-                        if (dl.TryGetProperty("downloadedArtifacts", out var artifacts) && 
+
+                        if (dl.TryGetProperty("downloadedArtifacts", out var artifacts) &&
                             artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
                             output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
-                        
+
                         // Only show files extracted if > 0 (can be 0 when cached)
-                        if (dl.TryGetProperty("filesExtracted", out var files) && 
+                        if (dl.TryGetProperty("filesExtracted", out var files) &&
                             files.ValueKind == System.Text.Json.JsonValueKind.Number &&
                             files.GetInt32() > 0)
                             output.KeyValue("Files Extracted", files.GetInt32().ToString());
-                        
+
                         // Show source URL
                         if (urlProp.ValueKind == System.Text.Json.JsonValueKind.String)
                             output.Dim($"Source: {urlProp.GetString()}");
                     }
 
                     // Show load result
-                    if (root.TryGetProperty("symbolsLoaded", out var loaded) && 
+                    if (root.TryGetProperty("symbolsLoaded", out var loaded) &&
                         loaded.ValueKind == System.Text.Json.JsonValueKind.Object)
                     {
                         output.WriteLine();
@@ -3586,7 +3585,7 @@ public class Program
                             managed.ValueKind == System.Text.Json.JsonValueKind.Number)
                             output.KeyValue("Managed Symbol Paths", managed.GetInt32().ToString());
                     }
-                    
+
                     // Show SHA mismatch warning if we fell back from commit to version
                     if (root.TryGetProperty("downloadResult", out var dlResult) &&
                         dlResult.TryGetProperty("shaMismatch", out var shaMismatch) &&
@@ -3596,16 +3595,16 @@ public class Program
                         output.Warning("Note: Exact commit SHA not found - downloaded symbols by version tag.");
                         output.Dim("  The symbols should match, but are from a release build rather than the exact commit.");
                     }
-                    
+
                     // Show PDB patching results if any
                     if (root.TryGetProperty("pdbsPatched", out var pdbsPatched) &&
                         pdbsPatched.ValueKind == System.Text.Json.JsonValueKind.Object)
                     {
-                        var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched) 
+                        var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched)
                             ? patched.GetInt32() : 0;
-                        var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified) 
+                        var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified)
                             ? verified.GetInt32() : 0;
-                        
+
                         if (patchedCount > 0)
                         {
                             output.WriteLine();
@@ -3621,20 +3620,20 @@ public class Program
                             {
                                 output.Error($"⚙ Patched {patchedCount} PDB file(s), but verification FAILED:");
                             }
-                            
+
                             if (pdbsPatched.TryGetProperty("files", out var patchedFiles) &&
                                 patchedFiles.ValueKind == System.Text.Json.JsonValueKind.Array)
                             {
                                 foreach (var patchedFile in patchedFiles.EnumerateArray())
                                 {
-                                    var fileName = patchedFile.TryGetProperty("file", out var f) 
+                                    var fileName = patchedFile.TryGetProperty("file", out var f)
                                         ? f.GetString() : "unknown";
                                     var fileVerified = patchedFile.TryGetProperty("verified", out var fv) && fv.GetBoolean();
                                     var checkmark = fileVerified ? "✓" : "✗";
                                     output.Dim($"  {checkmark} {fileName}");
                                 }
                             }
-                            
+
                             if (verifiedCount == patchedCount)
                             {
                                 output.Dim("  This allows SOS to load symbols despite the version mismatch.");
@@ -3696,35 +3695,35 @@ public class Program
             else
             {
                 output.Success("Datadog symbols downloaded!");
-                
+
                 // Pretty print the JSON result
                 try
                 {
                     using var doc = System.Text.Json.JsonDocument.Parse(result);
                     var root = doc.RootElement;
-                    
+
                     // Determine source type
-                    var isGitHub = root.TryGetProperty("buildUrl", out var urlProp) && 
+                    var isGitHub = root.TryGetProperty("buildUrl", out var urlProp) &&
                                   urlProp.GetString()?.Contains("github.com") == true;
-                    
+
                     if (root.TryGetProperty("buildNumber", out var buildNumElem))
                         output.KeyValue(isGitHub ? "Release" : "Build", buildNumElem.GetString() ?? "");
-                    
+
                     if (root.TryGetProperty("buildId", out var buildIdElem) &&
                         buildIdElem.ValueKind == System.Text.Json.JsonValueKind.Number)
                         output.KeyValue("Build ID", buildIdElem.GetInt32().ToString());
-                    
-                    if (root.TryGetProperty("downloadedArtifacts", out var artifacts) && 
+
+                    if (root.TryGetProperty("downloadedArtifacts", out var artifacts) &&
                         artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
                         output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
-                    
+
                     // Only show files extracted if > 0 (can be 0 when cached)
                     if (root.TryGetProperty("filesExtracted", out var files) &&
                         files.ValueKind == System.Text.Json.JsonValueKind.Number &&
                         files.GetInt32() > 0)
                         output.KeyValue("Files Extracted", files.GetInt32().ToString());
-                    
-                    if (root.TryGetProperty("symbolsLoaded", out var loaded) && 
+
+                    if (root.TryGetProperty("symbolsLoaded", out var loaded) &&
                         loaded.ValueKind == System.Text.Json.JsonValueKind.Object)
                     {
                         if (loaded.TryGetProperty("nativeSymbolsLoaded", out var native) &&
@@ -3734,26 +3733,26 @@ public class Program
                             managed.ValueKind == System.Text.Json.JsonValueKind.Number)
                             output.KeyValue("Managed Paths", managed.GetInt32().ToString());
                     }
-                    
+
                     if (urlProp.ValueKind == System.Text.Json.JsonValueKind.String)
                         output.Dim($"Source: {urlProp.GetString()}");
-                    
+
                     // Show SHA mismatch warning and PDB patching info
                     if (root.TryGetProperty("shaMismatch", out var shaMismatch) &&
                         shaMismatch.ValueKind == System.Text.Json.JsonValueKind.True)
                     {
                         output.WriteLine();
                         output.Warning("Note: Exact commit SHA not found - downloaded symbols by version tag.");
-                        
+
                         // Show PDB patching info if any PDBs were patched
                         if (root.TryGetProperty("pdbsPatched", out var pdbsPatched) &&
                             pdbsPatched.ValueKind == System.Text.Json.JsonValueKind.Object)
                         {
-                            var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched) 
+                            var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched)
                                 ? patched.GetInt32() : 0;
-                            var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified) 
+                            var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified)
                                 ? verified.GetInt32() : 0;
-                            
+
                             if (patchedCount > 0)
                             {
                                 output.WriteLine();
@@ -3769,20 +3768,20 @@ public class Program
                                 {
                                     output.Error($"⚙ Patched {patchedCount} PDB file(s), but verification FAILED:");
                                 }
-                                
+
                                 if (pdbsPatched.TryGetProperty("files", out var patchedFiles) &&
                                     patchedFiles.ValueKind == System.Text.Json.JsonValueKind.Array)
                                 {
                                     foreach (var patchedFile in patchedFiles.EnumerateArray())
                                     {
-                                        var fileName = patchedFile.TryGetProperty("file", out var f) 
+                                        var fileName = patchedFile.TryGetProperty("file", out var f)
                                             ? f.GetString() : "unknown";
                                         var fileVerified = patchedFile.TryGetProperty("verified", out var fv) && fv.GetBoolean();
                                         var checkmark = fileVerified ? "✓" : "✗";
                                         output.Dim($"  {checkmark} {fileName}");
                                     }
                                 }
-                                
+
                                 if (verifiedCount == patchedCount)
                                 {
                                     output.Dim("  This allows SOS to load symbols despite the version mismatch.");
@@ -3847,7 +3846,7 @@ public class Program
                 {
                     using var doc = System.Text.Json.JsonDocument.Parse(result);
                     var root = doc.RootElement;
-                    
+
                     if (root.TryGetProperty("build", out var build))
                     {
                         output.Header("Build Information");
@@ -3864,10 +3863,10 @@ public class Program
                     if (root.TryGetProperty("artifactsByCategory", out var categories))
                     {
                         output.Header("Available Artifacts");
-                        
+
                         void PrintCategory(string name, string propName)
                         {
-                            if (categories.TryGetProperty(propName, out var items) && 
+                            if (categories.TryGetProperty(propName, out var items) &&
                                 items.ValueKind == System.Text.Json.JsonValueKind.Array &&
                                 items.GetArrayLength() > 0)
                             {
@@ -3927,12 +3926,12 @@ public class Program
             else
             {
                 output.Header("Datadog Symbol Download Configuration");
-                
+
                 try
                 {
                     using var doc = System.Text.Json.JsonDocument.Parse(result);
                     var root = doc.RootElement;
-                    
+
                     if (root.TryGetProperty("enabled", out var enabled))
                         output.KeyValue("Enabled", enabled.GetBoolean() ? "[green]Yes[/]" : "[red]No[/]");
                     if (root.TryGetProperty("hasPatToken", out var hasPat))
@@ -4025,7 +4024,7 @@ public class Program
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;
 
-                var isSuccess = root.TryGetProperty("success", out var successProp) && 
+                var isSuccess = root.TryGetProperty("success", out var successProp) &&
                                successProp.ValueKind == System.Text.Json.JsonValueKind.True;
 
                 if (isSuccess)
@@ -4134,7 +4133,6 @@ public class Program
         }
     }
 
-    #endregion
 
     /// <summary>
     /// Shows available MCP tools.
@@ -4163,7 +4161,6 @@ public class Program
         }
     }
 
-    #region Session & Debugging Command Handlers
 
     /// <summary>
     /// Handles the session command (create, list, close).
@@ -4207,7 +4204,7 @@ public class Program
                     if (IsErrorResult(createResult))
                     {
                         output.Error(createResult);
-                        
+
                         // Provide helpful hints based on error type
                         if (createResult.Contains("maximum number of sessions", StringComparison.OrdinalIgnoreCase))
                         {
@@ -4334,7 +4331,7 @@ public class Program
                         }
 
                         state.SessionId = resolvedSessionId;
-                        
+
                         // Extract debugger type from response
                         var debuggerTypeMatch = System.Text.RegularExpressions.Regex.Match(
                             verifyResult, @"Debugger\s*Type:\s*(\w+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
@@ -4342,7 +4339,7 @@ public class Program
                         {
                             state.DebuggerType = debuggerTypeMatch.Groups[1].Value;
                         }
-                        
+
                         output.Success($"Now using session: {resolvedSessionId}");
                         output.Markup(verifyResult);
                     }
@@ -4383,7 +4380,7 @@ public class Program
                         }
 
                         state.SessionId = resolvedRestoreId;
-                        
+
                         // Check if dump is mentioned in result
                         if (restoreResult.Contains("CurrentDump:") && !restoreResult.Contains("None"))
                         {
@@ -4394,7 +4391,7 @@ public class Program
                                 state.SetDumpLoaded(dumpMatch.Groups[1].Value);
                             }
                         }
-                        
+
                         // Get debugger type for command mode prompt
                         try
                         {
@@ -4410,7 +4407,7 @@ public class Program
                         {
                             // Debugger type extraction failed - not critical
                         }
-                        
+
                         output.Success("Session restored!");
                         output.Markup(restoreResult);
                     }
@@ -4496,7 +4493,7 @@ public class Program
                 if (IsErrorResult(createResult))
                 {
                     output.Error(createResult);
-                    
+
                     // Provide helpful hints based on error type
                     if (createResult.Contains("maximum number of sessions", StringComparison.OrdinalIgnoreCase))
                     {
@@ -4524,7 +4521,7 @@ public class Program
             catch (Exception ex)
             {
                 output.Error($"Failed to create session: {ex.Message}");
-                
+
                 // Check exception message for hints
                 if (ex.Message.Contains("maximum number of sessions", StringComparison.OrdinalIgnoreCase))
                 {
@@ -4546,7 +4543,7 @@ public class Program
             output.Dim("  3. Loading dump file into debugger");
             output.Dim("  4. Configuring symbol paths");
             output.WriteLine();
-            
+
             var result = await output.WithSpinnerAsync(
                 "Downloading symbols and loading dump (please wait)...",
                 () => mcpClient.OpenDumpAsync(state.SessionId!, state.Settings.UserId, dumpId));
@@ -4561,7 +4558,7 @@ public class Program
                 output.Success("Dump opened successfully!");
                 output.Markup(result);
                 state.SetDumpLoaded(dumpId);
-                
+
                 // Get debugger type for proper command mapping
                 try
                 {
@@ -4579,7 +4576,7 @@ public class Program
                 {
                     // Ignore errors getting debugger info - not critical
                 }
-                
+
                 output.WriteLine();
                 output.Dim("Tip: For .NET dumps, SOS is auto-loaded. Try 'analyze dotnet' or 'exec !threads'");
             }
@@ -4637,7 +4634,7 @@ public class Program
             // Get server capabilities
             var configManager = new ServerConfigManager();
             var discovery = new ServerDiscovery(configManager);
-            
+
             // Try to get current server capabilities
             ServerCapabilities? serverCaps = null;
             try
@@ -4673,7 +4670,7 @@ public class Program
             var dumpIsAlpine = dumpInfo.IsAlpineDump ?? false;
 
             // Check for mismatches
-            var archMismatch = !string.IsNullOrEmpty(dumpArch) && 
+            var archMismatch = !string.IsNullOrEmpty(dumpArch) &&
                 !serverCaps.Architecture.Equals(dumpArch, StringComparison.OrdinalIgnoreCase);
             var alpineMismatch = serverCaps.IsAlpine != dumpIsAlpine;
 
@@ -4689,10 +4686,10 @@ public class Program
 
             // Show comparison (not using table to avoid centering)
             var dumpDistroDisplay = dumpIsAlpine ? "[cyan]Alpine[/]" : "[cyan]Debian/glibc[/]";
-            var serverArchDisplay = archMismatch 
-                ? $"[red]{serverCaps.Architecture}[/]" 
+            var serverArchDisplay = archMismatch
+                ? $"[red]{serverCaps.Architecture}[/]"
                 : $"[green]{serverCaps.Architecture}[/]";
-            var serverDistroDisplay = alpineMismatch 
+            var serverDistroDisplay = alpineMismatch
                 ? (serverCaps.IsAlpine ? "[red]Alpine[/]" : "[red]Debian/glibc[/]")
                 : (serverCaps.IsAlpine ? "[green]Alpine[/]" : "[green]Debian/glibc[/]");
 
@@ -4714,7 +4711,7 @@ public class Program
                 output.Warning("No matching servers configured.");
                 output.WriteLine();
                 output.Warning("The dump may not analyze correctly due to architecture/distribution mismatch.");
-                
+
                 if (output.Console.Confirm("Continue anyway?", false))
                 {
                     return ServerSwitchResult.ContinueWithMismatch;
@@ -4937,7 +4934,7 @@ public class Program
             "unable to"
         };
 
-        return errorIndicators.Any(indicator => 
+        return errorIndicators.Any(indicator =>
             result.Contains(indicator, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -5061,7 +5058,7 @@ public class Program
     /// </summary>
     // Separate command history for debugger cmd mode
     private static CommandHistory? _cmdHistory;
-    
+
     private static async Task HandleMultiLineCommandAsync(
         IAnsiConsole console,
         ConsoleOutput output,
@@ -5121,7 +5118,7 @@ public class Program
                     output.Info("Exiting multi-line command mode.");
                     break;
                 }
-                
+
                 if (string.IsNullOrEmpty(command))
                 {
                     continue;
@@ -5143,12 +5140,12 @@ public class Program
                 {
                     var cliCommand = command[1..].Trim();
                     var cliParts = ParseCommandLine(cliCommand);
-                    
+
                     if (cliParts.Length > 0)
                     {
                         var cliCmd = cliParts[0].ToLowerInvariant();
                         var cliArgs = cliParts.Length > 1 ? cliParts[1..] : [];
-                        
+
                         switch (cliCmd)
                         {
                             case "showobj":
@@ -5172,10 +5169,10 @@ public class Program
 
                 // Execute the debugger command
                 var result = await mcpClient.ExecuteCommandAsync(state.SessionId!, state.Settings.UserId, command);
-                
+
                 // Save result for copy command
                 state.SetLastResult($"cmd: {command}", result);
-                
+
                 Console.WriteLine(result);
             }
             catch (OperationCanceledException)
@@ -5365,7 +5362,7 @@ public class Program
             output.Dim("Loading SOS (Son of Strike) .NET debugging extension...");
             output.Dim("This enables commands like: clrthreads, dumpheap, pe, clrstack");
             output.WriteLine();
-            
+
             var result = await output.WithSpinnerAsync(
                 "Searching for SOS plugin and loading...",
                 () => mcpClient.LoadSosAsync(state.SessionId!, state.Settings.UserId));
@@ -5668,7 +5665,7 @@ public class Program
         output.Dim($"Starting {analysisName}...");
         output.Dim("This involves executing debugger commands and parsing output.");
         output.WriteLine();
-        
+
         var result = await output.WithSpinnerAsync(
             $"Analyzing (executing debugger commands)...",
             analyzeFunc);
@@ -6112,7 +6109,7 @@ public class Program
         {
             string result;
             var spinnerText = summary ? "Generating summary report..." : "Generating full report...";
-                
+
             if (summary)
             {
                 result = await output.WithSpinnerAsync(
@@ -6318,9 +6315,7 @@ public class Program
         }
     }
 
-    #endregion
 
-    #region Server Commands
 
     /// <summary>
     /// Handles server management commands in interactive shell.
@@ -6702,7 +6697,6 @@ public class Program
         output.Info("  - http://localhost:5003 (alpine-x64)");
     }
 
-    #endregion
 
     /// <summary>
     /// Checks if a dump is compatible with the connected server and shows a warning if not.
@@ -6796,7 +6790,6 @@ public class Program
         return string.Format(CultureInfo.InvariantCulture, "{0:0.##} {1}", size, suffixes[i]);
     }
 
-    #region Session Recovery
 
     /// <summary>
     /// Checks if an exception indicates a session not found error (session expired or removed).
@@ -6804,7 +6797,7 @@ public class Program
     private static bool IsSessionNotFoundError(Exception ex)
     {
         var message = ex.Message.ToLowerInvariant();
-        return message.Contains("session") && 
+        return message.Contains("session") &&
                (message.Contains("not found") || message.Contains("expired") || message.Contains("does not exist"));
     }
 
@@ -6907,6 +6900,5 @@ public class Program
         }
     }
 
-    #endregion
 }
 

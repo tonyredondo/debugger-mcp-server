@@ -81,7 +81,7 @@ Parameter[0]: 0000000000000000
 Parameter[1]: 00007ff6b1234567";
 
         var result = CreateInitializedResult();
-        
+
         // Should not throw - parsing may or may not find exception depending on format
         _analyzer.TestParseWinDbgException(output, result);
     }
@@ -93,7 +93,7 @@ Parameter[1]: 00007ff6b1234567";
 ExceptionMessage: Object reference not set to an instance of an object";
 
         var result = CreateInitializedResult();
-        
+
         // Should not throw
         _analyzer.TestParseWinDbgException(output, result);
     }
@@ -195,6 +195,7 @@ ExceptionMessage: Object reference not set to an instance of an object";
         var result = CreateInitializedResult();
         _analyzer.TestParseWinDbgModules(output, result);
 
+        Assert.NotNull(result.Modules);
         Assert.NotEmpty(result.Modules);
     }
 
@@ -222,7 +223,7 @@ ExceptionMessage: Object reference not set to an instance of an object";
   thread #3, name = 'gc'";
 
         var result = CreateInitializedResult();
-        
+
         // Should not throw - parsing exercises the code paths
         _analyzer.TestParseLldbThreads(output, result);
     }
@@ -233,7 +234,7 @@ ExceptionMessage: Object reference not set to an instance of an object";
         var output = @"* thread #1, stop reason = breakpoint";
 
         var result = CreateInitializedResult();
-        
+
         // Should not throw
         _analyzer.TestParseLldbThreads(output, result);
     }
@@ -298,6 +299,7 @@ ExceptionMessage: Object reference not set to an instance of an object";
         var result = CreateInitializedResult();
         _analyzer.TestParseLldbModules(output, result);
 
+        Assert.NotNull(result.Modules);
         Assert.NotEmpty(result.Modules);
     }
 
@@ -337,9 +339,9 @@ ExceptionMessage: Object reference not set to an instance of an object";
     {
         var result = CreateInitializedResult();
         result.Exception = new ExceptionDetails
-            {
-                Type = "System.NullReferenceException",
-                Message = "Object reference not set"
+        {
+            Type = "System.NullReferenceException",
+            Message = "Object reference not set"
         };
 
         _analyzer.TestGenerateSummary(result);
@@ -352,9 +354,9 @@ ExceptionMessage: Object reference not set to an instance of an object";
     public void GenerateSummary_WithCallStack_IncludesCrashLocation()
     {
         var result = CreateInitializedResult();
-        var thread = new ThreadInfo 
+        var thread = new ThreadInfo
         {
-            ThreadId = "1", 
+            ThreadId = "1",
             IsFaulting = true,
             CallStack = new List<StackFrame>
             {
@@ -373,9 +375,9 @@ ExceptionMessage: Object reference not set to an instance of an object";
     {
         var result = CreateInitializedResult();
         result.Memory!.LeakAnalysis = new LeakAnalysis
-            {
-                Detected = true,
-                TopConsumers = new List<MemoryConsumer>
+        {
+            Detected = true,
+            TopConsumers = new List<MemoryConsumer>
                 {
                     new() { TypeName = "System.String", Count = 1000, TotalSize = 50000 }
             }
@@ -391,9 +393,9 @@ ExceptionMessage: Object reference not set to an instance of an object";
     {
         var result = CreateInitializedResult();
         result.Threads!.Deadlock = new DeadlockInfo
-            {
-                Detected = true,
-                InvolvedThreads = new List<string> { "Thread 1", "Thread 2" }
+        {
+            Detected = true,
+            InvolvedThreads = new List<string> { "Thread 1", "Thread 2" }
         };
 
         _analyzer.TestGenerateSummary(result);
@@ -401,4 +403,3 @@ ExceptionMessage: Object reference not set to an instance of an object";
         Assert.NotEmpty(result.Summary!.Description!);
     }
 }
-

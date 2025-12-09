@@ -59,18 +59,20 @@ public class SessionCleanupService : BackgroundService
         {
             try
             {
+                // Wait between cleanup passes to avoid a tight loop and respect configured cadence.
                 await Task.Delay(_cleanupInterval, stoppingToken);
 
                 var cleanedCount = _sessionManager.CleanupInactiveSessions(_inactivityThreshold);
 
                 if (cleanedCount > 0)
                 {
+                    // Only log when work was done to reduce noise on idle periods.
                     _logger.LogInformation("Cleaned up {Count} inactive session(s)", cleanedCount);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
-                // Service is stopping, this is expected
+                // Service is stopping; swallow cancellation to allow graceful exit.
                 break;
             }
             catch (Exception ex)
@@ -82,4 +84,3 @@ public class SessionCleanupService : BackgroundService
         _logger.LogInformation("Session cleanup service stopped");
     }
 }
-

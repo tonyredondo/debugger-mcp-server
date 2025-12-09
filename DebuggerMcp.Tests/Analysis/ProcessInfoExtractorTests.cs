@@ -19,7 +19,6 @@ public class ProcessInfoExtractorTests
         _extractor = new ProcessInfoExtractor();
     }
 
-    #region FindMainFrame Tests
 
     [Fact]
     public void FindMainFrame_WithDotnetMain_ExtractsArgcAndArgv()
@@ -150,9 +149,7 @@ public class ProcessInfoExtractorTests
         Assert.Null(argvAddress);
     }
 
-    #endregion
 
-    #region ParseMemoryBlock Tests
 
     [Fact]
     public void ParseMemoryBlock_64Bit_ValidOutput_ExtractsPointers()
@@ -218,9 +215,7 @@ public class ProcessInfoExtractorTests
         Assert.Empty(pointers);
     }
 
-    #endregion
 
-    #region SplitByNullSentinel Tests
 
     [Fact]
     public void SplitByNullSentinel_ValidPointers_SeparatesArgvEnvp()
@@ -309,9 +304,7 @@ public class ProcessInfoExtractorTests
         Assert.Single(envp);
     }
 
-    #endregion
 
-    #region IsNullPointer Tests
 
     [Theory]
     [InlineData("0x0000000000000000", 64, true)]
@@ -329,9 +322,7 @@ public class ProcessInfoExtractorTests
         Assert.Equal(expected, result);
     }
 
-    #endregion
 
-    #region IsValidUserSpacePointer Tests
 
     [Theory]
     [InlineData("0x0000000000000000", 64, false)] // NULL
@@ -354,9 +345,7 @@ public class ProcessInfoExtractorTests
         Assert.Equal(expected, result);
     }
 
-    #endregion
 
-    #region UnescapeString Tests
 
     [Theory]
     [InlineData("hello", "hello")]
@@ -385,7 +374,7 @@ public class ProcessInfoExtractorTests
     {
         // Arrange - path with backslash followed by 'n' (not a newline)
         var input = "C:\\\\Users\\\\name";
-        
+
         // Act
         var result = ProcessInfoExtractor.UnescapeString(input);
 
@@ -393,9 +382,7 @@ public class ProcessInfoExtractorTests
         Assert.Equal("C:\\Users\\name", result);
     }
 
-    #endregion
 
-    #region ExtractProcessInfoAsync Tests
 
     [Fact]
     public async Task ExtractProcessInfoAsync_NonLLDB_ReturnsNull()
@@ -539,9 +526,7 @@ public class ProcessInfoExtractorTests
         mockDebugger.Verify(d => d.ExecuteCommand("bt all"), Times.Never);
     }
 
-    #endregion
 
-    #region RedactSensitiveValue Tests
 
     [Theory]
     [InlineData("DD_API_KEY=abc123secret", "DD_API_KEY=<redacted>", true)]
@@ -630,6 +615,5 @@ public class ProcessInfoExtractorTests
         Assert.DoesNotContain("some_secret_value", result);
     }
 
-    #endregion
 }
 

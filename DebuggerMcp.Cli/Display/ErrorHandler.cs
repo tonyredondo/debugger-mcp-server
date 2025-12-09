@@ -137,7 +137,7 @@ public static class ErrorHandler
     private static void HandleMcpClientException(ConsoleOutput output, McpClientException ex, ShellState state, string operation)
     {
         var opText = string.IsNullOrEmpty(operation) ? "" : $" during {operation}";
-        
+
         // Parse common MCP errors
         if (ex.Message.Contains("Session ID not found", StringComparison.OrdinalIgnoreCase) ||
             ex.Message.Contains("session not found", StringComparison.OrdinalIgnoreCase))
@@ -264,8 +264,8 @@ public static class ErrorHandler
     {
         var opText = string.IsNullOrEmpty(operation) ? "" : $" during {operation}";
         output.Error($"An error occurred{opText}: {ex.Message}");
-        
-        #if DEBUG
+
+#if DEBUG
         output.Dim($"Exception type: {ex.GetType().Name}");
         if (ex.StackTrace != null)
         {
@@ -275,7 +275,7 @@ public static class ErrorHandler
                 output.Dim($"  {line.Trim()}");
             }
         }
-        #endif
+#endif
     }
 
     /// <summary>
@@ -289,7 +289,7 @@ public static class ErrorHandler
         output.Dim("  1. Check server status: health");
         output.Dim("  2. Reconnect: disconnect && connect <url>");
         output.Dim("  3. Check server logs for errors");
-        
+
         if (!string.IsNullOrEmpty(state.SessionId))
         {
             output.Dim("");
@@ -305,9 +305,12 @@ public static class ErrorHandler
     {
         return ex is HttpRequestException or
                TaskCanceledException or
-               HttpApiException { StatusCode: System.Net.HttpStatusCode.ServiceUnavailable or 
+               HttpApiException
+        {
+            StatusCode: System.Net.HttpStatusCode.ServiceUnavailable or
                                               System.Net.HttpStatusCode.GatewayTimeout or
-                                              System.Net.HttpStatusCode.RequestTimeout };
+                                              System.Net.HttpStatusCode.RequestTimeout
+        };
     }
 }
 

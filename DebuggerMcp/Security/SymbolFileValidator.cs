@@ -18,7 +18,7 @@ public static class SymbolFileValidator
     /// Windows PDB MSF 7.0 signature (native code): "Microsoft C/C++ MSF 7.00\r\n\x1aDS"
     /// Used by Visual Studio for native C/C++ code.
     /// </summary>
-    private static readonly byte[] PdbMsf70Signature = 
+    private static readonly byte[] PdbMsf70Signature =
     {
         0x4D, 0x69, 0x63, 0x72, 0x6F, 0x73, 0x6F, 0x66, // "Microsof"
         0x74, 0x20, 0x43, 0x2F, 0x43, 0x2B, 0x2B, 0x20, // "t C/C++ "
@@ -30,7 +30,7 @@ public static class SymbolFileValidator
     /// Windows PDB MSF 2.0 signature (old native code): "Microsoft C/C++ program database 2.00\r\n\x1a"
     /// Used by older Visual Studio versions.
     /// </summary>
-    private static readonly byte[] PdbMsf20Signature = 
+    private static readonly byte[] PdbMsf20Signature =
     {
         0x4D, 0x69, 0x63, 0x72, 0x6F, 0x73, 0x6F, 0x66, // "Microsof"
         0x74, 0x20, 0x43, 0x2F, 0x43, 0x2B, 0x2B, 0x20, // "t C/C++ "
@@ -213,13 +213,13 @@ public static class SymbolFileValidator
         // Check Portable PDB first (most common in modern .NET)
         if (MatchesSignature(header, PortablePdbSignature))
             return "Portable PDB (.NET)";
-        
+
         // Check native PDB formats
         if (header.Length >= MinimumBytesNeededNativePdb && MatchesSignature(header, PdbMsf70Signature))
             return "Windows PDB (MSF 7.0, Native)";
         if (header.Length >= MinimumBytesNeededOldPdb && MatchesSignature(header, PdbMsf20Signature))
             return "Windows PDB (MSF 2.0, Legacy)";
-        
+
         // Non-Windows formats
         if (MatchesSignature(header, ElfSignature))
             return "ELF (Linux)";

@@ -16,14 +16,14 @@ public static partial class CollectionTypeDetector
     {
         if (string.IsNullOrEmpty(typeName))
             return CollectionType.None;
-            
+
         // Arrays (highest priority - check first)
         if (typeName.EndsWith("[]") || typeName.Contains("[,"))
             return CollectionType.Array;
-            
+
         // Extract base type name (before generic parameters)
         var baseTypeName = GetBaseTypeName(typeName);
-        
+
         return baseTypeName switch
         {
             // Tier 1
@@ -31,28 +31,28 @@ public static partial class CollectionTypeDetector
             "System.Collections.Generic.Stack`1" => CollectionType.Stack,
             "System.Collections.Generic.Queue`1" => CollectionType.Queue,
             "System.Collections.Generic.HashSet`1" => CollectionType.HashSet,
-            
+
             // Tier 2
             "System.Collections.Generic.Dictionary`2" => CollectionType.Dictionary,
             "System.Collections.Generic.SortedDictionary`2" => CollectionType.SortedDictionary,
             "System.Collections.Generic.SortedList`2" => CollectionType.SortedList,
-            
+
             // Tier 3
             "System.Collections.Concurrent.ConcurrentDictionary`2" => CollectionType.ConcurrentDictionary,
             "System.Collections.Concurrent.ConcurrentQueue`1" => CollectionType.ConcurrentQueue,
             "System.Collections.Concurrent.ConcurrentStack`1" => CollectionType.ConcurrentStack,
             "System.Collections.Concurrent.ConcurrentBag`1" => CollectionType.ConcurrentBag,
-            
+
             // Tier 4
             "System.Collections.Immutable.ImmutableArray`1" => CollectionType.ImmutableArray,
             "System.Collections.Immutable.ImmutableList`1" => CollectionType.ImmutableList,
             "System.Collections.Immutable.ImmutableDictionary`2" => CollectionType.ImmutableDictionary,
             "System.Collections.Immutable.ImmutableHashSet`1" => CollectionType.ImmutableHashSet,
-            
+
             _ => CollectionType.None
         };
     }
-    
+
     /// <summary>
     /// Extracts the base type name without generic parameters.
     /// "System.Collections.Generic.List`1[[System.String]]" → "System.Collections.Generic.List`1"
@@ -64,19 +64,19 @@ public static partial class CollectionTypeDetector
             return typeName[..bracketIndex];
         return typeName;
     }
-    
+
     /// <summary>
     /// Checks if a collection type is a key-value collection.
     /// </summary>
     public static bool IsKeyValueCollection(CollectionType type)
     {
-        return type is CollectionType.Dictionary 
-            or CollectionType.SortedDictionary 
+        return type is CollectionType.Dictionary
+            or CollectionType.SortedDictionary
             or CollectionType.SortedList
             or CollectionType.ConcurrentDictionary
             or CollectionType.ImmutableDictionary;
     }
-    
+
     /// <summary>
     /// Extracts the element type from a generic collection type name.
     /// </summary>
@@ -92,19 +92,19 @@ public static partial class CollectionTypeDetector
         var startIndex = typeName.IndexOf("[[", StringComparison.Ordinal);
         if (startIndex < 0)
             return null;
-        
+
         startIndex += 2; // Skip [[
-        
+
         // Find the end - either ]], or , (for assembly qualified names)
         var endIndex = typeName.IndexOf(',', startIndex);
         var bracketEnd = typeName.IndexOf("]]", startIndex, StringComparison.Ordinal);
-        
+
         if (endIndex < 0 || (bracketEnd >= 0 && bracketEnd < endIndex))
             endIndex = bracketEnd;
-        
+
         if (endIndex < 0)
             return null;
-        
+
         return typeName[startIndex..endIndex].Trim();
     }
 
@@ -119,7 +119,7 @@ public static partial class CollectionTypeDetector
         var match = KeyValueTypesRegex().Match(typeName);
         if (!match.Success)
             return null;
-        
+
         return (match.Groups[1].Value.Trim(), match.Groups[2].Value.Trim());
     }
 
@@ -167,17 +167,17 @@ public static partial class CollectionTypeDetector
         var mtMatch = Regex.Match(dumpObjOutput, @"MethodTable:\s+([0-9a-fA-Fx]+)");
         if (!mtMatch.Success)
             return null;
-        
+
         var arrayMt = mtMatch.Groups[1].Value;
-        
+
         // Now dump the MT to get component info
         var dumpMtOutput = manager.ExecuteCommand($"dumpmt {arrayMt}");
-        
+
         // Look for "Element Methodtable" or "ComponentMethodTable" or "Component Type"
-        var elementMtMatch = Regex.Match(dumpMtOutput, 
-            @"(?:Element Methodtable|ComponentMethodTable|Component Type|Element Type):\s+([0-9a-fA-Fx]+)", 
+        var elementMtMatch = Regex.Match(dumpMtOutput,
+            @"(?:Element Methodtable|ComponentMethodTable|Component Type|Element Type):\s+([0-9a-fA-Fx]+)",
             RegexOptions.IgnoreCase);
-        
+
         return elementMtMatch.Success ? elementMtMatch.Groups[1].Value : null;
     }
 
@@ -198,17 +198,17 @@ public static partial class CollectionTypeDetector
     {
         // Determine header size based on platform
         var headerSize = pointerSize == 8 ? 16 : 8;
-        
+
         // Parse base address
         var addrStr = baseAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
             ? baseAddress[2..]
             : baseAddress;
-        
+
         var addr = Convert.ToUInt64(addrStr, 16);
-        
+
         // Calculate: baseAddr + headerSize + (index * elementSize)
         var elementAddr = addr + (ulong)headerSize + (ulong)(index * elementSize);
-        
+
         return $"0x{elementAddr:x}";
     }
 
@@ -230,7 +230,7 @@ public static partial class CollectionTypeDetector
                 if (value is long longValue)
                     return (int)longValue;
             }
-            
+
             // Fallback: execute a command to detect (e.g., check address width)
             var output = manager.ExecuteCommand("!eeversion");
             // If addresses are 8 chars, it's x86; 16 chars is x64
@@ -244,7 +244,7 @@ public static partial class CollectionTypeDetector
         {
             // Ignore detection errors
         }
-        
+
         // Default to x64
         return 8;
     }
@@ -255,21 +255,21 @@ public static partial class CollectionTypeDetector
     public static int GetTypeSize(IDebuggerManager manager, string methodTable)
     {
         var output = manager.ExecuteCommand($"dumpmt {methodTable}");
-        
+
         // Try BaseSize first (for reference types)
         var sizeMatch = Regex.Match(output, @"BaseSize:\s+0x([0-9a-fA-F]+)", RegexOptions.IgnoreCase);
         if (sizeMatch.Success && int.TryParse(sizeMatch.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out var size))
         {
             return size;
         }
-        
+
         // Try ComponentSize (for value type arrays)
         sizeMatch = Regex.Match(output, @"ComponentSize:\s+0x([0-9a-fA-F]+)", RegexOptions.IgnoreCase);
         if (sizeMatch.Success && int.TryParse(sizeMatch.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out size))
         {
             return size;
         }
-        
+
         return -1;
     }
 }

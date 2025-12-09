@@ -38,7 +38,7 @@ public static class AsciiCharts
         }
 
         var sb = new StringBuilder();
-        
+
         if (!string.IsNullOrEmpty(title))
         {
             sb.AppendLine(title);
@@ -58,7 +58,7 @@ public static class AsciiCharts
             var emptyWidth = barWidth - filledWidth;
 
             var bar = new string(FullBlock, filledWidth) + new string(LightBlock, emptyWidth);
-            
+
             var suffix = "";
             if (showPercentage)
             {
@@ -92,7 +92,7 @@ public static class AsciiCharts
         }
 
         var sb = new StringBuilder();
-        
+
         if (!string.IsNullOrEmpty(title))
         {
             sb.AppendLine(title);
@@ -108,7 +108,7 @@ public static class AsciiCharts
             var percentage = total > 0 ? (double)value / total * 100 : 0;
             var blocks = (int)(percentage / 5); // Each block = 5%
             var visual = new string('●', blocks) + new string('○', 20 - blocks);
-            
+
             sb.AppendLine($"{paddedLabel} {visual} {percentage,5:F1}%");
         }
 
@@ -156,7 +156,7 @@ public static class AsciiCharts
     public static string ThreadStateChart(Dictionary<string, int> threadStates)
     {
         var data = threadStates.ToDictionary(kv => kv.Key, kv => (long)kv.Value);
-        
+
         return HorizontalBarChart(
             data,
             "Thread States",
@@ -180,7 +180,7 @@ public static class AsciiCharts
         }
 
         var sb = new StringBuilder();
-        
+
         if (!string.IsNullOrEmpty(title))
         {
             sb.AppendLine(title);
@@ -238,7 +238,7 @@ public static class AsciiCharts
         var emptyWidth = width - filledWidth;
 
         var bar = $"[{new string(FullBlock, filledWidth)}{new string(LightBlock, emptyWidth)}] {percentage:F1}%";
-        
+
         if (!string.IsNullOrEmpty(label))
         {
             bar = $"{label}: {bar}";
@@ -256,7 +256,7 @@ public static class AsciiCharts
     {
         var sparkChars = new[] { '▁', '▂', '▃', '▄', '▅', '▆', '▇', '█' };
         var list = values.ToList();
-        
+
         if (list.Count == 0)
         {
             return "";

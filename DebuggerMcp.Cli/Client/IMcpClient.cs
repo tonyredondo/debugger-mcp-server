@@ -32,7 +32,6 @@ public interface IMcpClient : IAsyncDisposable
     /// </summary>
     Task DisconnectAsync();
 
-    #region Session Tools
 
     /// <summary>
     /// Creates a new debugging session.
@@ -77,9 +76,7 @@ public interface IMcpClient : IAsyncDisposable
     /// <returns>Session information including dump status.</returns>
     Task<string> RestoreSessionAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Dump Tools
 
     /// <summary>
     /// Opens a dump file in the debugger.
@@ -119,9 +116,7 @@ public interface IMcpClient : IAsyncDisposable
     /// <returns>Confirmation message.</returns>
     Task<string> LoadSosAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Analysis Tools
 
     /// <summary>
     /// Runs crash analysis on the current dump.
@@ -141,9 +136,7 @@ public interface IMcpClient : IAsyncDisposable
     /// <returns>.NET analysis results.</returns>
     Task<string> AnalyzeDotNetAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Performance Analysis Tools
 
     /// <summary>
     /// Runs comprehensive performance analysis.
@@ -170,18 +163,14 @@ public interface IMcpClient : IAsyncDisposable
     /// </summary>
     Task<string> AnalyzeContentionAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Security Analysis Tools
 
     /// <summary>
     /// Runs security vulnerability analysis.
     /// </summary>
     Task<string> AnalyzeSecurityAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Comparison Tools
 
     /// <summary>
     /// Compares two dumps comprehensively.
@@ -223,9 +212,7 @@ public interface IMcpClient : IAsyncDisposable
         string targetUserId,
         CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Watch Tools
 
     /// <summary>
     /// Adds a watch expression.
@@ -257,9 +244,7 @@ public interface IMcpClient : IAsyncDisposable
     /// </summary>
     Task<string> ClearWatchesAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Report Tools
 
     /// <summary>
     /// Generates a comprehensive report.
@@ -271,9 +256,7 @@ public interface IMcpClient : IAsyncDisposable
     /// </summary>
     Task<string> GenerateSummaryReportAsync(string sessionId, string userId, string format = "markdown", CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Source Link Tools
 
     /// <summary>
     /// Resolves a source file path to a Source Link URL.
@@ -285,9 +268,7 @@ public interface IMcpClient : IAsyncDisposable
     /// </summary>
     Task<string> GetSourceLinkInfoAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Symbol Tools
 
     /// <summary>
     /// Configures additional symbol paths for the session.
@@ -323,9 +304,7 @@ public interface IMcpClient : IAsyncDisposable
     /// </remarks>
     Task<string> ReloadSymbolsAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Datadog Symbols
 
     /// <summary>
     /// Downloads Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit.
@@ -399,9 +378,7 @@ public interface IMcpClient : IAsyncDisposable
         bool clearApiCache = false,
         CancellationToken cancellationToken = default);
 
-    #endregion
 
-    #region Generic Tool Invocation
 
     /// <summary>
     /// Calls an MCP tool by name with the specified arguments.
@@ -412,6 +389,5 @@ public interface IMcpClient : IAsyncDisposable
     /// <returns>The tool's response.</returns>
     Task<string> CallToolAsync(string toolName, Dictionary<string, object?> arguments, CancellationToken cancellationToken = default);
 
-    #endregion
 }
 

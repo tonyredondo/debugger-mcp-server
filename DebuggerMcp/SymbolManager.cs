@@ -30,10 +30,10 @@ public class SymbolManager
     private static string GetDefaultDumpStoragePath() => EnvironmentConfig.GetDumpStoragePath();
 
     /// <summary>
-    /// Gets the default base directory for storing uploaded symbol files (legacy, for fallback).
+    /// Gets the default base directory for symbol server cache storage.
     /// </summary>
-    /// <returns>Platform-appropriate default symbol storage path from <see cref="EnvironmentConfig"/>.</returns>
-    private static string GetDefaultSymbolStorageBasePath() => EnvironmentConfig.GetSymbolStoragePath();
+    /// <returns>Platform-appropriate default symbol cache path from <see cref="EnvironmentConfig"/>.</returns>
+    private static string GetDefaultSymbolCachePath() => EnvironmentConfig.GetSymbolStoragePath();
 
     /// <summary>
     /// Maximum size for a symbol file (500 MB).
@@ -63,9 +63,9 @@ public class SymbolManager
     private readonly ConcurrentDictionary<string, List<string>> _sessionSymbolPaths = new();
 
     /// <summary>
-    /// Base directory for storing uploaded symbol files (legacy, for fallback).
+    /// Base directory for caching symbol server downloads.
     /// </summary>
-    private readonly string _symbolStorageBasePath;
+    private readonly string _symbolCacheBasePath;
 
     /// <summary>
     /// Base directory for storing dump files.
@@ -76,20 +76,18 @@ public class SymbolManager
     /// <summary>
     /// Initializes a new instance of the <see cref="SymbolManager"/> class.
     /// </summary>
-    /// <param name="symbolStorageBasePath">Optional base path for symbol storage (legacy). Uses platform-appropriate default if not specified.</param>
+    /// <param name="symbolCacheBasePath">Optional base path for symbol cache storage. Uses platform-appropriate default if not specified.</param>
     /// <param name="dumpStorageBasePath">Optional base path for dump storage. Used to locate .symbols_ folders.</param>
-    public SymbolManager(string? symbolStorageBasePath = null, string? dumpStorageBasePath = null)
+    public SymbolManager(string? symbolCacheBasePath = null, string? dumpStorageBasePath = null)
     {
-        // Use provided path or platform-appropriate default
-        _symbolStorageBasePath = symbolStorageBasePath ?? GetDefaultSymbolStorageBasePath();
+        _symbolCacheBasePath = symbolCacheBasePath ?? GetDefaultSymbolCachePath();
         _dumpStorageBasePath = dumpStorageBasePath ?? GetDefaultDumpStoragePath();
 
-        // Ensure directories exist
-        if (!Directory.Exists(_symbolStorageBasePath))
+        if (!Directory.Exists(_symbolCacheBasePath))
         {
-            Directory.CreateDirectory(_symbolStorageBasePath);
+            Directory.CreateDirectory(_symbolCacheBasePath);
         }
-        
+
         if (!Directory.Exists(_dumpStorageBasePath))
         {
             Directory.CreateDirectory(_dumpStorageBasePath);
@@ -181,7 +179,7 @@ public class SymbolManager
 
         return storedPaths;
     }
-    
+
     /// <summary>
     /// Stores a ZIP file containing multiple symbol files for a specific dump.
     /// The ZIP is extracted preserving its directory structure.
@@ -207,7 +205,7 @@ public class SymbolManager
         var extractedDirs = new HashSet<string>();
 
         using var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Read);
-        
+
         foreach (var entry in archive.Entries)
         {
             // Skip directory entries (they have empty names or end with /)
@@ -216,7 +214,7 @@ public class SymbolManager
 
             // Sanitize the entry path to prevent path traversal
             var relativePath = entry.FullName.Replace('\\', '/');
-            
+
             // Check for path traversal attempts
             if (relativePath.Contains("..") || Path.IsPathRooted(relativePath))
             {
@@ -233,7 +231,7 @@ public class SymbolManager
             // Build the full destination path
             var destPath = Path.Combine(dumpSymbolDir, relativePath);
             var destDir = Path.GetDirectoryName(destPath);
-            
+
             // Ensure destination directory exists
             if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
             {
@@ -250,7 +248,7 @@ public class SymbolManager
             using var entryStream = entry.Open();
             using var fileStream = File.Create(destPath);
             await entryStream.CopyToAsync(fileStream);
-            
+
             extractedFiles.Add(relativePath);
         }
 
@@ -266,7 +264,7 @@ public class SymbolManager
             RootSymbolDirectory = dumpSymbolDir
         };
     }
-    
+
     /// <summary>
     /// Gets all symbol files from a directory and its subdirectories.
     /// </summary>
@@ -280,12 +278,12 @@ public class SymbolManager
 
         // For LLDB, only .dbg and .debug files can be loaded with "target symbols add"
         // PDB files are Windows-specific and not supported by LLDB
-        var symbolExtensions = lldbOnly 
+        var symbolExtensions = lldbOnly
             ? new[] { ".dbg", ".debug" }
             : new[] { ".dbg", ".debug", ".pdb", ".sym", ".dwarf" };
-        
+
         var result = new List<string>();
-        
+
         foreach (var file in Directory.GetFiles(directory, "*", SearchOption.AllDirectories))
         {
             var ext = Path.GetExtension(file).ToLowerInvariant();
@@ -295,10 +293,10 @@ public class SymbolManager
                 result.Add(file);
             }
         }
-        
+
         return result;
     }
-    
+
     /// <summary>
     /// Gets all subdirectories in a directory, including the directory itself.
     /// </summary>
@@ -322,7 +320,7 @@ public class SymbolManager
     /// <remarks>
     /// Looks for symbols in the following locations (in order):
     /// 1. {dumpStoragePath}/{userId}/.symbols_{dumpId}/ - Same location as dotnet-symbol downloads
-    /// 2. {symbolStoragePath}/dump_{dumpId}/ - Legacy location for uploaded symbols
+    /// 2. {dumpStoragePath}/.symbols_{dumpId}/ - Root-level fallback when user directory is unknown
     /// </remarks>
     public string? GetDumpSymbolDirectory(string dumpId)
     {
@@ -347,16 +345,18 @@ public class SymbolManager
                 var symbolDirInUserDir = Path.Combine(userDir, $".symbols_{cleanDumpId}");
                 if (Directory.Exists(symbolDirInUserDir) && HasSymbolFiles(symbolDirInUserDir))
                 {
+                    // Prefer per-user symbols co-located with the dump for isolation.
                     return symbolDirInUserDir;
                 }
             }
         }
 
-        // 2. Legacy: Check in old symbol storage path: {symbolStoragePath}/dump_{dumpId}/
-        var legacySymbolDir = Path.Combine(_symbolStorageBasePath, $"dump_{cleanDumpId}");
-        if (Directory.Exists(legacySymbolDir) && HasSymbolFiles(legacySymbolDir))
+        // 2. Root-level symbols when user directory is unknown
+        var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
+        if (Directory.Exists(rootSymbolDir) && HasSymbolFiles(rootSymbolDir))
         {
-            return legacySymbolDir;
+            // Fallback when the dump owner directory cannot be resolved.
+            return rootSymbolDir;
         }
 
         return null;
@@ -422,18 +422,14 @@ public class SymbolManager
             cleanDumpId = dumpId;
         }
 
-        // Find and delete the symbol directory (could be in multiple locations)
-        var symbolDir = GetDumpSymbolDirectory(cleanDumpId);
-        if (symbolDir != null && Directory.Exists(symbolDir))
+        // Find and delete all symbol directories for this dump
+        foreach (var dir in GetAllDumpSymbolDirectories(cleanDumpId))
         {
-            Directory.Delete(symbolDir, true);
-        }
-
-        // Also try legacy location
-        var legacySymbolDir = Path.Combine(_symbolStorageBasePath, $"dump_{cleanDumpId}");
-        if (Directory.Exists(legacySymbolDir))
-        {
-            Directory.Delete(legacySymbolDir, true);
+            if (Directory.Exists(dir))
+            {
+                // Remove all symbol folders for this dump to avoid stale symbol usage.
+                Directory.Delete(dir, true);
+            }
         }
 
         _dumpSymbolDirectories.TryRemove(dumpId, out _);
@@ -462,8 +458,7 @@ public class SymbolManager
             paths.Add(MicrosoftSymbolServer);
         }
 
-        // Add ALL dump-specific symbol directories that exist
-        // This includes both new location (.symbols_{dumpId}/) and legacy location (dump_{dumpId}/)
+        // Add all dump-specific symbol directories that exist
         if (!string.IsNullOrWhiteSpace(dumpId))
         {
             var allSymbolDirs = GetAllDumpSymbolDirectories(dumpId);
@@ -476,7 +471,7 @@ public class SymbolManager
             var additionalPathList = additionalPaths.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(p => p.Trim())
                 .Where(p => !string.IsNullOrWhiteSpace(p));
-            
+
             paths.AddRange(additionalPathList);
         }
 
@@ -485,7 +480,7 @@ public class SymbolManager
     }
 
     /// <summary>
-    /// Gets ALL symbol directories for a dump ID (both new and legacy locations).
+    /// Gets ALL symbol directories for a dump ID.
     /// </summary>
     /// <param name="dumpId">The dump ID to look up.</param>
     /// <returns>List of all symbol directories that exist for the dump.</returns>
@@ -514,17 +509,18 @@ public class SymbolManager
                 var symbolDirInUserDir = Path.Combine(userDir, $".symbols_{cleanDumpId}");
                 if (Directory.Exists(symbolDirInUserDir) && HasSymbolFiles(symbolDirInUserDir))
                 {
+                    // First preference: symbols stored alongside the dump in the user folder.
                     directories.Add(symbolDirInUserDir);
                 }
             }
         }
 
-        // 2. Legacy: Check in old symbol storage path: {symbolStoragePath}/dump_{dumpId}/
-        // This is where uploaded symbols used to be stored
-        var legacySymbolDir = Path.Combine(_symbolStorageBasePath, $"dump_{cleanDumpId}");
-        if (Directory.Exists(legacySymbolDir) && HasSymbolFiles(legacySymbolDir))
+        // 2. Root-level symbols when user directory is unknown
+        var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
+        if (Directory.Exists(rootSymbolDir) && HasSymbolFiles(rootSymbolDir))
         {
-            directories.Add(legacySymbolDir);
+            // Fallback when we can't resolve a user-scoped path (e.g., uploaded without user context).
+            directories.Add(rootSymbolDir);
         }
 
         return directories;
@@ -564,7 +560,7 @@ public class SymbolManager
         // Add cache directive if requested
         if (includeLocalCache)
         {
-            var cacheDir = Path.Combine(_symbolStorageBasePath, "cache");
+            var cacheDir = Path.Combine(_symbolCacheBasePath, "cache");
             if (!Directory.Exists(cacheDir))
             {
                 Directory.CreateDirectory(cacheDir);
@@ -609,7 +605,7 @@ public class SymbolManager
 
         // LLDB only supports local directories, filter out URLs
         var localDirs = paths.Where(p => !p.StartsWith("http://") && !p.StartsWith("https://"));
-        
+
         return string.Join(" ", localDirs);
     }
 
@@ -632,10 +628,6 @@ public class SymbolManager
     /// </summary>
     /// <param name="dumpId">Dump ID to get directory for.</param>
     /// <returns>Path to the dump's symbol directory.</returns>
-    /// <remarks>
-    /// Creates the symbol directory as .symbols_{dumpId}/ next to the dump file.
-    /// Falls back to {symbolStoragePath}/dump_{dumpId}/ if dump file is not found.
-    /// </remarks>
     private string GetOrCreateDumpSymbolDirectory(string dumpId)
     {
         return _dumpSymbolDirectories.GetOrAdd(dumpId, id =>
@@ -663,15 +655,15 @@ public class SymbolManager
                 }
             }
 
-            // Fallback to legacy location
-            var legacySymbolDir = Path.Combine(_symbolStorageBasePath, $"dump_{cleanDumpId}");
-            if (!Directory.Exists(legacySymbolDir))
+            // Fallback to root-level symbols directory when user path is unknown
+            var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
+            if (!Directory.Exists(rootSymbolDir))
             {
-                Directory.CreateDirectory(legacySymbolDir);
+                Directory.CreateDirectory(rootSymbolDir);
             }
-            return legacySymbolDir;
+            return rootSymbolDir;
         });
-            }
+    }
 
     /// <summary>
     /// Finds the dump file path for a given dump ID.

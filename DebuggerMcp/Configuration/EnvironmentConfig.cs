@@ -22,7 +22,7 @@ namespace DebuggerMcp.Configuration;
 ///   <item>
 ///     <term>SYMBOL_STORAGE_PATH</term>
 ///     <term>Platform-specific</term>
-///     <term>Directory for uploaded symbol files</term>
+///     <term>Directory for symbol cache downloads</term>
 ///   </item>
 ///   <item>
 ///     <term>API_KEY</term>
@@ -98,13 +98,13 @@ public static class EnvironmentConfig
     /// Environment variable name for symbol storage path.
     /// </summary>
     /// <remarks>
-    /// Specifies the directory where uploaded symbol files are stored.
-    /// Symbol files are organized by dump ID: {SYMBOL_STORAGE_PATH}/dump_{dumpId}/
+    /// Specifies the directory where symbol cache files are stored.
+    /// This is used as the cache root for remote symbol servers.
     /// </remarks>
     public const string SymbolStoragePath = "SYMBOL_STORAGE_PATH";
 
     /// <summary>
-    /// Gets the default symbol storage path based on the current platform.
+    /// Gets the default symbol cache path based on the current platform.
     /// </summary>
     /// <returns>
     /// Windows: %LOCALAPPDATA%\DebuggerMcp\symbols
@@ -386,14 +386,14 @@ public static class EnvironmentConfig
     /// Gets the configured session cleanup interval.
     /// </summary>
     /// <returns>The cleanup interval from environment or default.</returns>
-    public static TimeSpan GetSessionCleanupInterval() => 
+    public static TimeSpan GetSessionCleanupInterval() =>
         TimeSpan.FromMinutes(GetInt(SessionCleanupIntervalMinutes, DefaultSessionCleanupIntervalMinutes));
 
     /// <summary>
     /// Gets the configured session inactivity threshold.
     /// </summary>
     /// <returns>The inactivity threshold from environment or default (24 hours).</returns>
-    public static TimeSpan GetSessionInactivityThreshold() => 
+    public static TimeSpan GetSessionInactivityThreshold() =>
         TimeSpan.FromMinutes(GetInt(SessionInactivityThresholdMinutes, DefaultSessionInactivityThresholdMinutes));
 
     /// <summary>
@@ -457,4 +457,3 @@ public static class EnvironmentConfig
         return (long)sizeGb * 1024 * 1024 * 1024;
     }
 }
-

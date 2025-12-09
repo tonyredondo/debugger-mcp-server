@@ -169,7 +169,7 @@ public class CollectionTypeDetectorTests
     {
         var typeName = "System.Collections.Generic.Dictionary`2[[System.String],[System.Int32]]";
         var result = CollectionTypeDetector.ExtractKeyValueTypes(typeName);
-        
+
         Assert.NotNull(result);
         Assert.Equal("System.String", result.Value.KeyType);
         Assert.Equal("System.Int32", result.Value.ValueType);
@@ -180,7 +180,7 @@ public class CollectionTypeDetectorTests
     {
         var typeName = "System.Collections.Generic.Dictionary`2[[System.String, System.Private.CoreLib],[MyApp.User, MyApp]]";
         var result = CollectionTypeDetector.ExtractKeyValueTypes(typeName);
-        
+
         Assert.NotNull(result);
         Assert.Equal("System.String", result.Value.KeyType);
         Assert.Equal("MyApp.User", result.Value.ValueType);

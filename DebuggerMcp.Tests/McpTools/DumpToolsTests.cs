@@ -21,7 +21,7 @@ public class DumpToolsTests : IDisposable
     {
         _tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempPath);
-        
+
         _sessionManager = new DebuggerSessionManager(_tempPath);
         _symbolManager = new SymbolManager(_tempPath);
         _watchStore = new WatchStore(_tempPath);
@@ -47,7 +47,7 @@ public class DumpToolsTests : IDisposable
     public async Task OpenDump_WithNullOrEmptySessionId_ThrowsArgumentException(string? sessionId)
     {
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.OpenDump(sessionId!, "user", "dump-id"));
     }
 
@@ -61,7 +61,7 @@ public class DumpToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.OpenDump(sessionId, userId!, "dump-id"));
     }
 
@@ -72,7 +72,7 @@ public class DumpToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession("owner");
 
         // Act & Assert
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => 
+        await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
             _tools.OpenDump(sessionId, "wrong-user", "dump-id"));
     }
 
@@ -84,7 +84,7 @@ public class DumpToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<FileNotFoundException>(() => 
+        await Assert.ThrowsAsync<FileNotFoundException>(() =>
             _tools.OpenDump(sessionId, userId, "non-existent-dump"));
     }
 
@@ -96,7 +96,7 @@ public class DumpToolsTests : IDisposable
         var sessionId = _sessionManager.CreateSession(userId);
 
         // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => 
+        await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.OpenDump(sessionId, userId, "../etc/passwd"));
     }
 
@@ -141,7 +141,7 @@ public class DumpToolsTests : IDisposable
     public void CloseDump_WithNonExistentSession_ThrowsInvalidOperationException()
     {
         // Act & Assert - Trying to close dump on non-existent session throws
-        Assert.Throws<InvalidOperationException>(() => 
+        Assert.Throws<InvalidOperationException>(() =>
             _tools.CloseDump("non-existent-session", "user"));
     }
 

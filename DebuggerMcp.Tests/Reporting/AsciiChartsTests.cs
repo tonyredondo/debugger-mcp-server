@@ -81,7 +81,7 @@ public class AsciiChartsTests
         var largeIndex = result.IndexOf("Large");
         var mediumIndex = result.IndexOf("Medium");
         var smallIndex = result.IndexOf("Small");
-        
+
         Assert.True(largeIndex < mediumIndex);
         Assert.True(mediumIndex < smallIndex);
     }

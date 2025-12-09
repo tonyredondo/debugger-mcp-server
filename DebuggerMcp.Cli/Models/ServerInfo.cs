@@ -18,25 +18,25 @@ public class ServerInfo
     /// </summary>
     [JsonPropertyName("osName")]
     public string OsName { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the OS version string.
     /// </summary>
     [JsonPropertyName("osVersion")]
     public string OsVersion { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the Linux distribution name if running on Linux (e.g., "Alpine", "Debian", "Ubuntu").
     /// </summary>
     [JsonPropertyName("linuxDistribution")]
     public string? LinuxDistribution { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the Linux distribution version if available.
     /// </summary>
     [JsonPropertyName("linuxDistributionVersion")]
     public string? LinuxDistributionVersion { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether the host is running on Alpine Linux.
     /// </summary>
@@ -46,49 +46,49 @@ public class ServerInfo
     /// </remarks>
     [JsonPropertyName("isAlpine")]
     public bool IsAlpine { get; set; }
-    
+
     /// <summary>
     /// Gets or sets whether the host is running in a Docker container.
     /// </summary>
     [JsonPropertyName("isDocker")]
     public bool IsDocker { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the processor architecture (e.g., "x64", "arm64").
     /// </summary>
     [JsonPropertyName("architecture")]
     public string Architecture { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the .NET runtime version running the server.
     /// </summary>
     [JsonPropertyName("dotNetVersion")]
     public string DotNetVersion { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the list of installed .NET runtimes available for debugging.
     /// </summary>
     [JsonPropertyName("installedRuntimes")]
     public List<string> InstalledRuntimes { get; set; } = [];
-    
+
     /// <summary>
     /// Gets or sets the debugger type being used (LLDB or WinDbg).
     /// </summary>
     [JsonPropertyName("debuggerType")]
     public string DebuggerType { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the hostname of the server.
     /// </summary>
     [JsonPropertyName("hostname")]
     public string Hostname { get; set; } = string.Empty;
-    
+
     /// <summary>
     /// Gets or sets the server start time.
     /// </summary>
     [JsonPropertyName("serverStartTime")]
     public DateTime ServerStartTime { get; set; }
-    
+
     /// <summary>
     /// Gets or sets the short description of the host.
     /// </summary>

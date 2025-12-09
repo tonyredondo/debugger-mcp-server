@@ -415,7 +415,6 @@ public class HttpApiClient : IHttpApiClient
         };
     }
 
-    #region File Upload Operations
 
     /// <inheritdoc/>
     public async Task<DumpUploadResponse> UploadDumpAsync(
@@ -753,7 +752,7 @@ public class HttpApiClient : IHttpApiClient
         await EnsureSuccessAsync(response, cancellationToken);
 
         var content = await response.Content.ReadAsStringAsync(cancellationToken);
-        
+
         // Ensure directory exists
         var directory = Path.GetDirectoryName(outputPath);
         if (!string.IsNullOrEmpty(directory))
@@ -765,7 +764,6 @@ public class HttpApiClient : IHttpApiClient
         return true;
     }
 
-    #endregion
 
     /// <inheritdoc/>
     public void Dispose()

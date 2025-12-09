@@ -76,7 +76,6 @@ public interface IHttpApiClient : IDisposable
     /// <param name="cancellationToken">Cancellation token.</param>
     Task DeleteAsync(string path, CancellationToken cancellationToken = default);
 
-    #region File Upload Operations
 
     /// <summary>
     /// Uploads a dump file with progress reporting.
@@ -194,6 +193,5 @@ public interface IHttpApiClient : IDisposable
         string outputPath,
         CancellationToken cancellationToken = default);
 
-    #endregion
 }
 

@@ -77,7 +77,7 @@ public class DiscoveredServer
             if (!IsOnline || Capabilities == null)
                 return "-";
 
-            var distro = Capabilities.IsAlpine ? "alpine" : 
+            var distro = Capabilities.IsAlpine ? "alpine" :
                 (Capabilities.Distribution ?? "debian");
             return $"{distro}-{Capabilities.Architecture}";
         }
@@ -151,7 +151,7 @@ public class ServerDiscovery
     public async Task<List<DiscoveredServer>> DiscoverAllAsync(CancellationToken cancellationToken = default)
     {
         var serverEntries = _configManager.GetServers();
-        
+
         if (serverEntries.Count == 0)
         {
             _servers = [];
@@ -161,15 +161,15 @@ public class ServerDiscovery
         // Query all servers in parallel
         var tasks = serverEntries.Select(entry => DiscoverServerAsync(entry, cancellationToken));
         var results = await Task.WhenAll(tasks);
-        
+
         _servers = results.ToList();
-        
+
         // Set current server to first online server if not already set
         if (_currentServer == null || !_currentServer.IsOnline)
         {
             _currentServer = _servers.FirstOrDefault(s => s.IsOnline);
         }
-        
+
         return _servers;
     }
 
@@ -187,7 +187,7 @@ public class ServerDiscovery
         try
         {
             using var client = new HttpClient { Timeout = _timeout };
-            
+
             if (!string.IsNullOrEmpty(entry.ApiKey))
             {
                 client.DefaultRequestHeaders.Add("X-API-Key", entry.ApiKey);
@@ -195,7 +195,7 @@ public class ServerDiscovery
 
             var url = entry.Url.TrimEnd('/') + "/api/server/capabilities";
             var response = await client.GetAsync(url, cancellationToken);
-            
+
             if (response.IsSuccessStatusCode)
             {
                 server.Capabilities = await response.Content.ReadFromJsonAsync<ServerCapabilities>(cancellationToken: cancellationToken);
@@ -237,15 +237,15 @@ public class ServerDiscovery
             return null;
 
         // Try exact URL match first
-        var byUrl = _servers.FirstOrDefault(s => 
+        var byUrl = _servers.FirstOrDefault(s =>
             s.Url.Equals(urlOrName, StringComparison.OrdinalIgnoreCase) ||
             s.ShortUrl.Equals(urlOrName, StringComparison.OrdinalIgnoreCase));
-        
+
         if (byUrl != null)
             return byUrl;
 
         // Try name match
-        return _servers.FirstOrDefault(s => 
+        return _servers.FirstOrDefault(s =>
             s.Name.Equals(urlOrName, StringComparison.OrdinalIgnoreCase));
     }
 
@@ -288,7 +288,7 @@ public class ServerDiscovery
     {
         var entry = new ServerEntry { Url = server.Url, ApiKey = server.ApiKey };
         var refreshed = await DiscoverServerAsync(entry, cancellationToken);
-        
+
         server.IsOnline = refreshed.IsOnline;
         server.Capabilities = refreshed.Capabilities;
         server.ErrorMessage = refreshed.ErrorMessage;

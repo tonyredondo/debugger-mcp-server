@@ -29,15 +29,13 @@ public class DatadogSymbolServiceTests
     [InlineData("3.10.0+abcd1234567890abcdef1234567890abcdef1234", "abcd1234567890abcdef1234567890abcdef1234")]
     public void ExtractCommitSha_ReturnsCorrectSha(string informationalVersion, string expectedSha)
     {
-        // We can't directly test the private method, but we can test via the service
-        // For now, we'll document the expected behavior
-        
-        // The InformationalVersion format is: "version+commitSha" or "version.commitSha"
-        // The commit SHA should be extracted from after the + or the last .
-        // It should be lowercased and must be at least 7 hex characters
-        
-        Assert.NotNull(expectedSha);
-        Assert.True(expectedSha.Length >= 7);
+        // Extract via reflection to keep tests aligned with the private helper
+        var method = typeof(DatadogSymbolService)
+            .GetMethod("ExtractCommitSha", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+
+        var sha = (string?)method!.Invoke(null, new object?[] { informationalVersion });
+
+        Assert.Equal(expectedSha, sha);
     }
 
     [Theory]
@@ -62,4 +60,3 @@ public class DatadogSymbolServiceTests
         Assert.False(assemblyName.StartsWith("Datadog", StringComparison.OrdinalIgnoreCase));
     }
 }
-

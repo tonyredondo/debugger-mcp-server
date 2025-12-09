@@ -42,12 +42,13 @@ public class CrashAnalyzer
 
         // Command caching is automatically enabled when dump is opened
         // All commands benefit from caching for the entire session
-        
+
         try
         {
             // Check if debugger is initialized
             if (!_debuggerManager.IsInitialized)
             {
+                // Without initialization we cannot execute commands; return a minimal result.
                 result.Summary!.Description = "Debugger not initialized";
                 return result;
             }
@@ -63,6 +64,7 @@ public class CrashAnalyzer
             }
             else
             {
+                // Unknown debugger type: avoid throwing and return a descriptive summary.
                 result.Summary!.Description = $"Unknown debugger type: {_debuggerManager.DebuggerType}";
             }
         }
@@ -73,7 +75,7 @@ public class CrashAnalyzer
 
         return result;
     }
-    
+
     /// <summary>
     /// Initializes the new hierarchical structures on the result object.
     /// </summary>
@@ -147,7 +149,7 @@ public class CrashAnalyzer
         var modulesOutput = await ExecuteCommandAsync("image list");
         result.RawCommands!["image list"] = modulesOutput;
         ParseLldbModules(modulesOutput, result);
-        
+
         // Detect platform info from modules
         DetectPlatformInfo(modulesOutput, result);
 
@@ -266,7 +268,7 @@ public class CrashAnalyzer
         // Ensure Threads.All is initialized (for tests that call this directly)
         result.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>(), Summary = new ThreadSummary() };
         result.Threads.All ??= new List<ThreadInfo>();
-        
+
         var lines = output.Split('\n');
         ThreadInfo? currentThread = null;
 
@@ -279,14 +281,14 @@ public class CrashAnalyzer
                 var threadIndex = int.Parse(threadMatch.Groups[1].Value);
                 var processId = threadMatch.Groups[2].Value;
                 var threadId = threadMatch.Groups[3].Value;
-                
+
                 // Find matching thread in result.Threads.All
                 var allThreads = result.Threads!.All!;
-                currentThread = allThreads.FirstOrDefault(t => 
-                    t.ThreadId == threadIndex.ToString() || 
+                currentThread = allThreads.FirstOrDefault(t =>
+                    t.ThreadId == threadIndex.ToString() ||
                     t.ThreadId == threadId ||
                     t.ThreadId.EndsWith($".{threadId}"));
-                
+
                 // If not found by ID, try by index
                 if (currentThread == null && threadIndex >= 0 && threadIndex < allThreads.Count)
                 {
@@ -311,62 +313,62 @@ public class CrashAnalyzer
     /// Parses a single stack frame line from WinDbg output.
     /// </summary>
     private StackFrame? ParseWinDbgSingleFrame(string line)
+    {
+        // Match stack frame pattern: frame# address address module!function+offset
+        // Example: "00 00000000`12345678 00007ff8`12345678 ntdll!NtWaitForSingleObject+0x14"
+        var frameMatch = Regex.Match(line,
+            @"^\s*([0-9a-f]+)\s+([0-9a-f`]+)\s+([0-9a-f`]+)\s+(.+)$",
+            RegexOptions.IgnoreCase);
+
+        if (frameMatch.Success)
         {
-            // Match stack frame pattern: frame# address address module!function+offset
-            // Example: "00 00000000`12345678 00007ff8`12345678 ntdll!NtWaitForSingleObject+0x14"
-            var frameMatch = Regex.Match(line, 
-                @"^\s*([0-9a-f]+)\s+([0-9a-f`]+)\s+([0-9a-f`]+)\s+(.+)$", 
-                RegexOptions.IgnoreCase);
+            var frameNumStr = frameMatch.Groups[1].Value;
+            var retAddr = frameMatch.Groups[3].Value.Replace("`", "");
+            var callSite = frameMatch.Groups[4].Value.Trim();
 
-            if (frameMatch.Success)
+            // Parse module and function from call site
+            var moduleFunc = ParseModuleFunction(callSite);
+
+            if (int.TryParse(frameNumStr, System.Globalization.NumberStyles.HexNumber, null, out int frameNum))
             {
-                var frameNumStr = frameMatch.Groups[1].Value;
-                var retAddr = frameMatch.Groups[3].Value.Replace("`", "");
-                var callSite = frameMatch.Groups[4].Value.Trim();
-
-                // Parse module and function from call site
-                var moduleFunc = ParseModuleFunction(callSite);
-
-                if (int.TryParse(frameNumStr, System.Globalization.NumberStyles.HexNumber, null, out int frameNum))
-                {
                 return new StackFrame
-                    {
-                        FrameNumber = frameNum,
-                        InstructionPointer = retAddr,
-                        Module = moduleFunc.Module,
-                        Function = moduleFunc.Function,
+                {
+                    FrameNumber = frameNum,
+                    InstructionPointer = retAddr,
+                    Module = moduleFunc.Module,
+                    Function = moduleFunc.Function,
                     Source = moduleFunc.Source,
                     IsManaged = false
                 };
-                }
             }
+        }
 
-                // Try alternate format without Child-SP (kp, kv commands may vary)
-                var altMatch = Regex.Match(line, 
-                    @"^\s*([0-9a-f]+)\s+([0-9a-f`]+)\s+(.+)$", 
-                    RegexOptions.IgnoreCase);
+        // Try alternate format without Child-SP (kp, kv commands may vary)
+        var altMatch = Regex.Match(line,
+            @"^\s*([0-9a-f]+)\s+([0-9a-f`]+)\s+(.+)$",
+            RegexOptions.IgnoreCase);
 
-                if (altMatch.Success && !line.Contains("Child-SP") && !line.Contains("RetAddr"))
-                {
-                    var frameNumStr = altMatch.Groups[1].Value;
-                    var retAddr = altMatch.Groups[2].Value.Replace("`", "");
-                    var callSite = altMatch.Groups[3].Value.Trim();
+        if (altMatch.Success && !line.Contains("Child-SP") && !line.Contains("RetAddr"))
+        {
+            var frameNumStr = altMatch.Groups[1].Value;
+            var retAddr = altMatch.Groups[2].Value.Replace("`", "");
+            var callSite = altMatch.Groups[3].Value.Trim();
 
-                    var moduleFunc = ParseModuleFunction(callSite);
+            var moduleFunc = ParseModuleFunction(callSite);
 
-                    if (int.TryParse(frameNumStr, System.Globalization.NumberStyles.HexNumber, null, out int frameNum))
-                    {
+            if (int.TryParse(frameNumStr, System.Globalization.NumberStyles.HexNumber, null, out int frameNum))
+            {
                 return new StackFrame
-                        {
-                            FrameNumber = frameNum,
-                            InstructionPointer = retAddr,
-                            Module = moduleFunc.Module,
-                            Function = moduleFunc.Function,
+                {
+                    FrameNumber = frameNum,
+                    InstructionPointer = retAddr,
+                    Module = moduleFunc.Module,
+                    Function = moduleFunc.Function,
                     Source = moduleFunc.Source,
                     IsManaged = false
                 };
-                    }
-                }
+            }
+        }
 
         return null;
     }
@@ -422,8 +424,8 @@ public class CrashAnalyzer
             //    0  Id: 1234.5678 Suspend: 1 Teb: 00000000`12345678 Unfrozen
             //  . 1  Id: 1234.9abc Suspend: 1 Teb: 00000000`12345abc Unfrozen "ThreadName"
             //  # 2  Id: 1234.def0 Suspend: 1 Teb: 00000000`12345def Unfrozen
-            var threadMatch = Regex.Match(line, 
-                @"^\s*([.#\s])\s*(\d+)\s+Id:\s*([0-9a-f]+)\.([0-9a-f]+)\s+Suspend:\s*(\d+)\s+Teb:\s*([0-9a-f`]+)\s+(\w+)", 
+            var threadMatch = Regex.Match(line,
+                @"^\s*([.#\s])\s*(\d+)\s+Id:\s*([0-9a-f]+)\.([0-9a-f]+)\s+Suspend:\s*(\d+)\s+Teb:\s*([0-9a-f`]+)\s+(\w+)",
                 RegexOptions.IgnoreCase);
 
             if (threadMatch.Success)
@@ -471,7 +473,7 @@ public class CrashAnalyzer
                         State = "Unknown",
                         IsFaulting = marker == "#" || marker == "."
                     };
-                result.Threads!.All!.Add(threadInfo);
+                    result.Threads!.All!.Add(threadInfo);
                 }
             }
         }
@@ -490,8 +492,8 @@ public class CrashAnalyzer
         {
             // Match module pattern: start end modulename (symbol status) symbol path
             // Example: "00007ff8`12340000 00007ff8`12345000   ntdll      (pdb symbols)  c:\symbols\ntdll.pdb\...\ntdll.pdb"
-            var moduleMatch = Regex.Match(line, 
-                @"^\s*([0-9a-f`]+)\s+([0-9a-f`]+)\s+(\S+)\s+(?:\(([^)]+)\))?", 
+            var moduleMatch = Regex.Match(line,
+                @"^\s*([0-9a-f`]+)\s+([0-9a-f`]+)\s+(\S+)\s+(?:\(([^)]+)\))?",
                 RegexOptions.IgnoreCase);
 
             if (moduleMatch.Success)
@@ -521,6 +523,7 @@ public class CrashAnalyzer
                     version = versionMatch.Groups[1].Value;
                 }
 
+                result.Modules ??= new List<ModuleInfo>();
                 result.Modules.Add(new ModuleInfo
                 {
                     Name = moduleName,
@@ -540,6 +543,7 @@ public class CrashAnalyzer
 
                     if (!moduleName.Equals("module", StringComparison.OrdinalIgnoreCase))
                     {
+                        result.Modules ??= new List<ModuleInfo>();
                         result.Modules.Add(new ModuleInfo
                         {
                             Name = moduleName,
@@ -564,8 +568,8 @@ public class CrashAnalyzer
         {
             // Match thread pattern: [*] thread #N: tid = TID, address function, name = 'name', queue = 'queue', stop reason = reason
             // Note: tid can be hex (0xHEX) OR decimal depending on LLDB version/platform
-            var threadMatch = Regex.Match(line, 
-                @"^(\*?)\s*thread\s*#(\d+):\s*tid\s*=\s*(0x[0-9a-f]+|\d+)(?:,\s*([^,]+))?", 
+            var threadMatch = Regex.Match(line,
+                @"^(\*?)\s*thread\s*#(\d+):\s*tid\s*=\s*(0x[0-9a-f]+|\d+)(?:,\s*([^,]+))?",
                 RegexOptions.IgnoreCase);
 
             if (threadMatch.Success)
@@ -648,7 +652,7 @@ public class CrashAnalyzer
         // Ensure Threads.All is initialized (for tests that call this directly)
         result.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>(), Summary = new ThreadSummary() };
         result.Threads.All ??= new List<ThreadInfo>();
-        
+
         var lines = output.Split('\n');
         ThreadInfo? currentThread = null;
 
@@ -684,11 +688,11 @@ public class CrashAnalyzer
     protected static ThreadInfo? FindThreadByIndex(List<ThreadInfo> threads, int threadIndex)
     {
         // First try direct match: ThreadId starts with the number followed by space or is exactly the number
-        var thread = threads.FirstOrDefault(t => 
+        var thread = threads.FirstOrDefault(t =>
             t.ThreadId == threadIndex.ToString() ||
             t.ThreadId.StartsWith($"{threadIndex} ") ||
             t.ThreadId.StartsWith($"{threadIndex}("));
-        
+
         if (thread != null) return thread;
 
         // Try by position (1-based index to 0-based)
@@ -708,8 +712,8 @@ public class CrashAnalyzer
     {
         // Match frame pattern with module`function (backtick separator)
         // Note: Use (.+?) for function to capture complex C++ signatures with spaces
-        var frameMatch = Regex.Match(line, 
-            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(\S+)`(.+?)(?:\s+\+\s+\d+)?(?:\s+at\s+(.+))?$", 
+        var frameMatch = Regex.Match(line,
+            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(\S+)`(.+?)(?:\s+\+\s+\d+)?(?:\s+at\s+(.+))?$",
             RegexOptions.IgnoreCase);
 
         if (frameMatch.Success)
@@ -739,8 +743,8 @@ public class CrashAnalyzer
         }
 
         // Try pattern for frames without backtick separator (e.g., "libstdc++.so.6 + 123")
-        var noBacktickMatch = Regex.Match(line, 
-            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(\S+\.(?:so|dylib)(?:\.\d+)*)(?:\s+\+\s+(-?\d+))?(?:\s+at\s+(.+))?$", 
+        var noBacktickMatch = Regex.Match(line,
+            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(\S+\.(?:so|dylib)(?:\.\d+)*)(?:\s+\+\s+(-?\d+))?(?:\s+at\s+(.+))?$",
             RegexOptions.IgnoreCase);
 
         if (noBacktickMatch.Success)
@@ -762,8 +766,8 @@ public class CrashAnalyzer
         }
 
         // Try simpler pattern for any remaining format
-        var simpleMatch = Regex.Match(line, 
-            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(.+)$", 
+        var simpleMatch = Regex.Match(line,
+            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(.+)$",
             RegexOptions.IgnoreCase);
 
         if (simpleMatch.Success)
@@ -851,11 +855,11 @@ public class CrashAnalyzer
         for (int i = 0; i < lines.Length; i++)
         {
             var line = lines[i];
-            
+
             // Match image list pattern: [idx] UUID address path
             // Example: "[  0] 12345678-1234-1234-1234-123456789ABC 0x0000000100000000 /usr/lib/dyld"
-            var moduleMatch = Regex.Match(line, 
-                @"^\s*\[\s*\d+\]\s+([0-9A-F-]+)\s+(0x[0-9a-f]+)\s+(.+)$", 
+            var moduleMatch = Regex.Match(line,
+                @"^\s*\[\s*\d+\]\s+([0-9A-F-]+)\s+(0x[0-9a-f]+)\s+(.+)$",
                 RegexOptions.IgnoreCase);
 
             if (moduleMatch.Success)
@@ -878,13 +882,13 @@ public class CrashAnalyzer
                 // 3. Check if next line has .debug/.dbg file (Linux debug symbols)
                 var hasSymbols = fullPath.Contains(".dSYM", StringComparison.OrdinalIgnoreCase) ||
                                  line.Contains("symbols", StringComparison.OrdinalIgnoreCase);
-                
+
                 // Check next line for debug info (Linux format: debug file on separate line)
                 if (!hasSymbols && i + 1 < lines.Length)
                 {
                     var nextLine = lines[i + 1];
                     // Debug info line doesn't start with [ and contains .debug or .dbg
-                    if (!nextLine.TrimStart().StartsWith("[") && 
+                    if (!nextLine.TrimStart().StartsWith("[") &&
                         (nextLine.Contains(".debug", StringComparison.OrdinalIgnoreCase) ||
                          nextLine.Contains(".dbg", StringComparison.OrdinalIgnoreCase) ||
                          nextLine.Contains("/debug/", StringComparison.OrdinalIgnoreCase)))
@@ -894,6 +898,7 @@ public class CrashAnalyzer
                     }
                 }
 
+                result.Modules ??= new List<ModuleInfo>();
                 result.Modules.Add(new ModuleInfo
                 {
                     Name = moduleName,
@@ -905,8 +910,8 @@ public class CrashAnalyzer
             else
             {
                 // Try alternate format: just path or simpler format
-                var simpleMatch = Regex.Match(line, 
-                    @"^\s*\[\s*\d+\]\s+(0x[0-9a-f]+)\s+(.+)$", 
+                var simpleMatch = Regex.Match(line,
+                    @"^\s*\[\s*\d+\]\s+(0x[0-9a-f]+)\s+(.+)$",
                     RegexOptions.IgnoreCase);
 
                 if (simpleMatch.Success)
@@ -921,6 +926,7 @@ public class CrashAnalyzer
                         moduleName = fullPath.Substring(lastSlash + 1);
                     }
 
+                    result.Modules ??= new List<ModuleInfo>();
                     result.Modules.Add(new ModuleInfo
                     {
                         Name = moduleName,
@@ -943,6 +949,7 @@ public class CrashAnalyzer
                         var addrMatch = Regex.Match(line, @"(0x[0-9a-f]+)");
                         var baseAddr = addrMatch.Success ? addrMatch.Groups[1].Value : "Unknown";
 
+                        result.Modules ??= new List<ModuleInfo>();
                         result.Modules.Add(new ModuleInfo
                         {
                             Name = moduleName,
@@ -954,7 +961,7 @@ public class CrashAnalyzer
             }
         }
     }
-    
+
     /// <summary>
     /// Detects platform and architecture information from the dump.
     /// </summary>
@@ -965,7 +972,7 @@ public class CrashAnalyzer
         // Initialize platform info in the new structure
         var platform = new PlatformInfo();
         result.Environment!.Platform = platform;
-        
+
         // Detect OS and C library type from loader
         if (modulesOutput.Contains("ld-musl-", StringComparison.OrdinalIgnoreCase))
         {
@@ -980,7 +987,7 @@ public class CrashAnalyzer
             platform.Os = "Linux";
             platform.IsAlpine = false;
             platform.LibcType = "glibc";
-            
+
             // Try to detect distro from paths
             if (modulesOutput.Contains("/debian/", StringComparison.OrdinalIgnoreCase))
                 platform.Distribution = "Debian";
@@ -1003,7 +1010,7 @@ public class CrashAnalyzer
         {
             platform.Os = "Windows";
         }
-        
+
         // Detect architecture from loader or module paths
         if (modulesOutput.Contains("aarch64", StringComparison.OrdinalIgnoreCase) ||
             modulesOutput.Contains("arm64", StringComparison.OrdinalIgnoreCase))
@@ -1030,7 +1037,7 @@ public class CrashAnalyzer
             platform.Architecture = "arm";
             platform.PointerSize = 32;
         }
-        
+
         // Try to detect architecture from address size if not yet determined
         if (string.IsNullOrEmpty(platform.Architecture))
         {
@@ -1064,14 +1071,14 @@ public class CrashAnalyzer
         {
             var extractor = new ProcessInfoExtractor();
             result.Environment!.Process = await extractor.ExtractProcessInfoAsync(
-                _debuggerManager, 
+                _debuggerManager,
                 result.Environment.Platform,
                 backtraceOutput,
                 result.RawCommands);
         }
         catch
         {
-            // Don't fail the entire analysis - this is optional enrichment
+            // Don't fail the entire analysis - this is optional enrichment.
         }
     }
 
@@ -1102,7 +1109,6 @@ public class CrashAnalyzer
         }
 
         result.Memory.LeakAnalysis.TotalHeapBytes = totalCommitted;
-        result.Memory.LeakAnalysis.EstimatedLeakedBytes = totalCommitted;
 
         // Check for large heaps - this is high consumption, not necessarily a leak
         if (totalCommitted > 2_000_000_000) // > 2GB
@@ -1160,12 +1166,12 @@ public class CrashAnalyzer
 
         // Parse critical sections
         // Format: "CritSec <name> at <address>\n  LockCount          X\n  OwningThread       Y"
-        var critSecMatches = Regex.Matches(locksOutput, 
-            @"CritSec\s+(\S+)\s+at\s+([0-9a-fx`]+).*?OwningThread\s+([0-9a-fx`]+)", 
+        var critSecMatches = Regex.Matches(locksOutput,
+            @"CritSec\s+(\S+)\s+at\s+([0-9a-fx`]+).*?OwningThread\s+([0-9a-fx`]+)",
             RegexOptions.IgnoreCase | RegexOptions.Singleline);
 
         var ownerToLocks = new Dictionary<string, List<string>>();
-        
+
         foreach (Match match in critSecMatches)
         {
             var lockName = match.Groups[1].Value;
@@ -1260,7 +1266,6 @@ public class CrashAnalyzer
         }
 
         result.Memory.LeakAnalysis.TotalHeapBytes = totalMemory;
-        result.Memory.LeakAnalysis.EstimatedLeakedBytes = totalMemory;
 
         // Check for large memory - this is high consumption, not necessarily a leak
         if (totalMemory > 2_000_000_000) // > 2GB
@@ -1296,9 +1301,9 @@ public class CrashAnalyzer
         // Get detailed thread info with backtraces (all threads)
         // Use actual command as key: "bt all" for LLDB, "~*k" for WinDbg
         var rawCommands = result.RawCommands ?? new Dictionary<string, string>();
-        var threadBacktraces = rawCommands.GetValueOrDefault("bt all", 
+        var threadBacktraces = rawCommands.GetValueOrDefault("bt all",
                                rawCommands.GetValueOrDefault("~*k", ""));
-        
+
         // Look for threads waiting on locks
         // Common patterns: pthread_mutex_lock, __psynch_mutexwait, semaphore_wait
         var waitingThreads = new List<string>();
@@ -1379,17 +1384,18 @@ public class CrashAnalyzer
         result.Threads.Summary ??= new ThreadSummary();
 
         // Count total frames across all threads
-        var threads = result.Threads.All;
+        var threads = result.Threads?.All ?? new List<ThreadInfo>();
         var totalFrames = threads.Sum(t => t.CallStack.Count);
         var faultingThread = threads.FirstOrDefault(t => t.IsFaulting);
         var faultingFrames = faultingThread?.CallStack.Count ?? 0;
 
         // Build description using new properties
-        var crashType = result.Summary!.CrashType ?? "Unknown";
+        result.Summary ??= new AnalysisSummary();
+        var crashType = result.Summary.CrashType ?? "Unknown";
         var description = result.Exception != null
             ? $"Crash Type: {crashType}. Exception: {result.Exception.Type}. "
             : $"Crash Type: {crashType}. ";
-        description += $"Found {threads.Count} threads ({totalFrames} total frames, {faultingFrames} in faulting thread), {result.Modules.Count} modules. ";
+        description += $"Found {threads.Count} threads ({totalFrames} total frames, {faultingFrames} in faulting thread), {result.Modules?.Count ?? 0} modules. ";
 
         // Add memory consumption summary
         if (result.Memory?.LeakAnalysis?.Detected == true)
@@ -1405,7 +1411,7 @@ public class CrashAnalyzer
         }
 
         // Initialize recommendations list
-        result.Summary!.Recommendations ??= new List<string>();
+        result.Summary.Recommendations ??= new List<string>();
 
         // Add basic recommendations
         if (totalFrames == 0)
@@ -1413,7 +1419,7 @@ public class CrashAnalyzer
             result.Summary.Recommendations.Add("No call stack found. Ensure symbols are configured correctly.");
         }
 
-        if (result.Modules.Any(m => !m.HasSymbols))
+        if (result.Modules != null && result.Modules.Any(m => !m.HasSymbols))
         {
             result.Summary.Recommendations.Add("Some modules are missing symbols. Upload symbol files for better analysis.");
         }
@@ -1422,8 +1428,8 @@ public class CrashAnalyzer
         result.Summary.Description = description;
         result.Summary.Severity = DetermineSeverity(result);
         result.Summary.ThreadCount = threads.Count;
-        result.Summary.ModuleCount = result.Modules.Count;
-        
+        result.Summary.ModuleCount = result.Modules?.Count ?? 0;
+
         // Update thread summary
         result.Threads!.Summary!.Total = threads.Count;
         result.Threads.FaultingThread = faultingThread;
@@ -1480,7 +1486,7 @@ public class CrashAnalyzer
         var totalFrames = allThreads.Sum(t => t.CallStack.Count);
         var framesWithSource = 0;
         var framesResolved = 0;
-        
+
         // Log start of resolution
         Console.WriteLine($"[SourceLink] ResolveSourceLinks: Starting resolution for {totalThreads} threads, {totalFrames} frames");
 
@@ -1499,7 +1505,7 @@ public class CrashAnalyzer
                 }
             }
         }
-        
+
         // Log summary
         Console.WriteLine($"[SourceLink] ResolveSourceLinks: Completed - {framesWithSource} frames with source info, {framesResolved} resolved");
     }
@@ -1509,51 +1515,51 @@ public class CrashAnalyzer
     /// </summary>
     /// <returns>True if source link was resolved, false otherwise.</returns>
     private bool ResolveFrameSourceLink(StackFrame frame, CrashAnalysisResult result)
+    {
+        // Skip if no source info available
+        if (string.IsNullOrEmpty(frame.Source) && (string.IsNullOrEmpty(frame.SourceFile) || !frame.LineNumber.HasValue))
         {
-            // Skip if no source info available
-            if (string.IsNullOrEmpty(frame.Source) && (string.IsNullOrEmpty(frame.SourceFile) || !frame.LineNumber.HasValue))
-            {
             return false;
-            }
+        }
 
-            // Extract source file and line number if not already set
-            if (string.IsNullOrEmpty(frame.SourceFile) && !string.IsNullOrEmpty(frame.Source))
+        // Extract source file and line number if not already set
+        if (string.IsNullOrEmpty(frame.SourceFile) && !string.IsNullOrEmpty(frame.Source))
+        {
+            // Parse source from "file.cpp:123" or "file.cpp @ 123" format
+            var match = Regex.Match(frame.Source, @"^(.+?)[:@]\s*(\d+)");
+            if (match.Success)
             {
-                // Parse source from "file.cpp:123" or "file.cpp @ 123" format
-                var match = Regex.Match(frame.Source, @"^(.+?)[:@]\s*(\d+)");
-                if (match.Success)
+                frame.SourceFile = match.Groups[1].Value.Trim();
+                if (int.TryParse(match.Groups[2].Value, out int line))
                 {
-                    frame.SourceFile = match.Groups[1].Value.Trim();
-                    if (int.TryParse(match.Groups[2].Value, out int line))
-                    {
-                        frame.LineNumber = line;
-                    }
+                    frame.LineNumber = line;
                 }
             }
+        }
 
-            // Skip if we still don't have source info
-            if (string.IsNullOrEmpty(frame.SourceFile) || !frame.LineNumber.HasValue)
-            {
+        // Skip if we still don't have source info
+        if (string.IsNullOrEmpty(frame.SourceFile) || !frame.LineNumber.HasValue)
+        {
             return false;
-            }
+        }
 
-            // Find the module path (try to locate it from the modules list)
-            var modulePath = FindModulePath(frame.Module, result);
-            if (string.IsNullOrEmpty(modulePath))
-            {
-                // Use module name as path if we can't find the full path
-                modulePath = frame.Module;
-            }
+        // Find the module path (try to locate it from the modules list)
+        var modulePath = FindModulePath(frame.Module, result);
+        if (string.IsNullOrEmpty(modulePath))
+        {
+            // Use module name as path if we can't find the full path
+            modulePath = frame.Module;
+        }
 
-            // Resolve source link
+        // Resolve source link
         var location = _sourceLinkResolver!.Resolve(modulePath, frame.SourceFile, frame.LineNumber.Value);
-            if (location.Resolved)
-            {
-                frame.SourceUrl = location.Url;
-                frame.SourceProvider = location.Provider.ToString();
+        if (location.Resolved)
+        {
+            frame.SourceUrl = location.Url;
+            frame.SourceProvider = location.Provider.ToString();
             return true;
         }
-        
+
         return false;
     }
 
@@ -1568,7 +1574,12 @@ public class CrashAnalyzer
         }
 
         // Try exact match first
-        var module = result.Modules.FirstOrDefault(m => 
+        if (result.Modules == null || result.Modules.Count == 0)
+        {
+            return null;
+        }
+
+        var module = result.Modules.FirstOrDefault(m =>
             m.Name.Equals(moduleName, StringComparison.OrdinalIgnoreCase) ||
             Path.GetFileNameWithoutExtension(m.Name).Equals(moduleName, StringComparison.OrdinalIgnoreCase));
 
@@ -1578,12 +1589,12 @@ public class CrashAnalyzer
         }
 
         // Try partial match
-        module = result.Modules.FirstOrDefault(m => 
+        module = result.Modules.FirstOrDefault(m =>
             m.Name.Contains(moduleName, StringComparison.OrdinalIgnoreCase));
 
         return module?.Name;
     }
-    
+
     /// <summary>
     /// Cleans up LLDB command output by removing known error patterns that shouldn't be there.
     /// This handles leftover Python errors from previous LLDB sessions or failed commands.
@@ -1592,19 +1603,19 @@ public class CrashAnalyzer
     {
         if (string.IsNullOrEmpty(output))
             return output;
-        
+
         // Remove Python traceback errors (from failed script commands)
-        output = Regex.Replace(output, 
-            @"Traceback \(most recent call last\):.*?(?:NameError|SyntaxError|TypeError|AttributeError):[^\n]*\n?", 
-            "", 
+        output = Regex.Replace(output,
+            @"Traceback \(most recent call last\):.*?(?:NameError|SyntaxError|TypeError|AttributeError):[^\n]*\n?",
+            "",
             RegexOptions.Singleline);
-        
+
         // Remove common LLDB Python errors
         output = Regex.Replace(output,
             @"(?:File ""<string>"", line \d+, in <module>|name '[^']+' is not defined)\n?",
             "",
             RegexOptions.Multiline);
-        
+
         return output.Trim();
     }
 }
