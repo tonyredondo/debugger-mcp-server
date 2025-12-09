@@ -758,19 +758,24 @@ public class ProcessInfoExtractor
                 }
             }
 
-            // Validate candidate arguments: argv[0] MUST be an executable path
-            // If the first argument doesn't look like a path, the whole list is likely garbage
+            // Validate candidate arguments: argv[0] should look like an executable
+            // Accept paths (absolute or relative) OR executable names (e.g., "Samples.BuggyBits", "dotnet")
             if (candidateArguments.Count > 0)
             {
                 var firstArg = candidateArguments[0];
-                // argv[0] should be an absolute path (/) or relative path (./ or ../)
-                // or at minimum look like a path with directory separators
-                var looksLikeExecutablePath = firstArg.StartsWith('/') || 
-                                               firstArg.StartsWith("./") || 
-                                               firstArg.StartsWith("../") ||
-                                               (firstArg.Contains('/') && !firstArg.Contains(' '));
                 
-                if (looksLikeExecutablePath)
+                // argv[0] can be:
+                // 1. An absolute path: /path/to/executable
+                // 2. A relative path: ./executable or ../bin/executable
+                // 3. A path with directories: some/path/executable
+                // 4. Just the executable name: "Samples.BuggyBits", "dotnet", "node"
+                var looksLikeExecutable = firstArg.StartsWith('/') || 
+                                          firstArg.StartsWith("./") || 
+                                          firstArg.StartsWith("../") ||
+                                          (firstArg.Contains('/') && !firstArg.Contains(' ')) ||
+                                          IsValidExecutableName(firstArg);
+                
+                if (looksLikeExecutable)
                 {
                     result.Arguments.AddRange(candidateArguments);
                     _logger?.LogDebug("ProcessInfoExtractor: Stack scan - accepted {Count} arguments (argv[0]={Argv0})",
@@ -778,7 +783,7 @@ public class ProcessInfoExtractor
                 }
                 else
                 {
-                    _logger?.LogDebug("ProcessInfoExtractor: Stack scan - discarded {Count} candidate arguments (first doesn't look like path: {First})",
+                    _logger?.LogDebug("ProcessInfoExtractor: Stack scan - discarded {Count} candidate arguments (first doesn't look like executable: {First})",
                         candidateArguments.Count, firstArg.Length > 50 ? firstArg.Substring(0, 50) + "..." : firstArg);
                 }
             }
@@ -1005,6 +1010,7 @@ public class ProcessInfoExtractor
 
     /// <summary>
     /// Validates if a string looks like a valid command-line argument.
+    /// More lenient than the argv[0] path check - accepts general argument patterns.
     /// </summary>
     /// <param name="arg">The argument string.</param>
     /// <returns>True if it looks like a valid argument.</returns>
@@ -1013,10 +1019,9 @@ public class ProcessInfoExtractor
         if (string.IsNullOrEmpty(arg))
             return false;
 
-        // Reject strings that are too short - real arguments are usually at least 4 chars
-        // (short options like "-v" are 2 chars, but we need more context to trust them)
-        // This helps filter out random 2-3 byte garbage from memory
-        if (arg.Length < 4)
+        // Reject very short strings (1-2 chars are likely garbage)
+        // But allow 3+ chars as valid args (e.g., "-v", "foo")
+        if (arg.Length < 3)
             return false;
 
         // Reject strings that are too long (likely not real arguments)
@@ -1028,9 +1033,9 @@ public class ProcessInfoExtractor
         // - Start with - or -- for flags/options
         // - Start with http for URLs
         // - Start with . for relative paths
-        // - First argument (argv[0]) is usually the executable path
+        // - Executable names (like "Samples.BuggyBits" or "dotnet")
         
-        // High confidence patterns - must match one of these
+        // High confidence patterns - accept immediately
         if (arg.StartsWith('/') || arg.StartsWith("./") || arg.StartsWith("../"))
             return true; // Paths
             
@@ -1040,10 +1045,11 @@ public class ProcessInfoExtractor
         if (arg.StartsWith("http://") || arg.StartsWith("https://"))
             return true; // URLs
 
-        // For other strings, require high confidence they're real arguments
+        // For other strings, check if they look like valid identifiers/arguments
         // Must be mostly alphanumeric with common path/argument characters
         var validChars = 0;
         var letterOrDigitCount = 0;
+        
         foreach (var c in arg)
         {
             if (char.IsLetterOrDigit(c))
@@ -1053,18 +1059,76 @@ public class ProcessInfoExtractor
             }
             else if (c == '/' || c == '\\' || c == '.' || c == '-' || c == '_' || 
                      c == ':' || c == '@' || c == ',' || c == ';' ||
-                     c == '[' || c == ']' || c == '(' || c == ')' || c == ' ')
+                     c == '[' || c == ']' || c == '(' || c == ')' || c == ' ' ||
+                     c == '+' || c == '=' || c == '#')
             {
                 validChars++;
             }
         }
 
-        // At least 80% of characters should be "valid" for arguments
-        // AND at least 50% should be letters or digits (not just punctuation)
+        // At least 70% of characters should be "valid" for arguments (more lenient)
         var validRatio = (double)validChars / arg.Length;
-        var alphanumRatio = (double)letterOrDigitCount / arg.Length;
+        if (validRatio < 0.7)
+            return false;
         
-        return validRatio >= 0.8 && alphanumRatio >= 0.5;
+        // At least 40% should be letters or digits (more lenient)
+        var alphanumRatio = (double)letterOrDigitCount / arg.Length;
+        if (alphanumRatio < 0.4)
+            return false;
+
+        // If it looks like an identifier/filename (e.g., "Samples.BuggyBits", "dotnet"),
+        // accept it - these are common for argv[0]
+        // Must start with a letter and have reasonable structure
+        if (char.IsLetter(arg[0]) && letterOrDigitCount >= 3)
+            return true;
+        
+        return false;
+    }
+
+    /// <summary>
+    /// Validates if a string looks like a valid executable name (without path).
+    /// Examples: "dotnet", "Samples.BuggyBits", "node", "python3"
+    /// </summary>
+    private static bool IsValidExecutableName(string name)
+    {
+        if (string.IsNullOrEmpty(name) || name.Length < 3)
+            return false;
+
+        // Must start with a letter
+        if (!char.IsLetter(name[0]))
+            return false;
+
+        // Should not contain spaces or special shell characters
+        if (name.Contains(' ') || name.Contains('|') || name.Contains('&') || 
+            name.Contains('>') || name.Contains('<') || name.Contains('$') ||
+            name.Contains('`') || name.Contains('\n') || name.Contains('\r'))
+            return false;
+
+        // Count valid characters for an executable name
+        var validChars = 0;
+        var letterOrDigitCount = 0;
+        
+        foreach (var c in name)
+        {
+            if (char.IsLetterOrDigit(c))
+            {
+                validChars++;
+                letterOrDigitCount++;
+            }
+            else if (c == '.' || c == '-' || c == '_')
+            {
+                validChars++;
+            }
+        }
+
+        // At least 90% should be valid chars (letters, digits, dots, dashes, underscores)
+        var validRatio = (double)validChars / name.Length;
+        if (validRatio < 0.9)
+            return false;
+
+        // At least 60% should be letters or digits
+        var alphanumRatio = (double)letterOrDigitCount / name.Length;
+        return alphanumRatio >= 0.6;
     }
 }
 
