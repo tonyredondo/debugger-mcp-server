@@ -1537,19 +1537,33 @@ public class LldbManager : IDebuggerManager
 
         foreach (var line in outputLines)
         {
-            // Skip empty lines and address-only lines
-            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("0x") || line.Contains("invalid image"))
+            // Skip empty lines, invalid images, and lines without addresses
+            if (string.IsNullOrWhiteSpace(line) || line.Contains("invalid image"))
                 continue;
 
+            // verifycore output format:
+            // First line is the dump file path (no address) - skip it
+            // Module lines: "00007F3156DC7000 /lib/ld-musl-x86_64.so.1"
+            
+            // Only process lines that start with a hex address (module lines)
+            // Addresses are 16 hex chars for 64-bit, 8 for 32-bit
+            var trimmedLine = line.TrimStart();
+            if (trimmedLine.Length < 8) continue;
+            
+            // Check if line starts with hex address (0-9, A-F, a-f)
+            var firstWord = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
+            if (firstWord.Length < 8 || !firstWord.All(c => char.IsAsciiHexDigit(c)))
+            {
+                _logger.LogDebug("[dotnet-symbol-verifycore] Skipping non-module line: {Line}", 
+                    line.Length > 80 ? line[..80] + "..." : line);
+                continue;
+            }
+
             // Extract the path from lines like "00007F3156DC7000 /lib/ld-musl-x86_64.so.1"
-            var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            var parts = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
             if (parts.Length >= 2 && parts[1].StartsWith("/"))
             {
                 modulePaths.Add(parts[1]);
-            }
-            else if (parts.Length >= 1 && parts[0].StartsWith("/"))
-            {
-                modulePaths.Add(parts[0]);
             }
         }
 
