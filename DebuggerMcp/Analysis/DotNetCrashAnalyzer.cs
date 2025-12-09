@@ -2318,6 +2318,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             result.Summary.Description += $"DEADLOCK DETECTED: {result.Threads!.Deadlock.InvolvedThreads.Count} threads involved. ";
         }
 
+        // Add warning if any commands caused LLDB to crash
+        if (_crashedCommands.Count > 0)
+        {
+            result.Summary.Description += $"WARNING: {_crashedCommands.Count} debugger command(s) crashed and were recovered. Some data may be incomplete. ";
+            result.Summary.Recommendations ??= new List<string>();
+            result.Summary.Recommendations.Add($"Some analysis commands crashed the debugger: {string.Join(", ", _crashedCommands)}. Results may be incomplete.");
+        }
+
         // Transfer .NET-specific data to new hierarchical structure
         PopulateDotNetStructure(result);
     }

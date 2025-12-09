@@ -172,13 +172,36 @@ public class CrashAnalyzer
 
     /// <summary>
     /// Executes a debugger command and returns the output.
+    /// If LLDB crashes and recovery succeeds, returns an error message instead of throwing.
+    /// This allows analysis to continue with partial results.
     /// </summary>
     /// <param name="command">The command to execute.</param>
-    /// <returns>The command output.</returns>
+    /// <returns>The command output, or an error message if the command caused a crash.</returns>
     protected async Task<string> ExecuteCommandAsync(string command)
     {
-        return await Task.Run(() => _debuggerManager.ExecuteCommand(command));
+        try
+        {
+            return await Task.Run(() => _debuggerManager.ExecuteCommand(command));
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("crashed") && ex.Message.Contains("recovered"))
+        {
+            // LLDB crashed but was recovered - return error message instead of throwing
+            // This allows analysis to continue with partial results
+            _crashedCommands.Add(command);
+            _lastCrashMessage = ex.Message;
+            return $"[ERROR: {ex.Message}]";
+        }
     }
+    
+    /// <summary>
+    /// Commands that caused LLDB to crash during analysis.
+    /// </summary>
+    protected readonly List<string> _crashedCommands = new();
+    
+    /// <summary>
+    /// Last crash recovery message (for error reporting).
+    /// </summary>
+    protected string? _lastCrashMessage;
 
     /// <summary>
     /// Parses WinDbg exception output from !analyze -v.
