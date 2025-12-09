@@ -301,16 +301,46 @@ public partial class ObjectInspector
             if (dumpResult.IsArray)
             {
                 inspected.Length = dumpResult.ArrayLength;
-                inspected.Elements = await InspectArrayElementsAsync(
-                    manager,
-                    normalizedAddress,
-                    dumpResult,
-                    depth - 1,
-                    maxArrayElements,
-                    maxStringLength,
-                    seenAddresses,
-                    rootAddress,
-                    cancellationToken);
+                
+                // Skip inspecting elements for very large arrays to prevent crashes and hangs
+                // Arrays with >10000 elements or >64KB size are too large to safely inspect
+                const int MaxArrayElementsToInspect = 10000;
+                const int MaxArraySizeBytes = 64 * 1024; // 64KB
+                
+                var arrayLength = dumpResult.ArrayLength ?? 0;
+                var arraySize = dumpResult.Size;
+                
+                if (arrayLength > MaxArrayElementsToInspect || arraySize > MaxArraySizeBytes)
+                {
+                    _logger.LogDebug(
+                        "Skipping element inspection for large array: {Type} with {Length} elements, {Size} bytes at {Address}",
+                        typeName, arrayLength, arraySize, normalizedAddress);
+                    
+                    // Return summary without elements to avoid potential crashes
+                    inspected.Fields = 
+                    [
+                        new()
+                        {
+                            Name = "[large array]",
+                            Type = dumpResult.ArrayElementType ?? "unknown",
+                            IsStatic = false,
+                            Value = $"Array too large to inspect ({arrayLength:N0} elements, {arraySize:N0} bytes)"
+                        }
+                    ];
+                }
+                else
+                {
+                    inspected.Elements = await InspectArrayElementsAsync(
+                        manager,
+                        normalizedAddress,
+                        dumpResult,
+                        depth - 1,
+                        maxArrayElements,
+                        maxStringLength,
+                        seenAddresses,
+                        rootAddress,
+                        cancellationToken);
+                }
             }
             // Handle collections (List<T>, Dictionary<K,V>, etc.)
             else if (TryHandleCollection(
