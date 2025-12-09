@@ -119,6 +119,20 @@ public interface IHttpApiClient : IDisposable
     Task DeleteDumpAsync(string userId, string dumpId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Uploads an executable binary for a standalone .NET app dump.
+    /// </summary>
+    /// <param name="userId">The user ID.</param>
+    /// <param name="dumpId">The dump ID.</param>
+    /// <param name="binaryPath">Path to the executable binary.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The upload response, or null if failed.</returns>
+    Task<BinaryUploadResponse?> UploadDumpBinaryAsync(
+        string userId, 
+        string dumpId, 
+        string binaryPath, 
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Uploads a symbol file with progress reporting.
     /// </summary>
     /// <param name="filePath">Path to the symbol file.</param>

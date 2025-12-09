@@ -43,7 +43,13 @@ public static class HelpSystem
             new("server", "<subcommand>", "Manage servers (list, add, remove, switch, init)", ["server list", "server add http://localhost:5001", "server switch alpine-x64", "server init"])
         ],
         ["files"] = [
-            new("dumps", "<subcommand>", "Manage dump files (upload, list, info, delete)", ["dumps upload ./crash.dmp", "dumps list", "dumps info abc123", "dumps delete abc123"]),
+            new("dumps", "<subcommand>", "Manage dump files (upload, list, info, delete, binary)", [
+                "dumps upload ./crash.dmp           Upload a dump file",
+                "dumps list                         List available dumps",
+                "dumps info abc123                  Show dump details",
+                "dumps delete abc123                Delete a dump",
+                "dumps binary abc123 ./MyApp        Upload executable for standalone apps"
+            ]),
             new("symbols", "<subcommand>", "Manage symbol files and Datadog symbols", [
                 "symbols upload ./app.pdb           Upload symbol file",
                 "symbols list                       List uploaded symbols",

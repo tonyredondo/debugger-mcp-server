@@ -298,12 +298,16 @@ public class DumpController : ControllerBase
                 LastAccessedAt = fileInfo.LastAccessTimeUtc
             };
 
-            // Try to load metadata if it exists
-            if (System.IO.File.Exists(metadataPath))
+            // Try to load metadata if it exists (check both old and new naming conventions)
+            var altMetadataPath = Path.Combine(userDir, $".metadata_{sanitizedDumpId}.json");
+            var actualMetadataPath = System.IO.File.Exists(metadataPath) ? metadataPath : 
+                                     System.IO.File.Exists(altMetadataPath) ? altMetadataPath : null;
+            
+            if (actualMetadataPath != null)
             {
                 try
                 {
-                    var metadataJson = System.IO.File.ReadAllText(metadataPath);
+                    var metadataJson = System.IO.File.ReadAllText(actualMetadataPath);
                     var metadata = System.Text.Json.JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
                     if (metadata != null)
                     {
@@ -314,6 +318,8 @@ public class DumpController : ControllerBase
                         response.IsAlpineDump = metadata.IsAlpineDump;
                         response.RuntimeVersion = metadata.RuntimeVersion;
                         response.Architecture = metadata.Architecture;
+                        response.HasExecutable = !string.IsNullOrEmpty(metadata.ExecutablePath);
+                        response.ExecutableName = metadata.ExecutableName;
                     }
                 }
                 catch
@@ -375,6 +381,7 @@ public class DumpController : ControllerBase
                 var fileInfo = new FileInfo(filePath);
                 var dumpId = Path.GetFileNameWithoutExtension(fileInfo.Name);
                 var metadataPath = Path.Combine(userDir, $"{dumpId}.json");
+                var altMetadataPath = Path.Combine(userDir, $".metadata_{dumpId}.json");
 
                 var response = new DumpInfoResponse
                 {
@@ -385,12 +392,14 @@ public class DumpController : ControllerBase
                     LastAccessedAt = fileInfo.LastAccessTimeUtc
                 };
 
-                // Try to load metadata if it exists
-                if (System.IO.File.Exists(metadataPath))
+                // Try to load metadata if it exists (check both naming conventions)
+                var actualMetadataPath = System.IO.File.Exists(metadataPath) ? metadataPath :
+                                         System.IO.File.Exists(altMetadataPath) ? altMetadataPath : null;
+                if (actualMetadataPath != null)
                 {
                     try
                     {
-                        var metadataJson = System.IO.File.ReadAllText(metadataPath);
+                        var metadataJson = System.IO.File.ReadAllText(actualMetadataPath);
                         var metadata = System.Text.Json.JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
                         if (metadata != null)
                         {
@@ -401,6 +410,8 @@ public class DumpController : ControllerBase
                             response.IsAlpineDump = metadata.IsAlpineDump;
                             response.RuntimeVersion = metadata.RuntimeVersion;
                             response.Architecture = metadata.Architecture;
+                            response.HasExecutable = !string.IsNullOrEmpty(metadata.ExecutablePath);
+                            response.ExecutableName = metadata.ExecutableName;
                         }
                     }
                     catch
@@ -467,10 +478,22 @@ public class DumpController : ControllerBase
             // Delete the dump file
             System.IO.File.Delete(filePath);
 
-            // Delete metadata file if it exists
+            // Delete metadata file if it exists (check both naming conventions)
             if (System.IO.File.Exists(metadataPath))
             {
                 System.IO.File.Delete(metadataPath);
+            }
+            var altMetadataPath = Path.Combine(userDir, $".metadata_{sanitizedDumpId}.json");
+            if (System.IO.File.Exists(altMetadataPath))
+            {
+                System.IO.File.Delete(altMetadataPath);
+            }
+
+            // Delete binary directory if it exists (standalone app executables)
+            var binaryDir = Path.Combine(userDir, $".binary_{sanitizedDumpId}");
+            if (Directory.Exists(binaryDir))
+            {
+                Directory.Delete(binaryDir, recursive: true);
             }
 
             // Delete associated symbol files to prevent orphaned files
@@ -486,6 +509,151 @@ public class DumpController : ControllerBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error deleting dump {DumpId} for user {UserId}", dumpId, userId);
+            return StatusCode(500, new { error = "Internal server error" });
+        }
+    }
+
+    /// <summary>
+    /// Uploads an executable binary for a standalone .NET app dump.
+    /// </summary>
+    /// <remarks>
+    /// For standalone (self-contained) .NET applications, the original executable is required
+    /// for LLDB to properly load modules and resolve symbols. This endpoint allows uploading
+    /// the executable to associate it with a previously uploaded dump.
+    /// 
+    /// After uploading the binary:
+    /// - The dump metadata is updated with the executable path
+    /// - When opening the dump, LLDB will use: target create -c &lt;corefile&gt; -- &lt;executable&gt;
+    /// - This enables proper module loading and symbol resolution for standalone apps
+    /// </remarks>
+    /// <param name="userId">User identifier who owns the dump.</param>
+    /// <param name="dumpId">Dump identifier to associate the binary with.</param>
+    /// <param name="file">The executable binary file.</param>
+    /// <returns>Result indicating success or failure.</returns>
+    /// <response code="200">Binary uploaded and associated with dump successfully.</response>
+    /// <response code="400">Invalid request (no file, dump not found, etc.).</response>
+    /// <response code="500">Internal server error.</response>
+    [HttpPost("{userId}/{dumpId}/binary")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status500InternalServerError)]
+    public async Task<IActionResult> UploadDumpBinary(
+        string userId,
+        string dumpId,
+        [FromForm] IFormFile file)
+    {
+        try
+        {
+            // Validate file
+            if (file == null || file.Length == 0)
+            {
+                return BadRequest(new { error = "No file provided or file is empty" });
+            }
+
+            // Sanitize inputs
+            string sanitizedUserId, sanitizedDumpId;
+            try
+            {
+                sanitizedUserId = PathSanitizer.SanitizeIdentifier(userId, nameof(userId));
+                sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
+            }
+            catch (ArgumentException ex)
+            {
+                return BadRequest(new { error = ex.Message });
+            }
+
+            // Find the dump metadata (check both naming conventions)
+            var dumpStorage = _sessionManager.GetDumpStoragePath();
+            var userDumpPath = Path.Combine(dumpStorage, sanitizedUserId);
+            var metadataPath = Path.Combine(userDumpPath, $"{sanitizedDumpId}.json");
+            var altMetadataPath = Path.Combine(userDumpPath, $".metadata_{sanitizedDumpId}.json");
+            
+            // Use whichever exists
+            var actualMetadataPath = System.IO.File.Exists(metadataPath) ? metadataPath :
+                                     System.IO.File.Exists(altMetadataPath) ? altMetadataPath : null;
+
+            if (actualMetadataPath == null)
+            {
+                return NotFound(new { error = $"Dump '{dumpId}' not found for user '{userId}'" });
+            }
+
+            // Load existing metadata
+            var metadataJson = await System.IO.File.ReadAllTextAsync(actualMetadataPath);
+            var metadata = System.Text.Json.JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
+            if (metadata == null)
+            {
+                return StatusCode(500, new { error = "Failed to read dump metadata" });
+            }
+
+            // Create binary storage directory
+            var binaryDir = Path.Combine(userDumpPath, $".binary_{sanitizedDumpId}");
+            Directory.CreateDirectory(binaryDir);
+
+            // Save the binary file - use Path.GetFileName to strip any directory components
+            var sanitizedFileName = Path.GetFileName(file.FileName);
+            if (string.IsNullOrWhiteSpace(sanitizedFileName))
+            {
+                return BadRequest(new { error = "Invalid file name" });
+            }
+            var binaryPath = Path.Combine(binaryDir, sanitizedFileName);
+
+            await using (var stream = new FileStream(binaryPath, FileMode.Create))
+            {
+                await file.CopyToAsync(stream);
+            }
+
+            // Make the binary executable on Unix systems
+            if (!OperatingSystem.IsWindows())
+            {
+                try
+                {
+                    var chmodProcess = new System.Diagnostics.Process
+                    {
+                        StartInfo = new System.Diagnostics.ProcessStartInfo
+                        {
+                            FileName = "chmod",
+                            Arguments = $"+x \"{binaryPath}\"",
+                            UseShellExecute = false,
+                            RedirectStandardOutput = true,
+                            RedirectStandardError = true
+                        }
+                    };
+                    chmodProcess.Start();
+                    await chmodProcess.WaitForExitAsync();
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to set executable permission on binary");
+                }
+            }
+
+            // Update metadata
+            metadata.ExecutablePath = binaryPath;
+            metadata.ExecutableName = sanitizedFileName;
+
+            // Save updated metadata back to the same file we read from
+            var updatedMetadataJson = System.Text.Json.JsonSerializer.Serialize(metadata, new System.Text.Json.JsonSerializerOptions
+            {
+                WriteIndented = true
+            });
+            await System.IO.File.WriteAllTextAsync(actualMetadataPath, updatedMetadataJson);
+
+            _logger.LogInformation("Uploaded binary '{FileName}' ({Size} bytes) for dump {DumpId}", 
+                sanitizedFileName, file.Length, sanitizedDumpId);
+
+            return Ok(new
+            {
+                message = $"Binary '{sanitizedFileName}' uploaded and associated with dump '{sanitizedDumpId}'",
+                dumpId = sanitizedDumpId,
+                executableName = sanitizedFileName,
+                executablePath = binaryPath,
+                size = file.Length
+            });
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error uploading binary for dump {DumpId}", dumpId);
             return StatusCode(500, new { error = "Internal server error" });
         }
     }
@@ -1058,6 +1226,18 @@ public class DumpMetadata
     /// The list contains relative paths from the symbol cache directory.
     /// </remarks>
     public List<string>? SymbolFiles { get; set; }
+    
+    /// <summary>Gets or sets the path to a custom executable for standalone apps.</summary>
+    /// <remarks>
+    /// For standalone .NET apps (self-contained deployments), LLDB needs the original
+    /// executable to properly load modules and resolve symbols. When this is set,
+    /// the dump will be opened with: target create -c &lt;corefile&gt; -- &lt;executable&gt;
+    /// instead of just: target create -c &lt;corefile&gt;
+    /// </remarks>
+    public string? ExecutablePath { get; set; }
+    
+    /// <summary>Gets or sets the original name of the uploaded executable.</summary>
+    public string? ExecutableName { get; set; }
 }
 
 /// <summary>
@@ -1152,6 +1332,21 @@ public class DumpInfoResponse
     /// </summary>
     /// <example>arm64</example>
     public string? Architecture { get; set; }
+    
+    /// <summary>
+    /// Gets or sets whether a custom executable has been uploaded for this dump.
+    /// </summary>
+    /// <remarks>
+    /// For standalone .NET apps, the original executable is needed for proper debugging.
+    /// </remarks>
+    /// <example>true</example>
+    public bool HasExecutable { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the name of the uploaded executable.
+    /// </summary>
+    /// <example>MyApp</example>
+    public string? ExecutableName { get; set; }
 }
 
 /// <summary>

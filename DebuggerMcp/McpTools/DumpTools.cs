@@ -85,6 +85,36 @@ public class DumpTools(
             var dumpPath = SessionManager.GetDumpPath(sanitizedDumpId, sanitizedUserId);
             Logger.LogInformation("[OpenDump] Dump path resolved: {DumpPath}", dumpPath);
 
+            // Check if there's a custom executable for this dump (standalone apps)
+            string? executablePath = null;
+            var dumpDir = Path.GetDirectoryName(dumpPath);
+            if (dumpDir != null)
+            {
+                // Check both naming conventions for metadata
+                var metadataPath = Path.Combine(dumpDir, $"{sanitizedDumpId}.json");
+                var altMetadataPath = Path.Combine(dumpDir, $".metadata_{sanitizedDumpId}.json");
+                var actualMetadataPath = File.Exists(metadataPath) ? metadataPath :
+                                         File.Exists(altMetadataPath) ? altMetadataPath : null;
+                
+                if (actualMetadataPath != null)
+                {
+                    try
+                    {
+                        var metadataJson = await File.ReadAllTextAsync(actualMetadataPath);
+                        var metadata = System.Text.Json.JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
+                        if (metadata?.ExecutablePath != null && File.Exists(metadata.ExecutablePath))
+                        {
+                            executablePath = metadata.ExecutablePath;
+                            Logger.LogInformation("[OpenDump] Found custom executable for standalone app: {ExecutablePath}", executablePath);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.LogDebug(ex, "[OpenDump] Failed to read dump metadata for executable path");
+                    }
+                }
+            }
+
             // Configure symbols automatically for this dump
             // This includes Microsoft Symbol Server + dump-specific symbols if they exist
             Logger.LogDebug("[OpenDump] Configuring symbol paths...");
@@ -105,7 +135,7 @@ public class DumpTools(
 
             // Open the dump file in the debugger
             Logger.LogInformation("[OpenDump] Opening dump file (this may take a while for large dumps)...");
-            manager.OpenDumpFile(dumpPath);
+            manager.OpenDumpFile(dumpPath, executablePath);
             Logger.LogInformation("[OpenDump] Dump file opened - Elapsed: {Elapsed}ms", sw.ElapsedMilliseconds);
 
             // Open with ClrMD for metadata enrichment (after debugger opens the dump)
@@ -382,17 +412,21 @@ public class DumpTools(
             var userDir = Path.GetDirectoryName(dumpPath);
             if (userDir == null) return;
 
+            // Check both naming conventions for metadata
             var metadataPath = Path.Combine(userDir, $"{dumpId}.json");
+            var altMetadataPath = Path.Combine(userDir, $".metadata_{dumpId}.json");
+            var actualMetadataPath = File.Exists(metadataPath) ? metadataPath :
+                                     File.Exists(altMetadataPath) ? altMetadataPath : null;
 
             // Check if metadata file exists
-            if (!File.Exists(metadataPath))
+            if (actualMetadataPath == null)
             {
                 Logger.LogDebug("[OpenDump] No metadata file found for dump {DumpId}", dumpId);
                 return;
             }
 
             // Read existing metadata
-            var metadataJson = await File.ReadAllTextAsync(metadataPath);
+            var metadataJson = await File.ReadAllTextAsync(actualMetadataPath);
             var metadata = JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
 
             if (metadata == null)
@@ -442,11 +476,11 @@ public class DumpTools(
                     analysisResult.Architecture, dumpId);
             }
 
-            // Save updated metadata if changes were made
+            // Save updated metadata if changes were made (back to the same file we read from)
             if (updated)
             {
                 var options = new JsonSerializerOptions { WriteIndented = true };
-                await File.WriteAllTextAsync(metadataPath, JsonSerializer.Serialize(metadata, options));
+                await File.WriteAllTextAsync(actualMetadataPath, JsonSerializer.Serialize(metadata, options));
                 Logger.LogInformation("[OpenDump] Saved updated metadata for dump {DumpId}", dumpId);
             }
         }

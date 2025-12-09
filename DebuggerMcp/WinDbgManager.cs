@@ -196,7 +196,10 @@ public class WinDbgManager : IDebuggerManager
     /// This method opens the dump file and waits for the debugger to process it.
     /// After opening, the dump is ready for command execution.
     /// </remarks>
-    public virtual void OpenDumpFile(string dumpFilePath)
+    /// <param name="executablePath">
+    /// Optional path to the executable for standalone apps (currently ignored on WinDbg).
+    /// </param>
+    public virtual void OpenDumpFile(string dumpFilePath, string? executablePath = null)
     {
         // Validate that the manager is initialized
         if (!IsInitialized)

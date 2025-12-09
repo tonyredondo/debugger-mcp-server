@@ -1115,6 +1115,8 @@ public class Program
                     output.Markup("  [yellow]dumps list[/]");
                     output.Markup("  [yellow]dumps info abc123[/]");
                     output.Markup("  [yellow]dumps delete abc123[/]");
+                    output.Markup("  [yellow]dumps binary abc123 ./MyApp[/]");
+                    output.Dim("    Upload executable for standalone app (use after dumps upload)");
                     break;
 
                 case "symbols":
@@ -2194,7 +2196,7 @@ public class Program
 
         if (args.Length == 0)
         {
-            output.Error("Subcommand required. Usage: dumps <upload|list|info|delete>");
+            output.Error("Subcommand required. Usage: dumps <upload|list|info|delete|binary>");
             return;
         }
 
@@ -2223,9 +2225,14 @@ public class Program
                 await HandleDumpsDeleteAsync(subArgs, console, output, state, httpClient);
                 break;
 
+            case "binary":
+            case "bin":
+                await HandleDumpsBinaryUploadAsync(subArgs, output, state, httpClient);
+                break;
+
             default:
                 output.Error($"Unknown subcommand: {subcommand}");
-                output.Dim("Available subcommands: upload, list, info, delete");
+                output.Dim("Available subcommands: upload, list, info, delete, binary");
                 break;
         }
     }
@@ -2489,6 +2496,13 @@ public class Program
                 CheckDumpServerCompatibility(null, dump.Architecture, state, output);
             }
 
+            // Show standalone app binary info
+            if (dump.HasExecutable)
+            {
+                output.KeyValue("Executable", dump.ExecutableName ?? "(unknown)");
+                output.Dim("  Standalone app - binary will be used when opening dump");
+            }
+
             output.KeyValue("Uploaded At", dump.UploadedAt.ToString("yyyy-MM-dd HH:mm:ss UTC"));
 
             if (!string.IsNullOrEmpty(dump.Description))
@@ -2566,6 +2580,92 @@ public class Program
         catch (Exception ex)
         {
             output.Error($"Failed to delete dump: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles dumps binary upload subcommand.
+    /// Uploads an executable binary for standalone .NET apps.
+    /// </summary>
+    private static async Task HandleDumpsBinaryUploadAsync(
+        string[] args,
+        ConsoleOutput output,
+        ShellState state,
+        HttpApiClient httpClient)
+    {
+        // Parse arguments: dumps binary <dumpId> <binary-path>
+        // Also accept: dumps binary upload <dumpId> <binary-path>
+        var argList = args.ToList();
+        
+        // Skip "upload" if present (e.g., "dumps binary upload <dumpId> <path>")
+        if (argList.Count > 0 && argList[0].Equals("upload", StringComparison.OrdinalIgnoreCase))
+        {
+            argList.RemoveAt(0);
+        }
+
+        if (argList.Count < 2)
+        {
+            output.Error("Usage: dumps binary <dumpId> <binary-path>");
+            output.Dim("For standalone .NET apps, upload the original executable to enable proper debugging.");
+            output.WriteLine();
+            output.Markup("[bold]EXAMPLES[/]");
+            output.Markup("  [yellow]dumps binary abc123 ./MyApp[/]");
+            output.Dim("    Upload executable for dump abc123");
+            output.Markup("  [yellow]dumps binary bff4 /path/to/MyStandaloneApp[/]");
+            output.Dim("    Use partial dump ID and full path");
+            return;
+        }
+
+        var partialDumpId = argList[0];
+        var binaryPath = argList[1];
+
+        // Validate binary file exists
+        if (!File.Exists(binaryPath))
+        {
+            output.Error($"Binary file not found: {binaryPath}");
+            return;
+        }
+
+        // Resolve partial dump ID
+        var dumpId = await ResolvePartialDumpIdAsync(partialDumpId, output, state, httpClient);
+        if (dumpId == null)
+        {
+            return; // Error already shown
+        }
+
+        try
+        {
+            var fileName = Path.GetFileName(binaryPath);
+            var fileSize = new FileInfo(binaryPath).Length;
+            
+            output.Info($"Uploading binary '{fileName}' ({fileSize / 1024.0:N1} KB) for dump {dumpId[..8]}...");
+
+            var result = await output.WithSpinnerAsync(
+                "Uploading binary...",
+                () => httpClient.UploadDumpBinaryAsync(state.Settings.UserId, dumpId, binaryPath));
+
+            if (result != null)
+            {
+                output.Success($"Binary uploaded successfully!");
+                output.KeyValue("Dump ID", dumpId);
+                output.KeyValue("Executable", fileName);
+                output.KeyValue("Size", $"{fileSize / 1024.0:N1} KB");
+                output.WriteLine();
+                output.Dim("The binary will be used automatically when opening this dump.");
+                output.Dim("Use 'dump open " + dumpId[..8] + "' to open the dump with the standalone binary.");
+            }
+            else
+            {
+                output.Error("Failed to upload binary");
+            }
+        }
+        catch (HttpApiException ex)
+        {
+            output.Error($"Failed to upload binary: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to upload binary: {ex.Message}");
         }
     }
 

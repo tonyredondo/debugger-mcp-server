@@ -72,6 +72,21 @@ public class DumpInfo
     public string? Architecture { get; set; }
 
     /// <summary>
+    /// Gets or sets whether a custom executable has been uploaded for this dump.
+    /// </summary>
+    /// <remarks>
+    /// For standalone .NET apps, the original executable is needed for proper debugging.
+    /// </remarks>
+    [JsonPropertyName("hasExecutable")]
+    public bool HasExecutable { get; set; }
+
+    /// <summary>
+    /// Gets or sets the name of the uploaded executable.
+    /// </summary>
+    [JsonPropertyName("executableName")]
+    public string? ExecutableName { get; set; }
+
+    /// <summary>
     /// Gets the size formatted as a human-readable string.
     /// </summary>
     [JsonIgnore]
@@ -98,6 +113,42 @@ public class DumpInfo
 /// </summary>
 public class DumpUploadResponse : DumpInfo
 {
+}
+
+/// <summary>
+/// Response from binary upload for standalone apps.
+/// </summary>
+public class BinaryUploadResponse
+{
+    /// <summary>
+    /// Gets or sets the message.
+    /// </summary>
+    [JsonPropertyName("message")]
+    public string? Message { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the dump ID.
+    /// </summary>
+    [JsonPropertyName("dumpId")]
+    public string? DumpId { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the executable name.
+    /// </summary>
+    [JsonPropertyName("executableName")]
+    public string? ExecutableName { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the executable path.
+    /// </summary>
+    [JsonPropertyName("executablePath")]
+    public string? ExecutablePath { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the file size.
+    /// </summary>
+    [JsonPropertyName("size")]
+    public long Size { get; set; }
 }
 
 /// <summary>

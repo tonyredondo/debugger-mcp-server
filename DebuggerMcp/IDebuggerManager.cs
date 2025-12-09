@@ -113,7 +113,12 @@ public interface IDebuggerManager : IDisposable, IAsyncDisposable
     /// <exception cref="ArgumentException">
     /// Thrown if the dump file path is null, empty, or whitespace.
     /// </exception>
-    void OpenDumpFile(string dumpFilePath);
+    /// <param name="dumpFilePath">The path to the dump file to open.</param>
+    /// <param name="executablePath">
+    /// Optional path to the executable for standalone .NET apps.
+    /// When specified, LLDB will use this binary instead of the default dotnet host.
+    /// </param>
+    void OpenDumpFile(string dumpFilePath, string? executablePath = null);
 
     /// <summary>
     /// Closes the currently open dump file.

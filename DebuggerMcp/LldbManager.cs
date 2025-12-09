@@ -285,10 +285,15 @@ public class LldbManager : IDebuggerManager
     /// <exception cref="ArgumentException">
     /// Thrown if the dump file path is null, empty, or whitespace.
     /// </exception>
-    public virtual void OpenDumpFile(string dumpFilePath)
+    public virtual void OpenDumpFile(string dumpFilePath, string? executablePath = null)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         _logger.LogInformation("[LLDB] Opening dump file: {DumpPath}", dumpFilePath);
+        
+        if (!string.IsNullOrEmpty(executablePath))
+        {
+            _logger.LogInformation("[LLDB] Using custom executable for standalone app: {ExecutablePath}", executablePath);
+        }
 
         // Validate the dump file path first (before checking initialization)
         if (string.IsNullOrWhiteSpace(dumpFilePath))
@@ -378,19 +383,33 @@ public class LldbManager : IDebuggerManager
                 }
             }
 
-            // Open the core dump using LLDB command with the dotnet host binary.
-            var dotnetHost = GetDotnetHostPath();
-            _logger.LogDebug("[LLDB] dotnet host path: {DotnetHost} (exists: {Exists})", dotnetHost, File.Exists(dotnetHost));
-
+            // Open the core dump using LLDB command.
+            // Priority order:
+            // 1. Custom executable (for standalone apps)
+            // 2. dotnet host binary (for framework-dependent apps)
+            // 3. Core-only load (fallback)
             string targetCreateCmd;
-            if (File.Exists(dotnetHost))
+            
+            if (!string.IsNullOrEmpty(executablePath) && File.Exists(executablePath))
             {
-                targetCreateCmd = $"target create \"{dotnetHost}\" --core \"{dumpFilePath}\"";
+                // Use custom executable for standalone apps
+                _logger.LogInformation("[LLDB] Using custom executable: {ExecutablePath}", executablePath);
+                targetCreateCmd = $"target create \"{executablePath}\" --core \"{dumpFilePath}\"";
             }
             else
             {
-                // Fall back to core-only load when a suitable host binary is missing
-                targetCreateCmd = $"target create --core \"{dumpFilePath}\"";
+                var dotnetHost = GetDotnetHostPath();
+                _logger.LogDebug("[LLDB] dotnet host path: {DotnetHost} (exists: {Exists})", dotnetHost, File.Exists(dotnetHost));
+
+                if (File.Exists(dotnetHost))
+                {
+                    targetCreateCmd = $"target create \"{dotnetHost}\" --core \"{dumpFilePath}\"";
+                }
+                else
+                {
+                    // Fall back to core-only load when a suitable host binary is missing
+                    targetCreateCmd = $"target create --core \"{dumpFilePath}\"";
+                }
             }
 
             _logger.LogInformation("[LLDB] Executing: {Command}", targetCreateCmd);

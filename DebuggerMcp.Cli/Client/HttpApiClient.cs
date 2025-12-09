@@ -487,6 +487,44 @@ public class HttpApiClient : IHttpApiClient
     }
 
     /// <inheritdoc/>
+    public async Task<BinaryUploadResponse?> UploadDumpBinaryAsync(
+        string userId,
+        string dumpId,
+        string binaryPath,
+        CancellationToken cancellationToken = default)
+    {
+        EnsureConfigured();
+
+        if (!File.Exists(binaryPath))
+        {
+            throw new FileNotFoundException($"Binary file not found: {binaryPath}");
+        }
+
+        var fileName = Path.GetFileName(binaryPath);
+
+        return await ExecuteWithRetryAsync(
+            $"Upload binary '{fileName}'",
+            async ct =>
+            {
+                await using var fileStream = new FileStream(binaryPath, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
+                using var content = new MultipartFormDataContent
+                {
+                    { new StreamContent(fileStream), "file", fileName }
+                };
+
+                var response = await _httpClient!.PostAsync(
+                    $"api/dumps/{Uri.EscapeDataString(userId)}/{Uri.EscapeDataString(dumpId)}/binary", 
+                    content, 
+                    ct);
+                
+                await EnsureSuccessAsync(response, ct);
+
+                return await response.Content.ReadFromJsonAsync<BinaryUploadResponse>(JsonOptions, ct);
+            },
+            cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task<SymbolUploadResponse> UploadSymbolAsync(
         string filePath,
         string dumpId,

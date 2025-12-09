@@ -392,8 +392,38 @@ public class DebuggerSessionManager
                     Task.Run(() => session.Manager.InitializeAsync()).GetAwaiter().GetResult();
                 }
 
+                // Check if there's a custom executable for this dump (standalone apps)
+                string? executablePath = null;
+                var dumpDir = Path.GetDirectoryName(metadata.CurrentDumpPath);
+                if (dumpDir != null && !string.IsNullOrEmpty(metadata.CurrentDumpId))
+                {
+                    // Check both naming conventions for metadata
+                    var dumpMetadataPath = Path.Combine(dumpDir, $"{metadata.CurrentDumpId}.json");
+                    var altMetadataPath = Path.Combine(dumpDir, $".metadata_{metadata.CurrentDumpId}.json");
+                    var actualDumpMetadataPath = File.Exists(dumpMetadataPath) ? dumpMetadataPath :
+                                                 File.Exists(altMetadataPath) ? altMetadataPath : null;
+                    
+                    if (actualDumpMetadataPath != null)
+                    {
+                        try
+                        {
+                            var dumpMetadataJson = File.ReadAllText(actualDumpMetadataPath);
+                            var dumpMeta = System.Text.Json.JsonSerializer.Deserialize<Controllers.DumpMetadata>(dumpMetadataJson);
+                            if (dumpMeta?.ExecutablePath != null && File.Exists(dumpMeta.ExecutablePath))
+                            {
+                                executablePath = dumpMeta.ExecutablePath;
+                                _logger.LogInformation("[SessionManager] Found custom executable for standalone app: {ExecutablePath}", executablePath);
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "[SessionManager] Failed to read dump metadata for executable path");
+                        }
+                    }
+                }
+                
                 _logger.LogInformation("Reopening dump file: {DumpPath}", metadata.CurrentDumpPath);
-                session.Manager.OpenDumpFile(metadata.CurrentDumpPath);
+                session.Manager.OpenDumpFile(metadata.CurrentDumpPath, executablePath);
                 // Note: SOS is now auto-loaded by OpenDumpFile if .NET runtime is detected
 
                 // Open ClrMD for metadata enrichment (after debugger opens the dump)
