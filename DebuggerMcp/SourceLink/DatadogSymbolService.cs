@@ -660,6 +660,44 @@ public class DatadogSymbolService
     }
 
     /// <summary>
+    /// Downloads Datadog symbols directly from a specific Azure Pipelines build ID.
+    /// This bypasses the SHA/version lookup and downloads artifacts from the specified build.
+    /// </summary>
+    /// <param name="buildId">The Azure Pipelines build ID to download from.</param>
+    /// <param name="platform">Target platform information.</param>
+    /// <param name="outputDirectory">Directory to store symbols.</param>
+    /// <param name="targetTfm">Target framework moniker.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Download result.</returns>
+    public async Task<DatadogSymbolDownloadResult> DownloadFromBuildIdAsync(
+        int buildId,
+        PlatformInfo platform,
+        string outputDirectory,
+        string targetTfm,
+        CancellationToken ct = default)
+    {
+        _logger?.LogInformation("[DatadogSymbolService] Downloading symbols from build ID {BuildId}", buildId);
+        
+        var resolver = new AzurePipelinesResolver(logger: _logger);
+        
+        // Use the override build ID parameter to bypass SHA lookup
+        var result = await resolver.DownloadDatadogSymbolsAsync(
+            "direct-build-download",  // Placeholder commit SHA (not used when buildId is provided)
+            platform,
+            outputDirectory,
+            targetTfm,
+            version: null,
+            overrideBuildId: buildId,
+            ct: ct);
+        
+        // Copy over the result properties and mark as not a SHA mismatch (direct download)
+        result.ShaMismatch = false;
+        result.Source = result.BuildUrl;
+        
+        return result;
+    }
+
+    /// <summary>
     /// Converts a GitHub result to a Datadog result for consistent return type.
     /// </summary>
     private static DatadogSymbolDownloadResult ConvertToDatadogResult(GitHubSymbolDownloadResult githubResult)

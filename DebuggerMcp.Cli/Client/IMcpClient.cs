@@ -333,6 +333,7 @@ public interface IMcpClient : IAsyncDisposable
     /// <param name="loadIntoDebugger">Whether to load symbols into the debugger after download.</param>
     /// <param name="forceVersion">If true, falls back to version/tag lookup when SHA lookup fails.</param>
     /// <param name="version">Optional version for fallback lookup (e.g., "3.31.0").</param>
+    /// <param name="buildId">Optional Azure Pipelines build ID to download directly.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>JSON result with download status and loaded symbols.</returns>
     Task<string> DownloadDatadogSymbolsAsync(
@@ -343,6 +344,7 @@ public interface IMcpClient : IAsyncDisposable
         bool loadIntoDebugger = true,
         bool forceVersion = false,
         string? version = null,
+        int? buildId = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>

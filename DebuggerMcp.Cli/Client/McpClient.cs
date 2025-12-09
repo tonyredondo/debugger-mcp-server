@@ -942,6 +942,7 @@ public class McpClient : IMcpClient
         bool loadIntoDebugger = true,
         bool forceVersion = false,
         string? version = null,
+        int? buildId = null,
         CancellationToken cancellationToken = default)
     {
         var args = new Dictionary<string, object?>
@@ -961,6 +962,11 @@ public class McpClient : IMcpClient
         if (!string.IsNullOrEmpty(version))
         {
             args["version"] = version;
+        }
+
+        if (buildId.HasValue)
+        {
+            args["buildId"] = buildId.Value;
         }
 
         return await CallToolAsync("download_datadog_symbols", args, cancellationToken);

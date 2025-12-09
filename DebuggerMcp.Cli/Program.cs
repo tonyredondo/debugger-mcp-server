@@ -1139,6 +1139,7 @@ public class Program
                     output.Markup("  [cyan]datadog download[/]                 Auto-detect and download (SHA matching only)");
                     output.Markup("  [cyan]datadog download --force-version[/] Download with version/tag fallback");
                     output.Markup("  [cyan]datadog download <sha>[/]           Download for a specific commit SHA");
+                    output.Markup("  [cyan]datadog download --build-id <id>[/] Download from Azure Pipelines build ID");
                     output.Markup("  [cyan]datadog clear[/]                    Clear downloaded symbols for current dump");
                     output.Markup("  [cyan]datadog clear --all[/]              Clear symbols and API caches");
                     output.Markup("  [cyan]datadog list <sha>[/]               List available artifacts for a commit");
@@ -1183,6 +1184,7 @@ public class Program
                     output.Markup("  [yellow]symbols datadog download[/]              Auto-detect and download (SHA only)");
                     output.Markup("  [yellow]symbols datadog download -f[/]           With version/tag fallback");
                     output.Markup("  [yellow]symbols datadog download 14fd3a2f[/]     Download for specific commit");
+                    output.Markup("  [yellow]symbols datadog download -b 192179[/]    Download from Azure Pipelines build");
                     output.Markup("  [yellow]symbols datadog clear[/]                 Clear downloaded Datadog symbols");
                     output.Markup("  [yellow]symbols datadog clear --all[/]           Also clear API caches");
                     output.Markup("  [yellow]symbols datadog list 14fd3a2f[/]         List available artifacts");
@@ -3499,7 +3501,8 @@ public class Program
 
         output.Markup("[bold]OPTIONS (download)[/]");
         output.Markup("  [cyan]--tfm <framework>[/]     Target framework (e.g., net6.0, netcoreapp3.1)");
-        output.Markup("  [cyan]--force-version[/]       Enable version/tag fallback if exact SHA not found");
+        output.Markup("  [cyan]--force-version, -f[/]   Enable version/tag fallback if exact SHA not found");
+        output.Markup("  [cyan]--build-id, -b <id>[/]   Download directly from Azure Pipelines build ID");
         output.Markup("  [cyan]--no-load[/]             Download only, don't load symbols into debugger");
         output.WriteLine();
         output.Markup("[bold]OPTIONS (clear)[/]");
@@ -3515,6 +3518,9 @@ public class Program
         output.WriteLine();
         output.Markup("  [yellow]symbols datadog download 14fd3a2f[/]");
         output.Dim("    Download symbols for commit 14fd3a2f");
+        output.WriteLine();
+        output.Markup("  [yellow]symbols datadog download --build-id 192179[/]");
+        output.Dim("    Download symbols directly from Azure Pipelines build 192179");
         output.WriteLine();
         output.Markup("  [yellow]symbols datadog list 14fd3a2f[/]");
         output.Dim("    List available artifacts for commit 14fd3a2f");
@@ -3556,6 +3562,7 @@ public class Program
         string? targetFramework = null;
         var loadIntoDebugger = true;
         var forceVersion = false;
+        int? buildId = null;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -3570,6 +3577,18 @@ public class Program
             else if (args[i] == "--no-load")
             {
                 loadIntoDebugger = false;
+            }
+            else if ((args[i] == "--build-id" || args[i] == "-b") && i + 1 < args.Length)
+            {
+                if (int.TryParse(args[++i], out var id))
+                {
+                    buildId = id;
+                }
+                else
+                {
+                    output.Error($"Invalid build ID: {args[i]}. Must be a number.");
+                    return;
+                }
             }
             else if (!args[i].StartsWith("-") && commitSha == null)
             {
@@ -3765,8 +3784,18 @@ public class Program
             }
         }
 
-        // Manual mode with explicit commit SHA
-        output.Info($"Downloading Datadog symbols for commit {commitSha[..Math.Min(8, commitSha.Length)]}...");
+        // Manual mode with explicit commit SHA or build ID
+        if (buildId.HasValue)
+        {
+            output.Info($"Downloading Datadog symbols from Azure Pipelines build {buildId}...");
+            // When using build ID, commit SHA is not required - use a placeholder
+            commitSha ??= "direct-build-download";
+        }
+        else
+        {
+            output.Info($"Downloading Datadog symbols for commit {commitSha![..Math.Min(8, commitSha.Length)]}...");
+        }
+        
         if (forceVersion)
         {
             output.Dim("Version fallback enabled - will try version/tag if exact SHA not found");
@@ -3783,10 +3812,12 @@ public class Program
                 () => mcpClient.DownloadDatadogSymbolsAsync(
                     state.SessionId!,
                     state.Settings.UserId,
-                    commitSha,
+                    commitSha!,
                     targetFramework,
                     loadIntoDebugger,
-                    forceVersion));
+                    forceVersion,
+                    version: null,
+                    buildId: buildId));
 
             if (IsErrorResult(result))
             {

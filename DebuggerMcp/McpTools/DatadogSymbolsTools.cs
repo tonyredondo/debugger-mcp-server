@@ -57,7 +57,7 @@ public class DatadogSymbolsTools(
     /// 
     /// After download, symbols are automatically loaded into LLDB for improved stack traces.
     /// </remarks>
-    [McpServerTool, Description("Download Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit SHA. Use forceVersion=true to enable version/tag fallback.")]
+    [McpServerTool, Description("Download Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit SHA. Use forceVersion=true to enable version/tag fallback, or buildId to download directly from a specific Azure Pipelines build.")]
     public async Task<string> DownloadDatadogSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -65,7 +65,8 @@ public class DatadogSymbolsTools(
         [Description("Target framework (e.g., net6.0, netcoreapp3.1). Auto-detected if not specified.")] string? targetFramework = null,
         [Description("Whether to load symbols into the debugger after download (default: true)")] bool loadIntoDebugger = true,
         [Description("If true, falls back to version/tag lookup when SHA lookup fails (default: false)")] bool forceVersion = false,
-        [Description("Optional version for fallback lookup (e.g., '3.31.0'). If not provided and forceVersion=true, will try to extract from commitSha.")] string? version = null)
+        [Description("Optional version for fallback lookup (e.g., '3.31.0'). If not provided and forceVersion=true, will try to extract from commitSha.")] string? version = null,
+        [Description("Optional Azure Pipelines build ID to download symbols directly (bypasses SHA/version lookup)")] int? buildId = null)
     {
         // Validate input parameters
         ValidateSessionId(sessionId);
@@ -123,15 +124,31 @@ public class DatadogSymbolsTools(
         var dumpStorage = SessionManager.GetDumpStoragePath();
         var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}", ".datadog");
 
-        // Create symbol service and download using the 4-step lookup
+        // Create symbol service and download
         var symbolService = new DatadogSymbolService(session.ClrMdAnalyzer, Logger);
-        var downloadResult = await symbolService.DownloadSymbolsAsync(
-            commitSha,
-            version,  // Pass the optional version for fallback
-            platform,
-            symbolsDir,
-            tfm,
-            forceVersion);
+        DatadogSymbolDownloadResult downloadResult;
+        
+        if (buildId.HasValue)
+        {
+            // Download directly from specific Azure Pipelines build ID (bypasses SHA/version lookup)
+            Logger.LogInformation("[DatadogSymbols] Downloading symbols from Azure Pipelines build ID: {BuildId}", buildId.Value);
+            downloadResult = await symbolService.DownloadFromBuildIdAsync(
+                buildId.Value,
+                platform,
+                symbolsDir,
+                tfm);
+        }
+        else
+        {
+            // Use the 4-step lookup (SHA -> GitHub SHA -> Version -> GitHub Version)
+            downloadResult = await symbolService.DownloadSymbolsAsync(
+                commitSha,
+                version,  // Pass the optional version for fallback
+                platform,
+                symbolsDir,
+                tfm,
+                forceVersion);
+        }
 
         // If there's a SHA mismatch (using forceVersion), patch the PDBs to match the DLLs
         // This allows SOS to load the symbols even when the exact build doesn't match

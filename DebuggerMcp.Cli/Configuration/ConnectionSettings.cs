@@ -26,8 +26,9 @@ public class ConnectionSettings
     };
     /// <summary>
     /// Default request timeout in seconds.
+    /// Increased from 300 to 600 to handle dumps with many symbols that take longer to download.
     /// </summary>
-    public const int DefaultTimeoutSeconds = 300;
+    public const int DefaultTimeoutSeconds = 600;
 
     /// <summary>
     /// Default history file path.
