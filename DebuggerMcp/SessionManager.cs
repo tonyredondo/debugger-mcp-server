@@ -75,6 +75,12 @@ public class DebuggerSessionManager
     public Action<string>? OnSessionClosed { get; set; }
 
     /// <summary>
+    /// Optional callback invoked when a session is restored from disk.
+    /// Parameters: (sessionId, dumpId, manager) - used to configure symbol paths.
+    /// </summary>
+    public Action<string, string?, IDebuggerManager>? OnSessionRestored { get; set; }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="DebuggerSessionManager"/> class.
     /// </summary>
     /// <param name="dumpStoragePath">
@@ -451,8 +457,18 @@ public class DebuggerSessionManager
                 // The SymbolManager is not available in SessionManager. Users may need to manually
                 // reconfigure symbols if using custom symbol paths. Default symbol servers will still work.
                 _logger.LogInformation(
-                    "Session {SessionId} restored with dump {DumpPath}. Note: Custom symbol paths may need to be reconfigured.",
+                    "Session {SessionId} restored with dump {DumpPath}",
                     sessionId, metadata.CurrentDumpPath);
+                
+                // Invoke callback to configure symbol paths (if set)
+                try
+                {
+                    OnSessionRestored?.Invoke(sessionId, metadata.CurrentDumpId, session.Manager);
+                }
+                catch (Exception callbackEx)
+                {
+                    _logger.LogWarning(callbackEx, "[SessionManager] OnSessionRestored callback failed for session {SessionId}", sessionId);
+                }
             }
             catch (Exception ex)
             {

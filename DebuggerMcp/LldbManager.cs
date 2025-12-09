@@ -94,6 +94,21 @@ public class LldbManager : IDebuggerManager
     private string? _detectedRuntimeVersion;
 
     /// <summary>
+    /// The executable path used when opening the dump (for recovery after crash).
+    /// </summary>
+    private string? _currentExecutablePath;
+
+    /// <summary>
+    /// Lock object for crash recovery to prevent concurrent recovery attempts.
+    /// </summary>
+    private readonly object _recoveryLock = new();
+
+    /// <summary>
+    /// Flag indicating whether a crash recovery is in progress.
+    /// </summary>
+    private bool _isRecovering;
+
+    /// <summary>
     /// Gets a value indicating whether the debugger engine has been initialized.
     /// </summary>
     /// <value>
@@ -326,8 +341,9 @@ public class LldbManager : IDebuggerManager
 
         try
         {
-            // Store the dump path
+            // Store the dump path and executable path (for recovery after crash)
             _currentDumpPath = dumpFilePath;
+            _currentExecutablePath = executablePath;
 
             // Create symbol cache directory for this dump
             var dumpDir = Path.GetDirectoryName(dumpFilePath) ?? "/tmp";
@@ -753,11 +769,44 @@ public class LldbManager : IDebuggerManager
 
             var output = ExtractOutput();
             LogCommandOutput(command, output, sw.ElapsedMilliseconds);
+            
+            // Check for LLDB crash indicators and attempt recovery
+            if (DetectLldbCrash(output))
+            {
+                _logger.LogError("[LLDB] Detected LLDB crash during command: {Command}", command);
+                
+                // Attempt auto-recovery
+                if (TryRecoverFromCrash())
+                {
+                    _logger.LogInformation("[LLDB] Successfully recovered from crash - retrying command");
+                    // Retry the command after recovery (avoid infinite recursion with a flag)
+                    if (!_isRecovering)
+                    {
+                        return ExecuteCommandInternal(command); // Use internal to avoid cache
+                    }
+                }
+                else
+                {
+                    _logger.LogError("[LLDB] Failed to recover from crash");
+                }
+            }
+            
             return output;
         }
         catch (Exception ex) when (ex is not InvalidOperationException && ex is not ArgumentException)
         {
             _logger.LogError(ex, "[LLDB] Command failed: {Command}", command);
+            
+            // Check if LLDB process has exited (crashed)
+            if (_lldbProcess?.HasExited == true)
+            {
+                _logger.LogWarning("[LLDB] Process has exited unexpectedly, attempting recovery...");
+                if (TryRecoverFromCrash())
+                {
+                    _logger.LogInformation("[LLDB] Recovered from crash - please retry the command");
+                }
+            }
+            
             throw new InvalidOperationException($"Failed to execute command: {ex.Message}", ex);
         }
     }
@@ -821,6 +870,149 @@ public class LldbManager : IDebuggerManager
             _logger.LogInformation("[LLDB] Command '{Command}' output ({Elapsed}ms):\n{Output}",
                 displayCommand, elapsedMs, output);
         }
+    }
+
+    /// <summary>
+    /// Detects if LLDB has crashed based on command output.
+    /// </summary>
+    /// <param name="output">The command output to check.</param>
+    /// <returns>True if crash indicators are found, false otherwise.</returns>
+    private bool DetectLldbCrash(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return false;
+        }
+
+        // Check for LLDB crash indicators in the output
+        // These messages appear when LLDB crashes during command execution
+        var crashIndicators = new[]
+        {
+            "PLEASE submit a bug report",
+            "Stack dump:",
+            "LLDB diagnostics will be written to",
+            "Segmentation fault",
+            "Aborted (core dumped)"
+        };
+
+        foreach (var indicator in crashIndicators)
+        {
+            if (output.Contains(indicator, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        // Also check if the process has exited unexpectedly
+        if (_lldbProcess?.HasExited == true)
+        {
+            _logger.LogWarning("[LLDB] Process has exited with code: {ExitCode}", _lldbProcess.ExitCode);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Attempts to recover from an LLDB crash by reinitializing and reopening the dump.
+    /// </summary>
+    /// <returns>True if recovery was successful, false otherwise.</returns>
+    private bool TryRecoverFromCrash()
+    {
+        lock (_recoveryLock)
+        {
+            if (_isRecovering)
+            {
+                _logger.LogDebug("[LLDB] Recovery already in progress, skipping");
+                return false;
+            }
+
+            _isRecovering = true;
+        }
+
+        try
+        {
+            _logger.LogWarning("[LLDB] Attempting crash recovery...");
+
+            // Save state before cleanup
+            var dumpPath = _currentDumpPath;
+            var executablePath = _currentExecutablePath;
+            var wasOpen = IsDumpOpen;
+
+            // Cleanup the crashed process
+            CleanupProcess();
+
+            // Reinitialize
+            _logger.LogInformation("[LLDB] Reinitializing LLDB after crash...");
+            Task.Run(() => InitializeAsync()).GetAwaiter().GetResult();
+
+            // Reopen dump if one was open
+            if (wasOpen && !string.IsNullOrEmpty(dumpPath) && File.Exists(dumpPath))
+            {
+                _logger.LogInformation("[LLDB] Reopening dump after crash recovery: {DumpPath}", dumpPath);
+                OpenDumpFile(dumpPath, executablePath);
+                _logger.LogInformation("[LLDB] Crash recovery complete - dump reopened successfully");
+            }
+            else
+            {
+                _logger.LogInformation("[LLDB] Crash recovery complete - LLDB reinitialized (no dump to reopen)");
+            }
+
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[LLDB] Failed to recover from crash");
+            return false;
+        }
+        finally
+        {
+            lock (_recoveryLock)
+            {
+                _isRecovering = false;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Cleans up the LLDB process without full disposal.
+    /// </summary>
+    private void CleanupProcess()
+    {
+        try
+        {
+            if (_lldbProcess != null)
+            {
+                try
+                {
+                    if (!_lldbProcess.HasExited)
+                    {
+                        _lldbProcess.Kill(entireProcessTree: true);
+                        _lldbProcess.WaitForExit(5000);
+                    }
+                }
+                catch (InvalidOperationException)
+                {
+                    // Process already exited
+                }
+                finally
+                {
+                    _lldbProcess.Dispose();
+                    _lldbProcess = null;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[LLDB] Error during process cleanup");
+        }
+
+        // Reset state but preserve dump/executable path for recovery
+        IsDumpOpen = false;
+        IsSosLoaded = false;
+        IsDotNetDump = false;
+        _commandCache.IsEnabled = false;
+        _commandCache.Clear();
     }
 
     /// <summary>
