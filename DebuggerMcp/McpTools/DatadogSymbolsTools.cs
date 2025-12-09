@@ -687,22 +687,52 @@ public class DatadogSymbolsTools(
             detectedAlpineFromLldb = true;
         }
         
-        // If LLDB didn't give us enough info (e.g., standalone app), try ClrMD
-        // ClrMD can access native modules directly from the dump
-        if (!detectedAlpineFromLldb && session.ClrMdAnalyzer != null)
+        // If LLDB didn't give us enough info (e.g., standalone app), try dotnet-symbol --verifycore
+        // This is the most reliable method as it directly parses the dump's module list
+        if ((!detectedAlpineFromLldb || !detectedFromLldb) && session.Manager is LldbManager lldbManager)
         {
-            Logger.LogDebug("[DatadogSymbols] LLDB didn't detect Alpine, trying ClrMD native modules...");
+            Logger.LogDebug("[DatadogSymbols] Checking dotnet-symbol --verifycore result...");
+            
+            // Check if we already have verified core result (populated during dump open), or run it now
+            var verifyCoreResult = lldbManager.VerifiedCorePlatform;
+            if (verifyCoreResult == null && !string.IsNullOrEmpty(lldbManager.CurrentDumpPath))
+            {
+                Logger.LogDebug("[DatadogSymbols] Running dotnet-symbol --verifycore for platform detection...");
+                verifyCoreResult = lldbManager.VerifyCore(lldbManager.CurrentDumpPath);
+            }
+            
+            if (verifyCoreResult != null)
+            {
+                if (!detectedAlpineFromLldb && verifyCoreResult.IsAlpine)
+                {
+                    platform.IsAlpine = true;
+                    platform.LibcType = "musl";
+                    Logger.LogInformation("[DatadogSymbols] Detected Alpine/musl via dotnet-symbol --verifycore");
+                }
+                
+                if (!detectedFromLldb && !string.IsNullOrEmpty(verifyCoreResult.Architecture))
+                {
+                    platform.Architecture = verifyCoreResult.Architecture;
+                    Logger.LogInformation("[DatadogSymbols] Detected architecture {Arch} via dotnet-symbol --verifycore", verifyCoreResult.Architecture);
+                }
+            }
+        }
+        
+        // Fallback to ClrMD if dotnet-symbol didn't work
+        if ((platform.IsAlpine != true || string.IsNullOrEmpty(platform.Architecture)) && session.ClrMdAnalyzer != null)
+        {
+            Logger.LogDebug("[DatadogSymbols] Trying ClrMD native modules as final fallback...");
             
             // Try to detect Alpine from ClrMD native modules
-            if (session.ClrMdAnalyzer.DetectIsAlpine())
+            if (platform.IsAlpine != true && session.ClrMdAnalyzer.DetectIsAlpine())
             {
                 platform.IsAlpine = true;
                 platform.LibcType = "musl";
                 Logger.LogInformation("[DatadogSymbols] Detected Alpine/musl via ClrMD native modules");
             }
             
-            // Also try to detect architecture from ClrMD if not detected from LLDB
-            if (!detectedFromLldb)
+            // Also try to detect architecture from ClrMD if not detected
+            if (string.IsNullOrEmpty(platform.Architecture))
             {
                 var arch = session.ClrMdAnalyzer.DetectArchitecture();
                 if (!string.IsNullOrEmpty(arch))

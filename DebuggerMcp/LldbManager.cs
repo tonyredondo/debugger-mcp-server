@@ -355,6 +355,24 @@ public class LldbManager : IDebuggerManager
                 _logger.LogWarning(ex, "[LLDB] Symbol download failed (continuing without symbols)");
             }
 
+            // Run verifycore to detect platform (Alpine/musl, architecture)
+            // This is especially useful for standalone apps where LLDB's image list may be incomplete
+            try
+            {
+                _logger.LogInformation("[LLDB] Running platform detection via dotnet-symbol --verifycore...");
+                var verifyCoreResult = VerifyCore(dumpFilePath);
+                if (verifyCoreResult != null)
+                {
+                    _logger.LogInformation("[LLDB] Platform detection complete: IsAlpine={IsAlpine}, Arch={Arch}",
+                        verifyCoreResult.IsAlpine, verifyCoreResult.Architecture ?? "unknown");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Platform detection is optional
+                _logger.LogDebug(ex, "[LLDB] Platform detection failed (continuing without it)");
+            }
+
             // Configure LLDB to search for symbols in the symbol cache directory and all subdirectories
             // This must be done BEFORE opening the dump so LLDB can find debug symbols
             if (!string.IsNullOrEmpty(_symbolCacheDirectory) && Directory.Exists(_symbolCacheDirectory))
@@ -1408,6 +1426,165 @@ public class LldbManager : IDebuggerManager
     }
 
     /// <summary>
+    /// Gets the platform information detected from the dump via dotnet-symbol --verifycore.
+    /// </summary>
+    public VerifyCoreResult? VerifiedCorePlatform { get; private set; }
+
+    /// <summary>
+    /// Runs dotnet-symbol --verifycore to detect platform information from the dump.
+    /// This is more reliable than LLDB's image list for standalone apps.
+    /// </summary>
+    /// <param name="dumpFilePath">The path to the dump file.</param>
+    /// <returns>Platform detection result, or null if detection failed.</returns>
+    public VerifyCoreResult? VerifyCore(string dumpFilePath)
+    {
+        var dotnetSymbolPath = FindDotnetSymbolTool();
+        if (dotnetSymbolPath == null)
+        {
+            _logger.LogWarning("[dotnet-symbol-verifycore] Tool not found, skipping platform detection");
+            return null;
+        }
+
+        try
+        {
+            var arguments = $"--verifycore \"{dumpFilePath}\"";
+            _logger.LogInformation("[dotnet-symbol-verifycore] Running: {Tool} {Arguments}", dotnetSymbolPath, arguments);
+
+            var startInfo = new ProcessStartInfo
+            {
+                FileName = dotnetSymbolPath,
+                Arguments = arguments,
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                CreateNoWindow = true
+            };
+
+            var outputLines = new List<string>();
+
+            using var process = new Process { StartInfo = startInfo };
+
+            process.OutputDataReceived += (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    outputLines.Add(e.Data);
+                    _logger.LogDebug("[dotnet-symbol-verifycore] {Output}", e.Data);
+                }
+            };
+
+            process.ErrorDataReceived += (sender, e) =>
+            {
+                if (!string.IsNullOrEmpty(e.Data))
+                {
+                    _logger.LogDebug("[dotnet-symbol-verifycore] stderr: {Error}", e.Data);
+                }
+            };
+
+            process.Start();
+            process.BeginOutputReadLine();
+            process.BeginErrorReadLine();
+
+            // Use a shorter timeout for verifycore (30 seconds should be enough)
+            var completed = process.WaitForExit(30000);
+
+            if (!completed)
+            {
+                _logger.LogWarning("[dotnet-symbol-verifycore] Command timed out after 30 seconds");
+                try { process.Kill(); } catch { /* ignore */ }
+                return null;
+            }
+
+            _logger.LogInformation("[dotnet-symbol-verifycore] Completed with exit code {ExitCode}, parsed {Count} modules",
+                process.ExitCode, outputLines.Count);
+
+            // Parse the output for platform detection
+            var result = ParseVerifyCoreOutput(outputLines);
+            VerifiedCorePlatform = result;
+            
+            if (result != null)
+            {
+                _logger.LogInformation("[dotnet-symbol-verifycore] Detected: IsAlpine={IsAlpine}, Architecture={Arch}",
+                    result.IsAlpine, result.Architecture ?? "unknown");
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[dotnet-symbol-verifycore] Exception during platform detection");
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Parses the output of dotnet-symbol --verifycore to detect platform information.
+    /// </summary>
+    private VerifyCoreResult ParseVerifyCoreOutput(List<string> outputLines)
+    {
+        var result = new VerifyCoreResult();
+        var modulePaths = new List<string>();
+
+        foreach (var line in outputLines)
+        {
+            // Skip empty lines and address-only lines
+            if (string.IsNullOrWhiteSpace(line) || line.StartsWith("0x") || line.Contains("invalid image"))
+                continue;
+
+            // Extract the path from lines like "00007F3156DC7000 /lib/ld-musl-x86_64.so.1"
+            var parts = line.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length >= 2 && parts[1].StartsWith("/"))
+            {
+                modulePaths.Add(parts[1]);
+            }
+            else if (parts.Length >= 1 && parts[0].StartsWith("/"))
+            {
+                modulePaths.Add(parts[0]);
+            }
+        }
+
+        result.ModulePaths = modulePaths;
+
+        // Detect Alpine/musl
+        foreach (var path in modulePaths)
+        {
+            var pathLower = path.ToLowerInvariant();
+
+            // Check for musl indicators
+            if (pathLower.Contains("ld-musl") || pathLower.Contains("/musl-") || pathLower.Contains("linux-musl-"))
+            {
+                result.IsAlpine = true;
+                _logger.LogDebug("[dotnet-symbol-verifycore] Detected musl from: {Path}", path);
+            }
+
+            // Check for architecture indicators
+            if (result.Architecture == null)
+            {
+                if (pathLower.Contains("x86_64") || pathLower.Contains("-x64/") || pathLower.Contains("/x64/") || 
+                    pathLower.Contains("amd64") || pathLower.Contains("musl-x64"))
+                {
+                    result.Architecture = "x64";
+                    _logger.LogDebug("[dotnet-symbol-verifycore] Detected x64 from: {Path}", path);
+                }
+                else if (pathLower.Contains("aarch64") || pathLower.Contains("-arm64/") || pathLower.Contains("/arm64/") ||
+                         pathLower.Contains("musl-arm64"))
+                {
+                    result.Architecture = "arm64";
+                    _logger.LogDebug("[dotnet-symbol-verifycore] Detected arm64 from: {Path}", path);
+                }
+                else if (pathLower.Contains("i386") || pathLower.Contains("i686") || pathLower.Contains("-x86/") || 
+                         pathLower.Contains("/x86/"))
+                {
+                    result.Architecture = "x86";
+                    _logger.LogDebug("[dotnet-symbol-verifycore] Detected x86 from: {Path}", path);
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
     /// Loads the cached symbol file list from the dump metadata.
     /// </summary>
     /// <returns>List of relative file paths, or null if not found.</returns>
@@ -2073,4 +2250,25 @@ public class LldbManager : IDebuggerManager
         // Mark as disposed
         _disposed = true;
     }
+}
+
+/// <summary>
+/// Result of dotnet-symbol --verifycore platform detection.
+/// </summary>
+public class VerifyCoreResult
+{
+    /// <summary>
+    /// Gets or sets whether the dump is from an Alpine/musl system.
+    /// </summary>
+    public bool IsAlpine { get; set; }
+
+    /// <summary>
+    /// Gets or sets the detected architecture (x64, arm64, x86).
+    /// </summary>
+    public string? Architecture { get; set; }
+
+    /// <summary>
+    /// Gets or sets the list of module paths found in the dump.
+    /// </summary>
+    public List<string> ModulePaths { get; set; } = [];
 }
