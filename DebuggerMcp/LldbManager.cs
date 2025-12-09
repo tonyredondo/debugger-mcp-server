@@ -1573,7 +1573,9 @@ public class LldbManager : IDebuggerManager
         if (modulePaths.Count > 0)
         {
             result.MainExecutablePath = modulePaths[0];
-            result.MainExecutableName = Path.GetFileNameWithoutExtension(modulePaths[0]);
+            // Use GetFileName, not GetFileNameWithoutExtension!
+            // Linux executables don't have extensions - "Samples.BuggyBits" is the full name
+            result.MainExecutableName = Path.GetFileName(modulePaths[0]);
             _logger.LogInformation("[dotnet-symbol-verifycore] Main executable: {Name} ({Path})",
                 result.MainExecutableName, result.MainExecutablePath);
         }
