@@ -3596,8 +3596,9 @@ public class Program
             }
         }
 
-        // If no commit SHA provided, use auto-detection from dump
-        if (string.IsNullOrEmpty(commitSha))
+        // If no commit SHA provided AND no build ID, use auto-detection from dump
+        // When build ID is provided, skip auto-detect and go directly to manual download
+        if (string.IsNullOrEmpty(commitSha) && !buildId.HasValue)
         {
             output.Info("Auto-detecting Datadog assemblies from dump...");
             if (forceVersion)
@@ -3791,9 +3792,9 @@ public class Program
             // When using build ID, commit SHA is not required - use a placeholder
             commitSha ??= "direct-build-download";
         }
-        else
+        else if (!string.IsNullOrEmpty(commitSha))
         {
-            output.Info($"Downloading Datadog symbols for commit {commitSha![..Math.Min(8, commitSha.Length)]}...");
+            output.Info($"Downloading Datadog symbols for commit {commitSha[..Math.Min(8, commitSha.Length)]}...");
         }
         
         if (forceVersion)
