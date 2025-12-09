@@ -1855,6 +1855,101 @@ public class ClrMdAnalyzer : IDisposable
 
         return guids;
     }
+    
+    /// <summary>
+    /// Gets all native module paths from the dump.
+    /// This includes native libraries like ld-musl, libcoreclr, etc.
+    /// Useful for platform detection (Alpine vs glibc).
+    /// </summary>
+    /// <returns>List of native module paths.</returns>
+    public List<string> GetNativeModulePaths()
+    {
+        var paths = new List<string>();
+        
+        lock (_lock)
+        {
+            if (_dataTarget == null)
+            {
+                _logger?.LogWarning("[ClrMD] DataTarget not available, cannot get native modules");
+                return paths;
+            }
+            
+            try
+            {
+                foreach (var module in _dataTarget.EnumerateModules())
+                {
+                    if (!string.IsNullOrEmpty(module.FileName))
+                    {
+                        paths.Add(module.FileName);
+                    }
+                }
+                
+                _logger?.LogDebug("[ClrMD] Found {Count} native modules in dump", paths.Count);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "[ClrMD] Error enumerating native modules");
+            }
+        }
+        
+        return paths;
+    }
+    
+    /// <summary>
+    /// Detects if the dump is from an Alpine/musl system by checking native module paths.
+    /// </summary>
+    /// <returns>True if musl is detected, false otherwise.</returns>
+    public bool DetectIsAlpine()
+    {
+        var nativeModules = GetNativeModulePaths();
+        
+        // Look for musl indicators in native module paths
+        // e.g., /lib/ld-musl-x86_64.so.1, /lib/ld-musl-aarch64.so.1
+        foreach (var path in nativeModules)
+        {
+            var pathLower = path.ToLowerInvariant();
+            if (pathLower.Contains("ld-musl") || pathLower.Contains("musl-"))
+            {
+                _logger?.LogInformation("[ClrMD] Detected Alpine/musl from module: {Path}", path);
+                return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /// <summary>
+    /// Detects the architecture from native module paths.
+    /// </summary>
+    /// <returns>Architecture string (x64, arm64, x86) or null if not detected.</returns>
+    public string? DetectArchitecture()
+    {
+        var nativeModules = GetNativeModulePaths();
+        
+        foreach (var path in nativeModules)
+        {
+            var pathLower = path.ToLowerInvariant();
+            
+            // Check for architecture indicators in paths
+            if (pathLower.Contains("aarch64") || pathLower.Contains("-arm64") || pathLower.Contains("/arm64/"))
+            {
+                _logger?.LogInformation("[ClrMD] Detected arm64 architecture from module: {Path}", path);
+                return "arm64";
+            }
+            if (pathLower.Contains("x86_64") || pathLower.Contains("x86-64") || pathLower.Contains("amd64") || pathLower.Contains("/x64/"))
+            {
+                _logger?.LogInformation("[ClrMD] Detected x64 architecture from module: {Path}", path);
+                return "x64";
+            }
+            if (pathLower.Contains("i386") || pathLower.Contains("i686") || pathLower.Contains("/x86/"))
+            {
+                _logger?.LogInformation("[ClrMD] Detected x86 architecture from module: {Path}", path);
+                return "x86";
+            }
+        }
+        
+        return null;
+    }
 }
 
 /// <summary>

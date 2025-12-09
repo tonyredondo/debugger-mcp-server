@@ -631,7 +631,7 @@ public class DatadogSymbolsTools(
 
     /// <summary>
     /// Detects platform information from the session and debugger output.
-    /// Uses 'image list' output which contains native module paths like /lib/ld-musl-aarch64.so.1
+    /// Uses 'image list' output and falls back to ClrMD for native module detection.
     /// </summary>
     private PlatformInfo DetectPlatformFromSession(DebuggerSession session, string debuggerOutput)
     {
@@ -641,22 +641,26 @@ public class DatadogSymbolsTools(
             Architecture = "x64"  // Default, will be overridden if detected
         };
 
-        // Try to detect from debugger output
+        // Try to detect from debugger output first
         var outputLower = debuggerOutput.ToLowerInvariant();
+        var detectedFromLldb = false;
 
         // Detect architecture first - look for specific patterns in module paths
         // Common patterns: /lib/ld-musl-aarch64.so, /lib64/ld-linux-x86-64.so.2
         if (outputLower.Contains("aarch64") || outputLower.Contains("-arm64"))
         {
             platform.Architecture = "arm64";
+            detectedFromLldb = true;
         }
         else if (outputLower.Contains("x86_64") || outputLower.Contains("x86-64") || outputLower.Contains("amd64"))
         {
             platform.Architecture = "x64";
+            detectedFromLldb = true;
         }
         else if (outputLower.Contains("i386") || outputLower.Contains("i686") || outputLower.Contains("x86"))
         {
             platform.Architecture = "x86";
+            detectedFromLldb = true;
         }
 
         // Detect OS from module extensions and paths
@@ -675,15 +679,43 @@ public class DatadogSymbolsTools(
 
         // Detect Alpine/musl - look for ld-musl in the loader path
         // e.g., /lib/ld-musl-aarch64.so.1 or /lib/ld-musl-x86_64.so.1
+        var detectedAlpineFromLldb = false;
         if (outputLower.Contains("ld-musl") || outputLower.Contains("musl-"))
         {
             platform.IsAlpine = true;
             platform.LibcType = "musl";
+            detectedAlpineFromLldb = true;
         }
-        else if (platform.Os == "Linux")
+        
+        // If LLDB didn't give us enough info (e.g., standalone app), try ClrMD
+        // ClrMD can access native modules directly from the dump
+        if (!detectedAlpineFromLldb && session.ClrMdAnalyzer != null)
+        {
+            Logger.LogDebug("[DatadogSymbols] LLDB didn't detect Alpine, trying ClrMD native modules...");
+            
+            // Try to detect Alpine from ClrMD native modules
+            if (session.ClrMdAnalyzer.DetectIsAlpine())
+            {
+                platform.IsAlpine = true;
+                platform.LibcType = "musl";
+                Logger.LogInformation("[DatadogSymbols] Detected Alpine/musl via ClrMD native modules");
+            }
+            
+            // Also try to detect architecture from ClrMD if not detected from LLDB
+            if (!detectedFromLldb)
+            {
+                var arch = session.ClrMdAnalyzer.DetectArchitecture();
+                if (!string.IsNullOrEmpty(arch))
+                {
+                    platform.Architecture = arch;
+                    Logger.LogInformation("[DatadogSymbols] Detected architecture {Arch} via ClrMD", arch);
+                }
+            }
+        }
+        
+        if (platform.Os == "Linux" && platform.IsAlpine != true)
         {
             // Default to glibc for Linux if musl not detected
-            platform.IsAlpine = false;
             platform.LibcType = "glibc";
         }
 
