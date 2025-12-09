@@ -94,8 +94,8 @@ RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh \
     && echo "Installing .NET 7.0 runtime..." \
     && ./dotnet-install.sh --runtime dotnet --channel 7.0 --install-dir /usr/share/dotnet \
     # .NET 8.0 - LTS, supports both x64 and ARM64
-    && echo "Installing .NET 8.0 runtime..." \
-    && ./dotnet-install.sh --runtime dotnet --channel 8.0 --install-dir /usr/share/dotnet \
+    && echo "Installing .NET 8.0.22 runtime..." \
+    && ./dotnet-install.sh --runtime dotnet --version 8.0.22 --install-dir /usr/share/dotnet \
     # .NET 9.0 - install multiple patch versions for DAC compatibility
     # SOS/DAC requires exact patch version match for Build ID validation
     && echo "Installing .NET 9.0.10 runtime..." \
