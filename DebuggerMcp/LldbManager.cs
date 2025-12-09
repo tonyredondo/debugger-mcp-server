@@ -401,31 +401,50 @@ public class LldbManager : IDebuggerManager
                 }
             }
 
+            // Detect if this is a standalone app (first module is NOT the dotnet host)
+            // Standalone apps bundle the runtime, so their main module is the app binary itself
+            var isStandaloneApp = VerifiedCorePlatform?.MainExecutableName != null &&
+                !VerifiedCorePlatform.MainExecutableName.Equals("dotnet", StringComparison.OrdinalIgnoreCase) &&
+                !VerifiedCorePlatform.MainExecutablePath?.Contains("/dotnet/") == true;
+
             // Open the core dump using LLDB command.
             // Priority order:
-            // 1. Custom executable (for standalone apps)
-            // 2. dotnet host binary (for framework-dependent apps)
-            // 3. Core-only load (fallback)
+            // 1. Custom executable (uploaded binary for standalone apps)
+            // 2. Core-only mode (for standalone apps without the binary - dotnet host won't work!)
+            // 3. dotnet host binary (for framework-dependent apps)
+            // 4. Core-only load (fallback when dotnet host not found)
             string targetCreateCmd;
             
             if (!string.IsNullOrEmpty(executablePath) && File.Exists(executablePath))
             {
-                // Use custom executable for standalone apps
+                // Use custom executable for standalone apps (binary was uploaded)
                 _logger.LogInformation("[LLDB] Using custom executable: {ExecutablePath}", executablePath);
                 targetCreateCmd = $"target create \"{executablePath}\" --core \"{dumpFilePath}\"";
             }
+            else if (isStandaloneApp)
+            {
+                // Standalone app detected but no binary provided - use core-only mode
+                // The dotnet host won't work for standalone apps because the runtime is bundled in the app
+                _logger.LogInformation("[LLDB] Standalone app detected ({Name}) but no binary provided - using core-only mode",
+                    VerifiedCorePlatform!.MainExecutableName);
+                _logger.LogInformation("[LLDB] Tip: Upload the binary using 'dumps binary <dumpId> <path>' for full debugging support");
+                targetCreateCmd = $"target create --core \"{dumpFilePath}\"";
+            }
             else
             {
+                // Framework-dependent app - try to use dotnet host
                 var dotnetHost = GetDotnetHostPath();
                 _logger.LogDebug("[LLDB] dotnet host path: {DotnetHost} (exists: {Exists})", dotnetHost, File.Exists(dotnetHost));
 
                 if (File.Exists(dotnetHost))
                 {
+                    _logger.LogInformation("[LLDB] Using dotnet host for framework-dependent app");
                     targetCreateCmd = $"target create \"{dotnetHost}\" --core \"{dumpFilePath}\"";
                 }
                 else
                 {
                     // Fall back to core-only load when a suitable host binary is missing
+                    _logger.LogWarning("[LLDB] dotnet host not found, using core-only mode");
                     targetCreateCmd = $"target create --core \"{dumpFilePath}\"";
                 }
             }
