@@ -438,35 +438,13 @@ public class LldbManager : IDebuggerManager
 
             // Explicitly add debug symbol files (.dbg) from the symbol cache
             // LLDB's search path doesn't auto-load .dbg files, we need 'target symbols add'
-            if (!string.IsNullOrEmpty(_symbolCacheDirectory) && Directory.Exists(_symbolCacheDirectory))
+            LoadDebugSymbolFiles();
+
+            // If we're in core-only mode (no executable), try to find and load .dbg for the main executable
+            // This helps with standalone apps where we don't have the binary
+            if (string.IsNullOrEmpty(executablePath) && VerifiedCorePlatform?.MainExecutableName != null)
             {
-                try
-                {
-                    var debugFiles = Directory.GetFiles(_symbolCacheDirectory, "*.dbg", SearchOption.AllDirectories);
-                    if (debugFiles.Length > 0)
-                    {
-                        _logger.LogInformation("[LLDB] Found {Count} .dbg symbol files, loading explicitly...", debugFiles.Length);
-                        foreach (var dbgFile in debugFiles)
-                        {
-                            try
-                            {
-                                var result = ExecuteCommandInternal($"target symbols add \"{dbgFile}\"");
-                                if (!result.Contains("error", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    _logger.LogDebug("[LLDB] Loaded symbols: {File}", Path.GetFileName(dbgFile));
-                                }
-                            }
-                            catch (Exception ex)
-                            {
-                                _logger.LogDebug(ex, "[LLDB] Failed to load symbol file: {File}", dbgFile);
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "[LLDB] Failed to enumerate debug symbol files");
-                }
+                TryLoadMainExecutableDebugSymbols(VerifiedCorePlatform.MainExecutableName);
             }
 
             // Log loaded modules for diagnostics
@@ -1545,6 +1523,15 @@ public class LldbManager : IDebuggerManager
 
         result.ModulePaths = modulePaths;
 
+        // The first module is typically the main executable
+        if (modulePaths.Count > 0)
+        {
+            result.MainExecutablePath = modulePaths[0];
+            result.MainExecutableName = Path.GetFileNameWithoutExtension(modulePaths[0]);
+            _logger.LogInformation("[dotnet-symbol-verifycore] Main executable: {Name} ({Path})",
+                result.MainExecutableName, result.MainExecutablePath);
+        }
+
         // Detect Alpine/musl
         foreach (var path in modulePaths)
         {
@@ -1582,6 +1569,115 @@ public class LldbManager : IDebuggerManager
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Loads all .dbg debug symbol files from the symbol cache directory.
+    /// </summary>
+    private void LoadDebugSymbolFiles()
+    {
+        if (string.IsNullOrEmpty(_symbolCacheDirectory) || !Directory.Exists(_symbolCacheDirectory))
+            return;
+
+        try
+        {
+            var debugFiles = Directory.GetFiles(_symbolCacheDirectory, "*.dbg", SearchOption.AllDirectories);
+            if (debugFiles.Length > 0)
+            {
+                _logger.LogInformation("[LLDB] Found {Count} .dbg symbol files, loading explicitly...", debugFiles.Length);
+                foreach (var dbgFile in debugFiles)
+                {
+                    try
+                    {
+                        var result = ExecuteCommandInternal($"target symbols add \"{dbgFile}\"");
+                        if (!result.Contains("error", StringComparison.OrdinalIgnoreCase))
+                        {
+                            _logger.LogDebug("[LLDB] Loaded symbols: {File}", Path.GetFileName(dbgFile));
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "[LLDB] Failed to load symbol file: {File}", dbgFile);
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[LLDB] Failed to enumerate debug symbol files");
+        }
+    }
+
+    /// <summary>
+    /// Tries to find and load debug symbols (.dbg) for the main executable.
+    /// This is useful for standalone apps where we don't have the binary but may have debug symbols.
+    /// </summary>
+    /// <param name="executableName">The name of the executable (without extension).</param>
+    private void TryLoadMainExecutableDebugSymbols(string executableName)
+    {
+        _logger.LogInformation("[LLDB] Standalone app detected: {Name} - searching for debug symbols...", executableName);
+
+        // Common patterns for debug symbol files
+        var searchPatterns = new[]
+        {
+            $"{executableName}.dbg",
+            $"{executableName}.debug",
+            $"lib{executableName}.dbg",
+            $"lib{executableName}.debug"
+        };
+
+        var searchPaths = new List<string>();
+
+        // Add symbol cache directory
+        if (!string.IsNullOrEmpty(_symbolCacheDirectory) && Directory.Exists(_symbolCacheDirectory))
+        {
+            searchPaths.Add(_symbolCacheDirectory);
+        }
+
+        // Add dump directory
+        if (!string.IsNullOrEmpty(_currentDumpPath))
+        {
+            var dumpDir = Path.GetDirectoryName(_currentDumpPath);
+            if (!string.IsNullOrEmpty(dumpDir) && Directory.Exists(dumpDir))
+            {
+                searchPaths.Add(dumpDir);
+            }
+        }
+
+        foreach (var searchPath in searchPaths)
+        {
+            foreach (var pattern in searchPatterns)
+            {
+                try
+                {
+                    var matches = Directory.GetFiles(searchPath, pattern, SearchOption.AllDirectories);
+                    foreach (var dbgFile in matches)
+                    {
+                        try
+                        {
+                            _logger.LogInformation("[LLDB] Found debug symbols for main executable: {File}", dbgFile);
+                            var result = ExecuteCommandInternal($"target symbols add \"{dbgFile}\"");
+                            if (!result.Contains("error", StringComparison.OrdinalIgnoreCase))
+                            {
+                                _logger.LogInformation("[LLDB] Successfully loaded main executable debug symbols: {File}", Path.GetFileName(dbgFile));
+                                return; // Found and loaded, we're done
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "[LLDB] Failed to load debug file: {File}", dbgFile);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[LLDB] Error searching for {Pattern} in {Path}", pattern, searchPath);
+                }
+            }
+        }
+
+        _logger.LogWarning("[LLDB] No debug symbols found for standalone app: {Name}. Native debugging may be limited.", executableName);
+        _logger.LogInformation("[LLDB] Tip: Upload the debug file ({Name}.dbg) using 'symbols upload' or 'dumps binary' for full debugging support.", executableName);
     }
 
     /// <summary>
@@ -2271,4 +2367,15 @@ public class VerifyCoreResult
     /// Gets or sets the list of module paths found in the dump.
     /// </summary>
     public List<string> ModulePaths { get; set; } = [];
+
+    /// <summary>
+    /// Gets or sets the main executable path (first module in the dump).
+    /// For standalone .NET apps, this is the app binary.
+    /// </summary>
+    public string? MainExecutablePath { get; set; }
+
+    /// <summary>
+    /// Gets or sets the main executable name (without path).
+    /// </summary>
+    public string? MainExecutableName { get; set; }
 }
