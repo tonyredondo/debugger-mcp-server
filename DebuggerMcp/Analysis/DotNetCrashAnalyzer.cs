@@ -1028,13 +1028,8 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     {
                         _logger?.LogDebug("Starting synchronization primitives analysis...");
                         
-                        // Detect cross-architecture analysis which can cause SIGSEGV in EnumerateSyncBlocks
-                        // (e.g., analyzing x64 dump on arm64 host via Rosetta 2 emulation)
-                        var skipSyncBlocks = IsCrossArchitectureAnalysis();
-                        if (skipSyncBlocks)
-                        {
-                            _logger?.LogInformation("Cross-architecture analysis detected - sync block enumeration will be skipped to avoid potential SIGSEGV");
-                        }
+                        // Check if sync block enumeration should be skipped (cross-arch, emulation, or env var)
+                        var skipSyncBlocks = ShouldSkipSyncBlocks();
                         
                         var syncAnalyzer = new Synchronization.SynchronizationAnalyzer(_clrMdAnalyzer.Runtime, _logger, skipSyncBlocks);
                         result.Synchronization = syncAnalyzer.Analyze();
@@ -7206,15 +7201,28 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
     
     /// <summary>
-    /// Detects if we're analyzing a dump with different architecture than the host.
-    /// Cross-architecture analysis (e.g., x64 dump on arm64 host) can cause SIGSEGV
-    /// in certain ClrMD operations like EnumerateSyncBlocks due to emulation issues.
+    /// Determines if sync block enumeration should be skipped.
+    /// EnumerateSyncBlocks can cause SIGSEGV under certain conditions:
+    /// - Cross-architecture analysis (e.g., x64 dump on arm64 host)
+    /// - Running under emulation (e.g., x64 Docker on arm64 Mac via Rosetta 2)
+    /// 
+    /// Can be forced via environment variable: SKIP_SYNC_BLOCKS=true
     /// </summary>
-    private bool IsCrossArchitectureAnalysis()
+    private bool ShouldSkipSyncBlocks()
     {
+        // Check environment variable first (allows manual override for emulation scenarios)
+        var envVar = Environment.GetEnvironmentVariable("SKIP_SYNC_BLOCKS");
+        if (!string.IsNullOrEmpty(envVar) && 
+            (envVar.Equals("true", StringComparison.OrdinalIgnoreCase) || 
+             envVar.Equals("1", StringComparison.OrdinalIgnoreCase)))
+        {
+            _logger?.LogInformation("SKIP_SYNC_BLOCKS environment variable set - skipping sync block enumeration");
+            return true;
+        }
+        
+        // Also check for cross-architecture (won't detect Docker emulation but catches native cross-arch)
         try
         {
-            // Get host architecture
             var hostArch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture;
             var hostArchStr = hostArch switch
             {
@@ -7225,33 +7233,22 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 _ => hostArch.ToString().ToLowerInvariant()
             };
             
-            // Get dump architecture from ClrMD
             var dumpArch = _clrMdAnalyzer?.DetectArchitecture();
             
-            if (string.IsNullOrEmpty(dumpArch))
+            if (!string.IsNullOrEmpty(dumpArch) && 
+                !string.Equals(hostArchStr, dumpArch, StringComparison.OrdinalIgnoreCase))
             {
-                _logger?.LogDebug("Could not detect dump architecture, assuming same as host");
-                return false;
+                _logger?.LogInformation("Cross-architecture detected (Host={HostArch}, Dump={DumpArch}) - skipping sync block enumeration", 
+                    hostArchStr, dumpArch);
+                return true;
             }
-            
-            var isCrossArch = !string.Equals(hostArchStr, dumpArch, StringComparison.OrdinalIgnoreCase);
-            
-            if (isCrossArch)
-            {
-                _logger?.LogInformation("Cross-architecture detected: Host={HostArch}, Dump={DumpArch}", hostArchStr, dumpArch);
-            }
-            else
-            {
-                _logger?.LogDebug("Same architecture: Host={HostArch}, Dump={DumpArch}", hostArchStr, dumpArch);
-            }
-            
-            return isCrossArch;
         }
         catch (Exception ex)
         {
-            _logger?.LogWarning(ex, "Failed to detect architecture, assuming same as host");
-            return false;
+            _logger?.LogDebug(ex, "Failed to detect architecture");
         }
+        
+        return false;
     }
     
 }
