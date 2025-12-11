@@ -682,9 +682,10 @@ public class ProcessInfoExtractor
     }
 
     /// <summary>
-    /// Fallback method to extract process info by scanning the stack directly.
-    /// This is used when the main frame approach fails (e.g., for standalone .NET apps).
-    /// The stack layout from high to low is: strings -> auxv -> envp pointers -> argv pointers -> argc
+    /// Fallback method that scans stack memory for the pointer array structure.
+    /// This is more robust than string scanning as it follows the actual C memory layout:
+    /// argv is a NULL-terminated array of pointers, followed by envp (also NULL-terminated).
+    /// Works for both x64 and arm64 (both use 8-byte pointers, little-endian).
     /// </summary>
     /// <param name="debuggerManager">The debugger manager.</param>
     /// <param name="platformInfo">Platform info for pointer size detection.</param>
@@ -697,7 +698,7 @@ public class ProcessInfoExtractor
     {
         try
         {
-            _logger?.LogInformation("ProcessInfoExtractor: Attempting stack scan fallback for environment extraction");
+            _logger?.LogInformation("ProcessInfoExtractor: Attempting pointer-array stack scan fallback");
 
             // Step 1: Get memory regions to find the stack
             var regionCmd = "memory region --all";
@@ -714,7 +715,7 @@ public class ProcessInfoExtractor
                 return null;
             }
 
-            // Step 2: Find the stack region (look for high-address rw- region)
+            // Step 2: Find the stack region
             var stackRegion = FindStackRegion(regionOutput);
             if (stackRegion == null)
             {
@@ -725,23 +726,23 @@ public class ProcessInfoExtractor
             _logger?.LogDebug("ProcessInfoExtractor: Stack scan - found stack region: 0x{Start:X}-0x{End:X}",
                 stackRegion.Value.start, stackRegion.Value.end);
 
-            // Step 3: Read memory from near the stack top where strings are stored
-            // The string area is typically within the last ~8KB of the stack
-            var maxScanSize = 8192ul; // 8KB should be enough for most cases
-            var regionSize = stackRegion.Value.end - stackRegion.Value.start;
+            // Step 3: Determine pointer size (8 bytes for 64-bit, 4 for 32-bit)
+            var pointerBytes = GetPointerByteSize(platformInfo);
+            var pointerSize = platformInfo?.PointerSize ?? 64;
             
-            // Cap scan size to actual region size (minus small buffer to avoid reading past region)
-            var scanSize = Math.Min(maxScanSize, regionSize > 256 ? regionSize - 256 : regionSize);
-            var scanStart = stackRegion.Value.end - scanSize;
-
-            // Add --force to override LLDB's default 1024 byte read limit
-            var memoryCmd = $"memory read --force -c{scanSize} 0x{scanStart:X}";
+            // Step 4: Read a portion of the stack as pointers
+            // The argv/envp pointer arrays are typically in the lower part of the stack region
+            // We scan from near the bottom of the stack where argc/argv/envp are placed
+            var maxPointers = 2048; // Enough for argc + argv + envp arrays
+            var scanStart = stackRegion.Value.start;
+            
+            // Read pointers from stack start
+            var memoryCmd = $"memory read --force -fx -s{pointerBytes} -c{maxPointers} 0x{scanStart:X}";
             var memoryOutput = await Task.Run(() => debuggerManager.ExecuteCommand(memoryCmd));
 
             if (rawCommands != null && !string.IsNullOrWhiteSpace(memoryOutput))
             {
-                // Don't store raw output as it may contain sensitive data
-                rawCommands["memory read (stack scan)"] = $"Read {scanSize} bytes from 0x{scanStart:X}";
+                rawCommands["memory read (pointer scan)"] = $"Read {maxPointers} pointers from 0x{scanStart:X}";
             }
 
             if (string.IsNullOrWhiteSpace(memoryOutput))
@@ -750,118 +751,84 @@ public class ProcessInfoExtractor
                 return null;
             }
 
-            // Step 4: Parse the memory output to extract strings
-            var strings = ParseMemoryToStrings(memoryOutput);
+            // Step 5: Parse pointers from memory
+            var pointers = ParseMemoryBlock(memoryOutput, pointerSize);
+            _logger?.LogDebug("ProcessInfoExtractor: Stack scan - parsed {Count} pointers", pointers.Count);
 
-            if (strings.Count == 0)
+            if (pointers.Count < 3) // Need at least argc, argv[0], NULL
             {
-                _logger?.LogWarning("ProcessInfoExtractor: Stack scan - no strings found in stack memory");
+                _logger?.LogWarning("ProcessInfoExtractor: Stack scan - too few pointers found");
                 return null;
             }
 
-            _logger?.LogDebug("ProcessInfoExtractor: Stack scan - found {Count} strings in stack", strings.Count);
-
-            // Step 5: Separate into arguments and environment variables
-            // Arguments come first (no '='), then environment variables (have '=')
-            var result = new ProcessInfo();
-            var foundFirstEnvVar = false;
-            var sensitiveCount = 0;
-            var candidateArguments = new List<string>();
-
-            foreach (var str in strings)
+            // Step 6: Find the argv pointer array by looking for:
+            // - A sequence of valid pointers (pointing to stack string area)
+            // - Where the first pointer's target looks like a filepath (argv[0])
+            // - Followed by NULL (marks end of argv)
+            var stackStart = stackRegion.Value.start;
+            var stackEnd = stackRegion.Value.end;
+            
+            var argvResult = await FindArgvArrayAsync(debuggerManager, pointers, stackStart, stackEnd, pointerSize, rawCommands);
+            
+            if (argvResult == null)
             {
-                // Skip empty or very short strings
-                if (string.IsNullOrWhiteSpace(str) || str.Length < 2)
-                    continue;
+                _logger?.LogWarning("ProcessInfoExtractor: Stack scan - could not find argv array pattern");
+                // Fall back to legacy string scanning
+                return await ExtractFromStringScanAsync(debuggerManager, stackRegion.Value, rawCommands);
+            }
 
-                // Check if this looks like an environment variable (contains '=')
-                // Must have '=' not at start (equalsIdx > 0) and key must be valid env var format
-                var equalsIdx = str.IndexOf('=');
-                var potentialEnvVar = equalsIdx > 0; // '=' not at position 0 means there's a key
-                
-                string? envVarKey = null;
-                var isValidEnvVar = false;
-                
-                if (potentialEnvVar)
+            var (argvStartIndex, argvPointers, envpPointers) = argvResult.Value;
+            
+            _logger?.LogDebug("ProcessInfoExtractor: Stack scan - found argv at index {Index} with {ArgvCount} args and {EnvpCount} env vars",
+                argvStartIndex, argvPointers.Count, envpPointers.Count);
+
+            // Step 7: Read strings from argv pointers
+            var result = new ProcessInfo();
+            
+            foreach (var ptr in argvPointers.Take(MaxArguments))
+            {
+                var value = await ReadStringAtAddressAsync(debuggerManager, ptr, rawCommands);
+                if (value != null)
                 {
-                    envVarKey = str.Substring(0, equalsIdx);
-                    isValidEnvVar = IsValidEnvVarKey(envVarKey);
+                    result.Arguments.Add(value);
                 }
+            }
 
-                if (isValidEnvVar)
+            // Step 8: Read strings from envp pointers
+            var sensitiveCount = 0;
+            foreach (var ptr in envpPointers.Take(MaxEnvironmentVariables))
+            {
+                var value = await ReadStringAtAddressAsync(debuggerManager, ptr, rawCommands);
+                if (value != null)
                 {
-                    // This is a real environment variable
-                    foundFirstEnvVar = true;
+                    // Validate: environment variables must contain '=' and have valid key
+                    if (!IsValidEnvironmentVariable(value))
+                    {
+                        _logger?.LogDebug("ProcessInfoExtractor: Skipping invalid env var: {Value}", 
+                            value.Length > 50 ? value.Substring(0, 50) + "..." : value);
+                        continue;
+                    }
                     
-                    var (redacted, wasRedacted) = RedactSensitiveValue(str);
+                    var (redacted, wasRedacted) = RedactSensitiveValue(value);
                     result.EnvironmentVariables.Add(redacted);
                     if (wasRedacted) sensitiveCount++;
-
-                    if (result.EnvironmentVariables.Count >= MaxEnvironmentVariables)
-                        break;
-                }
-                else if (!foundFirstEnvVar)
-                {
-                    // This is a potential argument (before we found any env vars)
-                    // Collect as candidates - we'll validate them later
-                    if (IsValidArgument(str))
-                    {
-                        candidateArguments.Add(str);
-
-                        if (candidateArguments.Count >= MaxArguments)
-                            continue; // Don't break, keep looking for env vars
-                    }
                 }
             }
 
-            // Validate candidate arguments: argv[0] should look like an executable
-            // Accept paths (absolute or relative) OR executable names (e.g., "Samples.BuggyBits", "dotnet")
-            if (candidateArguments.Count > 0)
-            {
-                var firstArg = candidateArguments[0];
-                
-                // argv[0] can be:
-                // 1. An absolute path: /path/to/executable
-                // 2. A relative path: ./executable or ../bin/executable
-                // 3. A path with directories: some/path/executable
-                // 4. Just the executable name: "Samples.BuggyBits", "dotnet", "node"
-                var looksLikeExecutable = firstArg.StartsWith('/') || 
-                                          firstArg.StartsWith("./") || 
-                                          firstArg.StartsWith("../") ||
-                                          (firstArg.Contains('/') && !firstArg.Contains(' ')) ||
-                                          IsValidExecutableName(firstArg);
-                
-                if (looksLikeExecutable)
-                {
-                    result.Arguments.AddRange(candidateArguments);
-                    _logger?.LogDebug("ProcessInfoExtractor: Stack scan - accepted {Count} arguments (argv[0]={Argv0})",
-                        candidateArguments.Count, firstArg);
-                }
-                else
-                {
-                    _logger?.LogDebug("ProcessInfoExtractor: Stack scan - discarded {Count} candidate arguments (first doesn't look like executable: {First})",
-                        candidateArguments.Count, firstArg.Length > 50 ? firstArg.Substring(0, 50) + "..." : firstArg);
-                }
-            }
-
-            // Set argc based on arguments found
             result.Argc = result.Arguments.Count;
-
-            // Set flag if any sensitive data was redacted
+            
             if (sensitiveCount > 0)
             {
                 result.SensitiveDataFiltered = true;
                 _logger?.LogDebug("ProcessInfoExtractor: Stack scan - redacted {Count} sensitive environment variables", sensitiveCount);
             }
 
-            // Sort environment variables alphabetically for consistent output
             result.EnvironmentVariables.Sort(StringComparer.Ordinal);
 
             _logger?.LogInformation(
                 "ProcessInfoExtractor: Stack scan - extracted {ArgCount} arguments and {EnvCount} environment variables",
                 result.Arguments.Count, result.EnvironmentVariables.Count);
 
-            // Only return if we found something useful
             if (result.Arguments.Count > 0 || result.EnvironmentVariables.Count > 0)
             {
                 return result;
@@ -875,6 +842,269 @@ public class ProcessInfoExtractor
             _logger?.LogWarning(ex, "ProcessInfoExtractor: Stack scan fallback failed");
             return null;
         }
+    }
+
+    /// <summary>
+    /// Finds the argv pointer array in the stack by scanning for the pattern:
+    /// [valid_ptr, valid_ptr, ..., NULL] where first pointer targets a filepath.
+    /// </summary>
+    private async Task<(int startIndex, List<string> argvPtrs, List<string> envpPtrs)?> FindArgvArrayAsync(
+        IDebuggerManager debuggerManager,
+        List<string> pointers,
+        ulong stackStart,
+        ulong stackEnd,
+        int pointerSize,
+        Dictionary<string, string>? rawCommands)
+    {
+        // The string data area is near the end of the stack region
+        // Valid string pointers should point to addresses within the stack
+        var stringAreaStart = stackEnd - 65536; // Strings typically in last 64KB
+        var stringAreaEnd = stackEnd;
+        
+        // Scan through pointers looking for argv array pattern
+        for (var i = 0; i < pointers.Count - 2; i++)
+        {
+            // Parse the pointer value
+            if (!TryParsePointer(pointers[i], out var firstPtr))
+                continue;
+                
+            // Check if this pointer points to the string area
+            if (firstPtr < stringAreaStart || firstPtr >= stringAreaEnd)
+                continue;
+            
+            // Try reading the string at this address to see if it looks like argv[0]
+            var firstString = await ReadStringAtAddressAsync(debuggerManager, pointers[i], rawCommands);
+            if (firstString == null)
+                continue;
+                
+            // argv[0] must be a filepath (absolute or relative path)
+            if (!LooksLikeFilePath(firstString))
+                continue;
+            
+            _logger?.LogDebug("ProcessInfoExtractor: Found potential argv[0] at index {Index}: {Value}", 
+                i, firstString.Length > 80 ? firstString.Substring(0, 80) + "..." : firstString);
+            
+            // Found a candidate! Now collect all argv pointers until NULL
+            var argvPointers = new List<string>();
+            var j = i;
+            
+            while (j < pointers.Count)
+            {
+                if (!TryParsePointer(pointers[j], out var ptr))
+                    break;
+                    
+                // NULL marks end of argv
+                if (ptr == 0)
+                {
+                    j++; // Move past NULL to envp
+                    break;
+                }
+                
+                // Validate pointer is in string area
+                if (ptr < stringAreaStart || ptr >= stringAreaEnd)
+                    break;
+                    
+                argvPointers.Add(pointers[j]);
+                j++;
+                
+                if (argvPointers.Count >= MaxArguments)
+                    break;
+            }
+            
+            if (argvPointers.Count == 0)
+                continue;
+            
+            // Now collect envp pointers (after the NULL)
+            var envpPointers = new List<string>();
+            
+            while (j < pointers.Count)
+            {
+                if (!TryParsePointer(pointers[j], out var ptr))
+                    break;
+                    
+                // NULL marks end of envp
+                if (ptr == 0)
+                    break;
+                
+                // Validate pointer is in string area
+                if (ptr < stringAreaStart || ptr >= stringAreaEnd)
+                    break;
+                    
+                envpPointers.Add(pointers[j]);
+                j++;
+                
+                if (envpPointers.Count >= MaxEnvironmentVariables)
+                    break;
+            }
+            
+            // Validate we found something reasonable
+            if (argvPointers.Count >= 1)
+            {
+                return (i, argvPointers, envpPointers);
+            }
+        }
+        
+        return null;
+    }
+
+    /// <summary>
+    /// Common executable names that are valid as argv[0] without a path prefix.
+    /// </summary>
+    private static readonly HashSet<string> KnownExecutables = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dotnet", "node", "python", "python3", "ruby", "perl", "java", "mono",
+        "bash", "sh", "zsh", "fish", "pwsh", "powershell",
+        "npm", "npx", "yarn", "pnpm", "cargo", "rustc", "go", "gcc", "g++", "clang",
+        "make", "cmake", "msbuild", "nuget"
+    };
+
+    /// <summary>
+    /// Checks if a string looks like a file path or known executable (argv[0]).
+    /// </summary>
+    private static bool LooksLikeFilePath(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+            return false;
+            
+        // Absolute path
+        if (value.StartsWith('/'))
+            return true;
+            
+        // Relative path
+        if (value.StartsWith("./") || value.StartsWith("../"))
+            return true;
+            
+        // Path with directory separators (and no obvious non-path characters)
+        if (value.Contains('/') && !value.Contains('\n') && !value.Contains('\r'))
+            return true;
+        
+        // Known executable names (e.g., "dotnet", "node", "python")
+        if (KnownExecutables.Contains(value))
+            return true;
+            
+        return false;
+    }
+
+    /// <summary>
+    /// Tries to parse a pointer string to a ulong value.
+    /// </summary>
+    private static bool TryParsePointer(string pointerStr, out ulong value)
+    {
+        value = 0;
+        if (string.IsNullOrEmpty(pointerStr))
+            return false;
+            
+        var hexStr = pointerStr.StartsWith("0x", StringComparison.OrdinalIgnoreCase) 
+            ? pointerStr.Substring(2) 
+            : pointerStr;
+            
+        return ulong.TryParse(hexStr, NumberStyles.HexNumber, null, out value);
+    }
+
+    /// <summary>
+    /// Legacy fallback: scans stack memory for strings directly.
+    /// Used when pointer-array scanning fails.
+    /// </summary>
+    private async Task<ProcessInfo?> ExtractFromStringScanAsync(
+        IDebuggerManager debuggerManager,
+        (ulong start, ulong end) stackRegion,
+        Dictionary<string, string>? rawCommands)
+    {
+        _logger?.LogDebug("ProcessInfoExtractor: Falling back to legacy string scan");
+        
+        // Read memory from near the stack top where strings are stored
+        var maxScanSize = 8192ul;
+        var regionSize = stackRegion.end - stackRegion.start;
+        var scanSize = Math.Min(maxScanSize, regionSize > 256 ? regionSize - 256 : regionSize);
+        var scanStart = stackRegion.end - scanSize;
+
+        var memoryCmd = $"memory read --force -c{scanSize} 0x{scanStart:X}";
+        var memoryOutput = await Task.Run(() => debuggerManager.ExecuteCommand(memoryCmd));
+
+        if (rawCommands != null && !string.IsNullOrWhiteSpace(memoryOutput))
+        {
+            rawCommands["memory read (string scan)"] = $"Read {scanSize} bytes from 0x{scanStart:X}";
+        }
+
+        if (string.IsNullOrWhiteSpace(memoryOutput))
+            return null;
+
+        var strings = ParseMemoryToStrings(memoryOutput);
+        if (strings.Count == 0)
+            return null;
+
+        _logger?.LogDebug("ProcessInfoExtractor: String scan - found {Count} strings", strings.Count);
+
+        // Find the first string that looks like a filepath - that's argv[0]
+        var result = new ProcessInfo();
+        var foundArgv0 = false;
+        var sensitiveCount = 0;
+
+        foreach (var str in strings)
+        {
+            if (string.IsNullOrWhiteSpace(str) || str.Length < 2)
+                continue;
+
+            // Check if this is an environment variable
+            var equalsIdx = str.IndexOf('=');
+            var isEnvVar = equalsIdx > 0 && IsValidEnvVarKey(str.Substring(0, equalsIdx));
+
+            if (isEnvVar)
+            {
+                // Once we hit env vars, stop collecting arguments
+                foundArgv0 = true; // Mark that we've moved past argv
+                
+                var (redacted, wasRedacted) = RedactSensitiveValue(str);
+                result.EnvironmentVariables.Add(redacted);
+                if (wasRedacted) sensitiveCount++;
+
+                if (result.EnvironmentVariables.Count >= MaxEnvironmentVariables)
+                    break;
+            }
+            else if (!foundArgv0)
+            {
+                // Look for argv[0] - must be a filepath
+                if (result.Arguments.Count == 0)
+                {
+                    if (LooksLikeFilePath(str))
+                    {
+                        result.Arguments.Add(str);
+                        _logger?.LogDebug("ProcessInfoExtractor: String scan - found argv[0]: {Value}",
+                            str.Length > 80 ? str.Substring(0, 80) + "..." : str);
+                    }
+                    // Skip non-filepath strings before we find argv[0]
+                }
+                else
+                {
+                    // After argv[0], collect subsequent arguments
+                    if (IsValidArgument(str))
+                    {
+                        result.Arguments.Add(str);
+                        if (result.Arguments.Count >= MaxArguments)
+                            foundArgv0 = true; // Stop collecting
+                    }
+                }
+            }
+        }
+
+        result.Argc = result.Arguments.Count;
+        
+        if (sensitiveCount > 0)
+        {
+            result.SensitiveDataFiltered = true;
+        }
+
+        result.EnvironmentVariables.Sort(StringComparer.Ordinal);
+
+        if (result.Arguments.Count > 0 || result.EnvironmentVariables.Count > 0)
+        {
+            _logger?.LogInformation(
+                "ProcessInfoExtractor: String scan - extracted {ArgCount} arguments and {EnvCount} environment variables",
+                result.Arguments.Count, result.EnvironmentVariables.Count);
+            return result;
+        }
+
+        return null;
     }
 
     /// <summary>

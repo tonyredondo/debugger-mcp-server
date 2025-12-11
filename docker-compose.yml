@@ -97,6 +97,7 @@ services:
       - LOG_STORAGE_PATH=/app/logs
       - SESSION_STORAGE_PATH=/app/sessions
       - SKIP_SYNC_BLOCKS=true
+      - SKIP_HEAP_ENUM=true
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:
@@ -133,6 +134,7 @@ services:
       - LOG_STORAGE_PATH=/app/logs
       - SESSION_STORAGE_PATH=/app/sessions
       - SKIP_SYNC_BLOCKS=true
+      - SKIP_HEAP_ENUM=true
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:

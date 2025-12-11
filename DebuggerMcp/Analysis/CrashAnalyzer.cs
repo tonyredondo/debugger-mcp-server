@@ -706,6 +706,23 @@ public class CrashAnalyzer
                 }
             }
         }
+        
+        // Update TopFunction from the first frame of each thread's call stack
+        // This provides complete function names instead of truncated thread header values
+        foreach (var thread in result.Threads!.All!)
+        {
+            if (thread.CallStack.Count > 0)
+            {
+                var firstFrame = thread.CallStack[0];
+                var function = firstFrame.Function ?? "";
+                var module = firstFrame.Module ?? "";
+                
+                // Format: module!function (full function name, no truncation)
+                thread.TopFunction = !string.IsNullOrEmpty(module) 
+                    ? $"{module}!{function}" 
+                    : function;
+            }
+        }
     }
 
     /// <summary>
