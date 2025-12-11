@@ -183,12 +183,7 @@ public class DatadogSymbolsTools(
                 cmd => debuggerManager.ExecuteCommand(cmd));
 
             // Clear command cache after loading new symbols so subsequent commands
-            // (like clrstack) will re-run and show improved stack traces
-            if (loadResult.Success)
-            {
-                debuggerManager.ClearCommandCache();
-                Logger.LogInformation("[DatadogSymbols] Cleared command cache after loading symbols");
-            }
+            // Note: ClrMD handles most operations now, no cache to clear
         }
 
         // Build response
@@ -321,12 +316,7 @@ public class DatadogSymbolsTools(
             forceVersion);
 
         // Clear command cache after loading new symbols so subsequent commands
-        // (like clrstack) will re-run and show improved stack traces
-        if (prepResult.Success && prepResult.LoadResult?.Success == true)
-        {
-            debuggerManager.ClearCommandCache();
-            Logger.LogInformation("[DatadogSymbols] Cleared command cache after loading symbols");
-        }
+        // Note: ClrMD handles most operations now, no cache to clear
 
         // Build response
         var response = new
@@ -622,13 +612,12 @@ public class DatadogSymbolsTools(
         // Clear debugger command cache since symbols are now gone
         try
         {
-            var debuggerManager = GetSessionManager(sessionId, sanitizedUserId);
-            debuggerManager.ClearCommandCache();
-            Logger.LogInformation("[DatadogSymbols] Cleared debugger command cache");
+            // Session found - symbols will be re-evaluated on next command
+            _ = GetSessionManager(sessionId, sanitizedUserId);
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            Logger.LogWarning(ex, "[DatadogSymbols] Failed to clear debugger command cache");
+            // Session not found or expired - that's okay, we still cleared the files
         }
 
         var response = new

@@ -107,16 +107,6 @@ public class WinDbgManager : IDebuggerManager
     public string DebuggerType => "WinDbg";
 
     /// <summary>
-    /// Command cache for improving performance during analysis operations.
-    /// </summary>
-    private readonly CommandCache _commandCache = new(Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
-
-    /// <summary>
-    /// Gets whether command caching is currently enabled.
-    /// </summary>
-    public bool IsCommandCacheEnabled => _commandCache.IsEnabled;
-
-    /// <summary>
     /// Initializes a new instance of the <see cref="WinDbgManager"/> class.
     /// </summary>
     /// <remarks>
@@ -250,10 +240,6 @@ public class WinDbgManager : IDebuggerManager
             // Execute a simple command to verify the dump is ready
             ExecuteCommand(".echo Dump file opened successfully");
 
-            // Enable command caching for the entire dump session
-            // Dump files are static, so all commands can be safely cached
-            EnableCommandCache();
-
             // Detect if this is a .NET dump by checking loaded modules
             IsDotNetDump = DetectDotNetDump();
             if (IsDotNetDump)
@@ -299,9 +285,6 @@ public class WinDbgManager : IDebuggerManager
 
         try
         {
-            // Clear command cache when closing dump (cache is dump-specific)
-            _commandCache.Clear();
-
             // Only attempt to close if a dump is actually open
             if (IsDumpOpen)
             {
@@ -321,31 +304,6 @@ public class WinDbgManager : IDebuggerManager
             // Wrap any exceptions for consistent error handling
             throw new InvalidOperationException($"Failed to close dump: {ex.Message}", ex);
         }
-    }
-
-    /// <summary>
-    /// Enables command caching to improve performance for repeated commands.
-    /// </summary>
-    public void EnableCommandCache()
-    {
-        _commandCache.IsEnabled = true;
-    }
-
-    /// <summary>
-    /// Disables command caching.
-    /// </summary>
-    public void DisableCommandCache()
-    {
-        _commandCache.IsEnabled = false;
-    }
-
-    /// <summary>
-    /// Clears the command cache and ObjectInspector cache.
-    /// </summary>
-    public void ClearCommandCache()
-    {
-        _commandCache.Clear();
-        ObjectInspection.ObjectInspector.ClearCache();
     }
 
     /// <summary>
@@ -380,17 +338,8 @@ public class WinDbgManager : IDebuggerManager
             throw new InvalidOperationException("No dump file is currently open");
         }
 
-        // Check cache first (significant performance improvement for analysis operations)
-        if (_commandCache.TryGetCachedResult(command, out var cachedResult))
-        {
-            return cachedResult!;
-        }
-
-        // Execute and cache the result
-        var result = ExecuteCommandInternal(command);
-        _commandCache.CacheResult(command, result);
-
-        return result;
+        // Execute command directly - caching removed as ClrMD handles most heavy operations
+        return ExecuteCommandInternal(command);
     }
 
     /// <summary>

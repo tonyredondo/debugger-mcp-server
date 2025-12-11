@@ -82,6 +82,13 @@ public class CrashAnalysisResult
     public SecurityInfo? Security { get; set; }
 
     /// <summary>
+    /// Synchronization primitives analysis (locks, semaphores, events, deadlocks).
+    /// </summary>
+    [JsonPropertyName("synchronization")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public Synchronization.SynchronizationAnalysisResult? Synchronization { get; set; }
+
+    /// <summary>
     /// Watch expression evaluation results.
     /// </summary>
     [JsonPropertyName("watches")]
@@ -606,6 +613,13 @@ public class TimerInfo
     /// </summary>
     [JsonPropertyName("stateType")]
     public string? StateType { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the inspected state object value (ClrMD inspection result).
+    /// </summary>
+    [JsonPropertyName("stateValue")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public ClrMdObjectInspection? StateValue { get; set; }
 
     /// <summary>
     /// Gets or sets the callback method name.
@@ -1892,6 +1906,12 @@ public class StateMachineInfo
 
     [JsonPropertyName("currentState")]
     public int CurrentState { get; set; }
+    
+    /// <summary>
+    /// Human-readable description of the current state.
+    /// </summary>
+    [JsonPropertyName("stateDescription")]
+    public string StateDescription { get; set; } = string.Empty;
 }
 
 /// <summary>

@@ -38,6 +38,11 @@ public class ClrMdAnalyzer : IDisposable
     public bool IsOpen => _runtime != null;
 
     /// <summary>
+    /// Gets the CLR runtime for advanced analysis (null if not open).
+    /// </summary>
+    public ClrRuntime? Runtime => _runtime;
+
+    /// <summary>
     /// Opens a dump file for analysis.
     /// </summary>
     /// <param name="dumpPath">Path to the dump file.</param>
@@ -639,6 +644,1373 @@ public class ClrMdAnalyzer : IDisposable
     }
     
     // ============================================================================
+    // Object Inspection Methods (ClrMD-based dumpobj replacement)
+    // ============================================================================
+    
+    /// <summary>
+    /// Inspects a .NET object at the given address using ClrMD.
+    /// This is a safe alternative to SOS dumpobj that runs in managed code.
+    /// </summary>
+    /// <param name="address">The memory address of the object.</param>
+    /// <param name="maxDepth">Maximum recursion depth for nested objects.</param>
+    /// <param name="maxArrayElements">Maximum array elements to show.</param>
+    /// <param name="maxStringLength">Maximum string length before truncation.</param>
+    /// <returns>Object inspection result, or null if inspection failed.</returns>
+    /// <summary>
+    /// Inspects a .NET object or value type at the specified address.
+    /// This is a unified replacement for SOS dumpobj and dumpvc commands.
+    /// </summary>
+    /// <param name="address">The object/value address.</param>
+    /// <param name="methodTable">Optional method table for value types. If provided, tries VT first, then reference type.</param>
+    /// <param name="maxDepth">1 for flat representation, 5+ for full tree.</param>
+    /// <param name="maxArrayElements">Max array elements to show.</param>
+    /// <param name="maxStringLength">Max string length before truncation.</param>
+    /// <returns>Inspection result or null if runtime not initialized.</returns>
+    public ClrMdObjectInspection? InspectObject(
+        ulong address,
+        ulong? methodTable = null,
+        int maxDepth = 5,
+        int maxArrayElements = 10,
+        int maxStringLength = 1024)
+    {
+        lock (_lock)
+        {
+            if (_runtime == null)
+            {
+                _logger?.LogWarning("[ClrMD] Cannot inspect object - runtime not initialized");
+                return null;
+            }
+
+            var seenAddresses = new HashSet<ulong>();
+            
+            // If method table is provided, try value type extraction first
+            if (methodTable.HasValue)
+            {
+                var vtResult = TryInspectValueType(address, methodTable.Value, maxDepth, maxArrayElements, maxStringLength, seenAddresses);
+                if (vtResult != null && vtResult.Error == null)
+                {
+                    _logger?.LogDebug("[ClrMD] Successfully inspected value type at 0x{Address:X} with MT 0x{MT:X}", address, methodTable.Value);
+                    return vtResult;
+                }
+                
+                // Value type failed, try as reference type
+                _logger?.LogDebug("[ClrMD] Value type inspection failed for 0x{Address:X}, trying as reference type", address);
+                seenAddresses.Clear();
+            }
+            
+            // Try reference type extraction
+            var refResult = TryInspectReferenceType(address, maxDepth, maxArrayElements, maxStringLength, seenAddresses);
+            if (refResult != null)
+            {
+                return refResult;
+            }
+            
+            // Both failed
+            return new ClrMdObjectInspection
+            {
+                Address = $"0x{address:x}",
+                Error = methodTable.HasValue 
+                    ? $"Failed to inspect as value type (MT=0x{methodTable.Value:x}) or reference type"
+                    : "Invalid object address"
+            };
+        }
+    }
+    
+    /// <summary>
+    /// Tries to inspect a value type at the given address using the provided method table.
+    /// </summary>
+    private ClrMdObjectInspection? TryInspectValueType(
+        ulong address,
+        ulong methodTable,
+        int maxDepth,
+        int maxArrayElements,
+        int maxStringLength,
+        HashSet<ulong> seenAddresses)
+    {
+        try
+        {
+            // Get the type from the method table
+            var type = _runtime!.GetTypeByMethodTable(methodTable);
+            if (type == null)
+            {
+                _logger?.LogDebug("[ClrMD] Could not find type for MT 0x{MT:X}", methodTable);
+                return new ClrMdObjectInspection
+                {
+                    Address = $"0x{address:x}",
+                    MethodTable = $"0x{methodTable:x}",
+                    Error = $"Type not found for method table 0x{methodTable:x}"
+                };
+            }
+            
+            if (!type.IsValueType)
+            {
+                _logger?.LogDebug("[ClrMD] Type {Type} is not a value type, will try as reference", type.Name);
+                return null; // Let caller try as reference type
+            }
+            
+            // Create value type inspection result
+            var result = new ClrMdObjectInspection
+            {
+                Address = $"0x{address:x}",
+                Type = type.Name ?? "Unknown",
+                MethodTable = $"0x{type.MethodTable:x}",
+                Size = (ulong)type.StaticSize
+            };
+            
+            if (maxDepth <= 0)
+            {
+                result.Value = "[max depth reached]";
+                return result;
+            }
+            
+            // Read fields from the value type
+            result.Fields = new List<ClrMdFieldInspection>();
+            foreach (var field in type.Fields)
+            {
+                var fieldInspection = new ClrMdFieldInspection
+                {
+                    Name = field.Name ?? "[unnamed]",
+                    Type = field.Type?.Name ?? "Unknown",
+                    IsStatic = false, // Instance fields for value types
+                    Offset = field.Offset
+                };
+                
+                try
+                {
+                    if (field.IsPrimitive)
+                    {
+                        fieldInspection.Value = ReadPrimitiveFieldFromAddress(field, address);
+                    }
+                    else if (field.Type?.IsString == true)
+                    {
+                        // For value types, use interior: true
+                        var fieldObj = field.ReadObject(address, interior: true);
+                        if (fieldObj.IsValid)
+                        {
+                            var str = fieldObj.AsString();
+                            if (str != null && str.Length > maxStringLength)
+                                str = str.Substring(0, maxStringLength) + "...";
+                            fieldInspection.Value = str;
+                        }
+                        else
+                        {
+                            fieldInspection.Value = "null";
+                        }
+                    }
+                    else if (field.IsObjectReference)
+                    {
+                        // For value types, use interior: true
+                        var fieldObj = field.ReadObject(address, interior: true);
+                        if (fieldObj.IsValid && fieldObj.Address != 0)
+                        {
+                            if (maxDepth > 1)
+                            {
+                                fieldInspection.NestedObject = InspectObjectInternal(fieldObj, maxDepth - 1, maxArrayElements, maxStringLength, seenAddresses);
+                            }
+                            else
+                            {
+                                fieldInspection.Value = $"0x{fieldObj.Address:x}";
+                            }
+                        }
+                        else
+                        {
+                            fieldInspection.Value = "null";
+                        }
+                    }
+                    else if (field.IsValueType)
+                    {
+                        // Nested value type - calculate address and recursively inspect
+                        var nestedVtAddress = address + (ulong)field.Offset;
+                        var nestedVtType = field.Type;
+                        
+                        if (nestedVtType != null && nestedVtType.MethodTable != 0 && maxDepth > 1)
+                        {
+                            // Recursively inspect the nested value type
+                            var nestedResult = TryInspectValueType(
+                                nestedVtAddress, 
+                                nestedVtType.MethodTable, 
+                                maxDepth - 1, 
+                                maxArrayElements, 
+                                maxStringLength, 
+                                seenAddresses);
+                            
+                            if (nestedResult != null && nestedResult.Error == null)
+                            {
+                                fieldInspection.NestedObject = nestedResult;
+                            }
+                            else
+                            {
+                                // Fallback to showing address if recursive inspection fails
+                                fieldInspection.Value = $"0x{nestedVtAddress:x}";
+                            }
+                        }
+                        else if (nestedVtType != null)
+                        {
+                            // Max depth reached or no MT - show address only (type is in Type field)
+                            fieldInspection.Value = $"0x{nestedVtAddress:x}";
+                        }
+                        else
+                        {
+                            fieldInspection.Value = $"[value type at 0x{nestedVtAddress:x}]";
+                        }
+                    }
+                    else
+                    {
+                        fieldInspection.Value = "[unknown field type]";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "[ClrMD] Error reading VT field {Field}", field.Name);
+                    fieldInspection.Value = $"[error: {ex.Message}]";
+                }
+                
+                result.Fields.Add(fieldInspection);
+            }
+            
+            return result;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ClrMD] Error inspecting value type at 0x{Address:X}", address);
+            return null; // Let caller try as reference type
+        }
+    }
+    
+    /// <summary>
+    /// Reads a primitive field value from a value type at the given address.
+    /// </summary>
+    private object? ReadPrimitiveFieldFromAddress(ClrInstanceField field, ulong address)
+    {
+        var fieldType = field.Type;
+        if (fieldType == null) return null;
+        
+        return fieldType.Name switch
+        {
+            "System.Boolean" => field.Read<bool>(address, interior: true),
+            "System.Byte" => field.Read<byte>(address, interior: true),
+            "System.SByte" => field.Read<sbyte>(address, interior: true),
+            "System.Int16" => field.Read<short>(address, interior: true),
+            "System.UInt16" => field.Read<ushort>(address, interior: true),
+            "System.Int32" => field.Read<int>(address, interior: true),
+            "System.UInt32" => field.Read<uint>(address, interior: true),
+            "System.Int64" => field.Read<long>(address, interior: true),
+            "System.UInt64" => field.Read<ulong>(address, interior: true),
+            "System.Single" => field.Read<float>(address, interior: true),
+            "System.Double" => field.Read<double>(address, interior: true),
+            "System.Char" => field.Read<char>(address, interior: true),
+            "System.IntPtr" => $"0x{field.Read<nint>(address, interior: true):x}",
+            "System.UIntPtr" => $"0x{field.Read<nuint>(address, interior: true):x}",
+            _ => null
+        };
+    }
+    
+    /// <summary>
+    /// Tries to inspect a reference type object at the given address.
+    /// </summary>
+    private ClrMdObjectInspection? TryInspectReferenceType(
+        ulong address,
+        int maxDepth,
+        int maxArrayElements,
+        int maxStringLength,
+        HashSet<ulong> seenAddresses)
+    {
+        try
+        {
+            var heap = _runtime!.Heap;
+            var obj = heap.GetObject(address);
+            
+            if (!obj.IsValid)
+            {
+                _logger?.LogDebug("[ClrMD] Object at 0x{Address:X} is not valid", address);
+                return null;
+            }
+
+            return InspectObjectInternal(obj, maxDepth, maxArrayElements, maxStringLength, seenAddresses);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "[ClrMD] Error inspecting reference type at 0x{Address:X}", address);
+            return new ClrMdObjectInspection
+            {
+                Address = $"0x{address:x}",
+                Error = ex.Message
+            };
+        }
+    }
+
+    /// <summary>
+    /// Inspects a CLR module at the given address, returning detailed module information.
+    /// This is a safe replacement for SOS !dumpmodule that won't crash LLDB.
+    /// </summary>
+    /// <param name="moduleAddress">The address of the module to inspect.</param>
+    /// <returns>Module inspection result, or null if not found.</returns>
+    public ClrMdModuleInspection? InspectModule(ulong moduleAddress)
+    {
+        lock (_lock)
+        {
+            try
+            {
+                if (_runtime == null)
+                {
+                    _logger?.LogWarning("[ClrMD] Cannot inspect module - runtime not initialized");
+                    return null;
+                }
+
+                // Find the module by address
+                ClrModule? targetModule = null;
+                foreach (var module in _runtime.EnumerateModules())
+                {
+                    if (module.Address == moduleAddress)
+                    {
+                        targetModule = module;
+                        break;
+                    }
+                }
+
+                if (targetModule == null)
+                {
+                    _logger?.LogDebug("[ClrMD] Module at 0x{Address:X} not found", moduleAddress);
+                    return new ClrMdModuleInspection
+                    {
+                        Address = $"0x{moduleAddress:X16}",
+                        Error = "Module not found at specified address"
+                    };
+                }
+
+                return InspectModuleInternal(targetModule);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "[ClrMD] Error inspecting module at 0x{Address:X}", moduleAddress);
+                return new ClrMdModuleInspection
+                {
+                    Address = $"0x{moduleAddress:X16}",
+                    Error = ex.Message
+                };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Inspects a CLR module by name, returning detailed module information.
+    /// </summary>
+    /// <param name="moduleName">The module name (can be partial, case-insensitive).</param>
+    /// <returns>Module inspection result, or null if not found.</returns>
+    public ClrMdModuleInspection? InspectModuleByName(string moduleName)
+    {
+        lock (_lock)
+        {
+            try
+            {
+                if (_runtime == null)
+                {
+                    _logger?.LogWarning("[ClrMD] Cannot inspect module - runtime not initialized");
+                    return null;
+                }
+
+                // Find the module by name (case-insensitive, supports partial match)
+                ClrModule? targetModule = null;
+                foreach (var module in _runtime.EnumerateModules())
+                {
+                    var name = module.Name;
+                    if (name != null && name.Contains(moduleName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        targetModule = module;
+                        break;
+                    }
+                }
+
+                if (targetModule == null)
+                {
+                    _logger?.LogDebug("[ClrMD] Module '{Name}' not found", moduleName);
+                    return new ClrMdModuleInspection
+                    {
+                        Address = "0x0",
+                        Name = moduleName,
+                        Error = "Module not found"
+                    };
+                }
+
+                return InspectModuleInternal(targetModule);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "[ClrMD] Error inspecting module '{Name}'", moduleName);
+                return new ClrMdModuleInspection
+                {
+                    Address = "0x0",
+                    Name = moduleName,
+                    Error = ex.Message
+                };
+            }
+        }
+    }
+
+    /// <summary>
+    /// Internal module inspection implementation.
+    /// </summary>
+    private ClrMdModuleInspection InspectModuleInternal(ClrModule module)
+    {
+        var result = new ClrMdModuleInspection
+        {
+            Address = $"0x{module.Address:X16}",
+            Name = module.Name,
+            Size = module.Size,
+            IsPEFile = module.IsPEFile,
+            IsDynamic = module.IsDynamic,
+            Layout = module.Layout.ToString(),
+            MetadataLength = module.MetadataLength
+        };
+
+        // Image base (only for PE files)
+        if (module.ImageBase != 0)
+        {
+            result.ImageBase = $"0x{module.ImageBase:X16}";
+        }
+
+        // Assembly info
+        var assembly = module.AssemblyAddress;
+        if (assembly != 0)
+        {
+            result.AssemblyAddress = $"0x{assembly:X16}";
+        }
+
+        // Get assembly name from module path
+        if (!string.IsNullOrEmpty(module.Name))
+        {
+            try
+            {
+                result.AssemblyName = System.IO.Path.GetFileNameWithoutExtension(module.Name);
+            }
+            catch
+            {
+                // Ignore errors getting assembly name from path
+            }
+        }
+
+        // Metadata address
+        if (module.MetadataAddress != 0)
+        {
+            result.MetadataAddress = $"0x{module.MetadataAddress:X16}";
+        }
+
+        // PDB info
+        var pdb = module.Pdb;
+        if (pdb != null)
+        {
+            result.Pdb = new ClrMdPdbInfo
+            {
+                Path = pdb.Path,
+                Guid = pdb.Guid.ToString("D"),
+                Revision = pdb.Revision
+            };
+        }
+
+        // Type count
+        try
+        {
+            result.TypeCount = module.EnumerateTypeDefToMethodTableMap().Count();
+        }
+        catch
+        {
+            result.TypeCount = 0;
+        }
+
+        // Try to get version from assembly attributes
+        try
+        {
+            var (attributes, version) = ReadAttributesFromMemory(module);
+            if (!string.IsNullOrEmpty(version))
+            {
+                result.Version = version;
+            }
+            else
+            {
+                // Try to find AssemblyInformationalVersionAttribute or AssemblyVersionAttribute
+                var infoVersion = attributes.FirstOrDefault(a => 
+                    a.AttributeType.Contains("InformationalVersion", StringComparison.Ordinal));
+                if (infoVersion != null && !string.IsNullOrEmpty(infoVersion.Value))
+                {
+                    result.Version = infoVersion.Value;
+                }
+                else
+                {
+                    var asmVersion = attributes.FirstOrDefault(a =>
+                        a.AttributeType.Equals("AssemblyVersionAttribute", StringComparison.Ordinal) ||
+                        a.AttributeType.Equals("AssemblyFileVersionAttribute", StringComparison.Ordinal));
+                    if (asmVersion != null && !string.IsNullOrEmpty(asmVersion.Value))
+                    {
+                        result.Version = asmVersion.Value;
+                    }
+                }
+            }
+        }
+        catch
+        {
+            // Ignore errors getting version
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Lists all modules in the runtime.
+    /// </summary>
+    /// <returns>List of module inspection results.</returns>
+    public List<ClrMdModuleInspection> ListModules()
+    {
+        lock (_lock)
+        {
+            var results = new List<ClrMdModuleInspection>();
+
+            if (_runtime == null)
+            {
+                _logger?.LogWarning("[ClrMD] Cannot list modules - runtime not initialized");
+                return results;
+            }
+
+            try
+            {
+                foreach (var module in _runtime.EnumerateModules())
+                {
+                    try
+                    {
+                        var info = InspectModuleInternal(module);
+                        results.Add(info);
+                    }
+                    catch (Exception ex)
+                    {
+                        results.Add(new ClrMdModuleInspection
+                        {
+                            Address = $"0x{module.Address:X16}",
+                            Name = module.Name,
+                            Error = ex.Message
+                        });
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "[ClrMD] Error listing modules");
+            }
+
+            return results;
+        }
+    }
+
+    /// <summary>
+    /// Searches for a type by name across all modules (ClrMD equivalent of SOS !name2ee).
+    /// Enhanced to support generic types that SOS !name2ee struggles with.
+    /// </summary>
+    /// <param name="typeName">The fully qualified type name to search for.</param>
+    /// <param name="moduleName">Optional module name filter (use "*" or null for all modules).</param>
+    /// <param name="searchHeapForGenerics">If true, also search heap for constructed generic types.</param>
+    /// <returns>Search results with type information.</returns>
+    public Name2EEResult Name2EE(string typeName, string? moduleName = null, bool searchHeapForGenerics = true)
+    {
+        lock (_lock)
+        {
+            var result = new Name2EEResult
+            {
+                SearchedTypeName = typeName,
+                ModuleFilter = moduleName ?? "*"
+            };
+
+            if (_runtime == null)
+            {
+                _logger?.LogWarning("[ClrMD] Cannot search for type - runtime not initialized");
+                result.Error = "Runtime not initialized";
+                return result;
+            }
+
+            try
+            {
+                var searchAllModules = string.IsNullOrEmpty(moduleName) || moduleName == "*";
+                var moduleEntries = new List<Name2EEModuleEntry>();
+                Name2EETypeMatch? foundType = null;
+                
+                // Normalize the search pattern for generic types
+                var normalizedTypeName = NormalizeGenericTypeName(typeName);
+                var isGenericSearch = typeName.Contains('<') || typeName.Contains('`');
+
+                // Phase 1: Search modules for type definitions
+                foreach (var module in _runtime.EnumerateModules())
+                {
+                    // Filter by module name if specified
+                    if (!searchAllModules)
+                    {
+                        var modName = module.Name ?? "";
+                        if (!modName.Contains(moduleName!, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                    }
+
+                    var entry = new Name2EEModuleEntry
+                    {
+                        ModuleAddress = $"0x{module.Address:X16}",
+                        AssemblyName = !string.IsNullOrEmpty(module.Name) 
+                            ? System.IO.Path.GetFileName(module.Name) 
+                            : null
+                    };
+
+                    // Search for the type in this module
+                    try
+                    {
+                        ClrType? matchedType = null;
+                        
+                        foreach (var type in module.EnumerateTypeDefToMethodTableMap())
+                        {
+                            var clrType = _runtime.GetTypeByMethodTable(type.MethodTable);
+                            if (clrType?.Name == null)
+                                continue;
+                            
+                            // Try different matching strategies
+                            if (MatchesTypeName(clrType.Name, typeName, normalizedTypeName, isGenericSearch))
+                            {
+                                matchedType = clrType;
+                                break;
+                            }
+                        }
+
+                        if (matchedType != null)
+                        {
+                            entry.TypeFound = CreateTypeMatch(matchedType, typeName);
+                            
+                            // Record first found type
+                            if (foundType == null)
+                            {
+                                foundType = entry.TypeFound;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogDebug(ex, "[ClrMD] Error searching type in module {Module}", module.Name);
+                    }
+
+                    moduleEntries.Add(entry);
+                }
+
+                // Phase 2: If not found and searching for generics, scan the heap for constructed generic types
+                if (foundType == null && isGenericSearch && searchHeapForGenerics && _runtime.Heap != null)
+                {
+                    _logger?.LogDebug("[ClrMD] Type not found in modules, searching heap for generic type '{TypeName}'", typeName);
+                    
+                    var heapMatch = SearchHeapForGenericType(typeName, normalizedTypeName);
+                    if (heapMatch != null)
+                    {
+                        foundType = heapMatch;
+                        result.FoundViaHeapSearch = true;
+                        
+                        // Add a synthetic module entry for the heap-found type
+                        moduleEntries.Add(new Name2EEModuleEntry
+                        {
+                            ModuleAddress = heapMatch.MethodTable, // Use MT as identifier
+                            AssemblyName = "(found via heap search)",
+                            TypeFound = heapMatch
+                        });
+                    }
+                }
+
+                result.Modules = moduleEntries;
+                result.FoundType = foundType;
+                result.TotalModulesSearched = moduleEntries.Count;
+                result.ModulesWithMatch = moduleEntries.Count(m => m.TypeFound != null);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "[ClrMD] Error in Name2EE for type '{TypeName}'", typeName);
+                result.Error = ex.Message;
+            }
+
+            return result;
+        }
+    }
+    
+    /// <summary>
+    /// Normalizes a generic type name to the CLR format (e.g., List&lt;T&gt; → List`1).
+    /// </summary>
+    private static string NormalizeGenericTypeName(string typeName)
+    {
+        // Handle C#-style generics like "List<T>" or "Dictionary<string, int>"
+        if (typeName.Contains('<'))
+        {
+            // Extract base name and count type parameters
+            var angleBracketIndex = typeName.IndexOf('<');
+            var baseName = typeName[..angleBracketIndex];
+            
+            // Count generic parameters by counting commas + 1, handling nested generics
+            var paramSection = typeName[(angleBracketIndex + 1)..];
+            var paramCount = CountGenericParameters(paramSection);
+            
+            return $"{baseName}`{paramCount}";
+        }
+        
+        return typeName;
+    }
+    
+    /// <summary>
+    /// Counts the number of generic type parameters, handling nested generics.
+    /// </summary>
+    private static int CountGenericParameters(string paramSection)
+    {
+        // Remove the closing bracket
+        if (paramSection.EndsWith(">", StringComparison.Ordinal))
+        {
+            paramSection = paramSection[..^1];
+        }
+        
+        var count = 1;
+        var depth = 0;
+        
+        foreach (var c in paramSection)
+        {
+            switch (c)
+            {
+                case '<':
+                    depth++;
+                    break;
+                case '>':
+                    depth--;
+                    break;
+                case ',' when depth == 0:
+                    count++;
+                    break;
+            }
+        }
+        
+        return count;
+    }
+    
+    /// <summary>
+    /// Checks if a CLR type name matches the search pattern.
+    /// </summary>
+    private static bool MatchesTypeName(string clrTypeName, string searchName, string normalizedName, bool isGenericSearch)
+    {
+        // Exact match
+        if (clrTypeName.Equals(searchName, StringComparison.Ordinal))
+            return true;
+        
+        // Normalized generic match (e.g., "List`1" matches search for "List<T>")
+        if (isGenericSearch && clrTypeName.Equals(normalizedName, StringComparison.Ordinal))
+            return true;
+        
+        // Ends-with for unqualified names (e.g., "MyClass" matches "Namespace.MyClass")
+        if (clrTypeName.EndsWith("." + searchName, StringComparison.Ordinal) ||
+            clrTypeName.EndsWith("+" + searchName, StringComparison.Ordinal))
+            return true;
+        
+        // Ends-with for normalized generic names
+        if (isGenericSearch)
+        {
+            if (clrTypeName.EndsWith("." + normalizedName, StringComparison.Ordinal) ||
+                clrTypeName.EndsWith("+" + normalizedName, StringComparison.Ordinal))
+                return true;
+            
+            // Match base name with generic arity (e.g., "List" matches "System.Collections.Generic.List`1")
+            var baseSearchName = searchName.Contains('<') 
+                ? searchName[..searchName.IndexOf('<')] 
+                : (searchName.Contains('`') ? searchName[..searchName.IndexOf('`')] : searchName);
+            
+            if (!string.IsNullOrEmpty(baseSearchName))
+            {
+                // Check if CLR name contains the base name followed by backtick
+                var clrBaseName = clrTypeName.Contains('`') 
+                    ? clrTypeName[..clrTypeName.LastIndexOf('`')] 
+                    : clrTypeName;
+                
+                if (clrBaseName.EndsWith("." + baseSearchName, StringComparison.Ordinal) ||
+                    clrBaseName.EndsWith("+" + baseSearchName, StringComparison.Ordinal) ||
+                    clrBaseName.Equals(baseSearchName, StringComparison.Ordinal))
+                    return true;
+            }
+        }
+        
+        return false;
+    }
+    
+    /// <summary>
+    /// Creates a Name2EETypeMatch from a ClrType.
+    /// </summary>
+    private static Name2EETypeMatch CreateTypeMatch(ClrType clrType, string searchedName)
+    {
+        return new Name2EETypeMatch
+        {
+            Token = $"0x{clrType.MetadataToken:X8}",
+            MethodTable = $"0x{clrType.MethodTable:X16}",
+            Name = clrType.Name ?? searchedName,
+            EEClass = $"0x{clrType.MethodTable:X16}", // In ClrMD, EEClass ≈ MethodTable
+            IsGeneric = clrType.Name?.Contains('`') == true
+        };
+    }
+    
+    /// <summary>
+    /// Searches the heap for constructed generic types matching the search pattern.
+    /// This finds instantiated generics like List&lt;string&gt; when the open generic List`1 isn't found.
+    /// </summary>
+    private Name2EETypeMatch? SearchHeapForGenericType(string typeName, string normalizedTypeName)
+    {
+        if (_runtime?.Heap == null)
+            return null;
+        
+        var heap = _runtime.Heap;
+        
+        try
+        {
+            // Extract the base generic type name for matching
+            var baseTypeName = normalizedTypeName.Contains('`') 
+                ? normalizedTypeName[..normalizedTypeName.IndexOf('`')] 
+                : (typeName.Contains('<') ? typeName[..typeName.IndexOf('<')] : typeName);
+            
+            var matchedTypes = new List<(ClrType Type, int Score)>();
+            var seenMethodTables = new HashSet<ulong>();
+            var objectsScanned = 0;
+            const int maxObjectsToScan = 100000; // Limit heap scan
+            
+            foreach (var obj in heap.EnumerateObjects())
+            {
+                if (++objectsScanned > maxObjectsToScan)
+                    break;
+                
+                var objType = obj.Type;
+                if (objType?.Name == null || !objType.Name.Contains('`'))
+                    continue;
+                
+                // Skip if we've already seen this method table
+                if (!seenMethodTables.Add(objType.MethodTable))
+                    continue;
+                
+                // Check if this type matches our search pattern
+                var score = ScoreGenericTypeMatch(objType.Name, baseTypeName, typeName);
+                if (score > 0)
+                {
+                    matchedTypes.Add((objType, score));
+                    
+                    // If we found a high-confidence match, stop early
+                    if (score >= 100)
+                        break;
+                }
+            }
+            
+            if (matchedTypes.Count == 0)
+                return null;
+            
+            // Return the best match
+            var bestMatch = matchedTypes.OrderByDescending(x => x.Score).First().Type;
+            
+            _logger?.LogDebug("[ClrMD] Found generic type via heap: {TypeName}", bestMatch.Name);
+            
+            return new Name2EETypeMatch
+            {
+                Token = $"0x{bestMatch.MetadataToken:X8}",
+                MethodTable = $"0x{bestMatch.MethodTable:X16}",
+                Name = bestMatch.Name ?? typeName,
+                EEClass = $"0x{bestMatch.MethodTable:X16}",
+                IsGeneric = true,
+                FoundViaHeapSearch = true
+            };
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ClrMD] Error searching heap for generic type");
+            return null;
+        }
+    }
+    
+    /// <summary>
+    /// Scores how well a CLR type name matches a generic type search pattern.
+    /// Returns 0 for no match, higher scores for better matches.
+    /// </summary>
+    private static int ScoreGenericTypeMatch(string clrTypeName, string baseTypeName, string fullSearchName)
+    {
+        // Extract CLR base name (before the backtick)
+        var clrBaseName = clrTypeName.Contains('`') 
+            ? clrTypeName[..clrTypeName.LastIndexOf('`')] 
+            : clrTypeName;
+        
+        // Exact base name match (highest priority)
+        if (clrBaseName.Equals(baseTypeName, StringComparison.Ordinal))
+            return 100;
+        
+        // Ends-with base name match
+        if (clrBaseName.EndsWith("." + baseTypeName, StringComparison.Ordinal))
+            return 90;
+        
+        // Nested type match
+        if (clrBaseName.EndsWith("+" + baseTypeName, StringComparison.Ordinal))
+            return 85;
+        
+        // Contains the base name (lower priority)
+        if (clrBaseName.Contains(baseTypeName, StringComparison.Ordinal))
+            return 50;
+        
+        return 0;
+    }
+
+    /// <summary>
+    /// Searches for a method by name within a type (extended name2ee functionality).
+    /// </summary>
+    /// <param name="typeName">The fully qualified type name.</param>
+    /// <param name="methodName">The method name to search for.</param>
+    /// <returns>Search results with method information.</returns>
+    public Name2EEMethodResult Name2EEMethod(string typeName, string methodName)
+    {
+        lock (_lock)
+        {
+            var result = new Name2EEMethodResult
+            {
+                TypeName = typeName,
+                MethodName = methodName
+            };
+
+            if (_runtime == null)
+            {
+                result.Error = "Runtime not initialized";
+                return result;
+            }
+
+            try
+            {
+                // First find the type
+                var typeResult = Name2EE(typeName);
+                if (typeResult.FoundType == null)
+                {
+                    result.Error = $"Type '{typeName}' not found";
+                    return result;
+                }
+
+                // Parse the method table address
+                var mtAddress = typeResult.FoundType.MethodTable;
+                if (mtAddress != null && mtAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                {
+                    mtAddress = mtAddress[2..];
+                }
+
+                if (!ulong.TryParse(mtAddress, System.Globalization.NumberStyles.HexNumber, null, out var mtAddr))
+                {
+                    result.Error = "Invalid method table address";
+                    return result;
+                }
+
+                var clrType = _runtime.GetTypeByMethodTable(mtAddr);
+                if (clrType == null)
+                {
+                    result.Error = "Could not get type from method table";
+                    return result;
+                }
+
+                result.TypeMethodTable = typeResult.FoundType.MethodTable;
+                result.Methods = [];
+
+                // Search for methods matching the name
+                foreach (var method in clrType.Methods)
+                {
+                    if (method.Name != null && 
+                        (method.Name.Equals(methodName, StringComparison.Ordinal) ||
+                         method.Name.Contains(methodName, StringComparison.OrdinalIgnoreCase)))
+                    {
+                        result.Methods.Add(new Name2EEMethodInfo
+                        {
+                            Name = method.Name,
+                            MethodDesc = $"0x{method.MethodDesc:X16}",
+                            NativeCode = method.NativeCode != 0 ? $"0x{method.NativeCode:X16}" : null,
+                            Token = $"0x{method.MetadataToken:X8}",
+                            Signature = method.Signature
+                        });
+                    }
+                }
+
+                result.TotalMethodsFound = result.Methods.Count;
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "[ClrMD] Error in Name2EEMethod for '{Type}.{Method}'", typeName, methodName);
+                result.Error = ex.Message;
+            }
+
+            return result;
+        }
+    }
+    
+    /// <summary>
+    /// Internal recursive object inspection.
+    /// </summary>
+    private ClrMdObjectInspection InspectObjectInternal(
+        ClrObject obj,
+        int depth,
+        int maxArrayElements,
+        int maxStringLength,
+        HashSet<ulong> seenAddresses)
+    {
+        var objType = obj.Type;
+        var result = new ClrMdObjectInspection
+        {
+            Address = $"0x{obj.Address:x}",
+            Type = objType?.Name ?? "Unknown",
+            MethodTable = objType?.MethodTable != 0 ? $"0x{objType!.MethodTable:x}" : null,
+            Size = obj.Size
+        };
+
+        // Handle null type
+        if (obj.Type == null)
+        {
+            result.Error = "Type information unavailable";
+            return result;
+        }
+
+        // Check for circular references
+        if (seenAddresses.Contains(obj.Address))
+        {
+            result.Value = "[circular reference]";
+            return result;
+        }
+        seenAddresses.Add(obj.Address);
+
+        // Check depth limit
+        if (depth <= 0)
+        {
+            result.Value = "[max depth reached]";
+            return result;
+        }
+
+        try
+        {
+            // Handle strings specially
+            if (obj.Type.IsString)
+            {
+                var str = obj.AsString();
+                if (str != null && str.Length > maxStringLength)
+                {
+                    str = str.Substring(0, maxStringLength) + $"... [truncated, total {str.Length} chars]";
+                }
+                result.Value = str;
+                result.IsString = true;
+                return result;
+            }
+
+            // Handle arrays
+            if (obj.IsArray)
+            {
+                result.IsArray = true;
+                result.ArrayLength = obj.AsArray().Length;
+                result.ArrayElementType = obj.Type.ComponentType?.Name;
+                
+                var elements = new List<object?>();
+                var arr = obj.AsArray();
+                var elementsToShow = Math.Min(arr.Length, maxArrayElements);
+                var componentType = obj.Type.ComponentType;
+                
+                // Determine array element category:
+                // 1. Primitive (int, bool, etc.) - use GetValue<T>
+                // 2. Simple value type (no pointers) - use GetValue<T> or show as bytes
+                // 3. Complex value type (with pointers) - can't use GetObjectValue, show summary
+                // 4. Reference type - use GetObjectValue
+                var isPrimitive = componentType?.IsPrimitive == true;
+                var isSimpleValueType = componentType?.IsValueType == true && componentType?.ContainsPointers == false;
+                var isComplexValueType = componentType?.IsValueType == true && componentType?.ContainsPointers == true;
+                var isReferenceType = !componentType?.IsValueType == true && !isPrimitive;
+                
+                for (int i = 0; i < elementsToShow; i++)
+                {
+                    try
+                    {
+                        if (isPrimitive || isSimpleValueType)
+                        {
+                            // For primitive/simple value type arrays, use GetValue directly
+                            var primValue = GetArrayPrimitiveValue(arr, i, componentType);
+                            elements.Add(primValue);
+                        }
+                        else if (isComplexValueType)
+                        {
+                            // Complex value types (structs with reference fields) cannot be read via GetObjectValue
+                            // Try to read the struct's fields by computing the element address
+                            try
+                            {
+                                var elementSize = componentType!.StaticSize;
+                                var arrayDataStart = arr.Address + (ulong)IntPtr.Size * 2; // Skip header
+                                var elementAddress = arrayDataStart + (ulong)(i * elementSize);
+                                
+                                // Create a summary showing the struct type and address
+                                elements.Add(new ClrMdObjectInspection
+                                {
+                                    Address = $"0x{elementAddress:x}",
+                                    Type = componentType.Name ?? "ValueType",
+                                    Value = $"[value type at index {i}]"
+                                });
+                            }
+                            catch
+                            {
+                                elements.Add($"[{componentType?.Name ?? "ValueType"} at index {i}]");
+                            }
+                        }
+                        else
+                        {
+                            // Reference type array - use GetObjectValue
+                            var elemObj = arr.GetObjectValue(i);
+                            if (elemObj.IsValid)
+                            {
+                                if (elemObj.Type?.IsString == true)
+                                {
+                                    var str = elemObj.AsString();
+                                    if (str != null && str.Length > maxStringLength)
+                                    {
+                                        str = str.Substring(0, maxStringLength) + "...";
+                                    }
+                                    elements.Add(str);
+                                }
+                                else if (elemObj.Type?.IsPrimitive == true)
+                                {
+                                    elements.Add(GetPrimitiveValue(elemObj));
+                                }
+                                else
+                                {
+                                    elements.Add(InspectObjectInternal(elemObj, depth - 1, maxArrayElements, maxStringLength, seenAddresses));
+                                }
+                            }
+                            else
+                            {
+                                elements.Add(null);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log but don't pollute output with full error messages
+                        _logger?.LogDebug(ex, "[ClrMD] Error reading array element {Index} of type {Type}", i, componentType?.Name);
+                        elements.Add($"[{componentType?.Name ?? "element"} at index {i}]");
+                    }
+                }
+                
+                if (arr.Length > maxArrayElements)
+                {
+                    elements.Add($"[... {arr.Length - maxArrayElements} more elements]");
+                }
+                
+                result.Elements = elements;
+                return result;
+            }
+
+            // Handle regular objects - enumerate fields
+            // Note: obj.Type.Fields returns instance fields only (ClrInstanceField)
+            // Static fields would need to be accessed via obj.Type.StaticFields
+            result.Fields = new List<ClrMdFieldInspection>();
+            
+            foreach (var field in obj.Type.Fields)
+            {
+                var fieldInspection = new ClrMdFieldInspection
+                {
+                    Name = field.Name ?? "[unnamed]",
+                    Type = field.Type?.Name ?? "Unknown",
+                    IsStatic = false, // Instance fields are never static
+                    Offset = field.Offset
+                };
+
+                try
+                {
+                    if (field.IsPrimitive)
+                    {
+                        fieldInspection.Value = GetFieldPrimitiveValue(obj, field);
+                    }
+                    else if (field.Type?.IsString == true)
+                    {
+                        var fieldObj = field.ReadObject(obj.Address, interior: false);
+                        if (fieldObj.IsValid)
+                        {
+                            var str = fieldObj.AsString();
+                            if (str != null && str.Length > maxStringLength)
+                            {
+                                str = str.Substring(0, maxStringLength) + $"... [truncated]";
+                            }
+                            fieldInspection.Value = str;
+                        }
+                        else
+                        {
+                            fieldInspection.Value = "null";
+                        }
+                    }
+                    else if (field.IsObjectReference)
+                    {
+                        var fieldObj = field.ReadObject(obj.Address, interior: false);
+                        if (fieldObj.IsValid && fieldObj.Address != 0)
+                        {
+                            if (depth > 1)
+                            {
+                                fieldInspection.NestedObject = InspectObjectInternal(
+                                    fieldObj, depth - 1, maxArrayElements, maxStringLength, seenAddresses);
+                            }
+                            else
+                            {
+                                fieldInspection.Value = $"0x{fieldObj.Address:x}";
+                            }
+                        }
+                        else
+                        {
+                            fieldInspection.Value = "null";
+                        }
+                    }
+                    else if (field.IsValueType)
+                    {
+                        // Value type embedded in the reference type object
+                        // Calculate address: object address + field offset
+                        var embeddedVtAddress = obj.Address + (ulong)field.Offset;
+                        var embeddedVtType = field.Type;
+                        
+                        if (embeddedVtType != null && embeddedVtType.MethodTable != 0 && depth > 1)
+                        {
+                            // Recursively inspect the embedded value type
+                            var embeddedResult = TryInspectValueType(
+                                embeddedVtAddress, 
+                                embeddedVtType.MethodTable, 
+                                depth - 1, 
+                                maxArrayElements, 
+                                maxStringLength, 
+                                seenAddresses);
+                            
+                            if (embeddedResult != null && embeddedResult.Error == null)
+                            {
+                                fieldInspection.NestedObject = embeddedResult;
+                            }
+                            else
+                            {
+                                // Fallback - show address only (type is in Type field)
+                                fieldInspection.Value = $"0x{embeddedVtAddress:x}";
+                            }
+                        }
+                        else if (embeddedVtType != null)
+                        {
+                            // Max depth or no MT - show address only (type is in Type field)
+                            fieldInspection.Value = $"0x{embeddedVtAddress:x}";
+                        }
+                        else
+                        {
+                            fieldInspection.Value = $"[embedded value type at 0x{embeddedVtAddress:x}]";
+                        }
+                    }
+                    else
+                    {
+                        fieldInspection.Value = $"[{field.ElementType}]";
+                    }
+                }
+                catch (Exception ex)
+                {
+                    fieldInspection.Value = $"[error: {ex.Message}]";
+                }
+
+                result.Fields.Add(fieldInspection);
+            }
+
+            return result;
+        }
+        catch (Exception ex)
+        {
+            result.Error = ex.Message;
+            return result;
+        }
+    }
+    
+    /// <summary>
+    /// Gets the primitive value from a ClrObject.
+    /// </summary>
+    private static object? GetPrimitiveValue(ClrObject obj)
+    {
+        if (obj.Type == null) return null;
+        
+        try
+        {
+            return obj.Type.ElementType switch
+            {
+                ClrElementType.Boolean => obj.ReadField<bool>("m_value"),
+                ClrElementType.Char => obj.ReadField<char>("m_value"),
+                ClrElementType.Int8 => obj.ReadField<sbyte>("m_value"),
+                ClrElementType.UInt8 => obj.ReadField<byte>("m_value"),
+                ClrElementType.Int16 => obj.ReadField<short>("m_value"),
+                ClrElementType.UInt16 => obj.ReadField<ushort>("m_value"),
+                ClrElementType.Int32 => obj.ReadField<int>("m_value"),
+                ClrElementType.UInt32 => obj.ReadField<uint>("m_value"),
+                ClrElementType.Int64 => obj.ReadField<long>("m_value"),
+                ClrElementType.UInt64 => obj.ReadField<ulong>("m_value"),
+                ClrElementType.Float => obj.ReadField<float>("m_value"),
+                ClrElementType.Double => obj.ReadField<double>("m_value"),
+                ClrElementType.NativeInt => $"0x{obj.ReadField<nint>("m_value"):x}",
+                ClrElementType.NativeUInt => $"0x{obj.ReadField<nuint>("m_value"):x}",
+                _ => $"0x{obj.Address:x}"
+            };
+        }
+        catch
+        {
+            return $"0x{obj.Address:x}";
+        }
+    }
+    
+    /// <summary>
+    /// Gets a primitive value from an array element.
+    /// </summary>
+    private static object? GetArrayPrimitiveValue(ClrArray arr, int index, ClrType? elementType)
+    {
+        if (elementType == null) return null;
+        
+        try
+        {
+            return elementType.ElementType switch
+            {
+                ClrElementType.Boolean => arr.GetValue<bool>(index),
+                ClrElementType.Char => arr.GetValue<char>(index),
+                ClrElementType.Int8 => arr.GetValue<sbyte>(index),
+                ClrElementType.UInt8 => arr.GetValue<byte>(index),
+                ClrElementType.Int16 => arr.GetValue<short>(index),
+                ClrElementType.UInt16 => arr.GetValue<ushort>(index),
+                ClrElementType.Int32 => arr.GetValue<int>(index),
+                ClrElementType.UInt32 => arr.GetValue<uint>(index),
+                ClrElementType.Int64 => arr.GetValue<long>(index),
+                ClrElementType.UInt64 => arr.GetValue<ulong>(index),
+                ClrElementType.Float => arr.GetValue<float>(index),
+                ClrElementType.Double => arr.GetValue<double>(index),
+                ClrElementType.NativeInt => $"0x{arr.GetValue<nint>(index):x}",
+                ClrElementType.NativeUInt => $"0x{arr.GetValue<nuint>(index):x}",
+                _ => $"[{elementType.ElementType}]"
+            };
+        }
+        catch
+        {
+            return $"[{elementType.ElementType}]";
+        }
+    }
+    
+    /// <summary>
+    /// Gets a primitive field value.
+    /// </summary>
+    private static object? GetFieldPrimitiveValue(ClrObject obj, ClrInstanceField field)
+    {
+        try
+        {
+            return field.ElementType switch
+            {
+                ClrElementType.Boolean => field.Read<bool>(obj.Address, interior: false),
+                ClrElementType.Char => field.Read<char>(obj.Address, interior: false),
+                ClrElementType.Int8 => field.Read<sbyte>(obj.Address, interior: false),
+                ClrElementType.UInt8 => field.Read<byte>(obj.Address, interior: false),
+                ClrElementType.Int16 => field.Read<short>(obj.Address, interior: false),
+                ClrElementType.UInt16 => field.Read<ushort>(obj.Address, interior: false),
+                ClrElementType.Int32 => field.Read<int>(obj.Address, interior: false),
+                ClrElementType.UInt32 => field.Read<uint>(obj.Address, interior: false),
+                ClrElementType.Int64 => field.Read<long>(obj.Address, interior: false),
+                ClrElementType.UInt64 => field.Read<ulong>(obj.Address, interior: false),
+                ClrElementType.Float => field.Read<float>(obj.Address, interior: false),
+                ClrElementType.Double => field.Read<double>(obj.Address, interior: false),
+                ClrElementType.NativeInt => $"0x{field.Read<nint>(obj.Address, interior: false):x}",
+                ClrElementType.NativeUInt => $"0x{field.Read<nuint>(obj.Address, interior: false):x}",
+                _ => $"[{field.ElementType}]"
+            };
+        }
+        catch (Exception ex)
+        {
+            return $"[error: {ex.Message}]";
+        }
+    }
+    
+    // ============================================================================
     // Phase 2 ClrMD Enrichment Methods
     // ============================================================================
     
@@ -982,6 +2354,16 @@ public class ClrMdAnalyzer : IDisposable
         {
             // Ignore errors reading state
         }
+        
+        // Translate numeric state to human-readable description
+        info.StateDescription = info.CurrentState switch
+        {
+            -2 => "Completed",
+            -1 => "Not started",
+            -99 => "Unknown (could not read state)",
+            >= 0 => $"Awaiting at await point {info.CurrentState}",
+            _ => $"Unknown state ({info.CurrentState})"
+        };
         
         return info;
     }
@@ -1950,6 +3332,513 @@ public class ClrMdAnalyzer : IDisposable
         
         return null;
     }
+
+    #region ClrStack Implementation
+
+    private SourceLink.SequencePointResolver? _sequencePointResolver;
+
+    /// <summary>
+    /// Sets the sequence point resolver for source location resolution.
+    /// </summary>
+    /// <param name="resolver">The resolver instance.</param>
+    public void SetSequencePointResolver(SourceLink.SequencePointResolver resolver)
+    {
+        _sequencePointResolver = resolver;
+    }
+
+    /// <summary>
+    /// Walks the stack for all threads, returning managed frame information.
+    /// This is a fast ClrMD-based alternative to SOS clrstack command.
+    /// </summary>
+    /// <param name="includeArguments">Include method arguments in output.</param>
+    /// <param name="includeLocals">Include local variables in output.</param>
+    /// <returns>Stack information for all threads.</returns>
+    public ClrStackResult GetAllThreadStacks(bool includeArguments = true, bool includeLocals = true)
+    {
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var result = new ClrStackResult();
+
+        lock (_lock)
+        {
+            if (_runtime == null)
+            {
+                result.Error = "Runtime not initialized";
+                return result;
+            }
+
+            try
+            {
+                foreach (var thread in _runtime.Threads)
+                {
+                    try
+                    {
+                        // Check if this thread has an unhandled exception (faulting thread)
+                        var isFaulting = thread.CurrentException != null;
+                        
+                        var threadInfo = new ClrThreadStack
+                        {
+                            OSThreadId = thread.OSThreadId,
+                            ManagedThreadId = thread.ManagedThreadId,
+                            IsAlive = thread.IsAlive,
+                            IsBackground = thread.IsFinalizer || thread.IsGc, // Approximation: GC/Finalizer are background
+                            IsFaulting = isFaulting
+                        };
+
+                        // Collect frames first
+                        var frames = thread.EnumerateStackTrace().ToList();
+
+                        // Build frame→roots lookup (one pass per thread) if we need args/locals
+                        Dictionary<ulong, List<ClrStackRoot>>? frameRoots = null;
+                        if (includeArguments || includeLocals)
+                        {
+                            try
+                            {
+                                frameRoots = BuildFrameRootsLookup(thread, frames);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger?.LogDebug(ex, "[ClrStack] Failed to build frame roots for thread {ThreadId}", thread.OSThreadId);
+                            }
+                        }
+
+                        int frameIndex = 0;
+                        foreach (var frame in frames)
+                        {
+                            try
+                            {
+                                var roots = frameRoots?.GetValueOrDefault(frame.StackPointer)
+                                            ?? new List<ClrStackRoot>();
+
+                                var frameInfo = new ClrFrameInfo
+                                {
+                                    FrameIndex = frameIndex++,
+                                    StackPointer = frame.StackPointer,
+                                    InstructionPointer = frame.InstructionPointer,
+                                    Kind = frame.Kind.ToString()
+                                };
+
+                                // Get method info
+                                if (frame.Method != null)
+                                {
+                                    frameInfo.Method = new ClrMethodInfo
+                                    {
+                                        Signature = frame.Method.Signature,
+                                        TypeName = frame.Method.Type?.Name,
+                                        MethodName = frame.Method.Name,
+                                        MetadataToken = (uint)frame.Method.MetadataToken,
+                                        NativeCode = frame.Method.NativeCode,
+                                        ILOffset = GetILOffset(frame)
+                                    };
+
+                                    // Resolve source location from PDB
+                                    if (_sequencePointResolver != null)
+                                    {
+                                        var modulePath = frame.Method.Type?.Module?.Name;
+                                        if (!string.IsNullOrEmpty(modulePath))
+                                        {
+                                            var ilOffset = frameInfo.Method.ILOffset;
+                                            
+                                            // If IL offset is invalid, try using offset 0 to at least get method start location
+                                            if (ilOffset < 0)
+                                                ilOffset = 0;
+                                            
+                                            frameInfo.SourceLocation = _sequencePointResolver.GetSourceLocation(
+                                                modulePath,
+                                                (uint)(frame.Method.MetadataToken & 0x00FFFFFF), // Row number only
+                                                ilOffset
+                                            );
+                                        }
+                                    }
+                                }
+
+                                // Get arguments
+                                if (includeArguments)
+                                {
+                                    frameInfo.Arguments = GetStackArguments(roots, frame.Method);
+                                }
+
+                                // Get locals
+                                if (includeLocals)
+                                {
+                                    frameInfo.Locals = GetStackLocals(roots, frame.Method);
+                                }
+
+                                threadInfo.Frames.Add(frameInfo);
+                            }
+                            catch (Exception ex)
+                            {
+                                _logger?.LogDebug(ex, "[ClrStack] Error processing frame {Index} for thread {ThreadId}",
+                                    frameIndex, thread.OSThreadId);
+                            }
+                        }
+
+                        result.Threads.Add(threadInfo);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogDebug(ex, "[ClrStack] Error processing thread {ThreadId}", thread.OSThreadId);
+                    }
+                }
+
+                result.DurationMs = stopwatch.ElapsedMilliseconds;
+                _logger?.LogInformation("[ClrStack] Collected {Threads} threads, {Frames} frames in {Duration}ms",
+                    result.TotalThreads, result.TotalFrames, result.DurationMs);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogError(ex, "[ClrStack] Error collecting thread stacks");
+                result.Error = ex.Message;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Gets the IL offset for a stack frame.
+    /// </summary>
+    private int GetILOffset(ClrStackFrame frame)
+    {
+        if (frame.Method == null)
+            return -1;
+
+        try
+        {
+            // Use ILOffsetMap to find the IL offset for this native IP
+            var map = frame.Method.ILOffsetMap;
+            if (map == null || map.Length == 0)
+                return -1;
+
+            foreach (var entry in map)
+            {
+                if (frame.InstructionPointer >= entry.StartAddress &&
+                    frame.InstructionPointer < entry.EndAddress)
+                {
+                    return entry.ILOffset;
+                }
+            }
+
+            return -1;
+        }
+        catch
+        {
+            return -1;
+        }
+    }
+
+    /// <summary>
+    /// Builds a lookup of stack roots indexed by frame stack pointer.
+    /// </summary>
+    private Dictionary<ulong, List<ClrStackRoot>> BuildFrameRootsLookup(
+        ClrThread thread,
+        List<ClrStackFrame> frames)
+    {
+        var result = new Dictionary<ulong, List<ClrStackRoot>>();
+
+        // Initialize empty lists for each frame
+        foreach (var frame in frames)
+        {
+            if (!result.ContainsKey(frame.StackPointer))
+                result[frame.StackPointer] = new List<ClrStackRoot>();
+        }
+
+        if (frames.Count == 0)
+            return result;
+
+        // Sort frames by SP descending (higher SP = earlier frame = closer to stack base)
+        var sortedFrames = frames.OrderByDescending(f => f.StackPointer).ToList();
+
+        foreach (var root in thread.EnumerateStackRoots())
+        {
+            // Find which frame this root belongs to based on SP
+            // Root belongs to first frame with SP <= root.Address
+            foreach (var frame in sortedFrames)
+            {
+                if (root.Address >= frame.StackPointer)
+                {
+                    result[frame.StackPointer].Add(root);
+                    break;
+                }
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Gets method arguments from stack roots.
+    /// </summary>
+    private List<ClrArgumentInfo> GetStackArguments(List<ClrStackRoot> roots, ClrMethod? method)
+    {
+        var args = new List<ClrArgumentInfo>();
+
+        if (method == null || roots.Count == 0)
+            return args;
+
+        try
+        {
+            // Estimate parameter count from signature (count commas + 1)
+            // This is a heuristic - the actual count may differ
+            var paramCount = 0;
+            if (!string.IsNullOrEmpty(method.Signature))
+            {
+                var sig = method.Signature;
+                var parenStart = sig.IndexOf('(');
+                var parenEnd = sig.LastIndexOf(')');
+                if (parenStart >= 0 && parenEnd > parenStart)
+                {
+                    var paramPart = sig.Substring(parenStart + 1, parenEnd - parenStart - 1).Trim();
+                    if (!string.IsNullOrEmpty(paramPart))
+                    {
+                        paramCount = paramPart.Count(c => c == ',') + 1;
+                    }
+                }
+            }
+
+            // Detect if method is instance or static by checking if first root's type
+            // matches or is compatible with the method's declaring type
+            var isInstanceMethod = false;
+            if (roots.Count > 0 && method.Type != null)
+            {
+                var firstRootType = roots[0].Object.Type;
+                if (firstRootType != null)
+                {
+                    // Check if first root's type matches or inherits from declaring type
+                    var declaringTypeName = method.Type.Name;
+                    var firstTypeName = firstRootType.Name;
+                    isInstanceMethod = firstTypeName == declaringTypeName ||
+                                       (firstRootType.BaseType?.Name == declaringTypeName) ||
+                                       (declaringTypeName != null && firstTypeName != null &&
+                                        firstTypeName.Contains(declaringTypeName));
+                }
+            }
+
+            // First few roots are typically 'this' (if instance method) + parameters
+            // Then come locals
+            var maxArgs = Math.Min(roots.Count, paramCount + (isInstanceMethod ? 1 : 0));
+
+            for (int i = 0; i < maxArgs; i++)
+            {
+                var root = roots[i];
+                
+                // Name the first argument 'this' only for instance methods
+                string argName;
+                if (i == 0 && isInstanceMethod)
+                    argName = "this";
+                else
+                    argName = $"arg{(isInstanceMethod ? i - 1 : i)}";
+
+                var argInfo = new ClrArgumentInfo
+                {
+                    Index = i,
+                    Name = argName,
+                    TypeName = root.Object.Type?.Name,
+                    Address = root.Address,
+                    HasValue = root.Address != 0 && root.Object.Address != 0
+                };
+
+                if (argInfo.HasValue)
+                {
+                    argInfo.ValueString = FormatStackValue(root.Object);
+                    argInfo.Value = GetStackPrimitiveValue(root.Object);
+                }
+
+                args.Add(argInfo);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ClrStack] Failed to enumerate arguments");
+        }
+
+        return args;
+    }
+
+    /// <summary>
+    /// Gets local variables from stack roots.
+    /// </summary>
+    private List<ClrLocalInfo> GetStackLocals(List<ClrStackRoot> roots, ClrMethod? method)
+    {
+        var locals = new List<ClrLocalInfo>();
+
+        if (method == null || roots.Count == 0)
+            return locals;
+
+        try
+        {
+            // Estimate parameter count to skip
+            var paramCount = 0;
+            if (!string.IsNullOrEmpty(method.Signature))
+            {
+                var sig = method.Signature;
+                var parenStart = sig.IndexOf('(');
+                var parenEnd = sig.LastIndexOf(')');
+                if (parenStart >= 0 && parenEnd > parenStart)
+                {
+                    var paramPart = sig.Substring(parenStart + 1, parenEnd - parenStart - 1).Trim();
+                    if (!string.IsNullOrEmpty(paramPart))
+                    {
+                        paramCount = paramPart.Count(c => c == ',') + 1;
+                    }
+                }
+            }
+
+            // Detect if instance method (same logic as GetStackArguments)
+            var isInstanceMethod = false;
+            if (roots.Count > 0 && method.Type != null)
+            {
+                var firstRootType = roots[0].Object.Type;
+                if (firstRootType != null)
+                {
+                    var declaringTypeName = method.Type.Name;
+                    var firstTypeName = firstRootType.Name;
+                    isInstanceMethod = firstTypeName == declaringTypeName ||
+                                       (firstRootType.BaseType?.Name == declaringTypeName) ||
+                                       (declaringTypeName != null && firstTypeName != null &&
+                                        firstTypeName.Contains(declaringTypeName));
+                }
+            }
+
+            // Skip args (including 'this' for instance methods)
+            var argsToSkip = paramCount + (isInstanceMethod ? 1 : 0);
+            var localRoots = roots.Skip(argsToSkip);
+
+            int index = 0;
+            foreach (var root in localRoots)
+            {
+                var localInfo = new ClrLocalInfo
+                {
+                    Index = index,
+                    Name = null, // Would require PDB local variable info
+                    TypeName = root.Object.Type?.Name,
+                    Address = root.Address,
+                    HasValue = root.Address != 0 && root.Object.Address != 0
+                };
+
+                if (localInfo.HasValue)
+                {
+                    localInfo.ValueString = FormatStackValue(root.Object);
+                    localInfo.Value = GetStackPrimitiveValue(root.Object);
+                }
+
+                locals.Add(localInfo);
+                index++;
+
+                // Limit number of locals to prevent huge outputs
+                if (index >= 20)
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ClrStack] Failed to enumerate locals");
+        }
+
+        return locals;
+    }
+
+    /// <summary>
+    /// Formats a stack object value for display.
+    /// </summary>
+    private string FormatStackValue(ClrObject obj)
+    {
+        if (obj.IsNull)
+            return "null";
+
+        var type = obj.Type;
+        if (type == null)
+            return $"0x{obj.Address:X}";
+
+        try
+        {
+            // Primitives
+            if (type.IsPrimitive)
+            {
+                return type.ElementType switch
+                {
+                    ClrElementType.Boolean => obj.ReadBoxedValue<bool>().ToString(),
+                    ClrElementType.Int32 => obj.ReadBoxedValue<int>().ToString(),
+                    ClrElementType.Int64 => obj.ReadBoxedValue<long>().ToString(),
+                    ClrElementType.Double => obj.ReadBoxedValue<double>().ToString("G"),
+                    ClrElementType.Float => obj.ReadBoxedValue<float>().ToString("G"),
+                    ClrElementType.UInt32 => obj.ReadBoxedValue<uint>().ToString(),
+                    ClrElementType.UInt64 => obj.ReadBoxedValue<ulong>().ToString(),
+                    ClrElementType.Int16 => obj.ReadBoxedValue<short>().ToString(),
+                    ClrElementType.UInt16 => obj.ReadBoxedValue<ushort>().ToString(),
+                    ClrElementType.Char => $"'{obj.ReadBoxedValue<char>()}'",
+                    ClrElementType.Int8 => obj.ReadBoxedValue<sbyte>().ToString(),
+                    ClrElementType.UInt8 => obj.ReadBoxedValue<byte>().ToString(),
+                    _ => $"0x{obj.Address:X}"
+                };
+            }
+
+            // Strings
+            if (type.IsString)
+            {
+                var str = obj.AsString();
+                if (str != null)
+                {
+                    if (str.Length > 100)
+                        return $"\"{str[..100]}...\" (len={str.Length})";
+                    return $"\"{str}\"";
+                }
+                return "null";
+            }
+
+            // Reference types - show address only (type is in TypeName field)
+            return $"0x{obj.Address:X}";
+        }
+        catch
+        {
+            return $"0x{obj.Address:X}";
+        }
+    }
+
+    /// <summary>
+    /// Gets a primitive value for JSON serialization.
+    /// </summary>
+    private object? GetStackPrimitiveValue(ClrObject obj)
+    {
+        if (obj.IsNull || obj.Type == null)
+            return null;
+
+        if (!obj.Type.IsPrimitive && !obj.Type.IsString)
+            return null;
+
+        try
+        {
+            if (obj.Type.IsString)
+            {
+                var str = obj.AsString();
+                if (str != null && str.Length > 100)
+                    return str[..100] + "...";
+                return str;
+            }
+
+            return obj.Type.ElementType switch
+            {
+                ClrElementType.Boolean => obj.ReadBoxedValue<bool>(),
+                ClrElementType.Int32 => obj.ReadBoxedValue<int>(),
+                ClrElementType.Int64 => obj.ReadBoxedValue<long>(),
+                ClrElementType.Double => obj.ReadBoxedValue<double>(),
+                ClrElementType.Float => obj.ReadBoxedValue<float>(),
+                ClrElementType.UInt32 => obj.ReadBoxedValue<uint>(),
+                ClrElementType.UInt64 => obj.ReadBoxedValue<ulong>(),
+                ClrElementType.Int16 => obj.ReadBoxedValue<short>(),
+                ClrElementType.UInt16 => obj.ReadBoxedValue<ushort>(),
+                ClrElementType.Char => obj.ReadBoxedValue<char>().ToString(),
+                ClrElementType.Int8 => obj.ReadBoxedValue<sbyte>(),
+                ClrElementType.UInt8 => obj.ReadBoxedValue<byte>(),
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    #endregion
 }
 
 /// <summary>
@@ -2018,4 +3907,817 @@ public class AssemblyAttributeInfo
     /// </summary>
     public string? Key { get; set; }
 }
+
+/// <summary>
+/// Result of ClrMD object inspection.
+/// </summary>
+public class ClrMdObjectInspection
+{
+    /// <summary>
+    /// Gets or sets the object address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("address")]
+    public string Address { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Gets or sets the type name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("type")]
+    public string? Type { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the method table address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("methodTable")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? MethodTable { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the object size in bytes.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("size")]
+    public ulong Size { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the value (for primitives, strings, or error markers).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("value")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public object? Value { get; set; }
+    
+    /// <summary>
+    /// Gets or sets whether this is a string object.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isString")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsString { get; set; }
+    
+    /// <summary>
+    /// Gets or sets whether this is an array.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isArray")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsArray { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the array length (if IsArray).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("arrayLength")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public int? ArrayLength { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the array element type (if IsArray).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("arrayElementType")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ArrayElementType { get; set; }
+    
+    /// <summary>
+    /// Gets or sets array elements (if IsArray).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("elements")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<object?>? Elements { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the object fields.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("fields")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<ClrMdFieldInspection>? Fields { get; set; }
+    
+    /// <summary>
+    /// Gets or sets any error that occurred during inspection.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("error")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+}
+
+/// <summary>
+/// Result of ClrMD field inspection.
+/// </summary>
+public class ClrMdFieldInspection
+{
+    /// <summary>
+    /// Gets or sets the field name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Gets or sets the field type name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("type")]
+    public string? Type { get; set; }
+    
+    /// <summary>
+    /// Gets or sets whether the field is static.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isStatic")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsStatic { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the field offset.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("offset")]
+    public int Offset { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the field value (for primitives, strings, or error markers).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("value")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public object? Value { get; set; }
+    
+    /// <summary>
+    /// Gets or sets the nested object inspection (for reference types).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nestedObject")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ClrMdObjectInspection? NestedObject { get; set; }
+}
+
+/// <summary>
+/// Result of ClrMD module inspection.
+/// </summary>
+public class ClrMdModuleInspection
+{
+    /// <summary>
+    /// Gets or sets the module address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("address")]
+    public string Address { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the module file path/name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string? Name { get; set; }
+
+    /// <summary>
+    /// Gets or sets the image base address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("imageBase")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ImageBase { get; set; }
+
+    /// <summary>
+    /// Gets or sets the module size in bytes.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("size")]
+    public ulong Size { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this is a PE file.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isPEFile")]
+    public bool IsPEFile { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this module is dynamic (generated at runtime).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isDynamic")]
+    public bool IsDynamic { get; set; }
+
+    /// <summary>
+    /// Gets or sets the module layout (Flat, Loaded, Unknown).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("layout")]
+    public string Layout { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the assembly address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("assemblyAddress")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssemblyAddress { get; set; }
+
+    /// <summary>
+    /// Gets or sets the assembly name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("assemblyName")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssemblyName { get; set; }
+
+    /// <summary>
+    /// Gets or sets the metadata start address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("metadataAddress")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? MetadataAddress { get; set; }
+
+    /// <summary>
+    /// Gets or sets the metadata size in bytes.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("metadataLength")]
+    public ulong MetadataLength { get; set; }
+
+    /// <summary>
+    /// Gets or sets the PDB information.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("pdb")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ClrMdPdbInfo? Pdb { get; set; }
+
+    /// <summary>
+    /// Gets or sets the number of types defined in this module.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("typeCount")]
+    public int TypeCount { get; set; }
+
+    /// <summary>
+    /// Gets or sets the assembly version.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("version")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Version { get; set; }
+
+    /// <summary>
+    /// Gets or sets any error that occurred during inspection.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("error")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+}
+
+/// <summary>
+/// PDB information for a module.
+/// </summary>
+public class ClrMdPdbInfo
+{
+    /// <summary>
+    /// Gets or sets the PDB file path.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("path")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Path { get; set; }
+
+    /// <summary>
+    /// Gets or sets the PDB GUID.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("guid")]
+    public string Guid { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the PDB age/revision.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("revision")]
+    public int Revision { get; set; }
+}
+
+/// <summary>
+/// Result of Name2EE type search (ClrMD equivalent of SOS !name2ee).
+/// </summary>
+public class Name2EEResult
+{
+    /// <summary>
+    /// The type name that was searched for.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("searchedTypeName")]
+    public string SearchedTypeName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The module filter used (or "*" for all modules).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("moduleFilter")]
+    public string ModuleFilter { get; set; } = "*";
+
+    /// <summary>
+    /// Total number of modules searched.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("totalModulesSearched")]
+    public int TotalModulesSearched { get; set; }
+
+    /// <summary>
+    /// Number of modules where the type was found.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modulesWithMatch")]
+    public int ModulesWithMatch { get; set; }
+    
+    /// <summary>
+    /// Whether the type was found via heap search (for constructed generic types).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("foundViaHeapSearch")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool FoundViaHeapSearch { get; set; }
+
+    /// <summary>
+    /// The first/primary type match found.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("foundType")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Name2EETypeMatch? FoundType { get; set; }
+
+    /// <summary>
+    /// List of all modules searched with their results.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("modules")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<Name2EEModuleEntry>? Modules { get; set; }
+
+    /// <summary>
+    /// Error message if search failed.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("error")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+}
+
+/// <summary>
+/// Module entry in Name2EE search results.
+/// </summary>
+public class Name2EEModuleEntry
+{
+    /// <summary>
+    /// Module address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("moduleAddress")]
+    public string ModuleAddress { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Assembly name (file name).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("assemblyName")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssemblyName { get; set; }
+
+    /// <summary>
+    /// Type match found in this module (null if type not found in this module).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("typeFound")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Name2EETypeMatch? TypeFound { get; set; }
+}
+
+/// <summary>
+/// Type match information from Name2EE search.
+/// </summary>
+public class Name2EETypeMatch
+{
+    /// <summary>
+    /// Metadata token.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("token")]
+    public string Token { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Method table address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("methodTable")]
+    public string MethodTable { get; set; } = string.Empty;
+
+    /// <summary>
+    /// EEClass address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("eeClass")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? EEClass { get; set; }
+
+    /// <summary>
+    /// Full type name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+    
+    /// <summary>
+    /// Whether this is a generic type.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isGeneric")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool IsGeneric { get; set; }
+    
+    /// <summary>
+    /// Whether this type was found via heap search (for constructed generics).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("foundViaHeapSearch")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingDefault)]
+    public bool FoundViaHeapSearch { get; set; }
+}
+
+/// <summary>
+/// Result of Name2EE method search.
+/// </summary>
+public class Name2EEMethodResult
+{
+    /// <summary>
+    /// The type name searched.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("typeName")]
+    public string TypeName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The method name searched for.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("methodName")]
+    public string MethodName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Method table address of the containing type.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("typeMethodTable")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? TypeMethodTable { get; set; }
+
+    /// <summary>
+    /// Number of methods found matching the name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("totalMethodsFound")]
+    public int TotalMethodsFound { get; set; }
+
+    /// <summary>
+    /// List of matching methods.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("methods")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<Name2EEMethodInfo>? Methods { get; set; }
+
+    /// <summary>
+    /// Error message if search failed.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("error")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+}
+
+/// <summary>
+/// Method information from Name2EE method search.
+/// </summary>
+public class Name2EEMethodInfo
+{
+    /// <summary>
+    /// Method name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Method descriptor address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("methodDesc")]
+    public string MethodDesc { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Native code address (null if not JIT compiled).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nativeCode")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? NativeCode { get; set; }
+
+    /// <summary>
+    /// Metadata token.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("token")]
+    public string Token { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Method signature.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("signature")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Signature { get; set; }
+}
+
+#region ClrStack Data Models
+
+/// <summary>
+/// Result of ClrMD-based stack walking for all threads.
+/// </summary>
+public class ClrStackResult
+{
+    /// <summary>
+    /// Stack information for each thread.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("threads")]
+    public List<ClrThreadStack> Threads { get; set; } = new();
+
+    /// <summary>
+    /// Total number of threads.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("totalThreads")]
+    public int TotalThreads => Threads.Count;
+
+    /// <summary>
+    /// Total number of frames across all threads.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("totalFrames")]
+    public int TotalFrames => Threads.Sum(t => t.Frames.Count);
+
+    /// <summary>
+    /// Time taken to collect stack information (milliseconds).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("durationMs")]
+    public long DurationMs { get; set; }
+
+    /// <summary>
+    /// Error message if collection failed.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("error")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+}
+
+/// <summary>
+/// Stack information for a single thread.
+/// </summary>
+public class ClrThreadStack
+{
+    /// <summary>
+    /// Operating system thread ID.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("osThreadId")]
+    public uint OSThreadId { get; set; }
+
+    /// <summary>
+    /// Managed thread ID.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("managedThreadId")]
+    public int ManagedThreadId { get; set; }
+
+    /// <summary>
+    /// Whether the thread is alive.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isAlive")]
+    public bool IsAlive { get; set; }
+
+    /// <summary>
+    /// Whether the thread is a background thread.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isBackground")]
+    public bool IsBackground { get; set; }
+
+    /// <summary>
+    /// Whether this is the faulting/crashing thread.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("isFaulting")]
+    public bool IsFaulting { get; set; }
+
+    /// <summary>
+    /// Registers for the top frame (optional, from LLDB).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("topFrameRegisters")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ClrRegisterSet? TopFrameRegisters { get; set; }
+
+    /// <summary>
+    /// Stack frames for this thread.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("frames")]
+    public List<ClrFrameInfo> Frames { get; set; } = new();
+}
+
+/// <summary>
+/// Information about a single stack frame.
+/// </summary>
+public class ClrFrameInfo
+{
+    /// <summary>
+    /// Frame index (0 = top of stack).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("frameIndex")]
+    public int FrameIndex { get; set; }
+
+    /// <summary>
+    /// Stack pointer value.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("stackPointer")]
+    public ulong StackPointer { get; set; }
+
+    /// <summary>
+    /// Instruction pointer value.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("instructionPointer")]
+    public ulong InstructionPointer { get; set; }
+
+    /// <summary>
+    /// Frame kind (Managed, Runtime, Unknown, etc.).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("kind")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Kind { get; set; }
+
+    /// <summary>
+    /// Method information (null for non-managed frames).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("method")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public ClrMethodInfo? Method { get; set; }
+
+    /// <summary>
+    /// Source location from PDB (if available).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("sourceLocation")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public SourceLink.SourceLocation? SourceLocation { get; set; }
+
+    /// <summary>
+    /// Method arguments.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("arguments")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<ClrArgumentInfo>? Arguments { get; set; }
+
+    /// <summary>
+    /// Local variables.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("locals")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public List<ClrLocalInfo>? Locals { get; set; }
+}
+
+/// <summary>
+/// Method information for a stack frame.
+/// </summary>
+public class ClrMethodInfo
+{
+    /// <summary>
+    /// Full method signature.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("signature")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Signature { get; set; }
+
+    /// <summary>
+    /// Declaring type name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("typeName")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? TypeName { get; set; }
+
+    /// <summary>
+    /// Method name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("methodName")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? MethodName { get; set; }
+
+    /// <summary>
+    /// Metadata token.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("metadataToken")]
+    public uint MetadataToken { get; set; }
+
+    /// <summary>
+    /// Native code address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("nativeCode")]
+    public ulong NativeCode { get; set; }
+
+    /// <summary>
+    /// IL offset within the method (-1 if not available).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("ilOffset")]
+    public int ILOffset { get; set; } = -1;
+}
+
+/// <summary>
+/// Information about a method argument.
+/// </summary>
+public class ClrArgumentInfo
+{
+    /// <summary>
+    /// Argument index (0 = first).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("index")]
+    public int Index { get; set; }
+
+    /// <summary>
+    /// Argument name (may be "this", "argN", or actual name if available).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Name { get; set; }
+
+    /// <summary>
+    /// Argument type name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("typeName")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? TypeName { get; set; }
+
+    /// <summary>
+    /// Stack address where the argument is stored.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("address")]
+    public ulong Address { get; set; }
+
+    /// <summary>
+    /// Primitive value (for JSON serialization).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("value")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public object? Value { get; set; }
+
+    /// <summary>
+    /// Formatted value string for display.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("valueString")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ValueString { get; set; }
+
+    /// <summary>
+    /// Whether a value was successfully read.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("hasValue")]
+    public bool HasValue { get; set; }
+}
+
+/// <summary>
+/// Information about a local variable.
+/// </summary>
+public class ClrLocalInfo
+{
+    /// <summary>
+    /// Local slot index.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("index")]
+    public int Index { get; set; }
+
+    /// <summary>
+    /// Local variable name (from PDB, may be null).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("name")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? Name { get; set; }
+
+    /// <summary>
+    /// Variable type name.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("typeName")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? TypeName { get; set; }
+
+    /// <summary>
+    /// Stack address where the variable is stored.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("address")]
+    public ulong Address { get; set; }
+
+    /// <summary>
+    /// Primitive value (for JSON serialization).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("value")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public object? Value { get; set; }
+
+    /// <summary>
+    /// Formatted value string for display.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("valueString")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ValueString { get; set; }
+
+    /// <summary>
+    /// Whether a value was successfully read.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("hasValue")]
+    public bool HasValue { get; set; }
+}
+
+/// <summary>
+/// Register set for a thread's top frame.
+/// </summary>
+public class ClrRegisterSet
+{
+    /// <summary>
+    /// General purpose registers (x0-x28 on ARM64, rax/rbx/etc on x64).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("generalPurpose")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public Dictionary<string, ulong>? GeneralPurpose { get; set; }
+
+    /// <summary>
+    /// Frame pointer (fp on ARM64, rbp on x64).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("framePointer")]
+    public ulong FramePointer { get; set; }
+
+    /// <summary>
+    /// Link register (lr on ARM64, not applicable on x64).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("linkRegister")]
+    public ulong LinkRegister { get; set; }
+
+    /// <summary>
+    /// Stack pointer (sp).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("stackPointer")]
+    public ulong StackPointer { get; set; }
+
+    /// <summary>
+    /// Program counter (pc on ARM64, rip on x64).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("programCounter")]
+    public ulong ProgramCounter { get; set; }
+
+    /// <summary>
+    /// Status register (cpsr on ARM64, rflags on x64).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("statusRegister")]
+    public uint StatusRegister { get; set; }
+}
+
+#endregion
 

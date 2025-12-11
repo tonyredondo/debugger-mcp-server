@@ -85,10 +85,7 @@ public class SymbolTools(
         if (!string.IsNullOrEmpty(symbolPathString))
         {
             manager.ConfigureSymbolPath(symbolPathString);
-
-            // Clear command cache since symbol paths have changed
-            manager.ClearCommandCache();
-            Logger.LogInformation("[ConfigureAdditionalSymbols] Cleared command cache after configuring new symbol paths");
+            // Note: ClrMD handles most operations now, no cache to clear
         }
 
         var pathCount = additionalPaths.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries).Length;
@@ -310,12 +307,7 @@ public class SymbolTools(
         }
 
         // Clear command cache since symbols have changed - this ensures subsequent
-        // commands like clrstack will re-run and show improved stack traces
-        if (addedPaths > 0 || loadedCount > 0)
-        {
-            manager.ClearCommandCache();
-            Logger.LogInformation("[ReloadSymbols] Cleared command cache after loading new symbols");
-        }
+        // Note: ClrMD handles most operations now, no cache to clear
 
         return $"Symbol reload completed.\n{string.Join("\n", messages)}";
     }

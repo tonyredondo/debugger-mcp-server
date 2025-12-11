@@ -761,16 +761,16 @@ public class SecurityAnalyzer
             btOutput.Contains("__stack_chk", StringComparison.OrdinalIgnoreCase);  // Stack check function
     }
 
-    private async Task AnalyzeHeapIntegrityLldbAsync(SecurityAnalysisResult result)
+    private Task AnalyzeHeapIntegrityLldbAsync(SecurityAnalysisResult result)
     {
         if (result.HeapIntegrity == null)
         {
             result.HeapIntegrity = new HeapIntegrityInfo();
         }
 
-        // Try to get heap info (limited on LLDB without special plugins)
-        // This command may fail but we catch errors
-        await ExecuteCommandAsync("memory read --size 8 --count 10 0x0");
+        // Note: Direct heap memory inspection via "memory read" is not reliable on LLDB
+        // because we don't know valid heap addresses without malloc metadata.
+        // Instead, we analyze heap corruption indicators from the backtrace.
 
         // Look for heap-related functions in backtrace
         var btOutput = result.RawOutput.GetValueOrDefault("backtrace", "");
@@ -858,6 +858,8 @@ public class SecurityAnalyzer
                 Indicators = result.HeapIntegrity.MetadataIssues.ToList()
             });
         }
+
+        return Task.CompletedTask;
     }
 
     private async Task AnalyzeStackIntegrityLldbAsync(SecurityAnalysisResult result)

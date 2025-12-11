@@ -435,17 +435,28 @@ public static class PrimitiveResolver
     }
 
     /// <summary>
-    /// Normalizes an address string (removes leading zeros, adds 0x prefix if needed).
+    /// Normalizes an address string (removes 0x prefix, leading zeros, and type suffix).
+    /// Handles formats like: "0x1234", "1234", "1234 (System.String)", "0x1234 (TypeName)"
     /// </summary>
     public static string NormalizeAddress(string address)
     {
         if (string.IsNullOrEmpty(address))
             return address;
 
-        // Remove any existing 0x prefix
         var clean = address.TrimStart();
+        
+        // Remove any existing 0x prefix
         if (clean.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
             clean = clean[2..];
+
+        // Remove type suffix like " (System.String)" - stop at first space or parenthesis
+        var spaceIdx = clean.IndexOf(' ');
+        if (spaceIdx > 0)
+            clean = clean[..spaceIdx];
+        
+        var parenIdx = clean.IndexOf('(');
+        if (parenIdx > 0)
+            clean = clean[..parenIdx];
 
         // Remove leading zeros but keep at least one digit
         clean = clean.TrimStart('0');

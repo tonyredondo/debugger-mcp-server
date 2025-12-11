@@ -195,34 +195,4 @@ public interface IDebuggerManager : IDisposable, IAsyncDisposable
     /// Thrown if the symbol path is null, empty, or whitespace.
     /// </exception>
     void ConfigureSymbolPath(string symbolPath);
-
-    /// <summary>
-    /// Enables command caching to improve performance for repeated commands.
-    /// </summary>
-    /// <remarks>
-    /// <para>When enabled, results of read-only commands are cached and returned immediately
-    /// for subsequent identical commands. This significantly speeds up analysis operations
-    /// that execute many repeated commands (e.g., dumpobj, dumpmt).</para>
-    /// <para>Since dumps are immutable snapshots, caching is safe for all read-only commands.</para>
-    /// <para>State-modifying commands (like settings, breakpoints) are never cached.</para>
-    /// </remarks>
-    void EnableCommandCache();
-
-    /// <summary>
-    /// Disables command caching.
-    /// </summary>
-    void DisableCommandCache();
-
-    /// <summary>
-    /// Clears the command cache.
-    /// </summary>
-    /// <remarks>
-    /// This should be called after analysis operations complete to free memory.
-    /// </remarks>
-    void ClearCommandCache();
-
-    /// <summary>
-    /// Gets whether command caching is currently enabled.
-    /// </summary>
-    bool IsCommandCacheEnabled { get; }
 }

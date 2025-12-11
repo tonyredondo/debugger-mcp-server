@@ -99,7 +99,7 @@ public class McpClient : IMcpClient
         {
             // Dispose any existing SSE client
             _sseClient?.Dispose();
-
+            
             // Create a separate client for SSE that stays open
             _sseClient = new HttpClient
             {
@@ -321,7 +321,7 @@ public class McpClient : IMcpClient
             _sseListenerCts.Dispose();
             _sseListenerCts = null;
         }
-
+        
         // Wait for SSE listener task to complete (with timeout)
         if (_sseListenerTask != null)
         {
@@ -350,7 +350,7 @@ public class McpClient : IMcpClient
         // Dispose SSE client (separate from main HTTP client)
         _sseClient?.Dispose();
         _sseClient = null;
-
+        
         _httpClient?.Dispose();
         _httpClient = null;
         _serverUrl = null;
@@ -513,16 +513,6 @@ public class McpClient : IMcpClient
     }
 
     /// <inheritdoc/>
-    public async Task<string> ClearCommandCacheAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
-    {
-        return await CallToolAsync("clear_command_cache", new Dictionary<string, object?>
-        {
-            ["sessionId"] = sessionId,
-            ["userId"] = userId
-        }, cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task<string> LoadVerifyCoreModulesAsync(string sessionId, string userId, string? moduleNames = null, CancellationToken cancellationToken = default)
     {
         var parameters = new Dictionary<string, object?>
@@ -634,7 +624,113 @@ public class McpClient : IMcpClient
         return await CallToolAsync("inspect_object", args, cancellationToken);
     }
 
+    // NOTE: DumpObjectAsync removed - merged into InspectObjectAsync
 
+    /// <summary>
+    /// Dumps a .NET module using ClrMD (safe, won't crash LLDB).
+    /// </summary>
+    public async Task<string> DumpModuleAsync(
+        string sessionId,
+        string userId,
+        string address,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["address"] = address
+        };
+
+        return await CallToolAsync("dump_module", args, cancellationToken);
+    }
+
+    /// <summary>
+    /// Lists all .NET modules using ClrMD.
+    /// </summary>
+    public async Task<string> ListModulesAsync(
+        string sessionId,
+        string userId,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId
+        };
+
+        return await CallToolAsync("list_modules", args, cancellationToken);
+    }
+
+    /// <summary>
+    /// Searches for a type by name across modules using ClrMD (equivalent to SOS !name2ee).
+    /// </summary>
+    public async Task<string> Name2EEAsync(
+        string sessionId,
+        string userId,
+        string typeName,
+        string? moduleName = "*",
+        bool includeAllModules = false,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["typeName"] = typeName,
+            ["moduleName"] = moduleName,
+            ["includeAllModules"] = includeAllModules
+        };
+
+        return await CallToolAsync("name2_e_e", args, cancellationToken);
+    }
+
+    /// <summary>
+    /// Searches for a method by name within a type using ClrMD.
+    /// </summary>
+    public async Task<string> Name2EEMethodAsync(
+        string sessionId,
+        string userId,
+        string typeName,
+        string methodName,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["typeName"] = typeName,
+            ["methodName"] = methodName
+        };
+
+        return await CallToolAsync("name2_e_e_method", args, cancellationToken);
+    }
+
+    /// <summary>
+    /// Gets managed call stacks for all threads using ClrMD.
+    /// Fast alternative to SOS clrstack (~500ms vs 12s).
+    /// </summary>
+    public async Task<string> ClrStackAsync(
+        string sessionId,
+        string userId,
+        bool includeArguments = true,
+        bool includeLocals = true,
+        bool includeRegisters = true,
+        uint threadId = 0,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["includeArguments"] = includeArguments,
+            ["includeLocals"] = includeLocals,
+            ["includeRegisters"] = includeRegisters,
+            ["threadId"] = threadId
+        };
+
+        return await CallToolAsync("clr_stack", args, cancellationToken);
+    }
 
     /// <inheritdoc/>
     public async Task<string> AnalyzePerformanceAsync(string sessionId, string userId, CancellationToken cancellationToken = default)

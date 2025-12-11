@@ -982,7 +982,9 @@ public class Program
 
             case "showobj":
             case "so":
-                await HandleShowObjAsync(args, console, output, state, mcpClient);
+            case "inspect":
+            case "obj":
+                await HandleInspectObjectAsync(args, console, output, state, mcpClient);
                 break;
 
             // Analysis operations (via MCP)
@@ -5053,21 +5055,53 @@ public class Program
             return false;
         }
 
-        // Common error indicators in tool responses
-        var errorIndicators = new[]
+        // For JSON responses, check for top-level "error" field only
+        // Don't flag nested [error: ...] markers as failures
+        if (result.TrimStart().StartsWith("{") || result.TrimStart().StartsWith("["))
         {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(result);
+                var root = doc.RootElement;
+                
+                // Check for top-level "error" property
+                if (root.TryGetProperty("error", out var errorProp))
+                {
+                    // Has an explicit error field - this is an error
+                    return true;
+                }
+                
+                // Check for "Error" property (capitalized)
+                if (root.TryGetProperty("Error", out var errorProp2) && 
+                    errorProp2.ValueKind == System.Text.Json.JsonValueKind.String)
+                {
+                    var errorValue = errorProp2.GetString();
+                    // Only error if the Error field contains an actual error message
+                    return !string.IsNullOrEmpty(errorValue) && 
+                           !errorValue.StartsWith("0x"); // Not an address
+                }
+                
+                // Valid JSON object/array without top-level error - not an error
+                return false;
+            }
+            catch
+            {
+                // Not valid JSON, fall through to text checks
+            }
+        }
+
+        // For non-JSON text responses, check for error indicators at the start
+        var trimmed = result.TrimStart();
+        var errorPrefixes = new[]
+        {
+            "error:",
             "error occurred",
-            "Error:",
-            "failed",
-            "not found",
-            "does not exist",
-            "invalid",
-            "cannot",
-            "unable to"
+            "failed:",
+            "failed to"
         };
 
-        return errorIndicators.Any(indicator => 
-            result.Contains(indicator, StringComparison.OrdinalIgnoreCase));
+        return errorPrefixes.Any(prefix => 
+            trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>
@@ -5280,13 +5314,29 @@ public class Program
                         
                         switch (cliCmd)
                         {
+                            case "inspect":
+                            case "obj":
                             case "showobj":
                             case "so":
-                                await HandleShowObjAsync(cliArgs, console, output, state, mcpClient);
+                            case "do":
+                            case "dumpobj":
+                                await HandleInspectObjectAsync(cliArgs, console, output, state, mcpClient);
                                 continue;
-                            case "clearcache":
-                            case "cc":
-                                await HandleClearCacheAsync(console, output, state, mcpClient);
+                            case "dm":
+                            case "dumpmodule":
+                                await HandleDumpModuleClrMdAsync(cliArgs, console, output, state, mcpClient);
+                                continue;
+                            case "modules":
+                            case "listmodules":
+                                await HandleListModulesClrMdAsync(console, output, state, mcpClient);
+                                continue;
+                            case "n2e":
+                            case "name2ee":
+                                await HandleName2EEAsync(cliArgs, console, output, state, mcpClient);
+                                continue;
+                            case "clrstack":
+                            case "cs":
+                                await HandleClrStackAsync(cliArgs, console, output, state, mcpClient);
                                 continue;
                             case "loadmodules":
                             case "lm":
@@ -5294,10 +5344,20 @@ public class Program
                                 continue;
                             case "help":
                                 output.Dim("Available / commands in cmd mode:");
-                                output.Markup("  [cyan]/showobj <address>[/]  Inspect .NET object as JSON");
-                                output.Markup("  [cyan]/so <address>[/]       Alias for /showobj");
-                                output.Markup("  [cyan]/clearcache[/]         Clear command cache (forces fresh results)");
-                                output.Markup("  [cyan]/cc[/]                 Alias for /clearcache");
+                                output.Markup("  [cyan]/inspect <address>[/]  Inspect .NET object/value using ClrMD (safe)");
+                                output.Markup("  [cyan]/obj <address>[/]      Alias for /inspect");
+                                output.Markup("  [cyan]/inspect --mt <mt>[/]  For value types, provide method table");
+                                output.Markup("  [cyan]/inspect --flat[/]     Flat view (depth=1, no recursion)");
+                                output.Markup("  [cyan]/dm <address>[/]       Safe module dump using ClrMD (won't crash)");
+                                output.Markup("  [cyan]/dumpmodule <addr>[/]  Alias for /dm");
+                                output.Markup("  [cyan]/modules[/]            List all .NET modules using ClrMD");
+                                output.Markup("  [cyan]/listmodules[/]        Alias for /modules");
+                                output.Markup("  [cyan]/n2e <type>[/]         Find type by name (like !name2ee *!Type)");
+                                output.Markup("  [cyan]/name2ee <type>[/]     Alias for /n2e");
+                                output.Markup("  [cyan]/clrstack[/]           Fast managed stack walk using ClrMD (with registers)");
+                                output.Markup("  [cyan]/cs[/]                 Alias for /clrstack");
+                                output.Markup("  [cyan]/clrstack <tid>[/]     Stack for specific thread (OS thread ID)");
+                                output.Markup("  [cyan]/clrstack --no-regs[/] Skip register fetching (faster)");
                                 output.Markup("  [cyan]/loadmodules[/]        Load modules from verifycore at correct addresses");
                                 output.Markup("  [cyan]/lm[/]                 Alias for /loadmodules");
                                 output.Markup("  [cyan]/help[/]               Show this help");
@@ -5543,9 +5603,11 @@ public class Program
     }
 
     /// <summary>
-    /// Handles the showobj command (inspect .NET object as JSON).
+    /// <summary>
+    /// Handles the unified /inspect command (replaces /do and /so).
+    /// Uses ClrMD only, supports both reference types and value types.
     /// </summary>
-    private static async Task HandleShowObjAsync(
+    private static async Task HandleInspectObjectAsync(
         string[] args,
         IAnsiConsole console,
         ConsoleOutput output,
@@ -5572,7 +5634,7 @@ public class Program
 
         if (args.Length == 0)
         {
-            output.Error("Address required. Usage: showobj <address> [--mt <methodtable>] [--depth <n>] [--array-limit <n>] [--string-limit <n>] [-o <file>]");
+            output.Error("Address required. Usage: /inspect <address> [--mt <methodtable>] [--flat] [--depth <n>] [-o <file>]");
             return;
         }
 
@@ -5589,6 +5651,10 @@ public class Program
             if ((args[i] == "--mt" || args[i] == "-m") && i + 1 < args.Length)
             {
                 methodTable = args[++i];
+            }
+            else if (args[i] == "--flat")
+            {
+                maxDepth = 1; // Flat = depth 1
             }
             else if ((args[i] == "--depth" || args[i] == "-d") && i + 1 < args.Length)
             {
@@ -5619,7 +5685,8 @@ public class Program
 
         try
         {
-            output.Dim($"Inspecting object at {address} (depth: {maxDepth}, arrays: {maxArrayElements}, strings: {maxStringLength})...");
+            var mtInfo = methodTable != null ? $", MT: {methodTable}" : "";
+            output.Dim($"Inspecting object at {address} (depth: {maxDepth}{mtInfo})...");
 
             var result = await output.WithSpinnerAsync(
                 "Inspecting object...",
@@ -5659,7 +5726,7 @@ public class Program
             }
 
             // Save result for copy command
-            state.SetLastResult($"showobj {address}", result);
+            state.SetLastResult($"/inspect {address}", result);
         }
         catch (McpClientException ex) when (IsSessionNotFoundError(ex))
         {
@@ -5680,9 +5747,10 @@ public class Program
     }
 
     /// <summary>
-    /// Handles the /clearcache command in cmd mode.
+    /// Handles the /dm (dumpmodule) command using ClrMD - safe alternative that won't crash.
     /// </summary>
-    private static async Task HandleClearCacheAsync(
+    private static async Task HandleDumpModuleClrMdAsync(
+        string[] args,
         IAnsiConsole console,
         ConsoleOutput output,
         ShellState state,
@@ -5700,10 +5768,30 @@ public class Program
             return;
         }
 
+        if (string.IsNullOrEmpty(state.DumpId))
+        {
+            output.Error("No dump loaded. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        if (args.Length == 0)
+        {
+            output.Error("Address required. Usage: /dm <address>");
+            return;
+        }
+
+        var address = args[0];
+
         try
         {
-            output.Info("Clearing command cache...");
-            var result = await mcpClient.ClearCommandCacheAsync(state.SessionId, state.Settings.UserId);
+            output.Dim($"Inspecting module at {address} using ClrMD (safe mode)...");
+
+            var result = await output.WithSpinnerAsync(
+                "Inspecting module...",
+                () => mcpClient.DumpModuleAsync(
+                    state.SessionId!,
+                    state.Settings.UserId,
+                    address));
 
             if (IsErrorResult(result))
             {
@@ -5711,7 +5799,12 @@ public class Program
                 return;
             }
 
-            output.Success("Command cache cleared. Subsequent commands will fetch fresh results.");
+            // Pretty print JSON to console
+            output.WriteLine();
+            Console.WriteLine(result);
+
+            // Save result for copy command
+            state.SetLastResult($"/dm {address}", result);
         }
         catch (McpClientException ex) when (IsSessionNotFoundError(ex))
         {
@@ -5719,13 +5812,386 @@ public class Program
         }
         catch (McpClientException ex)
         {
-            output.Error($"Failed to clear cache: {ex.Message}");
+            output.Error($"Module inspection failed: {ex.Message}");
+        }
+        catch (Exception ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
         }
         catch (Exception ex)
         {
-            output.Error($"Failed to clear cache: {ex.Message}");
+            output.Error($"Failed to inspect module: {ex.Message}");
         }
     }
+
+    /// <summary>
+    /// Handles the /modules command using ClrMD - lists all modules.
+    /// </summary>
+    private static async Task HandleListModulesClrMdAsync(
+        IAnsiConsole console,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        if (!state.IsConnected || !mcpClient.IsConnected)
+        {
+            output.Error("Not connected or MCP not available.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.SessionId))
+        {
+            output.Error("No active session. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.DumpId))
+        {
+            output.Error("No dump loaded. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        try
+        {
+            output.Dim("Listing modules using ClrMD...");
+
+            var result = await output.WithSpinnerAsync(
+                "Listing modules...",
+                () => mcpClient.ListModulesAsync(
+                    state.SessionId!,
+                    state.Settings.UserId));
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+                return;
+            }
+
+            // Pretty print JSON to console
+            output.WriteLine();
+            Console.WriteLine(result);
+
+            // Save result for copy command
+            state.SetLastResult("/modules", result);
+        }
+        catch (McpClientException ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"Module listing failed: {ex.Message}");
+        }
+        catch (Exception ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to list modules: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles the /n2e (name2ee) command using ClrMD - find type by name.
+    /// </summary>
+    private static async Task HandleName2EEAsync(
+        string[] args,
+        IAnsiConsole console,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        if (!state.IsConnected || !mcpClient.IsConnected)
+        {
+            output.Error("Not connected or MCP not available.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.SessionId))
+        {
+            output.Error("No active session. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.DumpId))
+        {
+            output.Error("No dump loaded. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        if (args.Length == 0)
+        {
+            output.Error("Type name required. Usage: /n2e <typeName> [moduleName]");
+            output.Dim("Examples:");
+            output.Dim("  /n2e System.String");
+            output.Dim("  /n2e MyNamespace.MyClass");
+            output.Dim("  /n2e MyClass MyAssembly.dll");
+            return;
+        }
+
+        var typeName = args[0];
+        var includeAllModules = args.Any(a => a == "--all" || a == "-a");
+        // Filter out flags when looking for module name
+        var nonFlagArgs = args.Where(a => !a.StartsWith("-")).ToArray();
+        var moduleName = nonFlagArgs.Length > 1 ? nonFlagArgs[1] : "*";
+
+        try
+        {
+            output.Dim($"Searching for type '{typeName}' in {(moduleName == "*" ? "all modules" : moduleName)}...");
+
+            var result = await output.WithSpinnerAsync(
+                "Searching...",
+                () => mcpClient.Name2EEAsync(
+                    state.SessionId!,
+                    state.Settings.UserId,
+                    typeName,
+                    moduleName,
+                    includeAllModules));
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+                return;
+            }
+
+            // Pretty print result
+            output.WriteLine();
+            Console.WriteLine(result);
+
+            // Save result for copy command
+            state.SetLastResult($"/n2e {typeName}", result);
+        }
+        catch (McpClientException ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"Name2EE failed: {ex.Message}");
+        }
+        catch (Exception ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to search for type: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles the /clrstack command - fast managed stack walk using ClrMD.
+    /// </summary>
+    private static async Task HandleClrStackAsync(
+        string[] args,
+        IAnsiConsole console,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        if (!state.IsConnected || !mcpClient.IsConnected)
+        {
+            output.Error("Not connected or MCP not available.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.SessionId))
+        {
+            output.Error("No active session. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.DumpId))
+        {
+            output.Error("No dump loaded. Use 'open <dumpId>' first.");
+            return;
+        }
+
+        // Parse arguments (registers enabled by default, can disable with --no-regs)
+        var includeRegisters = !args.Any(a => a == "--no-regs");
+        var noArgs = args.Any(a => a == "--no-args");
+        var noLocals = args.Any(a => a == "--no-locals");
+        uint threadId = 0;
+
+        // Check for thread ID argument (non-flag argument)
+        var tidArg = args.FirstOrDefault(a => !a.StartsWith("-"));
+        if (tidArg != null)
+        {
+            if (tidArg.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                uint.TryParse(tidArg[2..], System.Globalization.NumberStyles.HexNumber, null, out threadId);
+            else
+                uint.TryParse(tidArg, out threadId);
+        }
+
+        try
+        {
+            output.Dim($"Fetching managed stacks via ClrMD{(threadId > 0 ? $" for thread 0x{threadId:X}" : "")}...");
+
+            var result = await output.WithSpinnerAsync(
+                "Walking stacks...",
+                () => mcpClient.ClrStackAsync(
+                    state.SessionId!,
+                    state.Settings.UserId,
+                    includeArguments: !noArgs,
+                    includeLocals: !noLocals,
+                    includeRegisters: includeRegisters,
+                    threadId: threadId));
+
+            if (IsErrorResult(result))
+            {
+                output.Error(result);
+                return;
+            }
+
+            // Parse and pretty-print the result
+            try
+            {
+                var doc = System.Text.Json.JsonDocument.Parse(result);
+                var root = doc.RootElement;
+
+                if (root.TryGetProperty("error", out var errorProp))
+                {
+                    output.Error($"ClrStack error: {errorProp.GetString()}");
+                    return;
+                }
+
+                var totalThreads = root.TryGetProperty("totalThreads", out var tt) ? tt.GetInt32() : 0;
+                var totalFrames = root.TryGetProperty("totalFrames", out var tf) ? tf.GetInt32() : 0;
+                var durationMs = root.TryGetProperty("durationMs", out var dm) ? dm.GetInt64() : 0;
+
+                output.Success($"Found {totalThreads} threads, {totalFrames} frames ({durationMs}ms)");
+                output.WriteLine();
+
+                if (root.TryGetProperty("threads", out var threads))
+                {
+                    foreach (var thread in threads.EnumerateArray())
+                    {
+                        var osThreadId = thread.TryGetProperty("osThreadId", out var tid) ? tid.GetUInt32() : 0;
+                        var managedThreadId = thread.TryGetProperty("managedThreadId", out var mtid) ? mtid.GetInt32() : 0;
+                        var isFaulting = thread.TryGetProperty("isFaulting", out var faulting) && faulting.GetBoolean();
+
+                        var faultMarker = isFaulting ? " [red]<< FAULTING[/]" : "";
+                        output.Markup($"[yellow]OS Thread Id: 0x{osThreadId:x}[/] (Managed: {managedThreadId}){faultMarker}");
+
+                        if (thread.TryGetProperty("frames", out var frames))
+                        {
+                            foreach (var frame in frames.EnumerateArray())
+                            {
+                                var frameIndex = frame.TryGetProperty("frameIndex", out var fi) ? fi.GetInt32() : 0;
+                                var kind = frame.TryGetProperty("kind", out var k) ? k.GetString() : null;
+                                
+                                string? method = null;
+                                if (frame.TryGetProperty("method", out var methodProp) && 
+                                    methodProp.TryGetProperty("signature", out var sig))
+                                {
+                                    method = sig.GetString();
+                                }
+                                
+                                var displayMethod = method ?? kind ?? "???";
+                                
+                                // Truncate very long method signatures
+                                if (displayMethod.Length > 100)
+                                    displayMethod = displayMethod[..97] + "...";
+
+                                // Source location
+                                var source = "";
+                                if (frame.TryGetProperty("sourceLocation", out var srcLoc) &&
+                                    srcLoc.TryGetProperty("sourceFile", out var srcFile))
+                                {
+                                    var fileName = Path.GetFileName(srcFile.GetString() ?? "");
+                                    var line = srcLoc.TryGetProperty("lineNumber", out var ln) ? ln.GetInt32() : 0;
+                                    if (!string.IsNullOrEmpty(fileName))
+                                        source = $" [dim]@ {fileName}:{line}[/]";
+                                }
+
+                                output.Markup($"  [green]#{frameIndex:D2}[/] {displayMethod}{source}");
+
+                                // Show arguments if present
+                                if (frame.TryGetProperty("arguments", out var argsArray))
+                                {
+                                    foreach (var arg in argsArray.EnumerateArray())
+                                    {
+                                        var hasValue = arg.TryGetProperty("hasValue", out var hv) && hv.GetBoolean();
+                                        if (!hasValue) continue;
+
+                                        var name = arg.TryGetProperty("name", out var n) ? n.GetString() : "arg";
+                                        var valueStr = arg.TryGetProperty("valueString", out var vs) ? vs.GetString() : null;
+                                        if (valueStr != null)
+                                        {
+                                            // Truncate long values
+                                            if (valueStr.Length > 60)
+                                                valueStr = valueStr[..57] + "...";
+                                            output.Markup($"      [dim]{name}[/] = [cyan]{valueStr}[/]");
+                                        }
+                                    }
+                                }
+
+                                // Show locals if present (first 5 only)
+                                if (frame.TryGetProperty("locals", out var localsArray))
+                                {
+                                    var count = 0;
+                                    foreach (var local in localsArray.EnumerateArray())
+                                    {
+                                        if (count++ >= 5) break;
+
+                                        var hasValue = local.TryGetProperty("hasValue", out var hv) && hv.GetBoolean();
+                                        if (!hasValue) continue;
+
+                                        var index = local.TryGetProperty("index", out var idx) ? idx.GetInt32() : 0;
+                                        var name = local.TryGetProperty("name", out var n) ? n.GetString() : null;
+                                        var displayName = name ?? $"local_{index}";
+                                        var valueStr = local.TryGetProperty("valueString", out var vs) ? vs.GetString() : null;
+                                        if (valueStr != null)
+                                        {
+                                            if (valueStr.Length > 60)
+                                                valueStr = valueStr[..57] + "...";
+                                            output.Markup($"      [dim]{displayName}[/] = [blue]{valueStr}[/]");
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Show registers if present
+                        if (thread.TryGetProperty("topFrameRegisters", out var regs))
+                        {
+                            var sp = regs.TryGetProperty("stackPointer", out var spVal) ? spVal.GetUInt64() : 0;
+                            var pc = regs.TryGetProperty("programCounter", out var pcVal) ? pcVal.GetUInt64() : 0;
+                            output.Dim($"  Registers: SP=0x{sp:X} PC=0x{pc:X}");
+                        }
+
+                        output.WriteLine();
+                    }
+                }
+            }
+            catch
+            {
+                // If parsing fails, just show raw JSON
+                Console.WriteLine(result);
+            }
+
+            // Save result for copy command
+            state.SetLastResult("/clrstack", result);
+        }
+        catch (McpClientException ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
+        }
+        catch (McpClientException ex)
+        {
+            output.Error($"ClrStack failed: {ex.Message}");
+        }
+        catch (Exception ex) when (IsSessionNotFoundError(ex))
+        {
+            await TryRecoverSessionAsync(output, state, mcpClient);
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to get stacks: {ex.Message}");
+        }
+    }
+
 
     /// <summary>
     /// Handles the /loadmodules command in cmd mode.

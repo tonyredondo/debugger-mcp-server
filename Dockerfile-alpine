@@ -99,6 +99,9 @@ RUN curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh \
     && ./dotnet-install.sh --runtime dotnet --version 9.0.10 --install-dir /usr/share/dotnet \
     && echo "Installing .NET 9.0.11 runtime..." \
     && ./dotnet-install.sh --runtime dotnet --version 9.0.11 --install-dir /usr/share/dotnet \
+    # .NET 10
+    && echo "Installing .NET 10.0.0 runtime..." \
+    && ./dotnet-install.sh --runtime dotnet --version 10.0.0 --install-dir /usr/share/dotnet \
     # Cleanup
     && rm dotnet-install.sh
 

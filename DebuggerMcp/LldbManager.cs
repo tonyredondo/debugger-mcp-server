@@ -109,6 +109,11 @@ public class LldbManager : IDebuggerManager
     private bool _isRecovering;
 
     /// <summary>
+    /// Flag indicating crash recovery mode (used for logging purposes).
+    /// </summary>
+    private bool _skipModuleLoadingOnRecovery;
+
+    /// <summary>
     /// Gets a value indicating whether the debugger engine has been initialized.
     /// </summary>
     /// <value>
@@ -157,18 +162,6 @@ public class LldbManager : IDebuggerManager
     public string DebuggerType => "LLDB";
 
     /// <summary>
-    /// Command cache for improving performance during analysis operations.
-    /// </summary>
-    private readonly CommandCache _commandCache;
-
-    /// <summary>
-    /// Gets whether command caching is currently enabled.
-    /// </summary>
-    public bool IsCommandCacheEnabled => _commandCache.IsEnabled;
-
-
-
-    /// <summary>
     /// Initializes a new instance of the <see cref="LldbManager"/> class.
     /// </summary>
     /// <remarks>
@@ -190,8 +183,8 @@ public class LldbManager : IDebuggerManager
     public LldbManager(ILogger<LldbManager> logger)
     {
         _logger = logger;
-        _commandCache = new CommandCache(logger);
         // Initialization is deferred to the InitializeAsync() method
+        // Note: Command caching removed - ClrMD handles most heavy operations now
     }
 
 
@@ -274,9 +267,10 @@ public class LldbManager : IDebuggerManager
             // Configure frame format to include stack pointer (SP) for better stack merging
             // This enables accurate merging of native and managed frames by SP value
             // when clrstack -f crashes and we need to merge bt all + clrstack output
+            // Using line.file.fullpath to get complete source paths like clrstack output
             ExecuteCommandInternal(
-                "settings set frame-format \"frame #${frame.index}: ${frame.pc} SP=${frame.sp}{ ${module.file.basename}{\\`${function.name-with-args}{${frame.no-debug}${function.pc-offset}}}}{ at ${line.file.basename}:${line.number}{:${line.column}}}{${function.is-optimized} [opt]}\\n\"");
-            _logger.LogDebug("[LLDB] Configured frame-format with SP");
+                "settings set frame-format \"frame #${frame.index}: ${frame.pc} SP=${frame.sp}{ ${module.file.basename}{\\`${function.name-with-args}{${frame.no-debug}${function.pc-offset}}}}{ at ${line.file.fullpath}:${line.number}{:${line.column}}}{${function.is-optimized} [opt]}\\n\"");
+            _logger.LogDebug("[LLDB] Configured frame-format with SP and full source paths");
             
             _logger.LogInformation("[LLDB] Initialization complete - LLDB is ready");
         }
@@ -491,10 +485,6 @@ public class LldbManager : IDebuggerManager
             // Mark the dump as open
             IsDumpOpen = true;
 
-            // Explicitly add debug symbol files (.dbg) from the symbol cache
-            // LLDB's search path doesn't auto-load .dbg files, we need 'target symbols add'
-            LoadDebugSymbolFiles();
-
             // If we're in core-only mode (no executable), try to find and load .dbg for the main executable
             // This helps with standalone apps where we don't have the binary
             if (string.IsNullOrEmpty(executablePath) && VerifiedCorePlatform?.MainExecutableName != null)
@@ -503,12 +493,14 @@ public class LldbManager : IDebuggerManager
             }
 
             // Load all native modules from verifycore at their correct memory addresses
+            // This also loads symbols (.dbg/.debug) for each module AFTER it's loaded at the correct address
             // This is critical for SOS to work properly - LLDB doesn't auto-load modules from core dumps
             // Without this, libcoreclr.so and other modules won't be mapped correctly
             if (VerifiedCorePlatform?.ModuleAddresses != null && VerifiedCorePlatform.ModuleAddresses.Count > 0)
             {
-                _logger.LogInformation("[LLDB] Loading {Count} native modules from verifycore at their correct memory addresses...", 
-                    VerifiedCorePlatform.ModuleAddresses.Count);
+                var recoveryMode = _skipModuleLoadingOnRecovery ? " (crash recovery)" : "";
+                _logger.LogInformation("[LLDB] Loading {Count} native modules from verifycore at their correct memory addresses{Mode}...", 
+                    VerifiedCorePlatform.ModuleAddresses.Count, recoveryMode);
                 var loadResults = LoadModulesFromVerifyCore();
                 var successCount = loadResults.Count(r => r.Value);
                 _logger.LogInformation("[LLDB] Successfully loaded {Success}/{Total} modules from verifycore", 
@@ -519,9 +511,8 @@ public class LldbManager : IDebuggerManager
             var moduleList = ExecuteCommandInternal("image list");
             _logger.LogInformation("[LLDB] Loaded modules:\n{Modules}", moduleList);
 
-            // Enable command caching for the entire dump session
-            // Dump files are static, so all commands can be safely cached
-            EnableCommandCache();
+            // Note: Command caching removed - ClrMD handles most heavy operations now
+            // and the cache caused issues with context-dependent commands like register read
 
             // Detect if this is a .NET dump and auto-load SOS if so
             IsDotNetDump = DetectDotNetDump(moduleList);
@@ -583,21 +574,8 @@ public class LldbManager : IDebuggerManager
 
         try
         {
-            // Clear command cache when closing dump (cache is dump-specific)
-            _commandCache.Clear();
-
             // Delete the current target to close the dump
-            // Note: Must disable cache temporarily since this modifies state
-            var cacheWasEnabled = _commandCache.IsEnabled;
-            _commandCache.IsEnabled = false;
-            try
-            {
-                ExecuteCommandInternal("target delete");
-            }
-            finally
-            {
-                _commandCache.IsEnabled = cacheWasEnabled;
-            }
+            ExecuteCommandInternal("target delete");
 
             // Mark the dump as closed and reset all dump-specific state
             IsDumpOpen = false;
@@ -610,34 +588,6 @@ public class LldbManager : IDebuggerManager
         {
             throw new InvalidOperationException($"Failed to close dump: {ex.Message}", ex);
         }
-    }
-
-    /// <summary>
-    /// Enables command caching to improve performance for repeated commands.
-    /// </summary>
-    public void EnableCommandCache()
-    {
-        _commandCache.IsEnabled = true;
-        _logger.LogInformation("[LLDB] Command cache enabled");
-    }
-
-    /// <summary>
-    /// Disables command caching.
-    /// </summary>
-    public void DisableCommandCache()
-    {
-        _commandCache.IsEnabled = false;
-        _logger.LogInformation("[LLDB] Command cache disabled");
-    }
-
-    /// <summary>
-    /// Clears the command cache and ObjectInspector cache.
-    /// </summary>
-    public void ClearCommandCache()
-    {
-        _commandCache.Clear();
-        ObjectInspection.ObjectInspector.ClearCache();
-        _logger.LogInformation("[LLDB] Command cache and ObjectInspector cache cleared");
     }
 
     /// <summary>
@@ -686,17 +636,8 @@ public class LldbManager : IDebuggerManager
         // SOS commands in LLDB should be called without the '!' prefix
         var transformedCommand = TransformSosCommand(command);
 
-        // Check cache first (significant performance improvement for analysis operations)
-        if (_commandCache.TryGetCachedResult(transformedCommand, out var cachedResult))
-        {
-            return cachedResult!;
-        }
-
-        // Execute and cache the result
-        var result = ExecuteCommandInternal(transformedCommand);
-        _commandCache.CacheResult(transformedCommand, result);
-
-        return result;
+        // Execute command directly - caching removed as ClrMD handles most heavy operations
+        return ExecuteCommandInternal(transformedCommand);
     }
 
     /// <summary>
@@ -928,6 +869,7 @@ public class LldbManager : IDebuggerManager
 
     /// <summary>
     /// Attempts to recover from an LLDB crash by reinitializing and reopening the dump.
+    /// During recovery, module loading is skipped to avoid cascading issues.
     /// </summary>
     /// <returns>True if recovery was successful, false otherwise.</returns>
     private bool TryRecoverFromCrash()
@@ -955,20 +897,28 @@ public class LldbManager : IDebuggerManager
             // Cleanup the crashed process
             CleanupProcess();
 
-            // Reinitialize
+            // Reinitialize LLDB and reload all modules
             _logger.LogInformation("[LLDB] Reinitializing LLDB after crash...");
-            Task.Run(() => InitializeAsync()).GetAwaiter().GetResult();
+            _skipModuleLoadingOnRecovery = true; // Flag for logging purposes
+            try
+            {
+                Task.Run(() => InitializeAsync()).GetAwaiter().GetResult();
 
-            // Reopen dump if one was open
-            if (wasOpen && !string.IsNullOrEmpty(dumpPath) && File.Exists(dumpPath))
-            {
-                _logger.LogInformation("[LLDB] Reopening dump after crash recovery: {DumpPath}", dumpPath);
-                OpenDumpFile(dumpPath, executablePath);
-                _logger.LogInformation("[LLDB] Crash recovery complete - dump reopened successfully");
+                // Reopen dump if one was open (all modules will be loaded from verifycore)
+                if (wasOpen && !string.IsNullOrEmpty(dumpPath) && File.Exists(dumpPath))
+                {
+                    _logger.LogInformation("[LLDB] Reopening dump after crash recovery: {DumpPath}", dumpPath);
+                    OpenDumpFile(dumpPath, executablePath);
+                    _logger.LogInformation("[LLDB] Crash recovery complete - dump reopened successfully");
+                }
+                else
+                {
+                    _logger.LogInformation("[LLDB] Crash recovery complete - LLDB reinitialized (no dump to reopen)");
+                }
             }
-            else
+            finally
             {
-                _logger.LogInformation("[LLDB] Crash recovery complete - LLDB reinitialized (no dump to reopen)");
+                _skipModuleLoadingOnRecovery = false;
             }
 
             return true;
@@ -1024,8 +974,8 @@ public class LldbManager : IDebuggerManager
         IsDumpOpen = false;
         IsSosLoaded = false;
         IsDotNetDump = false;
-        _commandCache.IsEnabled = false;
-        _commandCache.Clear();
+        // Note: Command caching removed - only clear ObjectInspector cache
+        ObjectInspection.ObjectInspector.ClearCache();
     }
 
     /// <summary>
@@ -1852,43 +1802,6 @@ public class LldbManager : IDebuggerManager
     }
 
     /// <summary>
-    /// Loads all .dbg debug symbol files from the symbol cache directory.
-    /// </summary>
-    private void LoadDebugSymbolFiles()
-    {
-        if (string.IsNullOrEmpty(_symbolCacheDirectory) || !Directory.Exists(_symbolCacheDirectory))
-            return;
-
-        try
-        {
-            var debugFiles = Directory.GetFiles(_symbolCacheDirectory, "*.dbg", SearchOption.AllDirectories);
-            if (debugFiles.Length > 0)
-            {
-                _logger.LogInformation("[LLDB] Found {Count} .dbg symbol files, loading explicitly...", debugFiles.Length);
-                foreach (var dbgFile in debugFiles)
-                {
-                    try
-                    {
-                        var result = ExecuteCommandInternal($"target symbols add \"{dbgFile}\"");
-                        if (!result.Contains("error", StringComparison.OrdinalIgnoreCase))
-                        {
-                            _logger.LogDebug("[LLDB] Loaded symbols: {File}", Path.GetFileName(dbgFile));
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogDebug(ex, "[LLDB] Failed to load symbol file: {File}", dbgFile);
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "[LLDB] Failed to enumerate debug symbol files");
-        }
-    }
-
-    /// <summary>
     /// Checks if a file is a valid ELF that could potentially be used as an executable.
     /// Some .dbg files created with objcopy --only-keep-debug retain enough ELF structure.
     /// </summary>
@@ -2082,10 +1995,14 @@ public class LldbManager : IDebuggerManager
     }
 
     /// <summary>
-    /// Loads modules from verifycore output at their correct memory addresses.
-    /// This is useful for standalone apps where LLDB doesn't automatically load modules.
+    /// Loads native modules (.so) from verifycore output at their correct memory addresses.
+    /// Algorithm:
+    /// 1. Filter verifycore output for .so files only (skip .dll, .pdb, invalid images)
+    /// 2. For each module, check if already loaded in LLDB at a non-zero address
+    /// 3. Find the module file: first check original path, then symbol cache
+    /// 4. Load module at correct address, then load symbols (.dbg or .debug)
     /// </summary>
-    /// <param name="moduleNames">Optional list of module names to load. If null, loads all modules with .so files available.</param>
+    /// <param name="moduleNames">Optional list of module names to load. If null, loads all .so modules.</param>
     /// <returns>Dictionary of module name to success status.</returns>
     public Dictionary<string, bool> LoadModulesFromVerifyCore(IEnumerable<string>? moduleNames = null)
     {
@@ -2097,40 +2014,76 @@ public class LldbManager : IDebuggerManager
             return results;
         }
 
-        if (string.IsNullOrEmpty(_symbolCacheDirectory) || !Directory.Exists(_symbolCacheDirectory))
-        {
-            _logger.LogWarning("[LLDB] Symbol cache directory not available");
-            return results;
-        }
+        // Step 1: Filter for native modules (.so files) only
+        var nativeModules = VerifiedCorePlatform.ModuleAddresses
+            .Where(m => m.Key.EndsWith(".so", StringComparison.OrdinalIgnoreCase) || 
+                        m.Key.Contains(".so.", StringComparison.OrdinalIgnoreCase)) // handles .so.1, .so.6.0.25, etc.
+            .ToList();
 
-        // Get list of already loaded modules to avoid duplicates
-        var moduleListOutput = ExecuteCommandInternal("target modules list");
-        var alreadyLoadedModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        _logger.LogInformation("[LLDB] Found {Count} native modules (.so) in verifycore output", nativeModules.Count);
+
+        // Step 2: Get LLDB's current module list to check what's already loaded
+        // We need to extract module name AND base address to avoid double-loading
+        var moduleListOutput = ExecuteCommandInternal("image list");
+        var alreadyLoadedModules = new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
+        
         foreach (var line in moduleListOutput.Split('\n'))
         {
-            // Extract module name from lines like:
-            // [ 11] CEB8ED03... 0x0000f58559dd9000 /usr/share/dotnet/.../libcoreclr.so
-            var match = System.Text.RegularExpressions.Regex.Match(line, @"0x[0-9a-fA-F]{8,16}\s+(/[^\s]+\.so)");
-            if (match.Success)
+            // Extract from lines like:
+            // [  0] FE57C21D-3826-CC7A-E632-EFE452AEC383-83DFE47A 0x0000c29d29e30260 /usr/share/dotnet/dotnet
+            // [  1] C614CB6A-6CC1-873D-320E-DBCABDEA9FBD-3FEAD2D7 0x0000f5855aa1c000 [vdso] (0x0000f5855aa1c000)
+            // UUID can be upper or lowercase, address is lowercase
+            var match = System.Text.RegularExpressions.Regex.Match(line, 
+                @"\[\s*\d+\]\s+[0-9A-Fa-f-]+\s+0x([0-9a-fA-F]+)\s+(\S+)");
+            if (match.Success && ulong.TryParse(match.Groups[1].Value, 
+                System.Globalization.NumberStyles.HexNumber, null, out var loadedAddr))
             {
-                var loadedModule = Path.GetFileName(match.Groups[1].Value);
-                alreadyLoadedModules.Add(loadedModule);
+                var path = match.Groups[2].Value;
+                var moduleName = Path.GetFileName(path);
+                // Only record if loaded at non-zero address
+                if (loadedAddr > 0)
+                {
+                    alreadyLoadedModules[moduleName] = loadedAddr;
+                    _logger.LogDebug("[LLDB] Already loaded: {Name} at 0x{Addr:X}", moduleName, loadedAddr);
+                }
             }
         }
-        _logger.LogInformation("[LLDB] Found {Count} modules already loaded in target", alreadyLoadedModules.Count);
+        _logger.LogInformation("[LLDB] Found {Count} modules already loaded at non-zero addresses", alreadyLoadedModules.Count);
 
-        // Get available .so files in the symbol cache
-        var availableModules = Directory.GetFiles(_symbolCacheDirectory, "*.so", SearchOption.AllDirectories)
-            .ToDictionary(f => Path.GetFileName(f), f => f, StringComparer.OrdinalIgnoreCase);
-
-        _logger.LogInformation("[LLDB] Found {Count} .so files in symbol cache", availableModules.Count);
-
-        // Determine which modules to load - only those NOT already loaded with an address
-        var modulesToLoad = new List<(string Name, string Path, ulong Address)>();
-
-        foreach (var (modulePath, address) in VerifiedCorePlatform.ModuleAddresses)
+        // Build index of available .so files in symbol cache
+        var symbolCacheModules = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(_symbolCacheDirectory) && Directory.Exists(_symbolCacheDirectory))
         {
-            var moduleName = Path.GetFileName(modulePath);
+            foreach (var file in Directory.GetFiles(_symbolCacheDirectory, "*.so*", SearchOption.AllDirectories))
+            {
+                var fileName = Path.GetFileName(file);
+                
+                // Skip symbol files (.dbg, .debug) - we only want actual .so modules
+                if (fileName.EndsWith(".dbg", StringComparison.OrdinalIgnoreCase) ||
+                    fileName.EndsWith(".debug", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                
+                // Handle both exact match (libcoreclr.so) and versioned .so files (libssl.so.1.1)
+                if (fileName.EndsWith(".so", StringComparison.OrdinalIgnoreCase) || 
+                    fileName.Contains(".so.", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!symbolCacheModules.ContainsKey(fileName))
+                    {
+                        symbolCacheModules[fileName] = file;
+                    }
+                }
+            }
+            _logger.LogInformation("[LLDB] Found {Count} .so files in symbol cache", symbolCacheModules.Count);
+        }
+
+        // Step 3: Determine which modules to load
+        var modulesToLoad = new List<(string Name, string OriginalPath, string ActualPath, ulong Address)>();
+
+        foreach (var (originalPath, address) in nativeModules)
+        {
+            var moduleName = Path.GetFileName(originalPath);
             
             // Filter by requested names if provided
             if (moduleNames != null && !moduleNames.Any(m => 
@@ -2139,64 +2092,80 @@ public class LldbManager : IDebuggerManager
                 continue;
             }
 
-            // Skip if already loaded (LLDB already has it from the dump)
-            if (alreadyLoadedModules.Contains(moduleName))
+            // Skip if already loaded at non-zero address
+            if (alreadyLoadedModules.TryGetValue(moduleName, out var existingAddr) && existingAddr > 0)
             {
-                _logger.LogDebug("[LLDB] Skipping {Name} - already loaded", moduleName);
-                results[moduleName] = true; // Already loaded is success
+                _logger.LogDebug("[LLDB] Skipping {Name} - already loaded at 0x{Addr:X}", moduleName, existingAddr);
+                results[moduleName] = true;
                 continue;
             }
 
-            // Check if we have this module in our symbol cache
-            if (availableModules.TryGetValue(moduleName, out var localPath))
+            // Find the actual file path:
+            // Priority 1: Original path (if it exists)
+            // Priority 2: Symbol cache
+            string? actualPath = null;
+            
+            if (File.Exists(originalPath))
             {
-                modulesToLoad.Add((moduleName, localPath, address));
+                actualPath = originalPath;
+                _logger.LogDebug("[LLDB] Found {Name} at original path: {Path}", moduleName, originalPath);
+            }
+            else if (symbolCacheModules.TryGetValue(moduleName, out var cachePath))
+            {
+                actualPath = cachePath;
+                _logger.LogDebug("[LLDB] Found {Name} in symbol cache: {Path}", moduleName, cachePath);
+            }
+
+            if (actualPath != null)
+            {
+                modulesToLoad.Add((moduleName, originalPath, actualPath, address));
+            }
+            else
+            {
+                _logger.LogDebug("[LLDB] Module {Name} not found (original: {Path})", moduleName, originalPath);
             }
         }
 
-        _logger.LogInformation("[LLDB] Loading {Count} new modules from verifycore (skipped {Skipped} already loaded)", 
+        _logger.LogInformation("[LLDB] Loading {Count} modules (skipped {Skipped} already loaded)", 
             modulesToLoad.Count, results.Count);
 
-        foreach (var (name, localPath, address) in modulesToLoad)
+        // Step 4: Load each module and its symbols
+        foreach (var (name, originalPath, actualPath, address) in modulesToLoad)
         {
             try
             {
                 _logger.LogInformation("[LLDB] Loading module {Name} at 0x{Address:X16}", name, address);
 
-                // Step 1: Add the module to the target
-                var addResult = ExecuteCommandInternal($"target modules add \"{localPath}\"");
+                // Add the module to the target
+                var addResult = ExecuteCommandInternal($"target modules add \"{actualPath}\"");
                 _logger.LogDebug("[LLDB] target modules add result: {Result}", addResult);
 
-                // Step 2: Load the module at the correct address using --slide
-                // The slide value is the offset from the original link address (usually 0)
+                // Check if add failed
+                if (addResult.Contains("error", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogWarning("[LLDB] Failed to add module {Name}: {Error}", name, addResult);
+                    results[name] = false;
+                    continue;
+                }
+
+                // Load the module at the correct address using --slide
                 var loadResult = ExecuteCommandInternal($"target modules load --file \"{name}\" --slide 0x{address:X}");
                 _logger.LogDebug("[LLDB] target modules load result: {Result}", loadResult);
 
                 if (loadResult.Contains("error", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Fallback: try loading individual sections
-                    _logger.LogDebug("[LLDB] Slide failed, trying section load for {Name}", name);
-                    
-                    // Get section info
-                    var sectionsOutput = ExecuteCommandInternal($"image dump sections \"{name}\"");
-                    
-                    // Try loading .text section at the address
-                    var textResult = ExecuteCommandInternal($"target modules load --file \"{name}\" .text 0x{address:X}");
-                    _logger.LogDebug("[LLDB] Section load result: {Result}", textResult);
-
-                    results[name] = !textResult.Contains("error", StringComparison.OrdinalIgnoreCase);
-                }
-                else
-                {
-                    results[name] = true;
+                    _logger.LogWarning("[LLDB] Failed to load {Name} at address: {Error}", name, loadResult);
+                    results[name] = false;
+                    continue;
                 }
 
-                // Also try to load associated .dbg file if it exists
-                var dbgPath = localPath + ".dbg";
-                if (File.Exists(dbgPath))
+                results[name] = true;
+
+                // Try to load symbols - check multiple locations and extensions
+                var symbolLoaded = TryLoadSymbolsForModule(name, actualPath);
+                if (symbolLoaded)
                 {
-                    var symbolResult = ExecuteCommandInternal($"target symbols add \"{dbgPath}\"");
-                    _logger.LogDebug("[LLDB] Symbol add result: {Result}", symbolResult);
+                    _logger.LogDebug("[LLDB] Loaded symbols for {Name}", name);
                 }
             }
             catch (Exception ex)
@@ -2207,6 +2176,55 @@ public class LldbManager : IDebuggerManager
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// Tries to load debug symbols for a module.
+    /// Looks for .dbg or .debug files in:
+    /// 1. Same location as the module
+    /// 2. Symbol cache directory and subdirectories
+    /// </summary>
+    private bool TryLoadSymbolsForModule(string moduleName, string modulePath)
+    {
+        var symbolExtensions = new[] { ".dbg", ".debug" };
+        var searchLocations = new List<string>();
+
+        // Location 1: Same directory as the module
+        var moduleDir = Path.GetDirectoryName(modulePath);
+        if (!string.IsNullOrEmpty(moduleDir))
+        {
+            foreach (var ext in symbolExtensions)
+            {
+                searchLocations.Add(Path.Combine(moduleDir, moduleName + ext));
+            }
+        }
+
+        // Location 2: Symbol cache directory and subdirectories
+        if (!string.IsNullOrEmpty(_symbolCacheDirectory) && Directory.Exists(_symbolCacheDirectory))
+        {
+            foreach (var ext in symbolExtensions)
+            {
+                // Search for the symbol file in all subdirectories
+                var symbolFiles = Directory.GetFiles(_symbolCacheDirectory, moduleName + ext, SearchOption.AllDirectories);
+                searchLocations.AddRange(symbolFiles);
+            }
+        }
+
+        // Try each location
+        foreach (var symbolPath in searchLocations.Distinct())
+        {
+            if (File.Exists(symbolPath))
+            {
+                var result = ExecuteCommandInternal($"target symbols add \"{symbolPath}\"");
+                if (!result.Contains("error", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogDebug("[LLDB] Loaded symbols from: {Path}", symbolPath);
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -2813,6 +2831,128 @@ public class LldbManager : IDebuggerManager
         // Mark as disposed
         _disposed = true;
     }
+
+    #region Register Fetching for ClrStack
+
+    /// <summary>
+    /// Regex for parsing register output. Compiled and reused for performance.
+    /// Matches: "x0 = 0x0000000000000000" or "rax = 0x0000000000000000"
+    /// </summary>
+    private static readonly System.Text.RegularExpressions.Regex RegisterRegex = new(
+        @"(\w+)\s*=\s*(0x[0-9a-fA-F]+)",
+        System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>
+    /// Fetches registers for the top frame of specified threads.
+    /// This is used by ClrStack to get register values for the top frame only.
+    /// </summary>
+    /// <param name="threadIds">OS thread IDs to fetch registers for.</param>
+    /// <returns>Dictionary mapping thread ID to register set.</returns>
+    public Dictionary<uint, Analysis.ClrRegisterSet> GetTopFrameRegisters(IEnumerable<uint> threadIds)
+    {
+        var result = new Dictionary<uint, Analysis.ClrRegisterSet>();
+
+        if (!IsInitialized || !IsDumpOpen)
+            return result;
+
+        foreach (var tid in threadIds)
+        {
+            try
+            {
+                // Select thread
+                var selectOutput = ExecuteCommandInternal($"thread select {tid}");
+                if (selectOutput.Contains("error", StringComparison.OrdinalIgnoreCase) || 
+                    selectOutput.Contains("invalid", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger?.LogDebug("[LLDB] Failed to select thread {ThreadId}", tid);
+                    continue;
+                }
+
+                // Read registers
+                var regOutput = ExecuteCommandInternal("register read");
+                if (string.IsNullOrEmpty(regOutput))
+                    continue;
+
+                var regs = ParseRegisters(regOutput);
+                if (regs != null)
+                {
+                    result[tid] = regs;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "[LLDB] Failed to read registers for thread {ThreadId}", tid);
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Parses register output from LLDB.
+    /// </summary>
+    private Analysis.ClrRegisterSet? ParseRegisters(string output)
+    {
+        if (string.IsNullOrEmpty(output))
+            return null;
+
+        var regs = new Analysis.ClrRegisterSet
+        {
+            GeneralPurpose = new Dictionary<string, ulong>()
+        };
+
+        // Parse format:
+        // ARM64: x0 = 0x0000000000000000, fp = 0x..., lr = 0x..., sp = 0x..., pc = 0x..., cpsr = 0x...
+        // x64: rax = 0x..., rbx = 0x..., rsp = 0x..., rip = 0x..., rflags = 0x...
+        foreach (System.Text.RegularExpressions.Match match in RegisterRegex.Matches(output))
+        {
+            var name = match.Groups[1].Value.ToLowerInvariant();
+            if (!ulong.TryParse(
+                match.Groups[2].Value.AsSpan(2), // Skip "0x"
+                System.Globalization.NumberStyles.HexNumber,
+                null,
+                out var value))
+            {
+                continue;
+            }
+
+            switch (name)
+            {
+                // ARM64
+                case "fp":
+                case "rbp":
+                    regs.FramePointer = value;
+                    break;
+                case "lr":
+                    regs.LinkRegister = value;
+                    break;
+                case "sp":
+                case "rsp":
+                    regs.StackPointer = value;
+                    break;
+                case "pc":
+                case "rip":
+                    regs.ProgramCounter = value;
+                    break;
+                case "cpsr":
+                case "rflags":
+                    regs.StatusRegister = (uint)value;
+                    break;
+                default:
+                    // General purpose registers (x0-x28 on ARM64, r8-r15 on x64)
+                    if (name.StartsWith("x", StringComparison.Ordinal) ||
+                        name.StartsWith("r", StringComparison.Ordinal))
+                    {
+                        regs.GeneralPurpose[name] = value;
+                    }
+                    break;
+            }
+        }
+
+        return regs;
+    }
+
+    #endregion
 
     /// <summary>
     /// Asynchronously releases all resources used by the <see cref="LldbManager"/>.

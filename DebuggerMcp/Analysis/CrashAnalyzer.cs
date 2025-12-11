@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using DebuggerMcp.SourceLink;
+using Microsoft.Extensions.Logging;
 
 namespace DebuggerMcp.Analysis;
 
@@ -16,16 +17,19 @@ public class CrashAnalyzer
 {
     protected readonly IDebuggerManager _debuggerManager;
     private readonly SourceLinkResolver? _sourceLinkResolver;
+    private readonly ILogger? _crashAnalyzerLogger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CrashAnalyzer"/> class.
     /// </summary>
     /// <param name="debuggerManager">The debugger manager to use for executing commands.</param>
     /// <param name="sourceLinkResolver">Optional Source Link resolver for resolving source URLs.</param>
-    public CrashAnalyzer(IDebuggerManager debuggerManager, SourceLinkResolver? sourceLinkResolver = null)
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    public CrashAnalyzer(IDebuggerManager debuggerManager, SourceLinkResolver? sourceLinkResolver = null, ILogger? logger = null)
     {
         _debuggerManager = debuggerManager ?? throw new ArgumentNullException(nameof(debuggerManager));
         _sourceLinkResolver = sourceLinkResolver;
+        _crashAnalyzerLogger = logger;
     }
 
     /// <summary>
@@ -799,6 +803,56 @@ public class CrashAnalyzer
             };
         }
 
+        // Try pattern for JIT frames with only SP= and no function info
+        // Format: "frame #N: 0xADDR SP=0xSP" or "frame #N: 0xADDR SP=0xSP 0xADDR"
+        // These are managed JIT frames that LLDB doesn't understand
+        var spOnlyMatch = Regex.Match(line,
+            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+SP=(0x[0-9a-f]+)(?:\s+(0x[0-9a-f]+))?$",
+            RegexOptions.IgnoreCase);
+
+        if (spOnlyMatch.Success)
+        {
+            var frameNum = int.Parse(spOnlyMatch.Groups[1].Value);
+            var address = spOnlyMatch.Groups[2].Value;
+            var stackPointer = spOnlyMatch.Groups[3].Value;
+            
+            // This is a JIT frame - mark it as managed (will be enriched by ClrMD)
+            return new StackFrame
+            {
+                FrameNumber = frameNum,
+                InstructionPointer = address,
+                StackPointer = stackPointer,
+                Module = "",
+                Function = $"[JIT Code @ {address}]",
+                Source = null,
+                IsManaged = true // Mark as managed so ClrMD can enrich it
+            };
+        }
+
+        // Try pattern for JIT frames with just address (no SP, no function)
+        // Format: "frame #N: 0xADDR 0xADDR" (address repeated, no module info)
+        var jitFrameMatch = Regex.Match(line,
+            @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)\s+(0x[0-9a-f]+)$",
+            RegexOptions.IgnoreCase);
+
+        if (jitFrameMatch.Success)
+        {
+            var frameNum = int.Parse(jitFrameMatch.Groups[1].Value);
+            var address = jitFrameMatch.Groups[2].Value;
+            
+            // This is a JIT frame without SP info
+            return new StackFrame
+            {
+                FrameNumber = frameNum,
+                InstructionPointer = address,
+                StackPointer = null,
+                Module = "",
+                Function = $"[JIT Code @ {address}]",
+                Source = null,
+                IsManaged = true // Mark as managed so ClrMD can enrich it
+            };
+        }
+
         // Try simpler pattern for any remaining format (also supports optional SP=)
         var simpleMatch = Regex.Match(line,
             @"^\s*[*\s]*frame\s*#(\d+):\s*(0x[0-9a-f]+)(?:\s+SP=(0x[0-9a-f]+))?\s+(.+)$",
@@ -811,6 +865,24 @@ public class CrashAnalyzer
             var stackPointer = simpleMatch.Groups[3].Success && simpleMatch.Groups[3].Length > 0 
                 ? simpleMatch.Groups[3].Value : null;
             var rest = simpleMatch.Groups[4].Value.Trim();
+
+            // Check if "rest" is actually just an SP= value that wasn't captured
+            // This happens when the optional SP group doesn't match due to nothing after it
+            if (Regex.IsMatch(rest, @"^SP=0x[0-9a-f]+$", RegexOptions.IgnoreCase))
+            {
+                // Extract SP from rest and return as JIT frame
+                var spMatch = Regex.Match(rest, @"SP=(0x[0-9a-f]+)", RegexOptions.IgnoreCase);
+                return new StackFrame
+                {
+                    FrameNumber = frameNum,
+                    InstructionPointer = address,
+                    StackPointer = spMatch.Success ? spMatch.Groups[1].Value : null,
+                    Module = "",
+                    Function = $"[JIT Code @ {address}]",
+                    Source = null,
+                    IsManaged = true
+                };
+            }
 
             // Try to extract module`function with backtick
             string moduleName = "";
@@ -842,10 +914,18 @@ public class CrashAnalyzer
             else
             {
                 // No backtick - might be just a library name or special frame like [vdso]
-                // Don't add extra brackets if already bracketed
-                functionName = rest.StartsWith("[") && rest.EndsWith("]") 
-                    ? rest 
-                    : $"[{rest}]";
+                // Check if it looks like a raw address (JIT code)
+                if (Regex.IsMatch(rest, @"^0x[0-9a-f]+$", RegexOptions.IgnoreCase))
+                {
+                    functionName = $"[JIT Code @ {rest}]";
+                }
+                else
+                {
+                    // Don't add extra brackets if already bracketed
+                    functionName = rest.StartsWith("[") && rest.EndsWith("]") 
+                        ? rest 
+                        : $"[{rest}]";
+                }
             }
 
             return new StackFrame
@@ -1109,16 +1189,37 @@ public class CrashAnalyzer
     {
         try
         {
-            var extractor = new ProcessInfoExtractor();
-            result.Environment!.Process = await extractor.ExtractProcessInfoAsync(
+            _crashAnalyzerLogger?.LogDebug("ProcessInfoExtractor: Starting extraction, backtrace length={Length}", 
+                backtraceOutput?.Length ?? 0);
+            
+            var extractor = new ProcessInfoExtractor(_crashAnalyzerLogger);
+            var processInfo = await extractor.ExtractProcessInfoAsync(
                 _debuggerManager,
-                result.Environment.Platform,
+                result.Environment?.Platform,
                 backtraceOutput,
                 result.RawCommands);
+            
+            if (processInfo != null)
+            {
+                result.Environment ??= new EnvironmentInfo();
+                result.Environment.Process = processInfo;
+                _crashAnalyzerLogger?.LogInformation("ProcessInfoExtractor: Successfully extracted process info - {ArgCount} args, {EnvCount} env vars",
+                    processInfo.Arguments.Count, processInfo.EnvironmentVariables.Count);
+            }
+            else
+            {
+                _crashAnalyzerLogger?.LogWarning("ProcessInfoExtractor: Extraction returned null");
+            }
         }
-        catch
+        catch (Exception ex)
         {
+            _crashAnalyzerLogger?.LogError(ex, "ProcessInfoExtractor: Exception during extraction");
             // Don't fail the entire analysis - this is optional enrichment.
+            // Store the error in raw commands for debugging
+            if (result.RawCommands != null)
+            {
+                result.RawCommands["[ProcessInfoExtractor.Error]"] = ex.Message;
+            }
         }
     }
 
@@ -1565,7 +1666,8 @@ public class CrashAnalyzer
         // Extract source file and line number if not already set
         if (string.IsNullOrEmpty(frame.SourceFile) && !string.IsNullOrEmpty(frame.Source))
         {
-            // Parse source from "file.cpp:123" or "file.cpp @ 123" format
+            // Parse source from "file.cpp:123", "/full/path/file.cpp:123:15 [opt]", or "file.cpp @ 123" format
+            // The non-greedy .+? captures the path up to the first : followed by digits (the line number)
             var match = Regex.Match(frame.Source, @"^(.+?)[:@]\s*(\d+)");
             if (match.Success)
             {

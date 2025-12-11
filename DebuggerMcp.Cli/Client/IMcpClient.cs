@@ -77,15 +77,6 @@ public interface IMcpClient : IAsyncDisposable
     Task<string> RestoreSessionAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Clears the command cache for a session.
-    /// </summary>
-    /// <param name="sessionId">The session ID.</param>
-    /// <param name="userId">The user ID.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Confirmation message.</returns>
-    Task<string> ClearCommandCacheAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Loads modules from verifycore at their correct memory addresses.
     /// </summary>
     /// <param name="sessionId">The session ID.</param>

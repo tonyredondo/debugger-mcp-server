@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DebuggerMcp.Analysis;
 using DebuggerMcp.ObjectInspection.Models;
 using Microsoft.Extensions.Logging;
 
@@ -11,6 +12,7 @@ namespace DebuggerMcp.ObjectInspection;
 public partial class ObjectInspector
 {
     private readonly ILogger _logger;
+    private readonly ClrMdAnalyzer? _clrMdAnalyzer;
 
     // Internal caches for resolved data (cleared per inspection session)
     private readonly Dictionary<string, string?> _typeNameCache = new(StringComparer.OrdinalIgnoreCase);
@@ -62,9 +64,90 @@ public partial class ObjectInspector
     /// <summary>
     /// Initializes a new instance of the <see cref="ObjectInspector"/> class.
     /// </summary>
-    public ObjectInspector(ILogger logger)
+    /// <param name="logger">Logger for diagnostics.</param>
+    /// <param name="clrMdAnalyzer">Optional ClrMD analyzer. When provided, uses ClrMD for dumpobj instead of SOS.</param>
+    public ObjectInspector(ILogger logger, ClrMdAnalyzer? clrMdAnalyzer = null)
     {
         _logger = logger;
+        _clrMdAnalyzer = clrMdAnalyzer;
+    }
+    
+    /// <summary>
+    /// Executes dumpobj using ClrMD when available, otherwise falls back to SOS.
+    /// </summary>
+    private DumpObjectResult ExecuteDumpObj(IDebuggerManager manager, string address)
+    {
+        // Clean address - may contain type info like "0x1234 (System.String)"
+        var cleanAddress = address.Trim();
+        if (cleanAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            cleanAddress = cleanAddress[2..];
+        var spaceIndex = cleanAddress.IndexOf(' ');
+        if (spaceIndex > 0)
+            cleanAddress = cleanAddress[..spaceIndex];
+        
+        // Use ClrMD when available
+        if (_clrMdAnalyzer?.IsOpen == true)
+        {
+            if (ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
+            {
+                try
+                {
+                    var clrMdResult = _clrMdAnalyzer.InspectObject(addressValue, maxDepth: 5, maxArrayElements: 10, maxStringLength: 1024);
+                    if (clrMdResult != null && clrMdResult.Error == null)
+                    {
+                        // Convert ClrMD result to DumpObjectResult format
+                        return ConvertClrMdToDumpObjectResult(clrMdResult);
+                    }
+                    _logger.LogDebug("ClrMD dumpobj failed for {Address}: {Error}", address, clrMdResult?.Error ?? "null");
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "ClrMD dumpobj threw for {Address}", address);
+                }
+            }
+            
+            // ClrMD failed - return error (no SOS fallback when ClrMD is available)
+            return new DumpObjectResult { ErrorMessage = "ClrMD inspection failed" };
+        }
+        
+        // Fall back to SOS when ClrMD is not available
+        var output = manager.ExecuteCommand($"dumpobj 0x{cleanAddress}");
+        if (DumpObjParser.IsFailedOutput(output))
+        {
+            return new DumpObjectResult { ErrorMessage = "dumpobj failed" };
+        }
+        return DumpObjParser.Parse(output);
+    }
+    
+    /// <summary>
+    /// Converts a ClrMD inspection result to DumpObjectResult format for compatibility.
+    /// </summary>
+    private static DumpObjectResult ConvertClrMdToDumpObjectResult(ClrMdObjectInspection clrMd)
+    {
+        var result = new DumpObjectResult
+        {
+            Success = true,
+            Name = clrMd.Type ?? string.Empty,
+            MethodTable = clrMd.MethodTable ?? string.Empty,
+            Size = (int)clrMd.Size,
+            IsArray = clrMd.IsArray,
+            ArrayLength = clrMd.ArrayLength,
+            StringValue = clrMd.IsString ? clrMd.Value?.ToString() : null
+        };
+        
+        // Convert fields
+        if (clrMd.Fields != null)
+        {
+            result.Fields = clrMd.Fields.Select(f => new DumpFieldInfo
+            {
+                Name = f.Name ?? string.Empty,
+                Type = f.Type ?? string.Empty,
+                Value = f.Value?.ToString() ?? f.NestedObject?.Address ?? "null",
+                IsStatic = f.IsStatic
+            }).ToList();
+        }
+        
+        return result;
     }
 
     /// <summary>
@@ -419,14 +502,7 @@ public partial class ObjectInspector
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var output = manager.ExecuteCommand($"dumpobj {address}");
-
-            if (DumpObjParser.IsFailedOutput(output))
-            {
-                return Task.FromResult(new DumpObjectResult { ErrorMessage = "dumpobj failed" });
-            }
-
-            return Task.FromResult(DumpObjParser.Parse(output));
+            return Task.FromResult(ExecuteDumpObj(manager, address));
         }
         catch (Exception ex)
         {
@@ -544,7 +620,7 @@ public partial class ObjectInspector
         {
             if (PrimitiveResolver.IsNullAddress(field.Value))
             {
-                return null;
+                return "null"; // Show explicit "null" instead of omitting the field
             }
 
             // Dump the string object to get its value
@@ -562,7 +638,7 @@ public partial class ObjectInspector
 
             if (PrimitiveResolver.IsNullAddress(field.Value))
             {
-                return null;
+                return "null"; // Show explicit "null" instead of omitting the field
             }
 
             // Recurse into the reference
@@ -767,8 +843,7 @@ public partial class ObjectInspector
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var output = manager.ExecuteCommand($"dumpobj {address}");
-            var result = DumpObjParser.Parse(output);
+            var result = ExecuteDumpObj(manager, address);
 
             if (result.Success && result.StringValue != null)
             {
@@ -882,7 +957,7 @@ public partial class ObjectInspector
 
             if (string.IsNullOrEmpty(enumName))
             {
-                // Try alternative: use name2ee or other SOS commands
+                // Try alternative: could use ClrMD or other methods
                 // For now, fall back to checking if we can find literal fields
                 enumName = TryParseEnumFromFields(manager, methodTable, numericValue);
             }
@@ -992,9 +1067,42 @@ public partial class ObjectInspector
         var elements = new List<object?>();
         var elementCount = Math.Min(dumpResult.ArrayLength.Value, maxArrayElements);
 
+        // Try ClrMD first for more reliable array element inspection
+        if (_clrMdAnalyzer?.IsOpen == true)
+        {
+            try
+            {
+                var normalizedAddr = PrimitiveResolver.NormalizeAddress(arrayAddress);
+                if (ulong.TryParse(normalizedAddr, System.Globalization.NumberStyles.HexNumber, null, out var addr))
+                {
+                    var clrMdResult = _clrMdAnalyzer.InspectObject(addr, methodTable: null, maxDepth: depth, maxArrayElements: maxArrayElements, maxStringLength: maxStringLength);
+                    if (clrMdResult?.Elements != null)
+                    {
+                        // Convert ClrMD elements to InspectedObject format
+                        foreach (var elem in clrMdResult.Elements)
+                        {
+                            if (elem is ClrMdObjectInspection clrMdObj)
+                            {
+                                elements.Add(ConvertClrMdToInspected(clrMdObj));
+                            }
+                            else
+                            {
+                                elements.Add(elem);
+                            }
+                        }
+                        return elements;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "ClrMD array inspection failed for {Address}, falling back to SOS", arrayAddress);
+            }
+        }
+
+        // Fallback to SOS dumparray
         try
         {
-            // Use dumparray to get array elements
             cancellationToken.ThrowIfCancellationRequested();
             var output = manager.ExecuteCommand($"dumparray {arrayAddress}");
 
@@ -1770,26 +1878,33 @@ public partial class ObjectInspector
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var output = manager.ExecuteCommand($"dumpobj {contingentPropsAddress}");
+            var result = ExecuteDumpObj(manager, contingentPropsAddress);
 
-            if (string.IsNullOrWhiteSpace(output) || output.Contains("failed", StringComparison.OrdinalIgnoreCase))
+            if (!result.Success)
                 return null;
 
             // Look for m_exceptionsHolder field
-            var exceptionHolderMatch = Regex.Match(output, @"m_exceptionsHolder\s+([0-9a-fA-Fx]+)", RegexOptions.IgnoreCase);
-            if (!exceptionHolderMatch.Success)
+            var holderField = result.Fields?.FirstOrDefault(f => 
+                f.Name.Equals("m_exceptionsHolder", StringComparison.OrdinalIgnoreCase));
+            if (holderField == null || string.IsNullOrEmpty(holderField.Value))
                 return null;
 
-            var holderAddr = exceptionHolderMatch.Groups[1].Value;
+            var holderAddr = holderField.Value;
             if (PrimitiveResolver.IsNullAddress(holderAddr))
                 return null;
 
             // Get the holder object to find the actual exception
-            output = manager.ExecuteCommand($"dumpobj {holderAddr}");
-            var exceptionMatch = Regex.Match(output, @"m_exception[s]?\s+([0-9a-fA-Fx]+)", RegexOptions.IgnoreCase);
-            if (exceptionMatch.Success && !PrimitiveResolver.IsNullAddress(exceptionMatch.Groups[1].Value))
+            var holderResult = ExecuteDumpObj(manager, holderAddr);
+            if (!holderResult.Success)
+                return null;
+                
+            var exceptionField = holderResult.Fields?.FirstOrDefault(f => 
+                f.Name.Equals("m_exception", StringComparison.OrdinalIgnoreCase) ||
+                f.Name.Equals("m_exceptions", StringComparison.OrdinalIgnoreCase));
+            if (exceptionField != null && !string.IsNullOrEmpty(exceptionField.Value) && 
+                !PrimitiveResolver.IsNullAddress(exceptionField.Value))
             {
-                return PrimitiveResolver.NormalizeAddress(exceptionMatch.Groups[1].Value);
+                return PrimitiveResolver.NormalizeAddress(exceptionField.Value);
             }
 
             await Task.CompletedTask;
@@ -2340,6 +2455,48 @@ public partial class ObjectInspector
         }
 
         return hasData ? info : null;
+    }
+
+    /// <summary>
+    /// Converts a ClrMD object inspection to the ObjectInspector format.
+    /// </summary>
+    private static InspectedObject ConvertClrMdToInspected(ClrMdObjectInspection clrMdObj)
+    {
+        var result = new InspectedObject
+        {
+            Address = clrMdObj.Address ?? "",
+            Type = clrMdObj.Type ?? "Unknown",
+            MethodTable = clrMdObj.MethodTable ?? "",
+            Size = (int?)clrMdObj.Size,
+            Length = clrMdObj.ArrayLength
+        };
+
+        // Convert fields
+        if (clrMdObj.Fields != null)
+        {
+            result.Fields = clrMdObj.Fields.Select(f => new InspectedField
+            {
+                Name = f.Name ?? "",
+                Type = f.Type ?? "Unknown",
+                IsStatic = f.IsStatic,
+                Value = f.NestedObject != null 
+                    ? ConvertClrMdToInspected(f.NestedObject) 
+                    : (object?)f.Value
+            }).ToList();
+        }
+
+        // Convert array elements
+        if (clrMdObj.Elements != null)
+        {
+            result.Elements = clrMdObj.Elements.Select<object?, object?>(e =>
+            {
+                if (e is ClrMdObjectInspection nested)
+                    return ConvertClrMdToInspected(nested);
+                return e;
+            }).ToList();
+        }
+
+        return result;
     }
 
 }

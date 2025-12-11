@@ -312,64 +312,6 @@ public class SessionTools(
     }
 
     /// <summary>
-    /// Clears the command cache for a session.
-    /// </summary>
-    /// <param name="sessionId">The session ID.</param>
-    /// <param name="userId">The user ID that owns the session (for security validation).</param>
-    /// <returns>Confirmation message.</returns>
-    /// <remarks>
-    /// The command cache stores results of debugger commands to improve performance.
-    /// This tool should be called when:
-    /// - Modules or symbols have been manually loaded/changed
-    /// - After running commands that modify debugger state
-    /// - When you suspect cached results are stale
-    /// </remarks>
-    [McpServerTool, Description("Clear the command cache for a session. Use this when debugger state has changed (e.g., after manually loading symbols/modules) to ensure fresh results.")]
-    public string ClearCommandCache(
-        [Description("Session ID from CreateSession")] string sessionId,
-        [Description("User ID that owns the session")] string userId)
-    {
-        try
-        {
-            // Validate input parameters
-            ValidateSessionId(sessionId);
-
-            // Sanitize userId to prevent path traversal attacks
-            var sanitizedUserId = SanitizeUserId(userId);
-
-            // Get the session with user ownership validation
-            var manager = GetSessionManager(sessionId, sanitizedUserId);
-
-            // Clear the command cache
-            manager.ClearCommandCache();
-
-            Logger.LogInformation("[ClearCommandCache] Cleared command cache for session {SessionId}", sessionId);
-
-            return "Command cache cleared successfully. Subsequent commands will fetch fresh results from the debugger.";
-        }
-        catch (ArgumentException ex)
-        {
-            Logger.LogWarning(ex, "[ClearCommandCache] Invalid parameters");
-            return $"Error: {ex.Message}";
-        }
-        catch (UnauthorizedAccessException ex)
-        {
-            Logger.LogWarning(ex, "[ClearCommandCache] Unauthorized access");
-            return $"Error: {ex.Message}";
-        }
-        catch (InvalidOperationException ex)
-        {
-            Logger.LogWarning(ex, "[ClearCommandCache] Session not found or expired");
-            return $"Error: {ex.Message}";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "[ClearCommandCache] Unexpected error");
-            return $"Error: Failed to clear command cache - {ex.Message}";
-        }
-    }
-
-    /// <summary>
     /// Loads modules from verifycore output at their correct memory addresses.
     /// </summary>
     /// <param name="sessionId">The session ID.</param>
@@ -432,11 +374,7 @@ public class SessionTools(
             {
                 message += $"Failed to load: {string.Join(", ", failed)}\n";
             }
-            message += "\nTip: Use /clearcache or 'clear_command_cache' to see updated results.";
-
-            // Clear the cache since modules changed
-            manager.ClearCommandCache();
-            Logger.LogInformation("[LoadVerifyCoreModules] Cleared command cache after loading modules");
+            // Note: ClrMD handles most operations now, no cache to clear
 
             return message;
         }

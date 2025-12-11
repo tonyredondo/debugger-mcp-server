@@ -29,10 +29,745 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         SourceLinkResolver? sourceLinkResolver = null,
         ClrMdAnalyzer? clrMdAnalyzer = null,
         ILogger? logger = null)
-        : base(debuggerManager, sourceLinkResolver)
+        : base(debuggerManager, sourceLinkResolver, logger)
     {
         _clrMdAnalyzer = clrMdAnalyzer;
         _logger = logger;
+    }
+    
+    /// <summary>
+    /// Inspects an object using ClrMD exclusively. No SOS fallback to prevent LLDB crashes.
+    /// </summary>
+    /// <param name="address">The object address to inspect.</param>
+    /// <returns>The ClrMD inspection result formatted like dumpobj, or error message.</returns>
+    private Task<string> DumpObjectViaClrMdAsync(string address)
+    {
+        // Use ClrMD exclusively - no SOS fallback to prevent LLDB crashes
+        if (_clrMdAnalyzer?.IsOpen != true)
+        {
+            return Task.FromResult($"<ClrMD not available for object at {address}>");
+        }
+        
+        try
+        {
+            // Clean address - may contain type info like "0x1234 (System.String)"
+            var cleanAddress = ExtractHexAddress(address);
+            if (string.IsNullOrEmpty(cleanAddress))
+            {
+                return Task.FromResult($"<Invalid address format: {address}>");
+            }
+            
+            if (!ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
+            {
+                return Task.FromResult($"<Invalid address format: {address}>");
+            }
+            
+            var clrMdResult = _clrMdAnalyzer.InspectObject(addressValue, maxDepth: 2, maxArrayElements: 5, maxStringLength: 256);
+            
+            if (clrMdResult != null && clrMdResult.Error == null)
+            {
+                // Format ClrMD result to look like dumpobj output for compatibility
+                return Task.FromResult(FormatClrMdAsDumpObj(clrMdResult));
+            }
+            
+            _logger?.LogDebug("ClrMD dumpobj skipped for {Address}: {Error}", address, clrMdResult?.Error ?? "null");
+            return Task.FromResult($"<ClrMD: Object at {address} could not be inspected: {clrMdResult?.Error ?? "unknown error"}>");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "ClrMD dumpobj failed for {Address}", address);
+            return Task.FromResult($"<ClrMD: Object at {address} inspection threw: {ex.Message}>");
+        }
+    }
+    
+    /// <summary>
+    /// Populates thread call stacks using ClrMD instead of SOS clrstack command.
+    /// This is faster (~500ms vs 12s) and more reliable (no DAC crashes).
+    /// Merges managed frames with native frames from bt all by stack pointer.
+    /// </summary>
+    /// <param name="result">The crash analysis result to populate.</param>
+    private void PopulateManagedStacksViaClrMd(CrashAnalysisResult result)
+    {
+        if (_clrMdAnalyzer?.IsOpen != true)
+        {
+            _logger?.LogDebug("[ClrStack] ClrMD not available, skipping managed stack population");
+            return;
+        }
+
+        try
+        {
+            var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+            var clrStackResult = _clrMdAnalyzer.GetAllThreadStacks(
+                includeArguments: true,
+                includeLocals: true
+            );
+
+            if (clrStackResult.Error != null)
+            {
+                _logger?.LogWarning("[ClrStack] ClrMD stack walk failed: {Error}", clrStackResult.Error);
+                return;
+            }
+
+            // Store raw result for debugging
+            result.RawCommands ??= new Dictionary<string, string>();
+            result.RawCommands["clrmd_clrstack"] = System.Text.Json.JsonSerializer.Serialize(clrStackResult,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+
+            // Ensure thread containers exist
+            result.Threads ??= new ThreadsInfo();
+            result.Threads.All ??= new List<ThreadInfo>();
+
+            // Find faulting thread ID for register fetching (only fetch registers for faulting thread)
+            uint? faultingThreadId = null;
+            if (result.Threads.FaultingThread?.IsFaulting == true)
+            {
+                // Try to extract thread ID from faulting thread info
+                var tidMatch = Regex.Match(result.Threads.FaultingThread.ThreadId ?? "", @"tid:\s*(\d+)");
+                if (tidMatch.Success && uint.TryParse(tidMatch.Groups[1].Value, out var tid))
+                {
+                    faultingThreadId = tid;
+                }
+            }
+            
+            // Fallback: check ClrMD threads for faulting flag
+            if (faultingThreadId == null)
+            {
+                var faultingClrThread = clrStackResult.Threads.FirstOrDefault(t => t.IsFaulting);
+                if (faultingClrThread != null)
+                {
+                    faultingThreadId = faultingClrThread.OSThreadId;
+                }
+            }
+
+            // Fetch registers ONLY for faulting thread, for ALL frames (native + managed)
+            Dictionary<(uint ThreadId, ulong SP), Dictionary<string, string>>? perFrameRegisters = null;
+            if (_debuggerManager is LldbManager lldbManager && faultingThreadId.HasValue)
+            {
+                perFrameRegisters = FetchAllFrameRegistersForThread(lldbManager, faultingThreadId.Value);
+                _logger?.LogDebug("[ClrStack] Fetched registers for faulting thread {ThreadId}: {Count} frames", 
+                    faultingThreadId.Value, perFrameRegisters?.Count ?? 0);
+            }
+
+            foreach (var clrThread in clrStackResult.Threads)
+            {
+                // Find matching thread by OS thread ID
+                // bt all produces thread IDs like "1 (tid: 884) \"dotnet\"" where 884 is the TID
+                // ClrMD gives us OSThreadId as a numeric value (e.g., 884)
+                var threadIdHex = $"0x{clrThread.OSThreadId:x}";
+                var threadIdDec = clrThread.OSThreadId.ToString();
+                var existingThread = result.Threads.All.FirstOrDefault(t =>
+                {
+                    if (string.IsNullOrEmpty(t.ThreadId))
+                        return false;
+                    
+                    // Direct match (hex or decimal)
+                    if (string.Equals(t.ThreadId, threadIdHex, StringComparison.OrdinalIgnoreCase) ||
+                        string.Equals(t.ThreadId, threadIdDec, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                    
+                    // Parse TID from bt all format: "1 (tid: 884) \"dotnet\""
+                    var tidMatch = System.Text.RegularExpressions.Regex.Match(t.ThreadId, @"tid:\s*(\d+)");
+                    if (tidMatch.Success && tidMatch.Groups[1].Value == threadIdDec)
+                        return true;
+                    
+                    return false;
+                });
+
+                if (existingThread == null)
+                {
+                    // Create new thread entry if not found from bt all
+                    existingThread = new ThreadInfo
+                    {
+                        ThreadId = threadIdHex,
+                        State = clrThread.IsAlive ? "Running" : "Dead"
+                    };
+                    result.Threads.All.Add(existingThread);
+                }
+
+                // Update thread properties
+                if (clrThread.IsFaulting)
+                {
+                    existingThread.IsFaulting = true;
+                }
+
+
+                // Build managed frames indexed by SP for merging
+                var managedFramesBySp = new Dictionary<ulong, StackFrame>();
+                
+                foreach (var clrFrame in clrThread.Frames)
+                {
+                    // Skip non-managed frames (but keep Runtime frames like GCFrame)
+                    if (clrFrame.Method == null && clrFrame.Kind == "Unknown")
+                    {
+                        continue;
+                    }
+
+                    var frame = new StackFrame
+                    {
+                        StackPointer = $"0x{clrFrame.StackPointer:x16}",
+                        InstructionPointer = $"0x{clrFrame.InstructionPointer:x16}",
+                        IsManaged = clrFrame.Method != null
+                    };
+
+                    if (clrFrame.Method != null)
+                    {
+                        frame.Function = clrFrame.Method.Signature ?? clrFrame.Method.MethodName ?? string.Empty;
+                        frame.Module = ExtractModuleName(clrFrame.Method.TypeName) ?? string.Empty;
+
+                        // Source location from sequence points
+                        if (clrFrame.SourceLocation != null)
+                        {
+                            frame.SourceFile = clrFrame.SourceLocation.SourceFile;
+                            frame.LineNumber = clrFrame.SourceLocation.LineNumber;
+                            frame.Source = $"{frame.SourceFile}:{frame.LineNumber}";
+                        }
+                        
+                        // Add per-frame registers (fetched via LLDB frame select + register read)
+                        if (perFrameRegisters != null && 
+                            perFrameRegisters.TryGetValue((clrThread.OSThreadId, clrFrame.StackPointer), out var frameRegs) &&
+                            frameRegs.Count > 0)
+                        {
+                            frame.Registers = new Dictionary<string, string>(frameRegs);
+                        }
+                    }
+                    else
+                    {
+                        // Runtime frame (GC, etc.)
+                        frame.Function = $"[{clrFrame.Kind}]";
+                        frame.IsManaged = false;
+                    }
+
+                    // Add arguments (PARAMETERS)
+                    if (clrFrame.Arguments != null)
+                    {
+                        frame.Parameters ??= new List<LocalVariable>();
+                        foreach (var arg in clrFrame.Arguments)
+                        {
+                            frame.Parameters.Add(new LocalVariable
+                            {
+                                Name = arg.Name ?? $"arg{arg.Index}",
+                                Value = arg.HasValue ? (arg.ValueString ?? $"0x{arg.Address:x}") : "[NO DATA]",
+                                Type = arg.TypeName,
+                                HasData = arg.HasValue
+                            });
+                        }
+                    }
+
+                    // Add locals (LOCALS)
+                    if (clrFrame.Locals != null)
+                    {
+                        frame.Locals ??= new List<LocalVariable>();
+                        foreach (var local in clrFrame.Locals)
+                        {
+                            frame.Locals.Add(new LocalVariable
+                            {
+                                Name = local.Name ?? $"local_{local.Index}",
+                                Value = local.HasValue ? (local.ValueString ?? $"0x{local.Address:x}") : "[NO DATA]",
+                                Type = local.TypeName,
+                                HasData = local.HasValue
+                            });
+                        }
+                    }
+
+                    managedFramesBySp[clrFrame.StackPointer] = frame;
+                }
+
+                // Merge managed frames into existing native frames by SP
+                MergeManagedFramesIntoCallStack(existingThread, managedFramesBySp);
+            }
+
+            // Apply registers to ALL frames in faulting thread (including native frames)
+            if (perFrameRegisters != null && perFrameRegisters.Count > 0 && faultingThreadId.HasValue)
+            {
+                ApplyRegistersToFaultingThread(result, perFrameRegisters, faultingThreadId.Value);
+            }
+
+            stopwatch.Stop();
+            _logger?.LogInformation("[ClrStack] Populated {Threads} threads, {Frames} managed frames via ClrMD in {Duration}ms",
+                clrStackResult.TotalThreads, clrStackResult.TotalFrames, stopwatch.ElapsedMilliseconds);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "[ClrStack] ClrMD stack population failed, will fallback to SOS");
+        }
+    }
+    
+    /// <summary>
+    /// Applies fetched registers to all frames in the faulting thread.
+    /// This includes both native and managed frames.
+    /// </summary>
+    private void ApplyRegistersToFaultingThread(
+        CrashAnalysisResult result,
+        Dictionary<(uint ThreadId, ulong SP), Dictionary<string, string>> registers,
+        uint faultingThreadId)
+    {
+        // Find the faulting thread
+        var faultingThread = result.Threads?.FaultingThread;
+        if (faultingThread == null)
+        {
+            // Try to find it in All threads
+            var threadIdDec = faultingThreadId.ToString();
+            faultingThread = result.Threads?.All?.FirstOrDefault(t =>
+            {
+                if (string.IsNullOrEmpty(t.ThreadId))
+                    return false;
+                
+                var tidMatch = Regex.Match(t.ThreadId, @"tid:\s*(\d+)");
+                if (tidMatch.Success && tidMatch.Groups[1].Value == threadIdDec)
+                    return true;
+                
+                return t.ThreadId.Contains(threadIdDec, StringComparison.OrdinalIgnoreCase);
+            });
+        }
+        
+        if (faultingThread?.CallStack == null)
+        {
+            _logger?.LogDebug("[ClrStack] Faulting thread not found for register application");
+            return;
+        }
+        
+        int appliedCount = 0;
+        foreach (var frame in faultingThread.CallStack)
+        {
+            // Parse the frame's stack pointer
+            var sp = ParseStackPointer(frame.StackPointer);
+            if (sp == null)
+                continue;
+            
+            // Look up registers for this SP
+            if (registers.TryGetValue((faultingThreadId, sp.Value), out var frameRegs) && frameRegs.Count > 0)
+            {
+                frame.Registers ??= new Dictionary<string, string>();
+                foreach (var (name, value) in frameRegs)
+                {
+                    frame.Registers[name] = value;
+                }
+                appliedCount++;
+            }
+        }
+        
+        _logger?.LogDebug("[ClrStack] Applied registers to {Count}/{Total} frames in faulting thread",
+            appliedCount, faultingThread.CallStack.Count);
+    }
+    
+    /// <summary>
+    /// Fetches registers for frames of a specific thread using LLDB.
+    /// Used for the faulting thread to provide register context.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <b>Limitation:</b> LLDB can only provide registers for frames it understands (native frames 
+    /// and some JIT frames with debug info). Managed frames that exist only in ClrMD's view 
+    /// (JIT-compiled code without LLDB symbols) will not have registers because LLDB cannot 
+    /// determine their stack pointer.
+    /// </para>
+    /// <para>
+    /// This is a fundamental limitation of the LLDB/ClrMD integration - ClrMD walks the managed 
+    /// stack independently and provides SPs that LLDB may not be aware of.
+    /// </para>
+    /// </remarks>
+    private Dictionary<(uint ThreadId, ulong SP), Dictionary<string, string>> FetchAllFrameRegistersForThread(
+        LldbManager lldb, 
+        uint threadId)
+    {
+        var result = new Dictionary<(uint, ulong), Dictionary<string, string>>();
+        
+        try
+        {
+            // Map thread ID to LLDB index
+            var threadIdToIndex = BuildThreadIdToIndexMap(lldb);
+            if (!threadIdToIndex.TryGetValue(threadId, out var threadIndex))
+            {
+                _logger?.LogDebug("[ClrStack] No LLDB thread found for OS thread ID {ThreadId}", threadId);
+                return result;
+            }
+            
+            // Select the thread
+            var selectOutput = lldb.ExecuteCommand($"thread select {threadIndex}");
+            if (selectOutput.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                selectOutput.Contains("invalid", StringComparison.OrdinalIgnoreCase))
+            {
+                _logger?.LogDebug("[ClrStack] Failed to select thread {ThreadId} (index {Index})", threadId, threadIndex);
+                return result;
+            }
+            
+            // Get backtrace to find all frames and their SPs
+            // Use "bt 200" to get more frames than the default limit
+            var btOutput = lldb.ExecuteCommand("bt 200");
+            var lldbFrames = ParseBacktraceForSPs(btOutput);
+            
+            _logger?.LogDebug("[ClrStack] Found {Count} frames from bt for faulting thread {ThreadId}", 
+                lldbFrames.Count, threadId);
+            
+            // Create a set of frame indices we've already processed
+            var processedFrames = new HashSet<int>();
+            
+            // First pass: process frames from bt output (these have reliable SPs)
+            foreach (var (frameIndex, sp) in lldbFrames)
+            {
+                try
+                {
+                    processedFrames.Add(frameIndex);
+                    
+                    // Select the frame
+                    var frameSelectOutput = lldb.ExecuteCommand($"frame select {frameIndex}");
+                    if (frameSelectOutput.Contains("error", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    
+                    // Read registers for this frame
+                    var regOutput = lldb.ExecuteCommand("register read");
+                    if (string.IsNullOrEmpty(regOutput))
+                        continue;
+                    
+                    var registers = ParseRegisterOutput(regOutput);
+                    if (registers.Count > 0)
+                    {
+                        result[(threadId, sp)] = registers;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "[ClrStack] Failed to read registers for frame {Frame}", frameIndex);
+                }
+            }
+            
+            // Second pass: try frames that weren't in bt output (JIT frames without SP)
+            // Find the max frame index from the first pass to know our upper bound
+            var maxFrame = lldbFrames.Count > 0 ? lldbFrames.Max(f => f.FrameIndex) : 0;
+            var secondPassCount = 0;
+            
+            for (int frameIndex = 0; frameIndex <= maxFrame + 10; frameIndex++) // +10 for safety
+            {
+                if (processedFrames.Contains(frameIndex))
+                    continue;
+                    
+                try
+                {
+                    var frameSelectOutput = lldb.ExecuteCommand($"frame select {frameIndex}");
+                    if (frameSelectOutput.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                        frameSelectOutput.Contains("invalid", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // This frame doesn't exist, but keep trying for frames within range
+                        continue;
+                    }
+                    
+                    // Get SP from frame info
+                    var frameInfoOutput = lldb.ExecuteCommand("frame info");
+                    var spMatch = Regex.Match(frameInfoOutput, @"SP\s*=\s*(0x[0-9a-fA-F]+)", RegexOptions.IgnoreCase);
+                    if (!spMatch.Success)
+                        continue;
+                    
+                    if (!ulong.TryParse(spMatch.Groups[1].Value.TrimStart('0', 'x', 'X'), 
+                        System.Globalization.NumberStyles.HexNumber, null, out var sp))
+                        continue;
+                    
+                    // Read registers
+                    var regOutput = lldb.ExecuteCommand("register read");
+                    if (string.IsNullOrEmpty(regOutput))
+                        continue;
+                    
+                    var registers = ParseRegisterOutput(regOutput);
+                    if (registers.Count > 0)
+                    {
+                        result[(threadId, sp)] = registers;
+                        secondPassCount++;
+                    }
+                }
+                catch
+                {
+                    // Ignore errors in second pass
+                }
+            }
+            
+            if (secondPassCount > 0)
+            {
+                _logger?.LogDebug("[ClrStack] Second pass added {Count} frames via frame info", secondPassCount);
+            }
+            
+            _logger?.LogDebug("[ClrStack] Fetched registers for {Count} frames in faulting thread", result.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ClrStack] Failed to fetch registers for thread {ThreadId}", threadId);
+        }
+        
+        return result;
+    }
+    
+    /// <summary>
+    /// Builds a mapping from OS thread ID to LLDB thread index using 'thread list' command.
+    /// </summary>
+    private static Dictionary<uint, int> BuildThreadIdToIndexMap(LldbManager lldb)
+    {
+        var result = new Dictionary<uint, int>();
+        
+        var threadListOutput = lldb.ExecuteCommand("thread list");
+        if (string.IsNullOrEmpty(threadListOutput))
+            return result;
+        
+        // Parse thread list output which looks like:
+        // * thread #1: tid = 884, 0x0000f5855a9b9800, name = 'dotnet', stop reason = signal SIGSTOP
+        //   thread #2: tid = 892, 0x0000f5855a9b9800, name = 'dotnet', stop reason = signal SIGSTOP
+        // Or on older LLDB:
+        // Process 1234 stopped
+        // * thread #1, name = 'dotnet', stop reason = signal SIGSTOP
+        //   thread #2, tid = 0x378, 0x0000... 
+        
+        var lines = threadListOutput.Split('\n');
+        foreach (var line in lines)
+        {
+            // Match pattern: thread #N: tid = DECIMAL or thread #N, tid = 0xHEX
+            var indexMatch = Regex.Match(line, @"thread\s+#(\d+)", RegexOptions.IgnoreCase);
+            if (!indexMatch.Success)
+                continue;
+            
+            var threadIndex = int.Parse(indexMatch.Groups[1].Value);
+            
+            // Try to find tid in decimal format first (tid = 884)
+            var tidDecMatch = Regex.Match(line, @"tid\s*=\s*(\d+)", RegexOptions.IgnoreCase);
+            if (tidDecMatch.Success)
+            {
+                var tid = uint.Parse(tidDecMatch.Groups[1].Value);
+                result[tid] = threadIndex;
+                continue;
+            }
+            
+            // Try hex format (tid = 0x378)
+            var tidHexMatch = Regex.Match(line, @"tid\s*=\s*0x([0-9a-fA-F]+)", RegexOptions.IgnoreCase);
+            if (tidHexMatch.Success)
+            {
+                var tid = uint.Parse(tidHexMatch.Groups[1].Value, System.Globalization.NumberStyles.HexNumber);
+                result[tid] = threadIndex;
+            }
+        }
+        
+        return result;
+    }
+    
+    /// <summary>
+    /// Parses LLDB backtrace output to extract frame indices and stack pointers.
+    /// </summary>
+    private static List<(int FrameIndex, ulong SP)> ParseBacktraceForSPs(string btOutput)
+    {
+        var result = new List<(int, ulong)>();
+        
+        // LLDB bt format examples:
+        // * frame #0: 0x00007fff... libsystem... `__wait4 + 8
+        //   frame #1: 0x00007fff... libsystem... `waitpid + 45
+        // With our custom frame-format, SP should be visible
+        // We look for patterns like "sp=0x..." or extract from frame info
+        
+        var lines = btOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
+        {
+            // Match frame number: "frame #N:" or "* frame #N:"
+            var frameMatch = Regex.Match(line, @"frame\s*#(\d+)");
+            if (!frameMatch.Success)
+                continue;
+            
+            if (!int.TryParse(frameMatch.Groups[1].Value, out var frameIndex))
+                continue;
+            
+            // Only extract frames with explicit SP= pattern from frame-format
+            // Frames without SP (like JIT frames) will be handled by the second pass
+            // using "frame select" + "frame info" to get the actual SP
+            var spMatch = Regex.Match(line, @"SP\s*=\s*(0x[0-9a-fA-F]+)", RegexOptions.IgnoreCase);
+            if (spMatch.Success)
+            {
+                if (ulong.TryParse(spMatch.Groups[1].Value.TrimStart('0', 'x', 'X'), 
+                    System.Globalization.NumberStyles.HexNumber, null, out var sp))
+                {
+                    result.Add((frameIndex, sp));
+                }
+            }
+            // Note: No fallback - frames without SP will be handled by second pass
+        }
+        
+        return result;
+    }
+    
+    /// <summary>
+    /// Parses LLDB register output into a dictionary.
+    /// </summary>
+    private static Dictionary<string, string> ParseRegisterOutput(string output)
+    {
+        var result = new Dictionary<string, string>();
+        
+        // Match patterns like: x0 = 0x0000000000000000 or rax = 0x00007ff812345678
+        var matches = Regex.Matches(output, @"(\w+)\s*=\s*(0x[0-9a-fA-F]+)", RegexOptions.IgnoreCase);
+        foreach (Match match in matches)
+        {
+            var name = match.Groups[1].Value.ToLowerInvariant();
+            var value = match.Groups[2].Value;
+            
+            // Store just the hex digits without 0x prefix, truncated like SOS clrstack
+            var hexValue = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) 
+                ? value[2..] 
+                : value;
+            
+            result[name] = hexValue;
+        }
+        
+        return result;
+    }
+    
+    /// <summary>
+    /// Merges managed frames into an existing call stack by stack pointer.
+    /// Native frames from bt all are enriched with managed frame data when SP matches.
+    /// Managed-only frames are inserted at the correct position.
+    /// </summary>
+    private void MergeManagedFramesIntoCallStack(ThreadInfo thread, Dictionary<ulong, StackFrame> managedFramesBySp)
+    {
+        if (managedFramesBySp.Count == 0)
+            return;
+        
+        var mergedFrames = new List<StackFrame>();
+        var usedManagedSps = new HashSet<ulong>();
+        
+        // First pass: Enrich or insert managed frames
+        foreach (var nativeFrame in thread.CallStack)
+        {
+            // Try to parse SP from native frame
+            var nativeSp = ParseStackPointer(nativeFrame.StackPointer);
+            
+            // Check if there's a managed frame for this SP
+            if (nativeSp.HasValue && managedFramesBySp.TryGetValue(nativeSp.Value, out var managedFrame))
+            {
+                // Enrich native frame with managed data
+                nativeFrame.Function = managedFrame.Function;
+                nativeFrame.Module = managedFrame.Module;
+                nativeFrame.SourceFile = managedFrame.SourceFile;
+                nativeFrame.LineNumber = managedFrame.LineNumber;
+                nativeFrame.Source = managedFrame.Source;
+                nativeFrame.IsManaged = true;
+                nativeFrame.Registers = managedFrame.Registers;
+                nativeFrame.Parameters = managedFrame.Parameters;
+                nativeFrame.Locals = managedFrame.Locals;
+                
+                usedManagedSps.Add(nativeSp.Value);
+            }
+            
+            mergedFrames.Add(nativeFrame);
+        }
+        
+        // Second pass: Add any managed-only frames (not matched to native frames)
+        // Insert them in correct SP order (higher SP = earlier in call stack for typical architectures)
+        var orphanManagedFrames = managedFramesBySp
+            .Where(kv => !usedManagedSps.Contains(kv.Key))
+            .OrderByDescending(kv => kv.Key) // Higher SP = earlier frame
+            .Select(kv => kv.Value)
+            .ToList();
+        
+        foreach (var orphan in orphanManagedFrames)
+        {
+            var orphanSp = ParseStackPointer(orphan.StackPointer);
+            if (!orphanSp.HasValue)
+            {
+                // Can't determine position, add at end
+                mergedFrames.Add(orphan);
+                continue;
+            }
+            
+            // Find insertion point: after the first frame with higher SP
+            var insertIndex = mergedFrames.Count;
+            for (int i = 0; i < mergedFrames.Count; i++)
+            {
+                var frameSp = ParseStackPointer(mergedFrames[i].StackPointer);
+                if (frameSp.HasValue && frameSp.Value < orphanSp.Value)
+                {
+                    insertIndex = i;
+                    break;
+                }
+            }
+            
+            mergedFrames.Insert(insertIndex, orphan);
+        }
+        
+        // Renumber frames
+        for (int i = 0; i < mergedFrames.Count; i++)
+        {
+            mergedFrames[i].FrameNumber = i;
+        }
+        
+        // Replace the call stack
+        thread.CallStack.Clear();
+        thread.CallStack.AddRange(mergedFrames);
+    }
+    
+    /// <summary>
+    /// Parses a stack pointer string to ulong.
+    /// Handles formats: "0x0000FFFFCA31B4C0", "0000FFFFCA31B4C0", "[SP=0x0000FFFFCA31B4C0]"
+    /// </summary>
+    private static ulong? ParseStackPointer(string? spString)
+    {
+        if (string.IsNullOrEmpty(spString))
+            return null;
+        
+        // Extract hex value from various formats
+        var match = Regex.Match(spString, @"(?:0x)?([0-9a-fA-F]+)", RegexOptions.IgnoreCase);
+        if (!match.Success)
+            return null;
+        
+        if (ulong.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out var result))
+            return result;
+        
+        return null;
+    }
+
+    /// <summary>
+    /// Extracts module name from a type name.
+    /// </summary>
+    private static string? ExtractModuleName(string? typeName)
+    {
+        if (string.IsNullOrEmpty(typeName))
+            return null;
+
+        // For types like "System.String", "MyNamespace.MyClass" etc.
+        // The module is typically inferred from the namespace
+        var lastDot = typeName.LastIndexOf('.');
+        if (lastDot > 0)
+        {
+            // Return the namespace portion as a hint
+            return typeName[..lastDot];
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Formats ClrMD inspection result to look similar to dumpobj output.
+    /// </summary>
+    private static string FormatClrMdAsDumpObj(ClrMdObjectInspection result)
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"Name:        {result.Type}");
+        sb.AppendLine($"MethodTable: {result.MethodTable}");
+        sb.AppendLine($"Size:        {result.Size}(0x{result.Size:x}) bytes");
+        
+        if (result.IsString && result.Value != null)
+        {
+            sb.AppendLine($"String:      {result.Value}");
+        }
+        else if (result.IsArray)
+        {
+            sb.AppendLine($"Array:       Rank 1, Number of elements {result.ArrayLength}, Type {result.ArrayElementType}");
+        }
+        else if (result.Fields != null && result.Fields.Count > 0)
+        {
+            sb.AppendLine("Fields:");
+            sb.AppendLine("              MT    Field   Offset                 Type VT     Attr            Value Name");
+            foreach (var field in result.Fields)
+            {
+                var value = field.NestedObject != null 
+                    ? field.NestedObject.Address 
+                    : field.Value?.ToString() ?? "null";
+                sb.AppendLine($"0000000000000000  {field.Offset:x8}        0 {field.Type ?? "unknown",-20} 0 instance {value,-16} {field.Name}");
+            }
+        }
+        
+        return sb.ToString();
     }
 
     /// <summary>
@@ -114,47 +849,45 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             result.RawCommands!["!eeversion"] = clrVersionOutput;
             ParseClrVersion(clrVersionOutput, result);
 
-            // Get full call stacks for all threads (managed + native interleaved, with registers)
-            // -f: full stack (native + managed frames interleaved)
+            // Native stacks from bt all are already parsed by base AnalyzeCrashAsync()
+            // We now enrich those native frames with managed frame info from ClrMD
+            
+            // Try ClrMD first for managed stacks (~500ms vs 12s, no DAC crashes)
+            // ClrMD provides direct access to CLR runtime data structures
+            var usedClrMd = false;
+            if (_clrMdAnalyzer?.IsOpen == true)
+            {
+                try
+                {
+                    PopulateManagedStacksViaClrMd(result);
+                    usedClrMd = true;
+                    _logger?.LogInformation("[Analysis] Used ClrMD for managed stack collection (fast path)");
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "[Analysis] ClrMD stack collection failed, falling back to SOS");
+                }
+            }
+            
+            // Fallback to SOS clrstack if ClrMD is not available or failed
+            if (!usedClrMd)
+            {
+                // Get managed stacks with args/locals (without -f to avoid DAC crashes)
             // -r: include register values
             // -all: all threads
             // -a: include arguments and locals
-            var clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -f -r -all");
-            result.RawCommands!["clrstack -a -f -r -all"] = clrStackFullOutput;
-            
-            // The -f flag can crash the DAC on some platforms (e.g., .NET 10 ARM64)
-            // If it crashed/failed, fall back to getting native + managed stacks separately
-            // and merge them by stack pointer values
-            var usedFallbackMerge = false;
-            if (clrStackFullOutput.Contains("[ERROR:") || IsSosErrorOutput(clrStackFullOutput))
-            {
-                _logger?.LogWarning("clrstack -f crashed, falling back to separate native + managed stacks with SP-based merging");
-                usedFallbackMerge = true;
+                var clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -r -all");
+                result.RawCommands!["clrstack -a -r -all"] = clrStackFullOutput;
                 
-                // Get native stacks from bt all
-                var btAllOutput = await ExecuteCommandAsync("bt all");
-                result.RawCommands!["bt all (fallback)"] = btAllOutput;
-                
-                // Get managed stacks with args/locals (without -f) - this includes SP values
-                clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -r -all");
-                result.RawCommands!["clrstack -a -r -all (fallback)"] = clrStackFullOutput;
-                
-                // Parse native stacks from bt all first - this populates threads with native frames
-                ParseLldbBacktraceAll(btAllOutput, result);
+                // Parse managed frames and append to existing native frames
+                ParseFullCallStacksAllThreads(clrStackFullOutput, result, appendToExisting: true);
             }
             
-            // Parse managed frames (with or without native interleaving depending on -f success)
-            // In fallback mode, append managed frames to existing native frames instead of replacing
-            ParseFullCallStacksAllThreads(clrStackFullOutput, result, appendToExisting: usedFallbackMerge);
-            
-            // If we used the fallback, merge native and managed frames by SP
-            if (usedFallbackMerge)
-            {
-                MergeNativeAndManagedFramesBySP(result);
-            }
+            // Merge native and managed frames by SP for accurate interleaved stacks
+            MergeNativeAndManagedFramesBySP(result);
             
             // Enhance variable values: convert hex to meaningful representations
-            // and resolve string values using !dumpobj
+            // and resolve string values using ClrMD
             await EnhanceVariableValuesAsync(result);
 
             // Resolve Source Link URLs for the newly parsed stack frames
@@ -285,6 +1018,51 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                         gcSummary.FragmentationBytes = combinedAnalysis.FreeBytes;
                         gcSummary.Fragmentation = combinedAnalysis.FragmentationRatio;
                     }
+                }
+                
+                // === Synchronization Primitives Analysis ===
+                // Analyzes locks, semaphores, events, and detects potential deadlocks
+                try
+                {
+                    if (_clrMdAnalyzer.Runtime != null)
+                    {
+                        _logger?.LogDebug("Starting synchronization primitives analysis...");
+                        
+                        // Detect cross-architecture analysis which can cause SIGSEGV in EnumerateSyncBlocks
+                        // (e.g., analyzing x64 dump on arm64 host via Rosetta 2 emulation)
+                        var skipSyncBlocks = IsCrossArchitectureAnalysis();
+                        if (skipSyncBlocks)
+                        {
+                            _logger?.LogInformation("Cross-architecture analysis detected - sync block enumeration will be skipped to avoid potential SIGSEGV");
+                        }
+                        
+                        var syncAnalyzer = new Synchronization.SynchronizationAnalyzer(_clrMdAnalyzer.Runtime, _logger, skipSyncBlocks);
+                        result.Synchronization = syncAnalyzer.Analyze();
+                        
+                        // Add deadlock warnings to recommendations
+                        if (result.Synchronization?.PotentialDeadlocks?.Count > 0)
+                        {
+                            result.Summary ??= new AnalysisSummary();
+                            result.Summary.Recommendations ??= [];
+                            foreach (var deadlock in result.Synchronization.PotentialDeadlocks)
+                            {
+                                result.Summary.Recommendations.Add($"⚠️ POTENTIAL DEADLOCK: {deadlock.Description}");
+                            }
+                        }
+                        
+                        // Add contention warnings
+                        var highContentionCount = result.Synchronization?.ContentionHotspots?.Count(h => h.Severity == "high" || h.Severity == "critical") ?? 0;
+                        if (highContentionCount > 0)
+                        {
+                            result.Summary ??= new AnalysisSummary();
+                            result.Summary.Recommendations ??= [];
+                            result.Summary.Recommendations.Add($"High lock contention detected on {highContentionCount} synchronization primitive(s)");
+                        }
+                    }
+                }
+                catch (Exception syncEx)
+                {
+                    _logger?.LogWarning(syncEx, "Synchronization analysis failed");
                 }
             }
 
@@ -480,9 +1258,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     {
         try
         {
-            // Use dumpobj to inspect the exception object
-            var dumpOutput = await ExecuteCommandAsync($"!dumpobj {address}");
-            result.RawCommands![$"!dumpobj {address}"] = dumpOutput;
+            // Use ClrMD-based dumpobj to inspect the exception object
+            var dumpOutput = await DumpObjectViaClrMdAsync(address);
+            result.RawCommands![$"ClrMD:InspectObject({address})"] = dumpOutput;
             
             if (IsSosErrorOutput(dumpOutput)) return;
             
@@ -579,7 +1357,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
     
     /// <summary>
-    /// Gets a string value from an object address using dumpobj.
+    /// Gets a string value from an object address using ClrMD-based dumpobj.
     /// Handles both single-line and multi-line string values.
     /// </summary>
     private async Task<string?> GetStringValueAsync(string address, Dictionary<string, string>? rawCommands = null)
@@ -591,13 +1369,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         
         try
         {
-            var cmd = $"!dumpobj {address}";
-            var output = await ExecuteCommandAsync(cmd);
+            var output = await DumpObjectViaClrMdAsync(address);
             
             // Store command output if rawCommands provided
             if (rawCommands != null)
             {
-                rawCommands[cmd] = output;
+                rawCommands[$"ClrMD:InspectObject({address})"] = output;
             }
             
             // Look for the String: line which contains the actual string value
@@ -656,7 +1433,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         
         try
         {
-            var output = await ExecuteCommandAsync($"!dumpobj {address}");
+            var output = await DumpObjectViaClrMdAsync(address);
             if (IsSosErrorOutput(output)) return null;
             
             var data = new Dictionary<string, string>();
@@ -680,7 +1457,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     }
                     visitedNodes.Add(normalizedNodeAddr);
                     
-                    var nodeOutput = await ExecuteCommandAsync($"!dumpobj {currentNodeAddr}");
+                    var nodeOutput = await DumpObjectViaClrMdAsync(currentNodeAddr!);
                     if (IsSosErrorOutput(nodeOutput)) break;
                     
                     var keyAddr = ExtractFieldAddress(nodeOutput, "key");
@@ -727,7 +1504,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                             var entryAddr = entry.Groups[1].Value;
                             if (!IsNullAddress(entryAddr))
                             {
-                                var entryOutput = await ExecuteCommandAsync($"!dumpobj {entryAddr}");
+                                var entryOutput = await DumpObjectViaClrMdAsync(entryAddr);
                                 if (!IsSosErrorOutput(entryOutput))
                                 {
                                     var keyAddr = ExtractFieldAddress(entryOutput, "key");
@@ -795,8 +1572,8 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             
             try
             {
-                // Dump the MethodBase object to get method info
-                var methodOutput = await ExecuteCommandAsync($"!dumpobj {methodAddress}");
+                // Dump the MethodBase object to get method info (using ClrMD-based method)
+                var methodOutput = await DumpObjectViaClrMdAsync(methodAddress);
                 if (!IsSosErrorOutput(methodOutput))
                 {
                     analysis.TargetSite = new TargetSiteInfo();
@@ -814,7 +1591,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     
                     if (declaringTypeMatch.Success && !IsNullAddress(declaringTypeMatch.Groups[1].Value))
                     {
-                        var typeOutput = await ExecuteCommandAsync($"!dumpobj {declaringTypeMatch.Groups[1].Value}");
+                        var typeOutput = await DumpObjectViaClrMdAsync(declaringTypeMatch.Groups[1].Value);
                         var typeNameMatch = Regex.Match(typeOutput, @"Name:\s+(.+)$", RegexOptions.Multiline);
                         if (typeNameMatch.Success)
                         {
@@ -1024,10 +1801,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         
         try
         {
-            // Get the exception object details
-            var dumpCmd = $"!dumpobj {analysis.ExceptionAddress}";
-            var dumpOutput = await ExecuteCommandAsync(dumpCmd);
-            result.RawCommands![dumpCmd] = dumpOutput;
+            // Get the exception object details (using ClrMD-based dumpobj)
+            var dumpOutput = await DumpObjectViaClrMdAsync(analysis.ExceptionAddress);
+            result.RawCommands![$"ClrMD:InspectObject({analysis.ExceptionAddress})"] = dumpOutput;
             if (IsSosErrorOutput(dumpOutput)) return;
             
             // FileNotFoundException / FileLoadException
@@ -1291,6 +2067,47 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         }
         
         return null;
+    }
+    
+    /// <summary>
+    /// Extracts just the hex address from a string that may include type info.
+    /// Handles formats like "0x1234", "1234", "0x1234 (System.String)", etc.
+    /// Returns just the hex digits without 0x prefix.
+    /// </summary>
+    private static string? ExtractHexAddress(string? address)
+    {
+        if (string.IsNullOrEmpty(address))
+            return null;
+        
+        var trimmed = address.Trim();
+        
+        // Remove 0x prefix if present
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[2..];
+        
+        // If there's a space (e.g., "1234 (TypeName)"), take only the first part
+        var spaceIndex = trimmed.IndexOf(' ');
+        if (spaceIndex > 0)
+            trimmed = trimmed[..spaceIndex];
+        
+        // Validate it's a valid hex string
+        if (string.IsNullOrEmpty(trimmed) || !IsValidHexString(trimmed))
+            return null;
+        
+        return trimmed;
+    }
+    
+    /// <summary>
+    /// Checks if a string is a valid hexadecimal number.
+    /// </summary>
+    private static bool IsValidHexString(string s)
+    {
+        foreach (var c in s)
+        {
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')))
+                return false;
+        }
+        return s.Length > 0;
     }
     
     /// <summary>
@@ -1805,7 +2622,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
 
             // Find matching thread in result.Threads!.All by OS thread ID
-            // Threads from clrstack -f -r -all have ThreadId like "0x8954"
+            // Threads from clrstack output have ThreadId like "0x8954"
             // Skip dead threads (OSID = 0) as they don't have an OS thread
             ThreadInfo? matchingThread = null;
             
@@ -2008,6 +2825,27 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 if (periodStr != "------" && int.TryParse(periodStr, out var period))
                 {
                     timer.PeriodMs = period;
+                }
+                
+                // Inspect the state object using ClrMD if available
+                if (_clrMdAnalyzer?.IsOpen == true && !string.IsNullOrEmpty(timer.StateAddress))
+                {
+                    try
+                    {
+                        var cleanAddress = timer.StateAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
+                            ? timer.StateAddress[2..]
+                            : timer.StateAddress;
+                        
+                        if (ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var stateAddr))
+                        {
+                            // Use shallow inspection (depth=2) to avoid excessive nesting
+                            timer.StateValue = _clrMdAnalyzer.InspectObject(stateAddr, maxDepth: 2, maxArrayElements: 5, maxStringLength: 256);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger?.LogDebug(ex, "Failed to inspect timer state at {Address}", timer.StateAddress);
+                    }
                 }
                 
                 timers.Add(timer);
@@ -2378,14 +3216,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
 
     /// <summary>
-    /// Parses full call stacks from 'clrstack -a -f -r -all' output.
-    /// This command gives us both managed and native frames interleaved in the correct order,
-    /// plus register values, parameters, and locals for each frame.
+    /// Parses full call stacks from 'clrstack -a -r -all' output.
+    /// This parses managed frames with parameters, locals, and register values.
+    /// Used in conjunction with bt all (native frames) and SP-based merging.
     /// </summary>
     /// <param name="clrStackFullOutput">The clrstack command output to parse.</param>
     /// <param name="result">The result object to populate.</param>
     /// <param name="appendToExisting">If true, append frames to existing call stacks instead of clearing them.
-    /// Used in fallback mode when native frames were already parsed from bt all.</param>
+    /// This is the default mode when native frames were already parsed from bt all.</param>
     protected void ParseFullCallStacksAllThreads(string clrStackFullOutput, CrashAnalysisResult result, bool appendToExisting = false)
     {
         // Check for various error conditions that indicate SOS/CLR is not available (native dump)
@@ -2439,7 +3277,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Clear existing call stack unless we're appending (fallback mode with native frames already parsed)
                 if (!appendToExisting)
                 {
-                    currentThread.CallStack.Clear();
+                currentThread.CallStack.Clear();
                 }
                 frameNumber = appendToExisting ? currentThread.CallStack.Count : 0;
                 lastFrame = null;
@@ -2780,7 +3618,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
 
     /// <summary>
-    /// Parses a full stack frame line from 'clrstack -f' output.
+    /// Parses a full stack frame line from clrstack output.
     /// Handles both managed and native frames with various formats.
     /// </summary>
     private StackFrame? ParseFullStackFrame(string line, ref int frameNumber)
@@ -3123,11 +3961,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     
     /// <summary>
     /// Merges native frames (from bt all) and managed frames (from clrstack) by stack pointer values.
-    /// This is used as a fallback when clrstack -f crashes.
-    /// Stack grows downward, so higher SP = earlier frame (closer to top of stack).
+    /// This is the default approach for reliable stack collection across all platforms.
+    /// Stack grows downward, so lower SP = deeper frame (more recent call).
     /// 
-    /// With frame-format configured to include SP=${frame.sp}, native frames now have real SP values,
-    /// making the merge straightforward: just sort all frames by SP descending.
+    /// With frame-format configured to include SP=${frame.sp}, native frames have real SP values,
+    /// making the merge straightforward: sort all frames by SP ascending.
     /// </summary>
     private void MergeNativeAndManagedFramesBySP(CrashAnalysisResult result)
     {
@@ -3199,9 +4037,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 finalFrames.Add((frame, effectiveSp, originalOrder));
             }
             
-            // Sort by SP descending (higher SP = top of stack = frame 0)
+            // Sort by SP ascending (lower SP = most recent call = frame 0)
+            // Stack grows downward on ARM64/x64, so lower SP = deeper in call stack
             var sortedFrames = finalFrames
-                .OrderByDescending(x => x.sp)
+                .OrderBy(x => x.sp)
                 .ThenBy(x => x.originalOrder) // Tie-break by original order
                 .Select(x => x.frame)
                 .ToList();
@@ -3311,7 +4150,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// Enhances variable values by converting hex values to meaningful representations.
     /// For primitives: converts to actual values (e.g., "0x4e20" -> "20000")
     /// For ByRef types: dereferences the pointer to get the actual value/address
-    /// For strings: resolves the actual string content using !dumpobj (truncated to 1024 chars)
+    /// For strings: resolves the actual string content using ClrMD (truncated to 1024 chars)
     /// </summary>
     private async Task EnhanceVariableValuesAsync(CrashAnalysisResult result)
     {
@@ -3378,7 +4217,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
         }
         
-        // Fourth pass: resolve string values using !dumpobj
+        // Fourth pass: resolve string values using ClrMD
         if (stringAddresses.Count > 0)
         {
             var stringValues = await ResolveStringValuesAsync(stringAddresses, result.RawCommands);
@@ -3400,8 +4239,8 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
     
     /// <summary>
-    /// Expands reference type objects by calling showobj to get their full structure.
-    /// Uses name2ee to find the method table, then ObjectInspector to expand the object.
+    /// Expands reference type objects using ClrMD to get their full structure.
+    /// Uses ClrMD Name2EE to find the method table, then ClrMD InspectObject to expand.
     /// </summary>
     private async Task ExpandReferenceTypeObjectsAsync(CrashAnalysisResult result)
     {
@@ -3410,7 +4249,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             return;
         }
 
-        // Cache method tables to avoid repeated name2ee calls
+        // Cache method tables to avoid repeated Name2EE calls
         var methodTableCache = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
         
         foreach (var thread in result.Threads.All)
@@ -3491,7 +4330,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 if (string.IsNullOrEmpty(methodTable))
                     continue; // Can't expand without method table
                 
-                // Expand the object using ObjectInspector
+                // Expand the object using ClrMD
                 var expandedObject = await ExpandObjectAsync(addressToInspect, methodTable);
                 
                 if (expandedObject != null)
@@ -3605,89 +4444,89 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
     
     /// <summary>
-    /// Looks up the method table for a type using name2ee command.
+    /// Looks up the method table for a type using ClrMD Name2EE (safe, won't crash debugger).
     /// </summary>
-    private async Task<string?> LookupMethodTableAsync(string typeName)
+    private Task<string?> LookupMethodTableAsync(string typeName)
     {
         try
         {
-            // Use name2ee with wildcard module to search all assemblies
-            var output = await ExecuteCommandAsync($"name2ee *!{typeName}");
-            
-            if (string.IsNullOrWhiteSpace(output) || 
-                output.Contains("not found", StringComparison.OrdinalIgnoreCase))
+            // Use ClrMD Name2EE - it's safe and won't crash the debugger
+            if (_clrMdAnalyzer?.IsOpen != true)
             {
-                return null;
+                _logger?.LogDebug("[LookupMethodTable] ClrMD not available, cannot lookup type '{TypeName}'", typeName);
+                return Task.FromResult<string?>(null);
             }
             
-            // name2ee can return multiple assemblies. We need to find the section
-            // that contains our type (has "Name: <typeName>" line)
-            // Split by "------" separator
-            var sections = output.Split(new[] { "------" }, StringSplitOptions.RemoveEmptyEntries);
+            var result = _clrMdAnalyzer.Name2EE(typeName);
             
-            foreach (var section in sections)
+            if (result.FoundType == null)
             {
-                // Check if this section contains the Name we're looking for
-                var nameMatch = Regex.Match(section, @"Name:\s+(.+)", RegexOptions.IgnoreCase);
-                if (!nameMatch.Success)
-                    continue;
-                
-                var foundName = nameMatch.Groups[1].Value.Trim();
-                if (!foundName.Equals(typeName, StringComparison.OrdinalIgnoreCase))
-                    continue;
-                
-                // Found the right section - extract MethodTable
-                var mtMatch = Regex.Match(section, @"MethodTable:\s*([0-9a-fA-Fx]+)", RegexOptions.IgnoreCase);
-                if (mtMatch.Success)
-                {
-                    return mtMatch.Groups[1].Value;
-                }
+                _logger?.LogDebug("[LookupMethodTable] Type '{TypeName}' not found", typeName);
+                return Task.FromResult<string?>(null);
             }
             
-            // Fallback: If no exact name match, try to find any MethodTable
-            // (for cases where the output format is different)
-            var fallbackMatch = Regex.Match(output, @"MethodTable:\s*([0-9a-fA-Fx]+)", RegexOptions.IgnoreCase);
-            if (fallbackMatch.Success)
-            {
-                return fallbackMatch.Groups[1].Value;
-            }
-            
-            return null;
+            _logger?.LogDebug("[LookupMethodTable] Found type '{TypeName}' with MethodTable {MT}", 
+                typeName, result.FoundType.MethodTable);
+            return Task.FromResult<string?>(result.FoundType.MethodTable);
         }
-        catch
+        catch (Exception ex)
         {
-            return null;
+            _logger?.LogDebug(ex, "[LookupMethodTable] Error looking up type '{TypeName}'", typeName);
+            return Task.FromResult<string?>(null);
         }
     }
     
     /// <summary>
-    /// Expands an object using ObjectInspector.
+    /// Expands an object using ClrMD exclusively.
+    /// ClrMD is used because it won't crash the debugger on problematic objects.
+    /// Returns null if ClrMD is not available or inspection fails.
     /// </summary>
     private async Task<object?> ExpandObjectAsync(string address, string methodTable)
     {
+        // Use lower depth for report expansion to keep JSON manageable
+        const int reportMaxDepth = 3;
+        const int reportMaxArrayElements = 5;
+        const int reportMaxStringLength = 256;
+        
+        // ClrMD is the only implementation - no SOS dumpobj fallback (it can crash LLDB)
+        if (_clrMdAnalyzer?.IsOpen != true)
+        {
+            _logger?.LogDebug("ClrMD not available for object expansion at {Address}", address);
+            return null;
+        }
+        
+        // Clean address - may contain type info like "0x1234 (System.String)"
+        var cleanAddress = ExtractHexAddress(address);
+        if (string.IsNullOrEmpty(cleanAddress))
+        {
+            _logger?.LogDebug("Invalid address format for expansion: {Address}", address);
+            return null;
+        }
+        
         try
         {
-            var inspector = new ObjectInspection.ObjectInspector(
-                Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance);
+            if (!ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
+            {
+                _logger?.LogDebug("Failed to parse address as hex: {Address}", cleanAddress);
+                return null;
+            }
             
-            // Use lower depth for report expansion to keep JSON manageable
-            const int reportMaxDepth = 3;
-            const int reportMaxArrayElements = 5;
-            const int reportMaxStringLength = 256;
+            var clrMdResult = _clrMdAnalyzer.InspectObject(addressValue, methodTable: null, maxDepth: reportMaxDepth, maxArrayElements: reportMaxArrayElements, maxStringLength: reportMaxStringLength);
             
-            var result = await inspector.InspectAsync(
-                _debuggerManager,
-                address,
-                methodTable,
-                reportMaxDepth,
-                reportMaxArrayElements,
-                reportMaxStringLength,
-                CancellationToken.None);
+            if (clrMdResult != null && clrMdResult.Error == null)
+            {
+                _logger?.LogDebug("Object expansion at {Address} succeeded using ClrMD", address);
+                return clrMdResult;
+            }
             
-            return result;
+            // ClrMD returned an error - object may be invalid/corrupted
+            _logger?.LogDebug("ClrMD object expansion skipped for {Address}: {Error}", 
+                address, clrMdResult?.Error ?? "null result");
+            return null;
         }
-        catch
+        catch (Exception ex)
         {
+            _logger?.LogDebug(ex, "ClrMD object expansion failed for {Address}", address);
             return null;
         }
     }
@@ -4123,7 +4962,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
     
     /// <summary>
-    /// Resolves string values by calling !dumpobj on each address.
+    /// Resolves string values by calling ClrMD InspectObject on each address.
     /// </summary>
     private async Task<Dictionary<string, string>> ResolveStringValuesAsync(
         HashSet<string> addresses, 
@@ -4135,18 +4974,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             try
             {
-                var cmd = $"!dumpobj {address}";
-                var output = await ExecuteCommandAsync(cmd);
+                var output = await DumpObjectViaClrMdAsync(address);
                 
                 // Store the command output
                 if (rawCommands != null)
                 {
-                    rawCommands[cmd] = output;
+                    rawCommands[$"ClrMD:InspectObject({address})"] = output;
                 }
                 
-                // Parse the string value from dumpobj output
-                // Look for: String: <value>
-                // Or for the actual string content in the output
+                // Parse the string value from ClrMD output
                 var stringValue = ExtractStringFromDumpObj(output);
                 
                 if (!string.IsNullOrEmpty(stringValue))
@@ -4164,7 +5000,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
     
     /// <summary>
-    /// Extracts the string value from !dumpobj output.
+    /// Extracts the string value from ClrMD InspectObject output (formatted like dumpobj).
     /// </summary>
     private static string? ExtractStringFromDumpObj(string output)
     {
@@ -4584,16 +5420,23 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     
     /// <summary>
     /// Enriches assembly information with version details by querying each module.
-    /// Uses !dumpmodule to get version information for assemblies that have a ModuleId.
+    /// Uses ClrMD exclusively (safe, won't crash LLDB).
     /// </summary>
     /// <param name="result">The crash analysis result to enrich.</param>
-    protected async Task EnrichAssemblyVersionsAsync(CrashAnalysisResult result)
+    protected Task EnrichAssemblyVersionsAsync(CrashAnalysisResult result)
     {
         // Use new structure, fall back to old
         var assemblies = result.Assemblies?.Items;
-        if (assemblies == null) return;
+        if (assemblies == null) return Task.CompletedTask;
         
-        // Limit to non-dynamic assemblies with a ModuleId (up to 50 to avoid excessive commands)
+        // ClrMD required for module inspection
+        if (_clrMdAnalyzer == null || !_clrMdAnalyzer.IsOpen)
+        {
+            _logger?.LogDebug("[DotNetCrashAnalyzer] ClrMD not available, skipping module enrichment");
+            return Task.CompletedTask;
+        }
+        
+        // Limit to non-dynamic assemblies with a ModuleId (up to 50 to avoid excessive processing)
         var assembliesToEnrich = assemblies
             .Where(a => !string.IsNullOrEmpty(a.ModuleId) && a.IsDynamic != true)
             .Take(50)
@@ -4603,128 +5446,51 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             try
             {
-                var moduleOutput = await ExecuteCommandAsync($"!dumpmodule {assembly.ModuleId}");
-                if (IsSosErrorOutput(moduleOutput)) continue;
+                // Parse the module address
+                var moduleId = assembly.ModuleId!.Trim();
+                if (moduleId.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+                {
+                    moduleId = moduleId[2..];
+                }
                 
-                // Store raw output for debugging
-                result.RawCommands![$"!dumpmodule {assembly.ModuleId}"] = moduleOutput;
+                if (!ulong.TryParse(moduleId, System.Globalization.NumberStyles.HexNumber, null, out var moduleAddr))
+                {
+                continue;
+            }
+            
+                var moduleInfo = _clrMdAnalyzer.InspectModule(moduleAddr);
+                if (moduleInfo == null || moduleInfo.Error != null)
+            {
+                continue;
+            }
+            
+                // Store module info as raw command for debugging
+                result.RawCommands![$"ClrMD:InspectModule({assembly.ModuleId})"] = 
+                    System.Text.Json.JsonSerializer.Serialize(moduleInfo, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 
-                // Parse version information from dumpmodule output
-                ParseModuleVersionInfo(moduleOutput, assembly);
+                // Update assembly info from ClrMD result
+                if (!string.IsNullOrEmpty(moduleInfo.Version) && string.IsNullOrEmpty(assembly.AssemblyVersion))
+                {
+                    assembly.AssemblyVersion = moduleInfo.Version;
+                }
+                
+                if (!string.IsNullOrEmpty(moduleInfo.ImageBase) && string.IsNullOrEmpty(assembly.BaseAddress))
+                {
+                    assembly.BaseAddress = moduleInfo.ImageBase;
+                }
+                
+                if (!string.IsNullOrEmpty(moduleInfo.Name) && string.IsNullOrEmpty(assembly.Path))
+                {
+                    assembly.Path = moduleInfo.Name;
+                }
             }
             catch
             {
                 // Silently ignore failures - don't fail the whole analysis
             }
         }
-    }
-    
-    /// <summary>
-    /// Parses version information from !dumpmodule output.
-    /// 
-    /// Example output format:
-    /// Name:       /path/to/assembly.dll
-    /// Attributes: PEFile SupportsUpdateableMethods
-    /// Assembly:   00007FFD12345000
-    /// BaseAddress:    00007FFD12300000
-    /// PEAssembly:     00007FFD12345678
-    /// ModuleId:       00007FFD1234ABCD
-    /// ...
-    /// Version:    9.0.0.0
-    /// </summary>
-    private static void ParseModuleVersionInfo(string moduleOutput, AssemblyVersionInfo assembly)
-    {
-        var lines = moduleOutput.Split('\n');
         
-        foreach (var line in lines)
-        {
-            var trimmedLine = line.Trim();
-            
-            // Parse Version: X.X.X.X
-            if (trimmedLine.StartsWith("Version:", StringComparison.OrdinalIgnoreCase))
-            {
-                var versionPart = trimmedLine["Version:".Length..].Trim();
-                if (!string.IsNullOrEmpty(versionPart) && versionPart != "0.0.0.0")
-                {
-                    assembly.AssemblyVersion = versionPart;
-                }
-                continue;
-            }
-            
-            // Parse BaseAddress if not already set
-            if (trimmedLine.StartsWith("BaseAddress:", StringComparison.OrdinalIgnoreCase))
-            {
-                var addrPart = trimmedLine["BaseAddress:".Length..].Trim();
-                if (!string.IsNullOrEmpty(addrPart) && string.IsNullOrEmpty(assembly.BaseAddress))
-                {
-                    assembly.BaseAddress = addrPart;
-                }
-                continue;
-            }
-            
-            // Parse PEFile/PEAssembly path if we don't have a path yet
-            if (string.IsNullOrEmpty(assembly.Path))
-            {
-                if (trimmedLine.StartsWith("PEFile:", StringComparison.OrdinalIgnoreCase))
-                {
-                    var pathPart = trimmedLine["PEFile:".Length..].Trim();
-                    if (!string.IsNullOrEmpty(pathPart) && (pathPart.Contains('/') || pathPart.Contains('\\')))
-                    {
-                        assembly.Path = pathPart;
-                    }
-                }
-                else if (trimmedLine.StartsWith("Name:", StringComparison.OrdinalIgnoreCase))
-                {
-                    var pathPart = trimmedLine["Name:".Length..].Trim();
-                    if (!string.IsNullOrEmpty(pathPart) && (pathPart.Contains('/') || pathPart.Contains('\\')))
-                    {
-                        assembly.Path = pathPart;
-                    }
-                }
-            }
-            
-            // Detect native image from Attributes line
-            if (trimmedLine.StartsWith("Attributes:", StringComparison.OrdinalIgnoreCase))
-            {
-                // Check for native image indicators - be specific to avoid false positives
-                if (Regex.IsMatch(trimmedLine, @"\bNI\b", RegexOptions.IgnoreCase) ||
-                    trimmedLine.Contains("NativeImage", StringComparison.OrdinalIgnoreCase) ||
-                    trimmedLine.Contains("ReadyToRun", StringComparison.OrdinalIgnoreCase) ||
-                    Regex.IsMatch(trimmedLine, @"\bR2R\b", RegexOptions.IgnoreCase))
-                {
-                    assembly.IsNativeImage = true;
-                }
-            }
-            
-            // Detect GAC from InGac attribute
-            if (trimmedLine.Contains("InGac", StringComparison.OrdinalIgnoreCase))
-            {
-                assembly.IsInGac = true;
-            }
-        }
-        
-        // Check GAC from path (after loop to avoid repeated checks)
-        if (assembly.IsInGac != true && !string.IsNullOrEmpty(assembly.Path))
-        {
-            if (assembly.Path.Contains("/gac/", StringComparison.OrdinalIgnoreCase) ||
-                assembly.Path.Contains("\\gac\\", StringComparison.OrdinalIgnoreCase) ||
-                assembly.Path.Contains("/GAC_", StringComparison.OrdinalIgnoreCase) ||
-                assembly.Path.Contains("\\GAC_", StringComparison.OrdinalIgnoreCase))
-            {
-                assembly.IsInGac = true;
-            }
-        }
-        
-        // Try to extract file version from path if we have .NET runtime assemblies
-        // These typically have version in path: /shared/Microsoft.NETCore.App/9.0.10/
-        if (!string.IsNullOrEmpty(assembly.Path) && string.IsNullOrEmpty(assembly.FileVersion))
-        {
-            var versionMatch = Regex.Match(assembly.Path, @"[/\\](\d+\.\d+\.\d+(?:\.\d+)?)[/\\]");
-            if (versionMatch.Success)
-            {
-                assembly.FileVersion = versionMatch.Groups[1].Value;
-            }
-        }
+        return Task.CompletedTask;
     }
     
     /// <summary>
@@ -5159,54 +5925,35 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 };
             }
             
-            // Try to find the MethodTable using name2ee
-            var name2eeCmd = $"!name2ee * {sanitizedTypeName}";
-            var name2eeOutput = await ExecuteCommandAsync(name2eeCmd);
-            result.RawCommands![name2eeCmd] = name2eeOutput;
-            
-            // Parse MethodTable address (may have multiple matches from different modules)
-            // Each block has Module, MethodTable, EEClass, Name lines together
-            var mtBlockPattern = new Regex(
-                @"MethodTable:\s+([0-9a-fA-Fx]+).*?(?:EEClass:\s+([0-9a-fA-Fx]+))?",
-                RegexOptions.Singleline);
-            var mtMatches = mtBlockPattern.Matches(name2eeOutput);
-            
-            // Find first valid (non-null) MethodTable with its corresponding EEClass
+            // Try to find the MethodTable using ClrMD Name2EE (safe, won't crash debugger)
             string? validMt = null;
             string? validEeClass = null;
-            foreach (Match mtm in mtMatches)
+            
+            if (_clrMdAnalyzer?.IsOpen == true)
             {
-                var mtValue = mtm.Groups[1].Value;
-                // Skip null/zero addresses
-                if (!IsNullAddress(mtValue))
+                var name2eeResult = _clrMdAnalyzer.Name2EE(sanitizedTypeName);
+                result.RawCommands![$"ClrMD:Name2EE({sanitizedTypeName})"] = 
+                    System.Text.Json.JsonSerializer.Serialize(name2eeResult, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+                
+                if (name2eeResult.FoundType != null)
                 {
-                    validMt = mtValue;
-                    // Get corresponding EEClass if captured
-                    if (mtm.Groups[2].Success && !string.IsNullOrEmpty(mtm.Groups[2].Value))
-                    {
-                        validEeClass = mtm.Groups[2].Value;
-                    }
-                    break;
+                    validMt = name2eeResult.FoundType.MethodTable;
+                    validEeClass = name2eeResult.FoundType.EEClass;
                 }
+            }
+            else
+            {
+                _logger?.LogDebug("[TypeResolution] ClrMD not available for Name2EE, skipping type lookup");
             }
             
             if (validMt != null)
             {
                 analysis.MethodTable = validMt;
                 
-                // Use the EEClass from the same block, or fallback to global search
+                // Use the EEClass from the same result
                 if (!string.IsNullOrEmpty(validEeClass) && !IsNullAddress(validEeClass))
                 {
                     analysis.EEClass = validEeClass;
-                }
-                else
-                {
-                    // Fallback: try to find any valid EEClass
-                    var eeMatch = Regex.Match(name2eeOutput, @"EEClass:\s+([0-9a-fA-Fx]+)");
-                    if (eeMatch.Success && !IsNullAddress(eeMatch.Groups[1].Value))
-                    {
-                        analysis.EEClass = eeMatch.Groups[1].Value;
-                    }
                 }
                 
                 // Get all methods from the MethodTable
@@ -5292,7 +6039,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
             else
             {
-                // Type not found via name2ee - for generic types, try to find a concrete instantiation
+                // Type not found via ClrMD Name2EE - for generic types, try to find a concrete instantiation
                 // The methods on any instantiation would show us what methods exist
                 var foundViaHeap = await TryFindGenericTypeViaHeapAsync(
                     typeName, sanitizedTypeName, memberName, analysis, result);
@@ -5330,7 +6077,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     
     /// <summary>
     /// Tries to find a generic type by searching for any concrete instantiation in the heap.
-    /// This is useful when name2ee doesn't find the open generic type definition.
+    /// This is useful when ClrMD Name2EE doesn't find the open generic type definition.
     /// </summary>
     private async Task<bool> TryFindGenericTypeViaHeapAsync(
         string typeName,
@@ -5369,7 +6116,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 analysis.MethodTable = foundMt;
                 
-                // Note that we found it via heap search, not direct name2ee
+                // Note that we found it via heap search, not direct Name2EE
                 var concreteTypeName = ExtractConcreteTypeName(heapOutput, shortTypeName);
                 
                 // Get methods from this concrete instantiation
@@ -6456,6 +7203,55 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         }
         
         return usage;
+    }
+    
+    /// <summary>
+    /// Detects if we're analyzing a dump with different architecture than the host.
+    /// Cross-architecture analysis (e.g., x64 dump on arm64 host) can cause SIGSEGV
+    /// in certain ClrMD operations like EnumerateSyncBlocks due to emulation issues.
+    /// </summary>
+    private bool IsCrossArchitectureAnalysis()
+    {
+        try
+        {
+            // Get host architecture
+            var hostArch = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture;
+            var hostArchStr = hostArch switch
+            {
+                System.Runtime.InteropServices.Architecture.X64 => "x64",
+                System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+                System.Runtime.InteropServices.Architecture.X86 => "x86",
+                System.Runtime.InteropServices.Architecture.Arm => "arm",
+                _ => hostArch.ToString().ToLowerInvariant()
+            };
+            
+            // Get dump architecture from ClrMD
+            var dumpArch = _clrMdAnalyzer?.DetectArchitecture();
+            
+            if (string.IsNullOrEmpty(dumpArch))
+            {
+                _logger?.LogDebug("Could not detect dump architecture, assuming same as host");
+                return false;
+            }
+            
+            var isCrossArch = !string.Equals(hostArchStr, dumpArch, StringComparison.OrdinalIgnoreCase);
+            
+            if (isCrossArch)
+            {
+                _logger?.LogInformation("Cross-architecture detected: Host={HostArch}, Dump={DumpArch}", hostArchStr, dumpArch);
+            }
+            else
+            {
+                _logger?.LogDebug("Same architecture: Host={HostArch}, Dump={DumpArch}", hostArchStr, dumpArch);
+            }
+            
+            return isCrossArch;
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "Failed to detect architecture, assuming same as host");
+            return false;
+        }
     }
     
 }

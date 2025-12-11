@@ -34,6 +34,8 @@ public class SourceLinkResolver
 {
     private readonly ILogger? _logger;
     private readonly ConcurrentDictionary<string, ModuleSourceLinkCache> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _warnedModules = new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _warnedModulesLock = new();
     private readonly List<string> _symbolSearchPaths = new();
 
     // Source Link custom debug information GUID
@@ -144,7 +146,14 @@ public class SourceLinkResolver
             if (sourceLink == null)
             {
                 result.Error = "No Source Link information found in PDB";
-                _logger?.LogWarning("[SourceLink] No Source Link info found for module: {Module}", modulePath);
+                // Only warn once per module to avoid log spam (can be thousands of frames from same module)
+                lock (_warnedModulesLock)
+                {
+                    if (_warnedModules.Add(moduleName))
+                    {
+                        _logger?.LogWarning("[SourceLink] No Source Link info found for module: {Module}", modulePath);
+                    }
+                }
                 return result;
             }
 

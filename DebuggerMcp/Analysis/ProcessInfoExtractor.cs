@@ -150,6 +150,14 @@ public class ProcessInfoExtractor
                 return await ExtractFromStackScanAsync(debuggerManager, platformInfo, rawCommands);
             }
 
+            // Guard against null pointer values (0x0, 0x0000000000000000, etc.)
+            var trimmedAddress = argvAddress.TrimStart('0', 'x', 'X');
+            if (string.IsNullOrEmpty(trimmedAddress) || trimmedAddress.All(c => c == '0'))
+            {
+                _logger?.LogDebug("ProcessInfoExtractor: argv address is null pointer ({ArgvAddress}), trying stack scan fallback", argvAddress);
+                return await ExtractFromStackScanAsync(debuggerManager, platformInfo, rawCommands);
+            }
+
             _logger?.LogDebug("ProcessInfoExtractor: Found main frame - argc={Argc}, argv={ArgvAddress}",
                 argc, argvAddress);
 
@@ -157,7 +165,8 @@ public class ProcessInfoExtractor
             var pointerBytes = GetPointerByteSize(platformInfo);
 
             // Read memory block with correct pointer size
-            var memoryCmd = $"memory read -fx -s{pointerBytes} -c{DefaultPointerCount} {argvAddress}";
+            // Add --force to override LLDB's default 1024 byte read limit
+            var memoryCmd = $"memory read --force -fx -s{pointerBytes} -c{DefaultPointerCount} {argvAddress}";
             var memoryOutput = await Task.Run(() => debuggerManager.ExecuteCommand(memoryCmd));
 
             // Store the command in rawCommands if provided
@@ -206,12 +215,22 @@ public class ProcessInfoExtractor
             }
 
             // Read envp strings and redact sensitive values
+            // Environment variables must be in KEY=VALUE format
             var sensitiveCount = 0;
             foreach (var ptr in envpPointers.Take(MaxEnvironmentVariables))
             {
                 var value = await ReadStringAtAddressAsync(debuggerManager, ptr, rawCommands);
                 if (value != null)
                 {
+                    // Validate: environment variables must contain '=' and start with a valid key
+                    // Valid keys: start with letter or underscore, followed by alphanumeric/underscore
+                    if (!IsValidEnvironmentVariable(value))
+                    {
+                        _logger?.LogDebug("ProcessInfoExtractor: Skipping invalid env var: {Value}", 
+                            value.Length > 50 ? value.Substring(0, 50) + "..." : value);
+                        continue;
+                    }
+                    
                     var (redacted, wasRedacted) = RedactSensitiveValue(value);
                     result.EnvironmentVariables.Add(redacted);
                     if (wasRedacted) sensitiveCount++;
@@ -326,25 +345,26 @@ public class ProcessInfoExtractor
     internal (int? argc, string? argvAddress) FindMainFrame(string backtraceOutput)
     {
         // Patterns to match main entry points (in order of preference)
+        // IMPORTANT: Order matters! Prefer functions with the REAL stack argv/envp:
+        // - exe_start, main, _main -> have argv pointing to actual stack (with envp following)
+        // - corehost_main, hostfxr_main -> have dynamically allocated argv (no envp following!)
         // Examples:
-        // frame #48: 0x0000c5f644a77244 dotnet`main(argc=2, argv=0x0000ffffefcba618)
-        // frame #47: ... corehost_main(argc=2, argv=0x...)
-        // frame #46: ... hostfxr_main(argc=2, argv=0x...)
-        // frame #45: ... exe_start(argc=2, argv=0x...)
+        // frame #48: 0x0000c5f644a77244 dotnet`exe_start(argc=19, argv=0x0000ffffca31c988) <- real stack
+        // frame #47: ... corehost_main(argc=14, argv=0x0000c29d3cb4cd70) <- heap allocated, no envp!
         var patterns = new[]
         {
-            // dotnet`main with visible argc/argv
-            @"frame\s+#\d+:.*?dotnet`main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
-            // Generic `main (any module)
-            @"frame\s+#\d+:.*?`main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
-            // corehost_main
-            @"frame\s+#\d+:.*?corehost_main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
-            // hostfxr_main
-            @"frame\s+#\d+:.*?hostfxr_main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
-            // exe_start
+            // exe_start - dotnet host entry, has REAL stack argv/envp
             @"frame\s+#\d+:.*?exe_start\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
-            // _main (macOS)
-            @"frame\s+#\d+:.*?`_main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)"
+            // dotnet`main with visible argc/argv - real stack
+            @"frame\s+#\d+:.*?dotnet`main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
+            // Generic `main (any module) - real stack
+            @"frame\s+#\d+:.*?`main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
+            // _main (macOS) - real stack
+            @"frame\s+#\d+:.*?`_main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
+            // hostfxr_main - may have partial copy, fallback only
+            @"frame\s+#\d+:.*?hostfxr_main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)",
+            // corehost_main - heap allocated argv, NO envp follows - last resort
+            @"frame\s+#\d+:.*?corehost_main\s*\(\s*argc\s*=\s*(\d+)\s*,\s*argv\s*=\s*(0x[0-9a-fA-F]+)"
         };
 
         foreach (var pattern in patterns)
@@ -352,16 +372,27 @@ public class ProcessInfoExtractor
             var match = Regex.Match(backtraceOutput, pattern, RegexOptions.IgnoreCase | RegexOptions.Multiline);
             if (match.Success)
             {
+                _logger?.LogInformation("ProcessInfoExtractor: Pattern matched! Pattern={Pattern}, Match={Match}", 
+                    pattern.Substring(0, Math.Min(40, pattern.Length)), match.Value.Substring(0, Math.Min(100, match.Value.Length)));
                 if (int.TryParse(match.Groups[1].Value, out var argc))
                 {
                     var argvAddr = match.Groups[2].Value;
+                    _logger?.LogInformation("ProcessInfoExtractor: Found main frame - argc={Argc}, argv={ArgvAddress}", argc, argvAddr);
                     return (argc, argvAddr);
                 }
             }
         }
+        
+        _logger?.LogWarning("ProcessInfoExtractor: No main frame pattern matched. Backtrace length={Length}", backtraceOutput?.Length ?? 0);
 
         // Fallback: Try to find argv address without argc (for optimized builds)
-        var fallbackPattern = @"frame\s+#\d+:.*?(?:dotnet`main|`main|corehost_main|hostfxr_main|exe_start|`_main)\s*\([^)]*argv\s*=\s*(0x[0-9a-fA-F]+)";
+        if (string.IsNullOrEmpty(backtraceOutput))
+        {
+            return (null, null);
+        }
+        
+        // Fallback pattern - prefer exe_start/main first (real stack), then hostfxr/corehost (heap)
+        var fallbackPattern = @"frame\s+#\d+:.*?(?:exe_start|dotnet`main|`main|`_main|hostfxr_main|corehost_main)\s*\([^)]*argv\s*=\s*(0x[0-9a-fA-F]+)";
         var fallbackMatch = Regex.Match(backtraceOutput, fallbackPattern, RegexOptions.IgnoreCase | RegexOptions.Multiline);
         if (fallbackMatch.Success)
         {
@@ -454,6 +485,30 @@ public class ProcessInfoExtractor
         }
 
         return (argv, envp);
+    }
+
+    /// <summary>
+    /// Validates if a string looks like a valid environment variable (KEY=VALUE format).
+    /// </summary>
+    /// <param name="value">The string to validate.</param>
+    /// <returns>True if the string appears to be a valid environment variable.</returns>
+    internal static bool IsValidEnvironmentVariable(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        // Must contain '=' separator
+        var equalsIndex = value.IndexOf('=');
+        if (equalsIndex <= 0) // <= 0 means no '=' or '=' at start (empty key)
+        {
+            return false;
+        }
+
+        // Extract the key (part before '=') and validate it
+        var key = value.Substring(0, equalsIndex);
+        return IsValidEnvVarKey(key);
     }
 
     /// <summary>
@@ -679,7 +734,8 @@ public class ProcessInfoExtractor
             var scanSize = Math.Min(maxScanSize, regionSize > 256 ? regionSize - 256 : regionSize);
             var scanStart = stackRegion.Value.end - scanSize;
 
-            var memoryCmd = $"memory read -c{scanSize} 0x{scanStart:X}";
+            // Add --force to override LLDB's default 1024 byte read limit
+            var memoryCmd = $"memory read --force -c{scanSize} 0x{scanStart:X}";
             var memoryOutput = await Task.Run(() => debuggerManager.ExecuteCommand(memoryCmd));
 
             if (rawCommands != null && !string.IsNullOrWhiteSpace(memoryOutput))
