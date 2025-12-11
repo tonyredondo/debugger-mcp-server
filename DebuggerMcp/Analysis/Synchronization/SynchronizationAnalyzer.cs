@@ -83,19 +83,30 @@ public class SynchronizationAnalyzer
             }
 
             // Phase 2-5: Analyze all sync primitives in a single heap pass for efficiency
-            // Note: EnumerateObjects can crash on corrupted dumps
-            try
+            // Note: EnumerateObjects can ALSO crash (SIGSEGV) under cross-architecture emulation
+            if (_skipSyncBlocks)
             {
-                AnalyzeHeapSyncPrimitives(result);
-                _logger?.LogDebug("[SyncAnalyzer] Found {Semaphores} SemaphoreSlim, {RWLocks} ReaderWriterLockSlim, {Events} reset events, {Handles} WaitHandle instances",
-                    result.SemaphoreSlims?.Count ?? 0,
-                    result.ReaderWriterLocks?.Count ?? 0,
-                    result.ResetEvents?.Count ?? 0,
-                    result.WaitHandles?.Count ?? 0);
+                _logger?.LogInformation("[SyncAnalyzer] Skipping heap enumeration (cross-arch or unsafe scenario)");
+                result.SemaphoreSlims = new List<SemaphoreSlimInfo>();
+                result.ReaderWriterLocks = new List<ReaderWriterLockInfo>();
+                result.ResetEvents = new List<ResetEventInfo>();
+                result.WaitHandles = new List<WaitHandleInfo>();
             }
-            catch (Exception ex)
+            else
             {
-                _logger?.LogWarning(ex, "[SyncAnalyzer] Heap sync primitives analysis failed, continuing with wait graph");
+                try
+                {
+                    AnalyzeHeapSyncPrimitives(result);
+                    _logger?.LogDebug("[SyncAnalyzer] Found {Semaphores} SemaphoreSlim, {RWLocks} ReaderWriterLockSlim, {Events} reset events, {Handles} WaitHandle instances",
+                        result.SemaphoreSlims?.Count ?? 0,
+                        result.ReaderWriterLocks?.Count ?? 0,
+                        result.ResetEvents?.Count ?? 0,
+                        result.WaitHandles?.Count ?? 0);
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogWarning(ex, "[SyncAnalyzer] Heap sync primitives analysis failed, continuing with wait graph");
+                }
             }
 
             // Phase 6: Build wait graph

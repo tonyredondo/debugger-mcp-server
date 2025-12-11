@@ -7201,22 +7201,23 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
     
     /// <summary>
-    /// Determines if sync block enumeration should be skipped.
-    /// EnumerateSyncBlocks can cause SIGSEGV under certain conditions:
+    /// Determines if dangerous heap operations should be skipped.
+    /// EnumerateSyncBlocks and EnumerateObjects can cause SIGSEGV under:
     /// - Cross-architecture analysis (e.g., x64 dump on arm64 host)
     /// - Running under emulation (e.g., x64 Docker on arm64 Mac via Rosetta 2)
     /// 
-    /// Can be forced via environment variable: SKIP_SYNC_BLOCKS=true
+    /// Can be forced via environment variable: SKIP_HEAP_ENUM=true (or legacy: SKIP_SYNC_BLOCKS=true)
     /// </summary>
     private bool ShouldSkipSyncBlocks()
     {
-        // Check environment variable first (allows manual override for emulation scenarios)
-        var envVar = Environment.GetEnvironmentVariable("SKIP_SYNC_BLOCKS");
+        // Check environment variables (allows manual override for emulation scenarios)
+        var envVar = Environment.GetEnvironmentVariable("SKIP_HEAP_ENUM") 
+                  ?? Environment.GetEnvironmentVariable("SKIP_SYNC_BLOCKS");
         if (!string.IsNullOrEmpty(envVar) && 
             (envVar.Equals("true", StringComparison.OrdinalIgnoreCase) || 
              envVar.Equals("1", StringComparison.OrdinalIgnoreCase)))
         {
-            _logger?.LogInformation("SKIP_SYNC_BLOCKS environment variable set - skipping sync block enumeration");
+            _logger?.LogInformation("SKIP_HEAP_ENUM environment variable set - skipping heap enumeration operations");
             return true;
         }
         
