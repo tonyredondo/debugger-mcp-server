@@ -35,6 +35,9 @@ public class TestWebApplicationFactory : IDisposable
     /// </summary>
     public TestWebApplicationFactory()
     {
+        // Avoid running external tools (dotnet-symbol/file) during tests.
+        Environment.SetEnvironmentVariable(DebuggerMcp.Configuration.EnvironmentConfig.SkipDumpAnalysis, "true");
+
         _tempDir = Path.Combine(Path.GetTempPath(), $"DebuggerMcpTests_{Guid.NewGuid()}");
         Directory.CreateDirectory(_tempDir);
 

@@ -159,6 +159,9 @@ public static class ServiceCollectionExtensions
     /// Memory dumps can be very large (several GB), so this configures Kestrel
     /// to accept large uploads. The default is 5GB but can be configured via
     /// the MAX_REQUEST_BODY_SIZE_GB environment variable.
+    ///
+    /// NOTE: The dump upload controller also enforces the same limit to ensure
+    /// consistent behavior across hosting environments.
     /// </remarks>
     public static IServiceCollection ConfigureKestrelForLargeUploads(this IServiceCollection services, long? maxRequestBodySize = null)
     {

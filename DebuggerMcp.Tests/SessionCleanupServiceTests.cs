@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using Moq;
+using DebuggerMcp.Configuration;
 
 namespace DebuggerMcp.Tests;
 
@@ -11,10 +12,16 @@ public class SessionCleanupServiceTests : IDisposable
     private readonly Mock<ILogger<SessionCleanupService>> _loggerMock;
     private readonly DebuggerSessionManager _sessionManager;
     private readonly string _testStoragePath;
+    private readonly string? _originalCleanupInterval;
+    private readonly string? _originalInactivityThreshold;
 
     public SessionCleanupServiceTests()
     {
         _loggerMock = new Mock<ILogger<SessionCleanupService>>();
+        _loggerMock.Setup(x => x.IsEnabled(It.IsAny<LogLevel>())).Returns(true);
+        _originalCleanupInterval = Environment.GetEnvironmentVariable(EnvironmentConfig.SessionCleanupIntervalMinutes);
+        _originalInactivityThreshold = Environment.GetEnvironmentVariable(EnvironmentConfig.SessionInactivityThresholdMinutes);
+
         _testStoragePath = Path.Combine(Path.GetTempPath(), $"SessionCleanupTests_{Guid.NewGuid()}");
         Directory.CreateDirectory(_testStoragePath);
         _sessionManager = new DebuggerSessionManager(_testStoragePath);
@@ -22,6 +29,9 @@ public class SessionCleanupServiceTests : IDisposable
 
     public void Dispose()
     {
+        Environment.SetEnvironmentVariable(EnvironmentConfig.SessionCleanupIntervalMinutes, _originalCleanupInterval);
+        Environment.SetEnvironmentVariable(EnvironmentConfig.SessionInactivityThresholdMinutes, _originalInactivityThreshold);
+
         try
         {
             if (Directory.Exists(_testStoragePath))
@@ -49,23 +59,13 @@ public class SessionCleanupServiceTests : IDisposable
     public async Task ExecuteAsync_StartsAndLogsMessage()
     {
         // Arrange
+        Environment.SetEnvironmentVariable(EnvironmentConfig.SessionCleanupIntervalMinutes, "1");
         var service = new SessionCleanupService(_sessionManager, _loggerMock.Object);
-        var cts = new CancellationTokenSource();
 
-        // Act - Start the service and cancel quickly
-        var task = service.StartAsync(cts.Token);
-        await Task.Delay(100);
-        cts.Cancel();
-
-        try
-        {
-            await task;
-            await service.StopAsync(CancellationToken.None);
-        }
-        catch (OperationCanceledException)
-        {
-            // Expected
-        }
+        // Act
+        await service.StartAsync(CancellationToken.None);
+        await Task.Delay(50);
+        await service.StopAsync(CancellationToken.None);
 
         // Assert - Should have logged startup message
         _loggerMock.Verify(
@@ -82,13 +82,12 @@ public class SessionCleanupServiceTests : IDisposable
     public async Task ExecuteAsync_StopsGracefully()
     {
         // Arrange
+        Environment.SetEnvironmentVariable(EnvironmentConfig.SessionCleanupIntervalMinutes, "1");
         var service = new SessionCleanupService(_sessionManager, _loggerMock.Object);
-        var cts = new CancellationTokenSource();
 
         // Act
-        await service.StartAsync(cts.Token);
+        await service.StartAsync(CancellationToken.None);
         await Task.Delay(50);
-        cts.Cancel();
         await service.StopAsync(CancellationToken.None);
 
         // Assert - Should have logged stop message
@@ -114,16 +113,14 @@ public class SessionCleanupServiceTests : IDisposable
         var session = sessionManager.CreateSession("test-user");
 
         var service = new SessionCleanupService(sessionManager, _loggerMock.Object);
-        var cts = new CancellationTokenSource();
 
         // Act
-        await service.StartAsync(cts.Token);
+        await service.StartAsync(CancellationToken.None);
 
         // Wait for at least one cleanup cycle (default interval is 5 minutes, but we can't wait that long)
         // This test mostly verifies the service starts and runs without errors
         await Task.Delay(100);
 
-        cts.Cancel();
         await service.StopAsync(CancellationToken.None);
 
         // Assert - Service should have started and stopped without errors
@@ -135,12 +132,10 @@ public class SessionCleanupServiceTests : IDisposable
     {
         // Arrange
         var service = new SessionCleanupService(_sessionManager, _loggerMock.Object);
-        var cts = new CancellationTokenSource();
 
         // Act - Service should handle any internal exceptions
-        await service.StartAsync(cts.Token);
+        await service.StartAsync(CancellationToken.None);
         await Task.Delay(100);
-        cts.Cancel();
 
         // Should not throw
         await service.StopAsync(CancellationToken.None);
@@ -156,17 +151,15 @@ public class SessionCleanupServiceTests : IDisposable
 
         // Arrange
         var service = new SessionCleanupService(_sessionManager, _loggerMock.Object);
-        var cts = new CancellationTokenSource();
         var startTime = DateTime.UtcNow;
 
         // Act
-        await service.StartAsync(cts.Token);
+        await service.StartAsync(CancellationToken.None);
 
         // Wait a short time
         await Task.Delay(50);
         var elapsed = DateTime.UtcNow - startTime;
 
-        cts.Cancel();
         await service.StopAsync(CancellationToken.None);
 
         // Assert - Should not have run cleanup immediately (default is 5 min interval)
@@ -184,4 +177,3 @@ public class SessionCleanupServiceTests : IDisposable
         Assert.IsAssignableFrom<Microsoft.Extensions.Hosting.BackgroundService>(service);
     }
 }
-

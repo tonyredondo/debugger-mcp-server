@@ -61,7 +61,7 @@ namespace DebuggerMcp.Configuration;
 ///   </item>
 ///   <item>
 ///     <term>SESSION_INACTIVITY_THRESHOLD_MINUTES</term>
-///     <term>60</term>
+///     <term>1440 (24 hours)</term>
 ///     <term>Session inactivity timeout</term>
 ///   </item>
 ///   <item>
@@ -70,9 +70,34 @@ namespace DebuggerMcp.Configuration;
 ///     <term>Path to SOS plugin for .NET debugging</term>
 ///   </item>
 ///   <item>
+///     <term>SYMBOL_DOWNLOAD_TIMEOUT_MINUTES</term>
+///     <term>10</term>
+///     <term>Timeout (minutes) for symbol downloads via dotnet-symbol</term>
+///   </item>
+///   <item>
 ///     <term>SESSION_STORAGE_PATH</term>
 ///     <term>/app/sessions</term>
 ///     <term>Directory for persistent session storage (shared volume)</term>
+///   </item>
+///   <item>
+///     <term>MAX_REQUEST_BODY_SIZE_GB</term>
+///     <term>5</term>
+///     <term>Maximum dump upload size (GB). Enforced by Kestrel and the upload controller.</term>
+///   </item>
+///   <item>
+///     <term>SKIP_DUMP_ANALYSIS</term>
+///     <term>false</term>
+///     <term>
+///       When true, skips post-upload dump analysis (dotnet-symbol --verifycore and architecture detection).
+///       Intended for constrained environments and tests.
+///     </term>
+///   </item>
+///   <item>
+///     <term>PORT</term>
+///     <term>5000</term>
+///     <term>
+///       Convenience port value used in startup messages. Actual HTTP binding is controlled by ASP.NET Core (e.g., ASPNETCORE_URLS).
+///     </term>
 ///   </item>
 /// </list>
 /// </remarks>
@@ -232,6 +257,16 @@ public static class EnvironmentConfig
     /// to enable session sharing across servers.
     /// </remarks>
     public const string SessionStoragePath = "SESSION_STORAGE_PATH";
+
+    /// <summary>
+    /// Environment variable name for skipping post-upload dump analysis.
+    /// </summary>
+    /// <remarks>
+    /// When set to "true", the server will skip running external tools (dotnet-symbol and file)
+    /// after a dump upload. This can speed up tests and avoid timeouts in environments where
+    /// those tools are not available.
+    /// </remarks>
+    public const string SkipDumpAnalysis = "SKIP_DUMP_ANALYSIS";
 
     /// <summary>
     /// Gets the default session storage path based on the current platform.
@@ -407,6 +442,12 @@ public static class EnvironmentConfig
     /// </summary>
     /// <returns>True if Swagger should be enabled.</returns>
     public static bool IsSwaggerEnabled() => GetBool(EnableSwagger, false);
+
+    /// <summary>
+    /// Checks whether post-upload dump analysis should be skipped.
+    /// </summary>
+    /// <returns>True when dump analysis should be skipped.</returns>
+    public static bool IsDumpAnalysisSkipped() => GetBool(SkipDumpAnalysis, false);
 
     /// <summary>
     /// Gets the configured API key, if any.

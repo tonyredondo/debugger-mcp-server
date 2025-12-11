@@ -450,8 +450,8 @@ When `API_KEY` environment variable is set, include `X-API-Key` header in all re
 2. **Save IDs**: Save both `dumpId` and `sessionId` for use in subsequent operations
 3. **Session Limits**: Each user can have up to 5 concurrent sessions
 4. **System Limits**: Maximum 50 total concurrent sessions across all users
-5. **File Size**: Maximum dump file size is 5GB
-6. **Cleanup**: Inactive sessions are automatically cleaned up after 30 minutes
+5. **File Size**: Maximum dump file size is 5GB by default (configurable via `MAX_REQUEST_BODY_SIZE_GB`)
+6. **Cleanup**: Inactive sessions are automatically cleaned up after 24 hours by default (configurable via `SESSION_INACTIVITY_THRESHOLD_MINUTES`)
 7. **Security**: Use API key authentication in production environments
 8. **File Validation**: Only valid dump files are accepted (magic byte validation)
 

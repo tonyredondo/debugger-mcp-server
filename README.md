@@ -99,8 +99,8 @@ The server exposes documentation and guides as MCP resources for easy access:
 - 🔒 Session ownership validation
 - 📊 Maximum 5 sessions per user
 - 📊 Maximum 50 total sessions in the system
-- 📊 Maximum dump size: 5GB
-- 🧹 Automatic cleanup of inactive sessions (30 minutes)
+- 📊 Maximum dump size: 5GB by default (configurable via `MAX_REQUEST_BODY_SIZE_GB`)
+- 🧹 Automatic cleanup of inactive sessions (default: 24 hours, configurable via `SESSION_INACTIVITY_THRESHOLD_MINUTES`)
 
 ## 📋 Requirements
 
@@ -1000,6 +1000,20 @@ export SOS_PLUGIN_PATH="/custom/path/to/libsosplugin.so"
 
 # Enable Swagger UI (default: enabled in development)
 export ENABLE_SWAGGER="true"
+
+# Maximum dump upload size in GB (default: 5)
+export MAX_REQUEST_BODY_SIZE_GB=5
+
+# Session cleanup settings
+export SESSION_CLEANUP_INTERVAL_MINUTES=5
+export SESSION_INACTIVITY_THRESHOLD_MINUTES=1440
+
+# Optional: skip post-upload analysis (dotnet-symbol --verifycore + architecture detection)
+# Useful in constrained environments and tests.
+export SKIP_DUMP_ANALYSIS="true"
+
+# Optional: symbol download timeout for dotnet-symbol
+export SYMBOL_DOWNLOAD_TIMEOUT_MINUTES=10
 ```
 
 ### Security Configuration

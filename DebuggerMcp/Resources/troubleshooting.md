@@ -45,12 +45,14 @@ Solutions to common issues when using the Debugger MCP Server.
 
 ### "File size exceeds maximum" Error
 
-**Cause**: Dump file is larger than 5GB.
+**Cause**: Dump file is larger than the configured maximum upload size (default: 5GB).
 
 **Solution**:
 - Compress large dumps before analysis
 - For Windows, create a minidump instead of full dump
 - Consider using selective memory dump options
+
+If you control the server, you can increase the limit via `MAX_REQUEST_BODY_SIZE_GB`.
 
 ### Upload Timeout
 
@@ -86,7 +88,7 @@ Solutions to common issues when using the Debugger MCP Server.
 **Solutions**:
 1. Verify the `sessionId` from `CreateSession` response
 2. Use `ListSessions(userId)` to see active sessions
-3. Sessions auto-cleanup after 30 minutes of inactivity
+3. Sessions auto-cleanup after 24 hours of inactivity by default (configurable via `SESSION_INACTIVITY_THRESHOLD_MINUTES`)
 
 ### "User does not have access to session" Error
 
@@ -103,7 +105,7 @@ Solutions to common issues when using the Debugger MCP Server.
 **Solution**:
 - Close unused sessions with `CloseSession`
 - Use `ListSessions` to see all active sessions
-- Wait for automatic cleanup (30 minutes inactivity)
+- Wait for automatic cleanup (24 hours by default)
 
 ---
 
@@ -355,4 +357,3 @@ When reporting issues, include:
 - **WinDbg Docs**: https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/
 - **LLDB Docs**: https://lldb.llvm.org/
 - **SOS Docs**: https://learn.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension
-

@@ -98,6 +98,13 @@ If you encounter permission errors, use:
 required_permissions: ["all"]
 ```
 
+**Codex CLI note (sandboxing)**: When running `dotnet build` via the agent tooling, prefer running it outside the workspace sandbox so the build can freely use the global NuGet cache and system temp locations:
+
+```
+sandbox_permissions: require_escalated
+required_permissions: ["network"]
+```
+
 ### 4. Running Tests (Mandatory)
 
 **Always run the tests** before considering any work complete:
@@ -115,6 +122,13 @@ dotnet test --filter "FullyQualifiedName~MyFeatureTests"
 
 # Run with verbose output
 dotnet test --logger "console;verbosity=detailed"
+```
+
+**Codex CLI note (sandboxing)**: When running `dotnet test` via the agent tooling, request an escalated (unsandboxed) run to avoid failures/hangs related to writing diagnostics, temp files, and NuGet caches:
+
+```
+sandbox_permissions: require_escalated
+required_permissions: ["network"]
 ```
 
 **All tests must pass before committing.** If tests fail:

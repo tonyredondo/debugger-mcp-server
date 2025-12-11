@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using DebuggerMcp.Analysis;
+using DebuggerMcp.Configuration;
 using DebuggerMcp.Reporting;
 using DebuggerMcp.Security;
 using DebuggerMcp.SourceLink;
@@ -49,9 +50,11 @@ public class DumpController : ControllerBase
     private readonly ILoggerFactory _loggerFactory;
 
     /// <summary>
-    /// Maximum allowed dump file size in bytes (default: 5GB).
+    /// <summary>
+    /// Maximum allowed dump file size in bytes.
+    /// This is configured via MAX_REQUEST_BODY_SIZE_GB (default: 5GB).
     /// </summary>
-    private const long MaxDumpFileSize = 5L * 1024 * 1024 * 1024;
+    private readonly long _maxDumpFileSize;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DumpController"/> class.
@@ -74,6 +77,8 @@ public class DumpController : ControllerBase
         _logger = logger;
         _loggerFactory = loggerFactory;
 
+        _maxDumpFileSize = EnvironmentConfig.GetMaxRequestBodySize();
+
         // Ensure the storage directory exists (path comes from SessionManager)
         Directory.CreateDirectory(_sessionManager.GetDumpStoragePath());
     }
@@ -94,7 +99,7 @@ public class DumpController : ControllerBase
     /// <para>The upload process performs several security validations:</para>
     /// <list type="bullet">
     /// <item><description>User ID sanitization to prevent path traversal attacks</description></item>
-    /// <item><description>File size limit check (default 5GB)</description></item>
+    /// <item><description>File size limit check (default: 5GB, configurable via MAX_REQUEST_BODY_SIZE_GB)</description></item>
     /// <item><description>Magic byte validation to ensure only valid dump formats are accepted</description></item>
     /// </list>
     /// <para>Supported dump formats:</para>
@@ -138,11 +143,11 @@ public class DumpController : ControllerBase
 
             // Validation 3: Check file size against configured limit
             // This prevents disk exhaustion attacks and ensures reasonable upload times
-            if (file.Length > MaxDumpFileSize)
+            if (file.Length > _maxDumpFileSize)
             {
                 return BadRequest(new
                 {
-                    error = $"File size exceeds maximum allowed size of {MaxDumpFileSize / (1024 * 1024 * 1024)}GB"
+                    error = $"File size exceeds maximum allowed size of {_maxDumpFileSize / (1024 * 1024 * 1024)}GB"
                 });
             }
 
@@ -194,9 +199,12 @@ public class DumpController : ControllerBase
                 await headerStream.CopyToAsync(stream);
             }
 
-            // Analyze dump to detect Alpine status and runtime version (runs dotnet-symbol --verifycore)
-            // This is important because Alpine dumps can only be debugged on Alpine hosts
-            var analysisResult = await DumpAnalyzer.AnalyzeDumpAsync(filePath, _logger);
+            // Analyze dump to detect Alpine status and runtime version (runs dotnet-symbol --verifycore).
+            // This is important because Alpine dumps can only be debugged on Alpine hosts.
+            // In tests and constrained environments, this can be skipped.
+            var analysisResult = EnvironmentConfig.IsDumpAnalysisSkipped()
+                ? new DumpAnalysisResult()
+                : await DumpAnalyzer.AnalyzeDumpAsync(filePath, _logger);
 
             // Build the response object
             // Note: We intentionally do NOT expose the internal file path for security

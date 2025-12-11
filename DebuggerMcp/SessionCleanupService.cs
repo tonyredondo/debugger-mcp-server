@@ -14,7 +14,7 @@ namespace DebuggerMcp;
 /// 
 /// Configuration via environment variables (see <see cref="EnvironmentConfig"/>):
 /// - SESSION_CLEANUP_INTERVAL_MINUTES: Interval between cleanup runs (default: 5)
-/// - SESSION_INACTIVITY_THRESHOLD_MINUTES: Sessions inactive longer than this are cleaned up (default: 60)
+/// - SESSION_INACTIVITY_THRESHOLD_MINUTES: Sessions inactive longer than this are cleaned up (default: 1440 = 24 hours)
 /// </remarks>
 public class SessionCleanupService : BackgroundService
 {

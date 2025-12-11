@@ -34,7 +34,8 @@ public class SessionTools(
     /// <remarks>
     /// Each user can have multiple concurrent sessions (up to 5).
     /// The session ID must be provided to all other tools to identify which session to operate on.
-    /// Sessions are automatically cleaned up after 30 minutes of inactivity.
+    /// Sessions are automatically cleaned up after 24 hours of inactivity by default.
+    /// This can be configured via the SESSION_INACTIVITY_THRESHOLD_MINUTES environment variable.
     /// </remarks>
     [McpServerTool, Description("Create a new debugging session. Returns a sessionId that must be used in all subsequent operations.")]
     public string CreateSession(
