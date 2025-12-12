@@ -515,7 +515,7 @@ public class LldbManager : IDebuggerManager
             // and the cache caused issues with context-dependent commands like register read
 
             // Detect if this is a .NET dump and auto-load SOS if so
-            IsDotNetDump = DetectDotNetDump(moduleList);
+            IsDotNetDump = DetectDotNetDump(moduleList, _detectedRuntimeVersion, _logger);
             if (IsDotNetDump)
             {
                 _logger.LogInformation("[LLDB] .NET runtime detected, auto-loading SOS extension...");
@@ -651,7 +651,7 @@ public class LldbManager : IDebuggerManager
     /// <para>SOS commands in LLDB should be called without the ! prefix (e.g., pe, dumpheap -stat).</para>
     /// <para>This transformation allows the same commands to work across both debuggers.</para>
     /// </remarks>
-    private static string TransformSosCommand(string command)
+    internal static string TransformSosCommand(string command)
     {
         // If command starts with '!', it's likely a SOS command - remove the prefix
         if (command.StartsWith('!'))
@@ -777,6 +777,22 @@ public class LldbManager : IDebuggerManager
             output = _outputBuffer;
         }
 
+        return CleanCommandOutput(output);
+    }
+
+    /// <summary>
+    /// Cleans raw LLDB output by removing the echoed command line, sentinel marker,
+    /// and trailing prompts.
+    /// </summary>
+    /// <param name="output">Raw output buffer including prompts and sentinel.</param>
+    /// <returns>Cleaned output suitable for parsing.</returns>
+    internal static string CleanCommandOutput(string output)
+    {
+        if (string.IsNullOrEmpty(output))
+        {
+            return string.Empty;
+        }
+
         // Output format (sentinel error is discarded in OnErrorDataReceived):
         // (lldb) <command>         <- prompt + echo (line 1)
         // <actual output...>       <- what we want
@@ -838,8 +854,32 @@ public class LldbManager : IDebuggerManager
             return false;
         }
 
-        // Check for LLDB crash indicators in the output
-        // These messages appear when LLDB crashes during command execution
+        if (ContainsLldbCrashIndicators(output))
+        {
+            return true;
+        }
+
+        // Also check if the process has exited unexpectedly
+        if (_lldbProcess?.HasExited == true)
+        {
+            _logger.LogWarning("[LLDB] Process has exited with code: {ExitCode}", _lldbProcess.ExitCode);
+            return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns true when the output contains known LLDB crash signatures.
+    /// </summary>
+    internal static bool ContainsLldbCrashIndicators(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return false;
+        }
+
+        // These messages appear when LLDB crashes during command execution.
         var crashIndicators = new[]
         {
             "PLEASE submit a bug report",
@@ -855,13 +895,6 @@ public class LldbManager : IDebuggerManager
             {
                 return true;
             }
-        }
-
-        // Also check if the process has exited unexpectedly
-        if (_lldbProcess?.HasExited == true)
-        {
-            _logger.LogWarning("[LLDB] Process has exited with code: {ExitCode}", _lldbProcess.ExitCode);
-            return true;
         }
 
         return false;
@@ -1289,6 +1322,118 @@ public class LldbManager : IDebuggerManager
     }
 
     /// <summary>
+    /// Gets the dump metadata path for a dump file path.
+    /// </summary>
+    /// <param name="dumpPath">The dump file path.</param>
+    /// <returns>The metadata JSON path (same name as dump, but <c>.json</c>), or <c>null</c> if invalid.</returns>
+    internal static string? GetMetadataPathForDump(string? dumpPath)
+    {
+        if (string.IsNullOrEmpty(dumpPath))
+        {
+            return null;
+        }
+
+        var dumpDir = Path.GetDirectoryName(dumpPath);
+        var dumpName = Path.GetFileNameWithoutExtension(dumpPath);
+        if (string.IsNullOrEmpty(dumpDir) || string.IsNullOrEmpty(dumpName))
+        {
+            return null;
+        }
+
+        return Path.Combine(dumpDir, $"{dumpName}.json");
+    }
+
+    /// <summary>
+    /// Attempts to load dump metadata from a JSON file.
+    /// </summary>
+    internal static Controllers.DumpMetadata? TryLoadDumpMetadata(string metadataPath, ILogger? logger = null)
+    {
+        try
+        {
+            if (!File.Exists(metadataPath))
+            {
+                return null;
+            }
+
+            var json = File.ReadAllText(metadataPath);
+            return JsonSerializer.Deserialize<Controllers.DumpMetadata>(json);
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "[LLDB] Failed to load dump metadata: {Path}", metadataPath);
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to save dump metadata to a JSON file.
+    /// </summary>
+    internal static bool TrySaveDumpMetadata(string metadataPath, Controllers.DumpMetadata metadata, ILogger? logger = null)
+    {
+        try
+        {
+            var updatedJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
+            File.WriteAllText(metadataPath, updatedJson);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            logger?.LogWarning(ex, "[LLDB] Failed to save dump metadata: {Path}", metadataPath);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Attempts to read the cached runtime version from dump metadata.
+    /// </summary>
+    internal static string? TryLoadRuntimeVersionFromMetadata(string metadataPath, ILogger? logger = null)
+    {
+        var metadata = TryLoadDumpMetadata(metadataPath, logger);
+        return metadata != null && !string.IsNullOrEmpty(metadata.RuntimeVersion)
+            ? metadata.RuntimeVersion
+            : null;
+    }
+
+    /// <summary>
+    /// Attempts to update the cached runtime version in dump metadata.
+    /// </summary>
+    internal static bool TrySaveRuntimeVersionToMetadata(string metadataPath, string runtimeVersion, ILogger? logger = null)
+    {
+        var metadata = TryLoadDumpMetadata(metadataPath, logger);
+        if (metadata == null)
+        {
+            return false;
+        }
+
+        metadata.RuntimeVersion = runtimeVersion;
+        return TrySaveDumpMetadata(metadataPath, metadata, logger);
+    }
+
+    /// <summary>
+    /// Attempts to read the cached symbol file list from dump metadata.
+    /// </summary>
+    internal static List<string>? TryLoadSymbolFilesFromMetadata(string metadataPath, ILogger? logger = null)
+    {
+        var metadata = TryLoadDumpMetadata(metadataPath, logger);
+        return metadata?.SymbolFiles;
+    }
+
+    /// <summary>
+    /// Attempts to update the cached symbol file list in dump metadata.
+    /// </summary>
+    internal static bool TrySaveSymbolFilesToMetadata(string metadataPath, List<string> symbolFiles, ILogger? logger = null)
+    {
+        var metadata = TryLoadDumpMetadata(metadataPath, logger);
+        if (metadata == null)
+        {
+            return false;
+        }
+
+        metadata.SymbolFiles = symbolFiles;
+        return TrySaveDumpMetadata(metadataPath, metadata, logger);
+    }
+
+    /// <summary>
     /// Saves the detected runtime version to the existing dump metadata JSON file.
     /// </summary>
     private void SaveRuntimeVersionToMetadata()
@@ -1298,31 +1443,19 @@ public class LldbManager : IDebuggerManager
 
         try
         {
-            // Metadata file is at {dumpDir}/{dumpId}.json (same name as dump but .json extension)
-            var dumpDir = Path.GetDirectoryName(_currentDumpPath);
-            var dumpName = Path.GetFileNameWithoutExtension(_currentDumpPath);
-            if (string.IsNullOrEmpty(dumpDir) || string.IsNullOrEmpty(dumpName))
-                return;
-
-            var metadataPath = Path.Combine(dumpDir, $"{dumpName}.json");
-
-            if (File.Exists(metadataPath))
+            var metadataPath = GetMetadataPathForDump(_currentDumpPath);
+            if (metadataPath == null)
             {
-                // Load existing metadata and update runtime version
-                var json = File.ReadAllText(metadataPath);
-                var metadata = JsonSerializer.Deserialize<Controllers.DumpMetadata>(json);
+                return;
+            }
 
-                if (metadata != null)
-                {
-                    metadata.RuntimeVersion = _detectedRuntimeVersion;
-                    var updatedJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
-                    File.WriteAllText(metadataPath, updatedJson);
-                    _logger.LogInformation("[LLDB] Saved runtime version {Version} to metadata: {Path}", _detectedRuntimeVersion, metadataPath);
-                }
+            if (TrySaveRuntimeVersionToMetadata(metadataPath, _detectedRuntimeVersion, _logger))
+            {
+                _logger.LogInformation("[LLDB] Saved runtime version {Version} to metadata: {Path}", _detectedRuntimeVersion, metadataPath);
             }
             else
             {
-                _logger.LogDebug("[LLDB] Metadata file not found, skipping runtime version save: {Path}", metadataPath);
+                _logger.LogDebug("[LLDB] Metadata file not found or unreadable, skipping runtime version save: {Path}", metadataPath);
             }
         }
         catch (Exception ex)
@@ -1341,24 +1474,17 @@ public class LldbManager : IDebuggerManager
 
         try
         {
-            // Metadata file is at {dumpDir}/{dumpId}.json (same name as dump but .json extension)
-            var dumpDir = Path.GetDirectoryName(_currentDumpPath);
-            var dumpName = Path.GetFileNameWithoutExtension(_currentDumpPath);
-            if (string.IsNullOrEmpty(dumpDir) || string.IsNullOrEmpty(dumpName))
-                return;
-
-            var metadataPath = Path.Combine(dumpDir, $"{dumpName}.json");
-
-            if (File.Exists(metadataPath))
+            var metadataPath = GetMetadataPathForDump(_currentDumpPath);
+            if (metadataPath == null)
             {
-                var json = File.ReadAllText(metadataPath);
-                var metadata = JsonSerializer.Deserialize<Controllers.DumpMetadata>(json);
+                return;
+            }
 
-                if (metadata != null && !string.IsNullOrEmpty(metadata.RuntimeVersion))
-                {
-                    _detectedRuntimeVersion = metadata.RuntimeVersion;
-                    _logger.LogInformation("[LLDB] Loaded cached runtime version from metadata: {Version}", _detectedRuntimeVersion);
-                }
+            var runtimeVersion = TryLoadRuntimeVersionFromMetadata(metadataPath, _logger);
+            if (!string.IsNullOrEmpty(runtimeVersion))
+            {
+                _detectedRuntimeVersion = runtimeVersion;
+                _logger.LogInformation("[LLDB] Loaded cached runtime version from metadata: {Version}", _detectedRuntimeVersion);
             }
         }
         catch (Exception ex)
@@ -1402,20 +1528,15 @@ public class LldbManager : IDebuggerManager
             var cachedFiles = LoadSymbolFilesFromMetadata();
             _logger.LogDebug("[dotnet-symbol] Cached files from metadata: {Count}", cachedFiles?.Count ?? 0);
 
+            if (ShouldSkipSymbolDownload(cachedFiles, outputDirectory, out var missingFiles))
+            {
+                _logger.LogInformation("[dotnet-symbol] All {Count} cached symbol files exist, skipping download", cachedFiles!.Count);
+                LogDownloadedFiles(outputDirectory);
+                return true;
+            }
+
             if (cachedFiles != null && cachedFiles.Count > 0)
             {
-                _logger.LogInformation("[dotnet-symbol] Found {Count} cached files in metadata, checking if they exist in {Dir}",
-                    cachedFiles.Count, outputDirectory);
-
-                if (AllCachedFilesExist(cachedFiles, outputDirectory))
-                {
-                    _logger.LogInformation("[dotnet-symbol] All {Count} cached symbol files exist, skipping download", cachedFiles.Count);
-                    LogDownloadedFiles(outputDirectory);
-                    return true;
-                }
-
-                // Find which files are missing
-                var missingFiles = cachedFiles.Where(f => !File.Exists(Path.Combine(outputDirectory, f))).ToList();
                 _logger.LogInformation("[dotnet-symbol] {Missing} of {Total} cached symbol files missing, re-downloading",
                     missingFiles.Count, cachedFiles.Count);
             }
@@ -1681,7 +1802,7 @@ public class LldbManager : IDebuggerManager
                 process.ExitCode, outputLines.Count);
 
             // Parse the output for platform detection
-            var result = ParseVerifyCoreOutput(outputLines);
+            var result = ParseVerifyCoreOutput(outputLines, _logger);
             VerifiedCorePlatform = result;
             
             if (result != null)
@@ -1700,9 +1821,12 @@ public class LldbManager : IDebuggerManager
     }
 
     /// <summary>
-    /// Parses the output of dotnet-symbol --verifycore to detect platform information.
+    /// Parses the output of <c>dotnet-symbol --verifycore</c> to detect platform information.
     /// </summary>
-    private VerifyCoreResult ParseVerifyCoreOutput(List<string> outputLines)
+    /// <param name="outputLines">The captured stdout lines from <c>dotnet-symbol --verifycore</c>.</param>
+    /// <param name="logger">Optional logger for diagnostic output.</param>
+    /// <returns>A <see cref="VerifyCoreResult"/> with module and platform information.</returns>
+    internal static VerifyCoreResult ParseVerifyCoreOutput(IEnumerable<string> outputLines, ILogger? logger = null)
     {
         var result = new VerifyCoreResult();
         var modulePaths = new List<string>();
@@ -1727,7 +1851,7 @@ public class LldbManager : IDebuggerManager
             var firstWord = trimmedLine.Split(' ', 2, StringSplitOptions.RemoveEmptyEntries)[0];
             if (firstWord.Length < 8 || !firstWord.All(c => char.IsAsciiHexDigit(c)))
             {
-                _logger.LogDebug("[dotnet-symbol-verifycore] Skipping non-module line: {Line}", 
+                logger?.LogDebug("[dotnet-symbol-verifycore] Skipping non-module line: {Line}",
                     line.Length > 80 ? line[..80] + "..." : line);
                 continue;
             }
@@ -1743,7 +1867,7 @@ public class LldbManager : IDebuggerManager
                 if (ulong.TryParse(firstWord, System.Globalization.NumberStyles.HexNumber, null, out var address))
                 {
                     moduleAddresses[path] = address;
-                    _logger.LogDebug("[dotnet-symbol-verifycore] Module: {Path} @ 0x{Address:X16}", path, address);
+                    logger?.LogDebug("[dotnet-symbol-verifycore] Module: {Path} @ 0x{Address:X16}", path, address);
                 }
             }
         }
@@ -1758,7 +1882,7 @@ public class LldbManager : IDebuggerManager
             // Use GetFileName, not GetFileNameWithoutExtension!
             // Linux executables don't have extensions - "Samples.BuggyBits" is the full name
             result.MainExecutableName = Path.GetFileName(modulePaths[0]);
-            _logger.LogInformation("[dotnet-symbol-verifycore] Main executable: {Name} ({Path})",
+            logger?.LogInformation("[dotnet-symbol-verifycore] Main executable: {Name} ({Path})",
                 result.MainExecutableName, result.MainExecutablePath);
         }
 
@@ -1771,7 +1895,7 @@ public class LldbManager : IDebuggerManager
             if (pathLower.Contains("ld-musl") || pathLower.Contains("/musl-") || pathLower.Contains("linux-musl-"))
             {
                 result.IsAlpine = true;
-                _logger.LogDebug("[dotnet-symbol-verifycore] Detected musl from: {Path}", path);
+                logger?.LogDebug("[dotnet-symbol-verifycore] Detected musl from: {Path}", path);
             }
 
             // Check for architecture indicators
@@ -1781,19 +1905,19 @@ public class LldbManager : IDebuggerManager
                     pathLower.Contains("amd64") || pathLower.Contains("musl-x64"))
                 {
                     result.Architecture = "x64";
-                    _logger.LogDebug("[dotnet-symbol-verifycore] Detected x64 from: {Path}", path);
+                    logger?.LogDebug("[dotnet-symbol-verifycore] Detected x64 from: {Path}", path);
                 }
                 else if (pathLower.Contains("aarch64") || pathLower.Contains("-arm64/") || pathLower.Contains("/arm64/") ||
                          pathLower.Contains("musl-arm64"))
                 {
                     result.Architecture = "arm64";
-                    _logger.LogDebug("[dotnet-symbol-verifycore] Detected arm64 from: {Path}", path);
+                    logger?.LogDebug("[dotnet-symbol-verifycore] Detected arm64 from: {Path}", path);
                 }
                 else if (pathLower.Contains("i386") || pathLower.Contains("i686") || pathLower.Contains("-x86/") || 
                          pathLower.Contains("/x86/"))
                 {
                     result.Architecture = "x86";
-                    _logger.LogDebug("[dotnet-symbol-verifycore] Detected x86 from: {Path}", path);
+                    logger?.LogDebug("[dotnet-symbol-verifycore] Detected x86 from: {Path}", path);
                 }
             }
         }
@@ -1806,8 +1930,9 @@ public class LldbManager : IDebuggerManager
     /// Some .dbg files created with objcopy --only-keep-debug retain enough ELF structure.
     /// </summary>
     /// <param name="filePath">Path to the file to check.</param>
+    /// <param name="logger">Optional logger for diagnostic output.</param>
     /// <returns>True if file appears to be a usable ELF, false otherwise.</returns>
-    private bool IsUsableElf(string filePath)
+    internal static bool IsUsableElf(string filePath, ILogger? logger = null)
     {
         try
         {
@@ -1820,7 +1945,7 @@ public class LldbManager : IDebuggerManager
             // Check ELF magic: 0x7F 'E' 'L' 'F'
             if (header[0] != 0x7F || header[1] != 'E' || header[2] != 'L' || header[3] != 'F')
             {
-                _logger.LogDebug("[LLDB] {File} is not an ELF file", Path.GetFileName(filePath));
+                logger?.LogDebug("[LLDB] {File} is not an ELF file", Path.GetFileName(filePath));
                 return false;
             }
 
@@ -1836,7 +1961,7 @@ public class LldbManager : IDebuggerManager
             // 2 = ET_EXEC (executable), 3 = ET_DYN (shared object/PIE)
             var eType = BitConverter.ToUInt16(header, 16);
 
-            _logger.LogDebug("[LLDB] ELF check for {File}: type={Type}, phnum={PhNum}, is64bit={Is64}",
+            logger?.LogDebug("[LLDB] ELF check for {File}: type={Type}, phnum={PhNum}, is64bit={Is64}",
                 Path.GetFileName(filePath), eType, phNum, is64Bit);
 
             // A usable ELF should have program headers and be executable or shared object
@@ -1844,7 +1969,7 @@ public class LldbManager : IDebuggerManager
             
             if (isUsable)
             {
-                _logger.LogInformation("[LLDB] {File} appears to be a usable ELF (type={Type}, {PhNum} program headers)",
+                logger?.LogInformation("[LLDB] {File} appears to be a usable ELF (type={Type}, {PhNum} program headers)",
                     Path.GetFileName(filePath), eType == 2 ? "executable" : "shared object", phNum);
             }
 
@@ -1852,7 +1977,7 @@ public class LldbManager : IDebuggerManager
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "[LLDB] Error checking ELF structure of {File}", filePath);
+            logger?.LogDebug(ex, "[LLDB] Error checking ELF structure of {File}", filePath);
             return false;
         }
     }
@@ -1904,7 +2029,7 @@ public class LldbManager : IDebuggerManager
                     var matches = Directory.GetFiles(searchPath, pattern, SearchOption.AllDirectories);
                     foreach (var file in matches)
                     {
-                        if (IsUsableElf(file))
+                        if (IsUsableElf(file, _logger))
                         {
                             _logger.LogInformation("[LLDB] Found usable ELF for standalone app: {File}", file);
                             return file;
@@ -2015,66 +2140,20 @@ public class LldbManager : IDebuggerManager
         }
 
         // Step 1: Filter for native modules (.so files) only
-        var nativeModules = VerifiedCorePlatform.ModuleAddresses
-            .Where(m => m.Key.EndsWith(".so", StringComparison.OrdinalIgnoreCase) || 
-                        m.Key.Contains(".so.", StringComparison.OrdinalIgnoreCase)) // handles .so.1, .so.6.0.25, etc.
-            .ToList();
+        var nativeModules = FilterNativeModulesFromVerifyCore(VerifiedCorePlatform.ModuleAddresses);
 
         _logger.LogInformation("[LLDB] Found {Count} native modules (.so) in verifycore output", nativeModules.Count);
 
         // Step 2: Get LLDB's current module list to check what's already loaded
         // We need to extract module name AND base address to avoid double-loading
         var moduleListOutput = ExecuteCommandInternal("image list");
-        var alreadyLoadedModules = new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
-        
-        foreach (var line in moduleListOutput.Split('\n'))
-        {
-            // Extract from lines like:
-            // [  0] FE57C21D-3826-CC7A-E632-EFE452AEC383-83DFE47A 0x0000c29d29e30260 /usr/share/dotnet/dotnet
-            // [  1] C614CB6A-6CC1-873D-320E-DBCABDEA9FBD-3FEAD2D7 0x0000f5855aa1c000 [vdso] (0x0000f5855aa1c000)
-            // UUID can be upper or lowercase, address is lowercase
-            var match = System.Text.RegularExpressions.Regex.Match(line, 
-                @"\[\s*\d+\]\s+[0-9A-Fa-f-]+\s+0x([0-9a-fA-F]+)\s+(\S+)");
-            if (match.Success && ulong.TryParse(match.Groups[1].Value, 
-                System.Globalization.NumberStyles.HexNumber, null, out var loadedAddr))
-            {
-                var path = match.Groups[2].Value;
-                var moduleName = Path.GetFileName(path);
-                // Only record if loaded at non-zero address
-                if (loadedAddr > 0)
-                {
-                    alreadyLoadedModules[moduleName] = loadedAddr;
-                    _logger.LogDebug("[LLDB] Already loaded: {Name} at 0x{Addr:X}", moduleName, loadedAddr);
-                }
-            }
-        }
+        var alreadyLoadedModules = ParseImageListOutputForLoadedModules(moduleListOutput, _logger);
         _logger.LogInformation("[LLDB] Found {Count} modules already loaded at non-zero addresses", alreadyLoadedModules.Count);
 
         // Build index of available .so files in symbol cache
-        var symbolCacheModules = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (!string.IsNullOrEmpty(_symbolCacheDirectory) && Directory.Exists(_symbolCacheDirectory))
+        var symbolCacheModules = BuildSymbolCacheModuleIndex(_symbolCacheDirectory, _logger);
+        if (symbolCacheModules.Count > 0)
         {
-            foreach (var file in Directory.GetFiles(_symbolCacheDirectory, "*.so*", SearchOption.AllDirectories))
-            {
-                var fileName = Path.GetFileName(file);
-                
-                // Skip symbol files (.dbg, .debug) - we only want actual .so modules
-                if (fileName.EndsWith(".dbg", StringComparison.OrdinalIgnoreCase) ||
-                    fileName.EndsWith(".debug", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-                
-                // Handle both exact match (libcoreclr.so) and versioned .so files (libssl.so.1.1)
-                if (fileName.EndsWith(".so", StringComparison.OrdinalIgnoreCase) || 
-                    fileName.Contains(".so.", StringComparison.OrdinalIgnoreCase))
-                {
-                    if (!symbolCacheModules.ContainsKey(fileName))
-                    {
-                        symbolCacheModules[fileName] = file;
-                    }
-                }
-            }
             _logger.LogInformation("[LLDB] Found {Count} .so files in symbol cache", symbolCacheModules.Count);
         }
 
@@ -2228,6 +2307,121 @@ public class LldbManager : IDebuggerManager
     }
 
     /// <summary>
+    /// Filters a verifycore module list for native modules (shared libraries).
+    /// </summary>
+    /// <remarks>
+    /// Verifycore may include managed files and other non-loadable entries.
+    /// This helper limits results to ELF shared libraries such as:
+    /// <list type="bullet">
+    /// <item><description><c>libfoo.so</c></description></item>
+    /// <item><description><c>libfoo.so.1</c></description></item>
+    /// <item><description><c>libfoo.so.6.0.25</c></description></item>
+    /// </list>
+    /// </remarks>
+    internal static List<KeyValuePair<string, ulong>> FilterNativeModulesFromVerifyCore(Dictionary<string, ulong> moduleAddresses)
+    {
+        return moduleAddresses
+            .Where(m => (m.Key.EndsWith(".so", StringComparison.OrdinalIgnoreCase) ||
+                         m.Key.Contains(".so.", StringComparison.OrdinalIgnoreCase)) &&
+                        !m.Key.EndsWith(".dbg", StringComparison.OrdinalIgnoreCase) &&
+                        !m.Key.EndsWith(".debug", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Parses the output of <c>image list</c> into a dictionary of loaded module names and their base addresses.
+    /// </summary>
+    internal static Dictionary<string, ulong> ParseImageListOutputForLoadedModules(string moduleListOutput, ILogger? logger = null)
+    {
+        var alreadyLoadedModules = new Dictionary<string, ulong>(StringComparer.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(moduleListOutput))
+        {
+            return alreadyLoadedModules;
+        }
+
+        foreach (var line in moduleListOutput.Split('\n'))
+        {
+            // Extract from lines like:
+            // [  0] FE57C21D-3826-CC7A-E632-EFE452AEC383-83DFE47A 0x0000c29d29e30260 /usr/share/dotnet/dotnet
+            // [  1] C614CB6A-6CC1-873D-320E-DBCABDEA9FBD-3FEAD2D7 0x0000f5855aa1c000 [vdso] (0x0000f5855aa1c000)
+            // UUID can be upper or lowercase, address is lowercase
+            var match = System.Text.RegularExpressions.Regex.Match(
+                line,
+                @"\[\s*\d+\]\s+[0-9A-Fa-f-]+\s+0x([0-9a-fA-F]+)\s+(\S+)");
+
+            if (!match.Success ||
+                !ulong.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out var loadedAddr))
+            {
+                continue;
+            }
+
+            if (loadedAddr == 0)
+            {
+                continue;
+            }
+
+            var path = match.Groups[2].Value;
+            var moduleName = Path.GetFileName(path);
+            if (string.IsNullOrWhiteSpace(moduleName))
+            {
+                continue;
+            }
+
+            alreadyLoadedModules[moduleName] = loadedAddr;
+            logger?.LogDebug("[LLDB] Already loaded: {Name} at 0x{Addr:X}", moduleName, loadedAddr);
+        }
+
+        return alreadyLoadedModules;
+    }
+
+    /// <summary>
+    /// Builds an index of available native modules (shared libraries) in the symbol cache.
+    /// </summary>
+    /// <remarks>
+    /// This index is used when the original module path from verifycore is not present on disk.
+    /// Symbol files (<c>.dbg</c>, <c>.debug</c>) are excluded because LLDB needs the actual module image.
+    /// </remarks>
+    internal static Dictionary<string, string> BuildSymbolCacheModuleIndex(string? symbolCacheDirectory, ILogger? logger = null)
+    {
+        var symbolCacheModules = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (string.IsNullOrWhiteSpace(symbolCacheDirectory) || !Directory.Exists(symbolCacheDirectory))
+        {
+            return symbolCacheModules;
+        }
+
+        foreach (var file in Directory.GetFiles(symbolCacheDirectory, "*.so*", SearchOption.AllDirectories))
+        {
+            var fileName = Path.GetFileName(file);
+            if (string.IsNullOrWhiteSpace(fileName))
+            {
+                continue;
+            }
+
+            // Skip symbol files (.dbg, .debug) - we only want actual .so modules
+            if (fileName.EndsWith(".dbg", StringComparison.OrdinalIgnoreCase) ||
+                fileName.EndsWith(".debug", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Handle both exact match (libcoreclr.so) and versioned .so files (libssl.so.1.1)
+            if (fileName.EndsWith(".so", StringComparison.OrdinalIgnoreCase) ||
+                fileName.Contains(".so.", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!symbolCacheModules.ContainsKey(fileName))
+                {
+                    symbolCacheModules[fileName] = file;
+                    logger?.LogDebug("[LLDB] Indexed module from cache: {Name} -> {Path}", fileName, file);
+                }
+            }
+        }
+
+        return symbolCacheModules;
+    }
+
+    /// <summary>
     /// Loads the cached symbol file list from the dump metadata.
     /// </summary>
     /// <returns>List of relative file paths, or null if not found.</returns>
@@ -2243,31 +2437,17 @@ public class LldbManager : IDebuggerManager
 
         try
         {
-            var dumpDir = Path.GetDirectoryName(_currentDumpPath);
-            var dumpName = Path.GetFileNameWithoutExtension(_currentDumpPath);
-            _logger.LogDebug("[dotnet-symbol] LoadSymbolFilesFromMetadata: dumpDir={Dir}, dumpName={Name}", dumpDir, dumpName);
-
-            if (string.IsNullOrEmpty(dumpDir) || string.IsNullOrEmpty(dumpName))
+            var metadataPath = GetMetadataPathForDump(_currentDumpPath);
+            _logger.LogDebug("[dotnet-symbol] LoadSymbolFilesFromMetadata: metadataPath={Path}", metadataPath ?? "(null)");
+            if (metadataPath == null)
             {
-                _logger.LogDebug("[dotnet-symbol] LoadSymbolFilesFromMetadata: dumpDir or dumpName is null/empty, returning null");
                 return null;
             }
-
-            var metadataPath = Path.Combine(dumpDir, $"{dumpName}.json");
             _logger.LogDebug("[dotnet-symbol] LoadSymbolFilesFromMetadata: looking for metadata at {Path}", metadataPath);
 
-            if (File.Exists(metadataPath))
-            {
-                var json = File.ReadAllText(metadataPath);
-                var metadata = JsonSerializer.Deserialize<Controllers.DumpMetadata>(json);
-                var symbolFiles = metadata?.SymbolFiles;
-                _logger.LogDebug("[dotnet-symbol] LoadSymbolFilesFromMetadata: found metadata, SymbolFiles count = {Count}", symbolFiles?.Count ?? -1);
-                return symbolFiles;
-            }
-            else
-            {
-                _logger.LogDebug("[dotnet-symbol] LoadSymbolFilesFromMetadata: metadata file not found at {Path}", metadataPath);
-            }
+            var symbolFiles = TryLoadSymbolFilesFromMetadata(metadataPath, _logger);
+            _logger.LogDebug("[dotnet-symbol] LoadSymbolFilesFromMetadata: found metadata, SymbolFiles count = {Count}", symbolFiles?.Count ?? -1);
+            return symbolFiles;
         }
         catch (Exception ex)
         {
@@ -2288,23 +2468,49 @@ public class LldbManager : IDebuggerManager
         _logger.LogDebug("[dotnet-symbol] AllCachedFilesExist: checking {Count} files in {Dir}", cachedFiles.Count, outputDirectory);
         _logger.LogDebug("[dotnet-symbol] AllCachedFilesExist: directory exists = {Exists}", Directory.Exists(outputDirectory));
 
-        var checkedCount = 0;
-        foreach (var relativePath in cachedFiles)
+        var missingFiles = GetMissingCachedFiles(cachedFiles, outputDirectory);
+        if (missingFiles.Count > 0)
         {
-            var fullPath = Path.Combine(outputDirectory, relativePath);
-            var exists = File.Exists(fullPath);
-            checkedCount++;
-
-            if (!exists)
-            {
-                _logger.LogInformation("[dotnet-symbol] Missing cached file (#{Num}): {Path} -> {FullPath}",
-                    checkedCount, relativePath, fullPath);
-                return false;
-            }
+            var firstMissing = missingFiles[0];
+            _logger.LogInformation("[dotnet-symbol] Missing cached file: {Path} -> {FullPath}",
+                firstMissing, Path.Combine(outputDirectory, firstMissing));
+            return false;
         }
 
         _logger.LogDebug("[dotnet-symbol] AllCachedFilesExist: all {Count} files exist", cachedFiles.Count);
         return true;
+    }
+
+    /// <summary>
+    /// Returns the list of cached files that are missing from the output directory.
+    /// </summary>
+    internal static List<string> GetMissingCachedFiles(IEnumerable<string> cachedFiles, string outputDirectory)
+    {
+        var missingFiles = new List<string>();
+        foreach (var relativePath in cachedFiles)
+        {
+            if (!File.Exists(Path.Combine(outputDirectory, relativePath)))
+            {
+                missingFiles.Add(relativePath);
+            }
+        }
+        return missingFiles;
+    }
+
+    /// <summary>
+    /// Returns true when we can skip <c>dotnet-symbol</c> because a cached symbol list exists and all files are present.
+    /// </summary>
+    internal static bool ShouldSkipSymbolDownload(List<string>? cachedFiles, string outputDirectory, out List<string> missingFiles)
+    {
+        missingFiles = new List<string>();
+
+        if (cachedFiles == null || cachedFiles.Count == 0)
+        {
+            return false;
+        }
+
+        missingFiles = GetMissingCachedFiles(cachedFiles, outputDirectory);
+        return missingFiles.Count == 0;
     }
 
     /// <summary>
@@ -2318,12 +2524,11 @@ public class LldbManager : IDebuggerManager
 
         try
         {
-            var dumpDir = Path.GetDirectoryName(_currentDumpPath);
-            var dumpName = Path.GetFileNameWithoutExtension(_currentDumpPath);
-            if (string.IsNullOrEmpty(dumpDir) || string.IsNullOrEmpty(dumpName))
+            var metadataPath = GetMetadataPathForDump(_currentDumpPath);
+            if (metadataPath == null)
+            {
                 return;
-
-            var metadataPath = Path.Combine(dumpDir, $"{dumpName}.json");
+            }
 
             if (!File.Exists(metadataPath))
             {
@@ -2338,15 +2543,8 @@ public class LldbManager : IDebuggerManager
                 .OrderBy(f => f)
                 .ToList();
 
-            // Load existing metadata and update symbol files list
-            var json = File.ReadAllText(metadataPath);
-            var metadata = JsonSerializer.Deserialize<Controllers.DumpMetadata>(json);
-
-            if (metadata != null)
+            if (TrySaveSymbolFilesToMetadata(metadataPath, relativePaths, _logger))
             {
-                metadata.SymbolFiles = relativePaths;
-                var updatedJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(metadataPath, updatedJson);
                 _logger.LogInformation("[dotnet-symbol] Saved {Count} symbol files to metadata: {Path}", relativePaths.Count, metadataPath);
             }
         }
@@ -2472,29 +2670,48 @@ public class LldbManager : IDebuggerManager
         // - "/shared/Microsoft.NETCore.App/9.0.10/"
         // - "libcoreclr.so" paths with version directories
 
+        var version = ExtractRuntimeVersionFromDotnetSymbolLine(outputLine);
+        if (!string.IsNullOrWhiteSpace(version))
+        {
+            _detectedRuntimeVersion = version;
+            _logger.LogInformation("[dotnet-symbol] Detected .NET runtime version: {Version}", version);
+        }
+    }
+
+    /// <summary>
+    /// Extracts the .NET runtime version from a line of <c>dotnet-symbol</c> output.
+    /// </summary>
+    /// <param name="outputLine">A single output line.</param>
+    /// <returns>The runtime version (e.g., <c>9.0.10</c>) or null if not found.</returns>
+    internal static string? ExtractRuntimeVersionFromDotnetSymbolLine(string outputLine)
+    {
+        if (string.IsNullOrWhiteSpace(outputLine))
+        {
+            return null;
+        }
+
         // Pattern: Microsoft.NETCore.App/X.Y.Z
         var netCoreAppIndex = outputLine.IndexOf("Microsoft.NETCore.App/", StringComparison.OrdinalIgnoreCase);
-        if (netCoreAppIndex >= 0)
+        if (netCoreAppIndex < 0)
         {
-            var versionStart = netCoreAppIndex + "Microsoft.NETCore.App/".Length;
-            var versionEnd = outputLine.IndexOfAny(['/', ' ', '"', '\\'], versionStart);
-            if (versionEnd < 0) versionEnd = outputLine.Length;
-
-            var version = outputLine[versionStart..versionEnd].Trim();
-
-            // Validate it looks like a version (e.g., "9.0.10", "8.0.0")
-            if (IsValidVersionString(version))
-            {
-                _detectedRuntimeVersion = version;
-                _logger.LogInformation("[dotnet-symbol] Detected .NET runtime version: {Version}", version);
-            }
+            return null;
         }
+
+        var versionStart = netCoreAppIndex + "Microsoft.NETCore.App/".Length;
+        var versionEnd = outputLine.IndexOfAny(['/', ' ', '"', '\\'], versionStart);
+        if (versionEnd < 0)
+        {
+            versionEnd = outputLine.Length;
+        }
+
+        var version = outputLine[versionStart..versionEnd].Trim();
+        return IsValidVersionString(version) ? version : null;
     }
 
     /// <summary>
     /// Validates if a string looks like a .NET version (e.g., "9.0.10", "8.0.0").
     /// </summary>
-    private static bool IsValidVersionString(string version)
+    internal static bool IsValidVersionString(string version)
     {
         if (string.IsNullOrWhiteSpace(version))
             return false;
@@ -2513,12 +2730,12 @@ public class LldbManager : IDebuggerManager
     /// </summary>
     /// <param name="moduleList">The output from 'image list' command.</param>
     /// <returns>True if .NET runtime is detected; otherwise, false.</returns>
-    private bool DetectDotNetDump(string moduleList)
+    internal static bool DetectDotNetDump(string moduleList, string? detectedRuntimeVersion, ILogger? logger = null)
     {
         // Method 1: Check if we detected a runtime version from dotnet-symbol
-        if (!string.IsNullOrEmpty(_detectedRuntimeVersion))
+        if (!string.IsNullOrEmpty(detectedRuntimeVersion))
         {
-            _logger.LogInformation("[LLDB] .NET dump detected via runtime version: {Version}", _detectedRuntimeVersion);
+            logger?.LogInformation("[LLDB] .NET dump detected via runtime version: {Version}", detectedRuntimeVersion);
             return true;
         }
 
@@ -2541,12 +2758,12 @@ public class LldbManager : IDebuggerManager
         {
             if (moduleList.Contains(module, StringComparison.OrdinalIgnoreCase))
             {
-                _logger.LogInformation("[LLDB] .NET dump detected via module: {Module}", module);
+                logger?.LogInformation("[LLDB] .NET dump detected via module: {Module}", module);
                 return true;
             }
         }
 
-        _logger.LogDebug("[LLDB] No .NET runtime indicators found in module list");
+        logger?.LogDebug("[LLDB] No .NET runtime indicators found in module list");
         return false;
     }
 
@@ -2891,7 +3108,7 @@ public class LldbManager : IDebuggerManager
     /// <summary>
     /// Parses register output from LLDB.
     /// </summary>
-    private Analysis.ClrRegisterSet? ParseRegisters(string output)
+    internal static Analysis.ClrRegisterSet? ParseRegisters(string output)
     {
         if (string.IsNullOrEmpty(output))
             return null;

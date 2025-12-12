@@ -11,6 +11,7 @@ namespace DebuggerMcp.Tests.Controllers;
 /// <summary>
 /// Tests for dump upload size limit behavior.
 /// </summary>
+[Collection("NonParallelEnvironment")]
 public class DumpControllerUploadLimitTests : IDisposable
 {
     private readonly string? _originalMaxRequestBodySizeGb;

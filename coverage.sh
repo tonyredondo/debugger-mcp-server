@@ -20,18 +20,19 @@ echo ""
 echo "📊 Coverage reports generated in ./TestResults/"
 echo ""
 
-# Find the coverage file
-COVERAGE_FILE=$(find ./TestResults -name "coverage.cobertura.xml" | head -1)
+# Find the coverage file(s) (collector writes under TestResults/<guid>/)
+COVERAGE_FILES=$(find ./TestResults -name "coverage.cobertura.xml" | tr '\n' ';')
 
-if [ -n "$COVERAGE_FILE" ]; then
-    echo "Coverage file: $COVERAGE_FILE"
+if [ -n "$COVERAGE_FILES" ]; then
+    echo "Coverage files:"
+    find ./TestResults -name "coverage.cobertura.xml" -print
     
     # Check if reportgenerator is installed
     if command -v reportgenerator &> /dev/null; then
         echo ""
         echo "📈 Generating HTML report..."
         reportgenerator \
-            -reports:"$COVERAGE_FILE" \
+            -reports:"$COVERAGE_FILES" \
             -targetdir:"./TestResults/coverage-report" \
             -reporttypes:"Html;HtmlSummary;Badges;TextSummary"
         
@@ -53,4 +54,3 @@ if [ -n "$COVERAGE_FILE" ]; then
 else
     echo "⚠️ Coverage file not found"
 fi
-

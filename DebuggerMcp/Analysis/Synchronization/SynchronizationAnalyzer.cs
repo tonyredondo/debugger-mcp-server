@@ -898,39 +898,57 @@ public class SynchronizationAnalyzer
     /// </summary>
     private WaitGraph BuildWaitGraph(SynchronizationAnalysisResult result)
     {
+        var threads = _runtime.Threads
+            .Where(t => t.IsAlive && t.ManagedThreadId > 0)
+            .Select(t => (t.ManagedThreadId, t.OSThreadId));
+
+        return BuildWaitGraphFromResult(result, threads);
+    }
+
+    /// <summary>
+    /// Builds a wait graph without requiring a <see cref="ClrRuntime"/>.
+    /// </summary>
+    /// <param name="result">The synchronization analysis result.</param>
+    /// <param name="threads">The managed thread IDs and OS thread IDs present in the target process.</param>
+    /// <returns>A graph describing thread/resource dependencies.</returns>
+    /// <remarks>
+    /// This method is internal so unit tests can validate deadlock graph construction
+    /// without needing a real memory dump.
+    /// </remarks>
+    internal static WaitGraph BuildWaitGraphFromResult(
+        SynchronizationAnalysisResult result,
+        IEnumerable<(int ManagedThreadId, uint OsThreadId)> threads)
+    {
         var graph = new WaitGraph();
         var threadNodes = new Dictionary<int, WaitGraphNode>();
-        var resourceNodes = new Dictionary<string, WaitGraphNode>();
 
-        // Add nodes for threads with synchronization activity
-        foreach (var thread in _runtime.Threads)
+        foreach (var (managedThreadId, osThreadId) in threads)
         {
-            if (thread.IsAlive && thread.ManagedThreadId > 0)
+            if (managedThreadId <= 0)
             {
-                var nodeId = $"thread_{thread.ManagedThreadId}";
-                var node = new WaitGraphNode
-                {
-                    Id = nodeId,
-                    Type = "thread",
-                    Label = $"Thread {thread.ManagedThreadId} (OS: {thread.OSThreadId})"
-                };
-                threadNodes[thread.ManagedThreadId] = node;
+                continue;
             }
+
+            var nodeId = $"thread_{managedThreadId}";
+            threadNodes[managedThreadId] = new WaitGraphNode
+            {
+                Id = nodeId,
+                Type = "thread",
+                Label = $"Thread {managedThreadId} (OS: {osThreadId})"
+            };
         }
 
         // Add monitor lock nodes and edges
         foreach (var monitor in result.MonitorLocks ?? [])
         {
             var nodeId = $"monitor_{monitor.Address}";
-            var node = new WaitGraphNode
+            graph.Nodes.Add(new WaitGraphNode
             {
                 Id = nodeId,
                 Type = "resource",
                 Label = $"Monitor@{monitor.Address}",
                 ResourceType = "Monitor"
-            };
-            resourceNodes[nodeId] = node;
-            graph.Nodes.Add(node);
+            });
 
             // Edge: resource -> owner thread (owns)
             if (threadNodes.TryGetValue(monitor.OwnerThreadId, out var ownerNode))
@@ -960,22 +978,17 @@ public class SynchronizationAnalyzer
 
         // Add SemaphoreSlim nodes (only contended ones)
         // Note: SemaphoreSlim doesn't have a clear "owner" thread - any thread can release.
-        // We can only show waiters, not ownership edges. This limits deadlock detection
-        // to cases where we can infer ownership through other means.
         foreach (var sem in result.SemaphoreSlims?.Where(s => s.IsContended) ?? [])
         {
             var nodeId = $"semaphore_{sem.Address}";
-            var node = new WaitGraphNode
+            graph.Nodes.Add(new WaitGraphNode
             {
                 Id = nodeId,
                 Type = "resource",
                 Label = sem.IsAsyncLock ? $"AsyncLock@{sem.Address}" : $"SemaphoreSlim@{sem.Address}",
                 ResourceType = "SemaphoreSlim"
-            };
-            resourceNodes[nodeId] = node;
-            graph.Nodes.Add(node);
+            });
 
-            // Add waiter edges
             foreach (var waiter in sem.Waiters ?? [])
             {
                 if (waiter.ThreadId.HasValue && threadNodes.TryGetValue(waiter.ThreadId.Value, out var waiterNode))
@@ -994,15 +1007,13 @@ public class SynchronizationAnalyzer
         foreach (var rwLock in result.ReaderWriterLocks?.Where(r => r.IsContended) ?? [])
         {
             var nodeId = $"rwlock_{rwLock.Address}";
-            var node = new WaitGraphNode
+            graph.Nodes.Add(new WaitGraphNode
             {
                 Id = nodeId,
                 Type = "resource",
                 Label = $"RWLock@{rwLock.Address}",
                 ResourceType = "ReaderWriterLockSlim"
-            };
-            resourceNodes[nodeId] = node;
-            graph.Nodes.Add(node);
+            });
 
             // Edge: resource -> writer thread (if any)
             if (rwLock.WriterThreadId.HasValue && threadNodes.TryGetValue(rwLock.WriterThreadId.Value, out var writerNode))
@@ -1039,10 +1050,26 @@ public class SynchronizationAnalyzer
     /// </summary>
     private List<DeadlockCycle> DetectDeadlocks(WaitGraph graph)
     {
+        return DetectDeadlocksFromWaitGraph(graph);
+    }
+
+    /// <summary>
+    /// Detects deadlock cycles in a graph using DFS.
+    /// </summary>
+    /// <param name="graph">The wait graph to analyze.</param>
+    /// <returns>Detected deadlock cycles.</returns>
+    /// <remarks>
+    /// This method is internal so unit tests can validate deadlock detection
+    /// without requiring ClrMD.
+    /// </remarks>
+    internal static List<DeadlockCycle> DetectDeadlocksFromWaitGraph(WaitGraph graph)
+    {
         var deadlocks = new List<DeadlockCycle>();
 
         if (graph.Nodes.Count == 0 || graph.Edges.Count == 0)
+        {
             return deadlocks;
+        }
 
         // Build adjacency list
         var adjacency = new Dictionary<string, List<string>>();
@@ -1072,16 +1099,18 @@ public class SynchronizationAnalyzer
 
         foreach (var node in graph.Nodes.Where(n => n.Type == "thread"))
         {
-            if (!visited.Contains(node.Id))
+            if (visited.Contains(node.Id))
             {
-                var cycles = FindCycles(node.Id, adjacency, visited, recursionStack, path);
-                foreach (var cycle in cycles)
+                continue;
+            }
+
+            var cycles = FindCycles(node.Id, adjacency, visited, recursionStack, path);
+            foreach (var cycle in cycles)
+            {
+                var deadlock = CreateDeadlockCycle(cycle, graph, deadlocks.Count + 1);
+                if (deadlock != null && !IsDuplicateDeadlock(deadlock, deadlocks))
                 {
-                    var deadlock = CreateDeadlockCycle(cycle, graph, deadlocks.Count + 1);
-                    if (deadlock != null && !IsDuplicateDeadlock(deadlock, deadlocks))
-                    {
-                        deadlocks.Add(deadlock);
-                    }
+                    deadlocks.Add(deadlock);
                 }
             }
         }
@@ -1092,7 +1121,7 @@ public class SynchronizationAnalyzer
     /// <summary>
     /// Finds cycles using DFS.
     /// </summary>
-    private List<List<string>> FindCycles(
+    private static List<List<string>> FindCycles(
         string nodeId,
         Dictionary<string, List<string>> adjacency,
         HashSet<string> visited,
@@ -1136,7 +1165,7 @@ public class SynchronizationAnalyzer
     /// <summary>
     /// Creates a DeadlockCycle from a cycle path.
     /// </summary>
-    private DeadlockCycle? CreateDeadlockCycle(List<string> cyclePath, WaitGraph graph, int id)
+    private static DeadlockCycle? CreateDeadlockCycle(List<string> cyclePath, WaitGraph graph, int id)
     {
         var threads = cyclePath
             .Where(p => p.StartsWith("thread_", StringComparison.Ordinal))
@@ -1199,6 +1228,14 @@ public class SynchronizationAnalyzer
     /// Identifies contention hotspots.
     /// </summary>
     private List<ContentionHotspot> IdentifyContentionHotspots(SynchronizationAnalysisResult result)
+    {
+        return IdentifyContentionHotspotsFromResult(result);
+    }
+
+    /// <summary>
+    /// Identifies contention hotspots from an analysis result.
+    /// </summary>
+    internal static List<ContentionHotspot> IdentifyContentionHotspotsFromResult(SynchronizationAnalysisResult result)
     {
         var hotspots = new List<ContentionHotspot>();
 
@@ -1291,6 +1328,14 @@ public class SynchronizationAnalyzer
     /// </summary>
     private SynchronizationSummary BuildSummary(SynchronizationAnalysisResult result)
     {
+        return BuildSummaryFromResult(result);
+    }
+
+    /// <summary>
+    /// Builds a <see cref="SynchronizationSummary"/> from an analysis result.
+    /// </summary>
+    internal static SynchronizationSummary BuildSummaryFromResult(SynchronizationAnalysisResult result)
+    {
         var contendedSemaphores = result.SemaphoreSlims?.Count(s => s.IsContended) ?? 0;
         var asyncLocks = result.SemaphoreSlims?.Count(s => s.IsAsyncLock) ?? 0;
 
@@ -1381,4 +1426,3 @@ public class SynchronizationAnalyzer
 
     #endregion
 }
-

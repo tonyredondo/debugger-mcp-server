@@ -1520,8 +1520,67 @@ public static class DumpAnalyzer
     // "ELF 64-bit LSB core file, x86-64" -> x64
     // "platform: 'aarch64'" -> arm64
     private static readonly System.Text.RegularExpressions.Regex ArchitectureRegex = new(
-        @"(ARM aarch64|aarch64|x86-64|x86_64|AMD64|i386|i686|ARM,|armv7)",
+        @"(ARM aarch64|aarch64|x86-64|x86_64|AMD64|i386|i686|Intel 80386|ARM,|armv7)",
         System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Detects whether a dump appears to be from Alpine Linux (musl) based on <c>dotnet-symbol --verifycore</c> output.
+    /// </summary>
+    /// <param name="verifyCoreOutput">Raw output from <c>dotnet-symbol --verifycore</c>.</param>
+    /// <returns>True if musl indicators are found; otherwise false.</returns>
+    internal static bool DetectIsAlpineFromVerifyCoreOutput(string verifyCoreOutput)
+    {
+        if (string.IsNullOrEmpty(verifyCoreOutput))
+            return false;
+
+        // Alpine uses musl libc, which shows up as:
+        // - /lib/ld-musl-aarch64.so.1 or /lib/ld-musl-x86_64.so.1
+        // - linux-musl-arm64 or linux-musl-x64 in native library paths
+        return verifyCoreOutput.Contains("/ld-musl-", StringComparison.OrdinalIgnoreCase) ||
+               verifyCoreOutput.Contains("linux-musl-", StringComparison.OrdinalIgnoreCase) ||
+               verifyCoreOutput.Contains("/musl-", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Extracts a .NET runtime version (e.g., <c>9.0.10</c>) from <c>dotnet-symbol --verifycore</c> output.
+    /// </summary>
+    /// <param name="verifyCoreOutput">Raw output from <c>dotnet-symbol --verifycore</c>.</param>
+    /// <returns>The runtime version if found; otherwise null.</returns>
+    internal static string? TryExtractRuntimeVersionFromVerifyCoreOutput(string verifyCoreOutput)
+    {
+        if (string.IsNullOrEmpty(verifyCoreOutput))
+            return null;
+
+        var match = RuntimeVersionRegex.Match(verifyCoreOutput);
+        return match.Success ? match.Groups[1].Value : null;
+    }
+
+    /// <summary>
+    /// Attempts to detect the architecture from <c>file</c> command output.
+    /// </summary>
+    /// <param name="fileOutput">Raw output from the <c>file</c> command.</param>
+    /// <returns>Normalized architecture (e.g., <c>arm64</c>, <c>x64</c>) or null if not detected.</returns>
+    internal static string? TryExtractArchitectureFromFileOutput(string fileOutput)
+    {
+        if (string.IsNullOrEmpty(fileOutput))
+            return null;
+
+        var match = ArchitectureRegex.Match(fileOutput);
+        if (!match.Success)
+            return null;
+
+        var arch = match.Groups[1].Value.ToLowerInvariant();
+
+        return arch switch
+        {
+            "arm aarch64" or "aarch64" => "arm64",
+            "x86-64" or "x86_64" or "amd64" => "x64",
+            "intel 80386" => "x86",
+            "i386" or "i686" => "x86",
+            "arm," or "armv7" => "arm",
+            _ => arch
+        };
+    }
 
     /// <summary>
     /// Analyzes a dump file to detect Alpine status, runtime version, and architecture.
@@ -1595,21 +1654,11 @@ public static class DumpAnalyzer
 
             var outputStr = output.ToString();
 
-            // Check for musl indicators (Alpine detection)
-            // Alpine uses musl libc, which shows up as:
-            // - /lib/ld-musl-aarch64.so.1 or /lib/ld-musl-x86_64.so.1
-            // - linux-musl-arm64 or linux-musl-x64 in native library paths
-            result.IsAlpine = outputStr.Contains("/ld-musl-", StringComparison.OrdinalIgnoreCase) ||
-                              outputStr.Contains("linux-musl-", StringComparison.OrdinalIgnoreCase) ||
-                              outputStr.Contains("/musl-", StringComparison.OrdinalIgnoreCase);
+            result.IsAlpine = DetectIsAlpineFromVerifyCoreOutput(outputStr);
 
             // Extract runtime version from paths like:
             // /usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Runtime.dll
-            var match = RuntimeVersionRegex.Match(outputStr);
-            if (match.Success)
-            {
-                result.RuntimeVersion = match.Groups[1].Value;
-            }
+            result.RuntimeVersion = TryExtractRuntimeVersionFromVerifyCoreOutput(outputStr);
 
             // Detect architecture using file command
             result.Architecture = await DetectArchitectureAsync(dumpFilePath, logger);
@@ -1724,22 +1773,10 @@ public static class DumpAnalyzer
             // "ELF 64-bit LSB core file, ARM aarch64, version 1 (GNU/Linux)"
             // "ELF 64-bit LSB core file, x86-64, version 1 (GNU/Linux)"
             // "PE32+ executable (console) x86-64" (Windows)
-            var match = ArchitectureRegex.Match(outputStr);
-            if (match.Success)
+            var normalizedArch = TryExtractArchitectureFromFileOutput(outputStr);
+            if (normalizedArch != null)
             {
-                var arch = match.Groups[1].Value.ToLowerInvariant();
-
-                // Normalize architecture names
-                var normalizedArch = arch switch
-                {
-                    "arm aarch64" or "aarch64" => "arm64",
-                    "x86-64" or "x86_64" or "amd64" => "x64",
-                    "i386" or "i686" => "x86",
-                    "arm," or "armv7" => "arm",
-                    _ => arch
-                };
-
-                logger?.LogDebug("Detected architecture: {Architecture} (raw: {RawArch})", normalizedArch, arch);
+                logger?.LogDebug("Detected architecture: {Architecture}", normalizedArch);
                 return normalizedArch;
             }
 

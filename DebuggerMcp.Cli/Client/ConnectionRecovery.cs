@@ -16,8 +16,8 @@ namespace DebuggerMcp.Cli.Client;
 /// </remarks>
 public class ConnectionRecovery
 {
-    private readonly HttpApiClient _httpClient;
-    private readonly McpClient _mcpClient;
+    private readonly IHttpApiClient _httpClient;
+    private readonly IMcpClient _mcpClient;
     private readonly ShellState _state;
     private readonly ConsoleOutput _output;
 
@@ -35,8 +35,8 @@ public class ConnectionRecovery
     /// Creates a new connection recovery handler.
     /// </summary>
     public ConnectionRecovery(
-        HttpApiClient httpClient,
-        McpClient mcpClient,
+        IHttpApiClient httpClient,
+        IMcpClient mcpClient,
         ShellState state,
         ConsoleOutput output)
     {
@@ -59,7 +59,7 @@ public class ConnectionRecovery
         try
         {
             var health = await _httpClient.CheckHealthAsync(cancellationToken);
-            return health?.Status == "healthy";
+            return health?.IsHealthy == true;
         }
         catch
         {
@@ -89,7 +89,7 @@ public class ConnectionRecovery
 
                 // Try to reconnect HTTP client
                 var health = await _httpClient.CheckHealthAsync(cancellationToken);
-                if (health?.Status != "healthy")
+                if (health?.IsHealthy != true)
                 {
                     throw new Exception("Server not healthy");
                 }
@@ -205,4 +205,3 @@ public class ConnectionRecovery
         }, operationName, cancellationToken);
     }
 }
-

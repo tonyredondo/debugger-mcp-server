@@ -452,7 +452,7 @@ public class SourceLinkResolver
     /// <summary>
     /// Resolves a source file path to a raw URL using Source Link document mappings.
     /// </summary>
-    private string? ResolveRawUrl(SourceLinkInfo sourceLink, string sourceFile)
+    internal string? ResolveRawUrl(SourceLinkInfo sourceLink, string sourceFile)
     {
         // Normalize path separators
         var normalizedPath = sourceFile.Replace('\\', '/');
@@ -518,7 +518,7 @@ public class SourceLinkResolver
     /// <summary>
     /// Detects the source control provider from the URL.
     /// </summary>
-    private static SourceProvider DetectProvider(string url)
+    internal static SourceProvider DetectProvider(string url)
     {
         var lowerUrl = url.ToLowerInvariant();
 
@@ -540,7 +540,7 @@ public class SourceLinkResolver
     /// <summary>
     /// Converts a raw content URL to a browsable URL with line number.
     /// </summary>
-    private static string ConvertToBrowsableUrl(string rawUrl, int lineNumber, SourceProvider provider)
+    internal static string ConvertToBrowsableUrl(string rawUrl, int lineNumber, SourceProvider provider)
     {
         switch (provider)
         {
@@ -660,4 +660,3 @@ public class SourceLinkResolver
         return $"<a href=\"{url}\" target=\"_blank\" class=\"source-link\">📄 {displayText}</a>";
     }
 }
-

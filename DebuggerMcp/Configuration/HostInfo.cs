@@ -122,6 +122,55 @@ public class HostInfo
         return RuntimeInformation.OSDescription;
     }
 
+    internal static (string? distro, string? version, bool isAlpine) ParseOsReleaseLines(IEnumerable<string> lines)
+    {
+        string? id = null;
+        string? versionId = null;
+        string? prettyName = null;
+
+        foreach (var line in lines)
+        {
+            if (line.StartsWith("ID=", StringComparison.OrdinalIgnoreCase))
+            {
+                id = line[3..].Trim('"', '\'');
+            }
+            else if (line.StartsWith("VERSION_ID=", StringComparison.OrdinalIgnoreCase))
+            {
+                versionId = line[11..].Trim('"', '\'');
+            }
+            else if (line.StartsWith("PRETTY_NAME=", StringComparison.OrdinalIgnoreCase))
+            {
+                prettyName = line[12..].Trim('"', '\'');
+            }
+        }
+
+        // Determine distribution name
+        var distroName = id?.ToLowerInvariant() switch
+        {
+            "alpine" => "Alpine",
+            "debian" => "Debian",
+            "ubuntu" => "Ubuntu",
+            "fedora" => "Fedora",
+            "centos" => "CentOS",
+            "rhel" => "RHEL",
+            "arch" => "Arch",
+            "opensuse" => "openSUSE",
+            "opensuse-leap" => "openSUSE Leap",
+            "opensuse-tumbleweed" => "openSUSE Tumbleweed",
+            _ => prettyName ?? id
+        };
+
+        var isAlpine = string.Equals(id, "alpine", StringComparison.OrdinalIgnoreCase);
+        return (distroName, versionId, isAlpine);
+    }
+
+    internal static bool DetectDockerFromCgroupContent(string content)
+    {
+        return content.Contains("docker", StringComparison.OrdinalIgnoreCase) ||
+               content.Contains("kubepods", StringComparison.OrdinalIgnoreCase) ||
+               content.Contains("containerd", StringComparison.OrdinalIgnoreCase);
+    }
+
     private static (string? distro, string? version, bool isAlpine) GetLinuxDistributionInfo()
     {
         if (!RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
@@ -133,45 +182,7 @@ public class HostInfo
             if (File.Exists("/etc/os-release"))
             {
                 var lines = File.ReadAllLines("/etc/os-release");
-                string? id = null;
-                string? versionId = null;
-                string? prettyName = null;
-
-                foreach (var line in lines)
-                {
-                    if (line.StartsWith("ID=", StringComparison.OrdinalIgnoreCase))
-                    {
-                        id = line[3..].Trim('"', '\'');
-                    }
-                    else if (line.StartsWith("VERSION_ID=", StringComparison.OrdinalIgnoreCase))
-                    {
-                        versionId = line[11..].Trim('"', '\'');
-                    }
-                    else if (line.StartsWith("PRETTY_NAME=", StringComparison.OrdinalIgnoreCase))
-                    {
-                        prettyName = line[12..].Trim('"', '\'');
-                    }
-                }
-
-                // Determine distribution name
-                var distroName = id?.ToLowerInvariant() switch
-                {
-                    "alpine" => "Alpine",
-                    "debian" => "Debian",
-                    "ubuntu" => "Ubuntu",
-                    "fedora" => "Fedora",
-                    "centos" => "CentOS",
-                    "rhel" => "RHEL",
-                    "arch" => "Arch",
-                    "opensuse" => "openSUSE",
-                    "opensuse-leap" => "openSUSE Leap",
-                    "opensuse-tumbleweed" => "openSUSE Tumbleweed",
-                    _ => prettyName ?? id
-                };
-
-                var isAlpine = string.Equals(id, "alpine", StringComparison.OrdinalIgnoreCase);
-
-                return (distroName, versionId, isAlpine);
+                return ParseOsReleaseLines(lines);
             }
 
             // Fallback: check for Alpine-specific file
@@ -201,12 +212,7 @@ public class HostInfo
             if (File.Exists("/proc/1/cgroup"))
             {
                 var content = File.ReadAllText("/proc/1/cgroup");
-                if (content.Contains("docker", StringComparison.OrdinalIgnoreCase) ||
-                    content.Contains("kubepods", StringComparison.OrdinalIgnoreCase) ||
-                    content.Contains("containerd", StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
+                return DetectDockerFromCgroupContent(content);
             }
         }
         catch
@@ -217,19 +223,9 @@ public class HostInfo
         return false;
     }
 
-    private static List<string> GetInstalledRuntimes()
+    internal static List<string> GetInstalledRuntimesFromPaths(IEnumerable<string> runtimePaths)
     {
         var runtimes = new List<string>();
-
-        // Check common .NET runtime locations
-        var runtimePaths = new[]
-        {
-            "/usr/share/dotnet/shared/Microsoft.NETCore.App",
-            "/usr/local/share/dotnet/shared/Microsoft.NETCore.App",
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "shared", "Microsoft.NETCore.App"),
-            // Windows paths
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "shared", "Microsoft.NETCore.App")
-        };
 
         foreach (var basePath in runtimePaths)
         {
@@ -259,5 +255,20 @@ public class HostInfo
         }
 
         return runtimes;
+    }
+
+    private static List<string> GetInstalledRuntimes()
+    {
+        // Check common .NET runtime locations
+        var runtimePaths = new[]
+        {
+            "/usr/share/dotnet/shared/Microsoft.NETCore.App",
+            "/usr/local/share/dotnet/shared/Microsoft.NETCore.App",
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "shared", "Microsoft.NETCore.App"),
+            // Windows paths
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "shared", "Microsoft.NETCore.App")
+        };
+
+        return GetInstalledRuntimesFromPaths(runtimePaths);
     }
 }

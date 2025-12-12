@@ -609,6 +609,42 @@ public partial class ObjectInspector
         string rootAddress,
         CancellationToken cancellationToken)
     {
+        // For complex value types (DateTime, TimeSpan, Guid, etc.) SOS often prints an embedded address.
+        // Prefer expanding those via recursive inspection before treating them as primitives.
+        if (field.IsValueType &&
+            IsComplexValueType(resolvedTypeName) &&
+            !string.IsNullOrEmpty(field.MethodTable) &&
+            !PrimitiveResolver.IsNullAddress(field.Value) &&
+            LooksLikeAddress(field.Value))
+        {
+            try
+            {
+                var embeddedAddrStr = PrimitiveResolver.NormalizeAddress(field.Value);
+                if (!string.IsNullOrEmpty(embeddedAddrStr))
+                {
+                    var innerObj = await InspectRecursiveAsync(
+                        manager,
+                        embeddedAddrStr,
+                        field.MethodTable,
+                        depth,
+                        maxArrayElements,
+                        maxStringLength,
+                        seenAddresses,
+                        rootAddress,
+                        cancellationToken);
+
+                    if (innerObj != null && !innerObj.Type.StartsWith("[error:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        return innerObj;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "Error expanding complex value type field {FieldName}", field.Name);
+            }
+        }
+
         // Handle primitive types - use resolved type name
         if (PrimitiveResolver.IsPrimitiveType(resolvedTypeName))
         {
@@ -1345,48 +1381,6 @@ public partial class ObjectInspector
     }
 
     /// <summary>
-    /// Resolves fields WITHOUT recursion - used for collection internal fields.
-    /// Per plan section 2.5: primitives are inlined; complex types (including strings) show as addresses.
-    /// Note: Collection internal fields are typically arrays/primitives, not strings.
-    /// String inlining happens in the elements array via ResolveElementAsync.
-    /// </summary>
-    private List<InspectedField> ResolveFieldsShallow(List<DumpFieldInfo> fields)
-    {
-        var result = new List<InspectedField>();
-
-        foreach (var field in fields)
-        {
-            var inspectedField = new InspectedField
-            {
-                Name = field.Name,
-                Type = field.Type,
-                IsStatic = field.IsStatic
-            };
-
-            // Resolve value based on type
-            if (PrimitiveResolver.IsPrimitiveType(field.Type))
-            {
-                // Inline primitive value
-                inspectedField.Value = PrimitiveResolver.ResolvePrimitiveValue(field.Type, field.Value);
-            }
-            else if (PrimitiveResolver.IsNullAddress(field.Value))
-            {
-                // Null reference
-                inspectedField.Value = null;
-            }
-            else
-            {
-                // Complex type (arrays, strings, objects) - show address only
-                inspectedField.Value = NormalizeAddressForDisplay(field.Value);
-            }
-
-            result.Add(inspectedField);
-        }
-
-        return result;
-    }
-
-    /// <summary>
     /// Resolves fields WITHOUT recursion but WITH type name resolution for truncated types.
     /// Used for collection internal fields.
     /// </summary>
@@ -1525,7 +1519,7 @@ public partial class ObjectInspector
     [GeneratedRegex(@"^(?<target>[0-9a-fA-F]+)\s+(?<method>[0-9a-fA-F]+)\s+(?<name>.+)$", RegexOptions.Multiline)]
     private static partial Regex DumpDelegateRegex();
 
-    private static DelegateInfo? ParseDumpDelegate(string output)
+    internal static DelegateInfo? ParseDumpDelegate(string output)
     {
         var lines = output.Split('\n', StringSplitOptions.RemoveEmptyEntries);
 
@@ -1627,9 +1621,16 @@ public partial class ObjectInspector
             cancellationToken.ThrowIfCancellationRequested();
             var output = manager.ExecuteCommand($"pe {address}");
 
-            if (string.IsNullOrWhiteSpace(output) ||
-                output.Contains("Invalid", StringComparison.OrdinalIgnoreCase) ||
-                output.Contains("not a valid", StringComparison.OrdinalIgnoreCase))
+            if (string.IsNullOrWhiteSpace(output))
+            {
+                return null;
+            }
+
+            // Avoid broad "Invalid" matches (e.g., InvalidOperationException).
+            if (output.Contains("Invalid exception object", StringComparison.OrdinalIgnoreCase) ||
+                output.Contains("Invalid object address", StringComparison.OrdinalIgnoreCase) ||
+                output.Contains("not a valid", StringComparison.OrdinalIgnoreCase) ||
+                output.Contains("Usage:", StringComparison.OrdinalIgnoreCase))
             {
                 return null;
             }
@@ -1646,7 +1647,7 @@ public partial class ObjectInspector
     /// <summary>
     /// Parses pe (PrintException) output.
     /// </summary>
-    private static ExceptionInfo? ParsePrintException(string output)
+    internal static ExceptionInfo? ParsePrintException(string output)
     {
         var info = new ExceptionInfo();
         var hasData = false;
@@ -1826,7 +1827,7 @@ public partial class ObjectInspector
     /// <summary>
     /// Parses task state flags to determine status.
     /// </summary>
-    private static void ParseTaskStateFlags(int stateFlags, TaskInfo taskInfo)
+    internal static void ParseTaskStateFlags(int stateFlags, TaskInfo taskInfo)
     {
         var flags = (TaskStateFlags)stateFlags;
 
@@ -2329,7 +2330,7 @@ public partial class ObjectInspector
     /// <summary>
     /// Parses dumpmt output to extract type information.
     /// </summary>
-    private static TypeReflectionInfo? ParseDumpMtForTypeInfo(string output, string methodTable)
+    internal static TypeReflectionInfo? ParseDumpMtForTypeInfo(string output, string methodTable)
     {
         var info = new TypeReflectionInfo
         {
@@ -2460,7 +2461,7 @@ public partial class ObjectInspector
     /// <summary>
     /// Converts a ClrMD object inspection to the ObjectInspector format.
     /// </summary>
-    private static InspectedObject ConvertClrMdToInspected(ClrMdObjectInspection clrMdObj)
+    internal static InspectedObject ConvertClrMdToInspected(ClrMdObjectInspection clrMdObj)
     {
         var result = new InspectedObject
         {

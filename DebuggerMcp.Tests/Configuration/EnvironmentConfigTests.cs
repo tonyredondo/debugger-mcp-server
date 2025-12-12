@@ -6,6 +6,7 @@ namespace DebuggerMcp.Tests.Configuration;
 /// Tests for EnvironmentConfig class.
 /// Note: These tests manipulate environment variables and restore them after each test.
 /// </summary>
+[Collection("NonParallelEnvironment")]
 public class EnvironmentConfigTests : IDisposable
 {
     private readonly Dictionary<string, string?> _originalValues = new();
@@ -823,4 +824,3 @@ public class EnvironmentConfigTests : IDisposable
         Assert.Equal(5L * 1024 * 1024 * 1024, result); // 5 GB in bytes
     }
 }
-

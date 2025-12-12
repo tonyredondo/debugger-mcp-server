@@ -66,6 +66,13 @@ public class AzurePipelinesResolver : IDisposable
         string? version = null,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(organization) ||
+            string.IsNullOrWhiteSpace(project) ||
+            string.IsNullOrWhiteSpace(commitSha))
+        {
+            return null;
+        }
+
         // Check cache first, but validate the cached build's sourceVersion matches
         var skipCommitLookup = false;
         if (_cache.TryGetBuild(organization, project, commitSha, out var cachedBuild))
@@ -349,6 +356,13 @@ public class AzurePipelinesResolver : IDisposable
         int buildId,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(organization) ||
+            string.IsNullOrWhiteSpace(project) ||
+            buildId <= 0)
+        {
+            return new List<AzurePipelinesArtifact>();
+        }
+
         // Check cache first
         if (_cache.TryGetArtifacts(organization, project, buildId, out var cachedArtifacts) && cachedArtifacts != null)
         {
@@ -409,6 +423,15 @@ public class AzurePipelinesResolver : IDisposable
         string outputDirectory,
         CancellationToken ct = default)
     {
+        if (string.IsNullOrWhiteSpace(organization) ||
+            string.IsNullOrWhiteSpace(project) ||
+            buildId <= 0 ||
+            string.IsNullOrWhiteSpace(artifactName) ||
+            string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            return null;
+        }
+
         var url = $"{DatadogTraceSymbolsConfig.AzureDevOpsBaseUrl}/{organization}/{project}/_apis/build/builds/{buildId}/artifacts" +
                   $"?artifactName={Uri.EscapeDataString(artifactName)}&$format=zip&api-version={DatadogTraceSymbolsConfig.ApiVersion}";
 

@@ -234,9 +234,15 @@ public class ClrMdAnalyzer : IDisposable
     }
 
     /// <summary>
-    /// Extracts assembly attributes and version from a MetadataReader.
+    /// Extracts assembly attributes and version from a <see cref="MetadataReader"/>.
     /// </summary>
-    private (List<AssemblyAttributeInfo> attributes, string? version) ExtractAttributes(MetadataReader reader)
+    /// <remarks>
+    /// This is used both when reading module metadata from dump memory and in unit tests that
+    /// validate the attribute decoding behavior against a real on-disk assembly.
+    /// </remarks>
+    /// <param name="reader">The metadata reader.</param>
+    /// <returns>Decoded attribute list and optional assembly version string.</returns>
+    internal static (List<AssemblyAttributeInfo> attributes, string? version) ExtractAttributes(MetadataReader reader)
     {
         var result = new List<AssemblyAttributeInfo>();
         string? version = null;
@@ -276,7 +282,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Decodes a custom attribute from metadata.
     /// </summary>
-    private AssemblyAttributeInfo? DecodeAttribute(MetadataReader reader, CustomAttribute attr)
+    private static AssemblyAttributeInfo? DecodeAttribute(MetadataReader reader, CustomAttribute attr)
     {
         string? typeName = null;
         
@@ -317,7 +323,7 @@ public class ClrMdAnalyzer : IDisposable
     /// Decodes the attribute blob value according to ECMA-335 II.23.3.
     /// Handles known attribute types with specific signatures.
     /// </summary>
-    private (string? Value, string? Key) DecodeBlob(MetadataReader reader, CustomAttribute attr, string typeName)
+    private static (string? Value, string? Key) DecodeBlob(MetadataReader reader, CustomAttribute attr, string typeName)
     {
         try
         {
@@ -359,7 +365,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Decodes AssemblyMetadataAttribute which has two string params (key, value).
     /// </summary>
-    private (string? Value, string? Key) DecodeKeyValueString(ref BlobReader blob)
+    private static (string? Value, string? Key) DecodeKeyValueString(ref BlobReader blob)
             {
                 var key = ReadString(ref blob);
                 var value = ReadString(ref blob);
@@ -379,7 +385,7 @@ public class ClrMdAnalyzer : IDisposable
         EnableEditAndContinue = 4
     }
 
-    private (string? Value, string? Key) DecodeDebuggable(ref BlobReader blob)
+    private static (string? Value, string? Key) DecodeDebuggable(ref BlobReader blob)
             {
         // DebuggableAttribute has two constructors:
         // 1. DebuggableAttribute(DebuggingModes modes) - 4 bytes (int32 enum) - modern, handled here
@@ -420,7 +426,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Decodes RuntimeCompatibilityAttribute which has named property WrapNonExceptionThrows.
     /// </summary>
-    private (string? Value, string? Key) DecodeRuntimeCompatibility(ref BlobReader blob)
+    private static (string? Value, string? Key) DecodeRuntimeCompatibility(ref BlobReader blob)
     {
         // Skip to named arguments section
         // Format: NumNamed (uint16), then properties
@@ -512,7 +518,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Decodes CompilationRelaxationsAttribute(int relaxations).
     /// </summary>
-    private (string? Value, string? Key) DecodeCompilationRelaxations(ref BlobReader blob)
+    private static (string? Value, string? Key) DecodeCompilationRelaxations(ref BlobReader blob)
     {
         if (blob.RemainingBytes < 4) return ("<binary>", null);
         var relaxations = blob.ReadInt32();
@@ -523,7 +529,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Decodes simple bool attributes (CLSCompliantAttribute, ComVisibleAttribute, etc.).
     /// </summary>
-    private (string? Value, string? Key) DecodeBoolAttribute(ref BlobReader blob)
+    private static (string? Value, string? Key) DecodeBoolAttribute(ref BlobReader blob)
     {
         if (blob.RemainingBytes < 1) return ("<binary>", null);
         return (blob.ReadByte() != 0 ? "true" : "false", null);
@@ -532,7 +538,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Decodes simple string attributes.
     /// </summary>
-    private (string? Value, string? Key) DecodeStringAttribute(ref BlobReader blob)
+    private static (string? Value, string? Key) DecodeStringAttribute(ref BlobReader blob)
     {
                 var value = ReadString(ref blob);
                 return (value, null);
@@ -541,7 +547,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Decodes TargetFrameworkAttribute which has a string param and optional named FrameworkDisplayName.
     /// </summary>
-    private (string? Value, string? Key) DecodeTargetFramework(ref BlobReader blob)
+    private static (string? Value, string? Key) DecodeTargetFramework(ref BlobReader blob)
     {
         var frameworkName = ReadString(ref blob);
         
@@ -576,7 +582,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Attempts to decode as string. Returns "&lt;binary&gt;" if the data contains control characters.
     /// </summary>
-    private (string? Value, string? Key) DecodeStringOrBinary(ref BlobReader blob)
+    private static (string? Value, string? Key) DecodeStringOrBinary(ref BlobReader blob)
     {
         var value = ReadString(ref blob);
         
@@ -593,7 +599,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Reads a serialized string from a blob (ECMA-335 II.23.3).
     /// </summary>
-    private string? ReadString(ref BlobReader blob)
+    private static string? ReadString(ref BlobReader blob)
     {
         if (blob.RemainingBytes == 0)
             return null;
@@ -1332,7 +1338,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Normalizes a generic type name to the CLR format (e.g., List&lt;T&gt; → List`1).
     /// </summary>
-    private static string NormalizeGenericTypeName(string typeName)
+    internal static string NormalizeGenericTypeName(string typeName)
     {
         // Handle C#-style generics like "List<T>" or "Dictionary<string, int>"
         if (typeName.Contains('<'))
@@ -1354,7 +1360,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Counts the number of generic type parameters, handling nested generics.
     /// </summary>
-    private static int CountGenericParameters(string paramSection)
+    internal static int CountGenericParameters(string paramSection)
     {
         // Remove the closing bracket
         if (paramSection.EndsWith(">", StringComparison.Ordinal))
@@ -1387,7 +1393,7 @@ public class ClrMdAnalyzer : IDisposable
     /// <summary>
     /// Checks if a CLR type name matches the search pattern.
     /// </summary>
-    private static bool MatchesTypeName(string clrTypeName, string searchName, string normalizedName, bool isGenericSearch)
+    internal static bool MatchesTypeName(string clrTypeName, string searchName, string normalizedName, bool isGenericSearch)
     {
         // Exact match
         if (clrTypeName.Equals(searchName, StringComparison.Ordinal))
@@ -1523,7 +1529,7 @@ public class ClrMdAnalyzer : IDisposable
     /// Scores how well a CLR type name matches a generic type search pattern.
     /// Returns 0 for no match, higher scores for better matches.
     /// </summary>
-    private static int ScoreGenericTypeMatch(string clrTypeName, string baseTypeName, string fullSearchName)
+    internal static int ScoreGenericTypeMatch(string clrTypeName, string baseTypeName, string fullSearchName)
     {
         // Extract CLR base name (before the backtick)
         var clrBaseName = clrTypeName.Contains('`') 
@@ -2282,7 +2288,10 @@ public class ClrMdAnalyzer : IDisposable
     private const int TASK_STATE_CANCELED = 0x400000;
     private const int TASK_STATE_FAULTED = 0x200000;
     
-    private static string GetTaskStatus(int stateFlags)
+    /// <summary>
+    /// Translates Task state flags into a human-readable status string.
+    /// </summary>
+    internal static string GetTaskStatus(int stateFlags)
     {
         if ((stateFlags & TASK_STATE_RAN_TO_COMPLETION) != 0) return "RanToCompletion";
         if ((stateFlags & TASK_STATE_FAULTED) != 0) return "Faulted";
@@ -2466,7 +2475,10 @@ public class ClrMdAnalyzer : IDisposable
     
     // === Phase 2d: String Analysis ===
     
-    private static string GetStringSuggestion(string value)
+    /// <summary>
+    /// Returns a heuristic suggestion for improving string usage.
+    /// </summary>
+    internal static string GetStringSuggestion(string value)
     {
         if (string.IsNullOrEmpty(value))
             return "Use string.Empty instead of \"\"";
@@ -2489,7 +2501,10 @@ public class ClrMdAnalyzer : IDisposable
         return "Consider caching or using StringPool";
     }
     
-    private static string EscapeControlCharacters(string value)
+    /// <summary>
+    /// Escapes control characters so string values can be displayed safely.
+    /// </summary>
+    internal static string EscapeControlCharacters(string value)
     {
         if (string.IsNullOrEmpty(value)) return value;
         
@@ -3061,7 +3076,7 @@ public class ClrMdAnalyzer : IDisposable
             wasAbortedFlag == 1, sw.ElapsedMilliseconds, topN);
     }
     
-    private CombinedHeapAnalysis BuildCombinedResult(
+    internal static CombinedHeapAnalysis BuildCombinedResult(
         Dictionary<string, (int Count, long Size, long Largest)> typeStats,
         Dictionary<string, (int Count, long Size)> stringCounts,
         List<LargeObjectInfo> largeObjects,
@@ -3284,19 +3299,30 @@ public class ClrMdAnalyzer : IDisposable
     public bool DetectIsAlpine()
     {
         var nativeModules = GetNativeModulePaths();
-        
+
+        return DetectIsAlpineFromNativeModulePaths(nativeModules, _logger);
+    }
+
+    /// <summary>
+    /// Detects if a dump appears to be from an Alpine/musl system by inspecting native module paths.
+    /// </summary>
+    /// <param name="nativeModules">Native module paths extracted from a dump.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    /// <returns>True when musl indicators are present; otherwise, false.</returns>
+    internal static bool DetectIsAlpineFromNativeModulePaths(IEnumerable<string> nativeModules, ILogger? logger = null)
+    {
         // Look for musl indicators in native module paths
         // e.g., /lib/ld-musl-x86_64.so.1, /lib/ld-musl-aarch64.so.1
         foreach (var path in nativeModules)
         {
             var pathLower = path.ToLowerInvariant();
-            if (pathLower.Contains("ld-musl") || pathLower.Contains("musl-"))
+            if (pathLower.Contains("ld-musl", StringComparison.Ordinal) || pathLower.Contains("musl-", StringComparison.Ordinal))
             {
-                _logger?.LogInformation("[ClrMD] Detected Alpine/musl from module: {Path}", path);
+                logger?.LogInformation("[ClrMD] Detected Alpine/musl from module: {Path}", path);
                 return true;
             }
         }
-        
+
         return false;
     }
     
@@ -3307,29 +3333,47 @@ public class ClrMdAnalyzer : IDisposable
     public string? DetectArchitecture()
     {
         var nativeModules = GetNativeModulePaths();
-        
+
+        return DetectArchitectureFromNativeModulePaths(nativeModules, _logger);
+    }
+
+    /// <summary>
+    /// Detects dump architecture by inspecting native module paths.
+    /// </summary>
+    /// <param name="nativeModules">Native module paths extracted from a dump.</param>
+    /// <param name="logger">Optional logger for diagnostics.</param>
+    /// <returns>Architecture string (x64, arm64, x86) or null when not detected.</returns>
+    internal static string? DetectArchitectureFromNativeModulePaths(IEnumerable<string> nativeModules, ILogger? logger = null)
+    {
         foreach (var path in nativeModules)
         {
             var pathLower = path.ToLowerInvariant();
-            
+
             // Check for architecture indicators in paths
-            if (pathLower.Contains("aarch64") || pathLower.Contains("-arm64") || pathLower.Contains("/arm64/"))
+            if (pathLower.Contains("aarch64", StringComparison.Ordinal) ||
+                pathLower.Contains("-arm64", StringComparison.Ordinal) ||
+                pathLower.Contains("/arm64/", StringComparison.Ordinal))
             {
-                _logger?.LogInformation("[ClrMD] Detected arm64 architecture from module: {Path}", path);
+                logger?.LogInformation("[ClrMD] Detected arm64 architecture from module: {Path}", path);
                 return "arm64";
             }
-            if (pathLower.Contains("x86_64") || pathLower.Contains("x86-64") || pathLower.Contains("amd64") || pathLower.Contains("/x64/"))
+            if (pathLower.Contains("x86_64", StringComparison.Ordinal) ||
+                pathLower.Contains("x86-64", StringComparison.Ordinal) ||
+                pathLower.Contains("amd64", StringComparison.Ordinal) ||
+                pathLower.Contains("/x64/", StringComparison.Ordinal))
             {
-                _logger?.LogInformation("[ClrMD] Detected x64 architecture from module: {Path}", path);
+                logger?.LogInformation("[ClrMD] Detected x64 architecture from module: {Path}", path);
                 return "x64";
             }
-            if (pathLower.Contains("i386") || pathLower.Contains("i686") || pathLower.Contains("/x86/"))
+            if (pathLower.Contains("i386", StringComparison.Ordinal) ||
+                pathLower.Contains("i686", StringComparison.Ordinal) ||
+                pathLower.Contains("/x86/", StringComparison.Ordinal))
             {
-                _logger?.LogInformation("[ClrMD] Detected x86 architecture from module: {Path}", path);
+                logger?.LogInformation("[ClrMD] Detected x86 architecture from module: {Path}", path);
                 return "x86";
             }
         }
-        
+
         return null;
     }
 
@@ -4720,4 +4764,3 @@ public class ClrRegisterSet
 }
 
 #endregion
-

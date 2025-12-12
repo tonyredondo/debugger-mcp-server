@@ -7,6 +7,7 @@ namespace DebuggerMcp.Tests;
 /// <summary>
 /// Tests for SessionCleanupService class.
 /// </summary>
+[Collection("NonParallelEnvironment")]
 public class SessionCleanupServiceTests : IDisposable
 {
     private readonly Mock<ILogger<SessionCleanupService>> _loggerMock;

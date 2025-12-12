@@ -36,6 +36,24 @@ public class DotNetCrashAnalyzerParsingTests
 
         public void TestUpdateDotNetSummary(CrashAnalysisResult result)
             => UpdateDotNetSummary(result);
+
+        public void TestParseClrThreads(string output, CrashAnalysisResult result)
+            => ParseClrThreads(output, result);
+
+        public void TestParseThreadPool(string output, CrashAnalysisResult result)
+            => ParseThreadPool(output, result);
+
+        public void TestParseTimerInfo(string output, CrashAnalysisResult result)
+            => ParseTimerInfo(output, result);
+
+        public void TestParseFullCallStacksAllThreads(string output, CrashAnalysisResult result, bool appendToExisting = false)
+            => ParseFullCallStacksAllThreads(output, result, appendToExisting);
+
+        public void TestParseAssemblyVersions(string output, CrashAnalysisResult result)
+            => ParseAssemblyVersions(output, result);
+
+        public void TestEnrichAssemblyInfo(CrashAnalysisResult result)
+            => EnrichAssemblyInfo(result);
     }
 
     private readonly TestableDotNetCrashAnalyzer _analyzer = new();
@@ -349,5 +367,249 @@ Ready for finalization 10 objects";
         // All hierarchical properties are initialized by CreateInitializedResult()
 
         _analyzer.TestUpdateDotNetSummary(result);
+    }
+
+    // ============================================================
+    // ParseClrThreads Tests
+    // ============================================================
+
+    [Fact]
+    public void ParseClrThreads_WithHeaderAndThreadLine_UpdatesSummaryAndEnrichesThread()
+    {
+        var output = string.Join(
+            "\n",
+            "ThreadCount:      13",
+            "UnstartedThread:  0",
+            "BackgroundThread: 10",
+            "PendingThread:    0",
+            "DeadThread:       2",
+            "Hosted Runtime:   yes",
+            "DBG   ID     OSID ThreadOBJ           State GC Mode     GC Alloc Context                  Domain           Count Apt Exception",
+            "1     1     8954 0000F714F13A4010    20020 Preemptive  0000F7158EE6AA88:0000F7158EE6C1F8 0000F7559002B110 -00001 Ukn (Threadpool Worker) System.MissingMethodException 1234abcd");
+
+        var result = CreateInitializedResult();
+        result.Threads!.All!.Add(new ThreadInfo { ThreadId = "0x8954", CallStack = new List<StackFrame>() });
+
+        _analyzer.TestParseClrThreads(output, result);
+
+        Assert.Equal(13, result.Threads!.Summary!.Total);
+        Assert.Equal(10, result.Threads.Summary.Background);
+        Assert.True(result.Environment!.Runtime!.IsHosted);
+
+        var thread = result.Threads.All.Single(t => t.ThreadId.Equals("0x8954", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(1, thread.ManagedThreadId);
+        Assert.Equal("8954", thread.OsThreadId);
+        Assert.Equal("0x0000F714F13A4010", thread.ThreadObject);
+        Assert.Equal("0x20020", thread.ClrThreadState);
+        Assert.Equal("Preemptive", thread.GcMode);
+        Assert.Equal(-1, thread.LockCount);
+        Assert.Equal("Threadpool Worker", thread.ThreadType);
+        Assert.True(thread.IsThreadpool);
+        Assert.Contains("MissingMethodException", thread.CurrentException ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseClrThreads_WhenOutputMissingThreadCountHeader_DoesNothing()
+    {
+        var result = CreateInitializedResult();
+        _analyzer.TestParseClrThreads("some output", result);
+
+        Assert.Equal(0, result.Threads!.Summary!.Total);
+    }
+
+    // ============================================================
+    // ParseThreadPool Tests
+    // ============================================================
+
+    [Fact]
+    public void ParseThreadPool_WithPortablePoolAndSaturation_AddsRecommendations()
+    {
+        var output = string.Join(
+            "\n",
+            "Portable thread pool",
+            "CPU utilization:  95%",
+            "Workers Total:    3",
+            "Workers Running:  3",
+            "Workers Idle:     0",
+            "Worker Min Limit: 4",
+            "Worker Max Limit: 32767");
+
+        var result = CreateInitializedResult();
+        result.Summary!.Recommendations = new List<string>();
+
+        _analyzer.TestParseThreadPool(output, result);
+
+        Assert.NotNull(result.Threads!.ThreadPool);
+        Assert.True(result.Threads.ThreadPool!.IsPortableThreadPool);
+        Assert.Equal(95, result.Threads.ThreadPool.CpuUtilization);
+        Assert.Equal(3, result.Threads.ThreadPool.WorkersTotal);
+        Assert.Equal(3, result.Threads.ThreadPool.WorkersRunning);
+
+        Assert.Contains(result.Summary.Recommendations, r => r.Contains("thread pool workers", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Summary.Recommendations, r => r.Contains("High CPU utilization", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ============================================================
+    // ParseTimerInfo Tests
+    // ============================================================
+
+    [Fact]
+    public void ParseTimerInfo_WithManyTimersAndShortIntervals_AddsRecommendationsAndPopulatesTimers()
+    {
+        var header = "   51 timers";
+        var timerLines = Enumerable.Range(0, 51)
+            .Select(i => $"(L) 0x0000F7158EDFD{i.ToString("X4")} @ 10 ms every 50 ms | 0000F7158EDFCE20 (TypeName) -> CallbackName")
+            .ToArray();
+        var output = header + "\n" + string.Join("\n", timerLines);
+
+        var result = CreateInitializedResult();
+        result.Summary!.Recommendations = new List<string>();
+
+        Assert.False(DotNetCrashAnalyzer.IsSosErrorOutput(output));
+        var timerRegex = new System.Text.RegularExpressions.Regex(
+            @"\(L\)\s+0x([0-9a-fA-F]+)\s+@\s+(\d+)\s+ms\s+every\s+([\d\-]+)\s+ms\s+\|\s+([0-9a-fA-F]+)\s+\(([^)]+)\)\s*(?:->\s*(.*))?",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        Assert.True(timerRegex.IsMatch(timerLines[0]), "Test input should match the production regex");
+
+        _analyzer.TestParseTimerInfo(output, result);
+
+        Assert.NotNull(result.Async!.Timers);
+        Assert.Equal(51, result.Async.Timers!.Count);
+
+        Assert.Contains(result.Summary.Recommendations, r => r.Contains("High number of active timers", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Summary.Recommendations, r => r.Contains("very short intervals", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ============================================================
+    // ParseFullCallStacksAllThreads Tests
+    // ============================================================
+
+    [Fact]
+    public void ParseFullCallStacksAllThreads_ParsesFramesParametersLocalsAndRegisters()
+    {
+        var output = string.Join(
+            "\n",
+            "OS Thread Id: 0x8954 (1)",
+            "0000000000001000 0000000000002000 MyApp.dll!MyNamespace.MyType.Method(System.Int32, System.String) + 0 [/src/MyType.cs @ 42]",
+            "PARAMETERS:",
+            "    this (rcx) = 0x000000000000DEAD",
+            "    value (rdx) = 123",
+            "LOCALS:",
+            "    <CLR reg> = 0x000000000000BEEF",
+            "    <no data> = <no data>",
+            "    rax=1 rbx=2 rcx=3 rdx=4",
+            "0000000000001010                  [GCFrame]",
+            "0000000000001020 0000000000003000 libcoreclr.so!PROCCreateCrashDump() + 636 at /path/to/file.cpp:123");
+
+        var result = CreateInitializedResult();
+        result.Threads!.All!.Clear();
+
+        _analyzer.TestParseFullCallStacksAllThreads(output, result, appendToExisting: false);
+
+        var thread = Assert.Single(result.Threads!.All!);
+        Assert.Equal("0x8954", thread.ThreadId);
+        Assert.True(thread.CallStack.Count >= 2);
+
+        var first = thread.CallStack[0];
+        Assert.True(first.IsManaged);
+        Assert.Equal("MyApp.dll", first.Module);
+        Assert.Contains("MyNamespace.MyType.Method", first.Function, StringComparison.Ordinal);
+        Assert.Equal("/src/MyType.cs", first.SourceFile);
+        Assert.Equal(42, first.LineNumber);
+
+        Assert.NotNull(first.Parameters);
+        Assert.NotEmpty(first.Parameters!);
+        Assert.Contains(first.Parameters!, p => p.Name == "this");
+
+        var thisParam = first.Parameters!.First(p => p.Name == "this");
+        Assert.Equal("MyNamespace.MyType", thisParam.Type);
+        Assert.True(thisParam.IsReferenceType);
+
+        Assert.NotNull(first.Locals);
+        Assert.Contains(first.Locals!, l => l.Value is string s && s == "[NO DATA]");
+
+        Assert.NotNull(first.Registers);
+        Assert.Equal("1", first.Registers!["rax"]);
+        Assert.Equal("3", first.Registers["rcx"]);
+
+        Assert.Contains(thread.CallStack, f => f.Function.Contains("[GCFrame]", StringComparison.Ordinal));
+
+        var native = thread.CallStack.First(f => !f.IsManaged && f.Module.Contains("libcoreclr", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("file.cpp", native.SourceFile);
+        Assert.Equal(123, native.LineNumber);
+    }
+
+    [Fact]
+    public void ParseFullCallStacksAllThreads_WhenAppending_DoesNotClearExistingFrames()
+    {
+        var result = CreateInitializedResult();
+        result.Threads!.All = new List<ThreadInfo>
+        {
+            new()
+            {
+                ThreadId = "0x8954",
+                State = "Unknown",
+                CallStack = new List<StackFrame> { new() { FrameNumber = 0, Function = "native", IsManaged = false } }
+            }
+        };
+
+        var output = string.Join(
+            "\n",
+            "OS Thread Id: 0x8954 (1)",
+            "0000000000001000 0000000000002000 MyApp.dll!MyNamespace.MyType.Method(System.Int32) + 0");
+
+        _analyzer.TestParseFullCallStacksAllThreads(output, result, appendToExisting: true);
+
+        var thread = Assert.Single(result.Threads.All);
+        Assert.True(thread.CallStack.Count >= 2);
+        Assert.Contains(thread.CallStack, f => f.Function == "native");
+    }
+
+    // ============================================================
+    // ParseAssemblyVersions / EnrichAssemblyInfo Tests
+    // ============================================================
+
+    [Fact]
+    public void ParseAssemblyVersions_WithBracketFormat_PopulatesAssemblies()
+    {
+        var output = string.Join(
+            "\n",
+            "Assembly:   0000f7558b725348 [My.Assembly]",
+            "Module Name    0000f7558b7254c8  /path/to/My.Assembly.dll",
+            "Assembly:   0000f7558b725349 [Other.Assembly]",
+            "Module Name    0000f7558b7254c9  C:\\path\\to\\Other.Assembly.dll");
+
+        var result = CreateInitializedResult();
+        _analyzer.TestParseAssemblyVersions(output, result);
+
+        Assert.NotNull(result.Assemblies);
+        Assert.Equal(2, result.Assemblies!.Count);
+        Assert.NotNull(result.Assemblies.Items);
+        Assert.Contains(result.Assemblies.Items!, a => a.Name == "My.Assembly" && a.Path == "/path/to/My.Assembly.dll");
+        Assert.Contains(result.Assemblies.Items!, a => a.Name == "Other.Assembly" && a.Path!.EndsWith("Other.Assembly.dll", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void EnrichAssemblyInfo_WithMatchingModules_FillsBaseAddressAndNativeImageFlag()
+    {
+        var result = CreateInitializedResult();
+        result.Assemblies = new AssembliesInfo
+        {
+            Count = 1,
+            Items = new List<AssemblyVersionInfo>
+            {
+                new() { Name = "My.Assembly", Path = "/path/to/My.Assembly.ni.dll" }
+            }
+        };
+        result.Modules = new List<ModuleInfo>
+        {
+            new() { Name = "/path/to/My.Assembly.ni.dll", BaseAddress = "0x1111" }
+        };
+
+        _analyzer.TestEnrichAssemblyInfo(result);
+
+        var asm = Assert.Single(result.Assemblies.Items!);
+        Assert.Equal("0x1111", asm.BaseAddress);
+        Assert.True(asm.IsNativeImage);
     }
 }

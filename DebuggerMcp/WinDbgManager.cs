@@ -531,57 +531,72 @@ public class WinDbgManager : IDebuggerManager
             // Get list of loaded modules
             var moduleList = ExecuteCommand("lm");
 
-            // Check for .NET Core/.NET 5+ runtime (most common modern case)
-            if (moduleList.Contains("coreclr", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-
-            // Check for .NET Framework runtime - look for clr module name with word boundary
-            // Pattern: "clr " at start of module name or " clr " as whole word
-            // The lm output format is: "start end module_name"
-            // We need to avoid false positives like "aclr" or "clrjit" (handled separately)
-            var lines = moduleList.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-            foreach (var line in lines)
-            {
-                // Check if line contains " clr " as a word (module name with spaces around it)
-                // Or ends with " clr" (end of line)
-                if (System.Text.RegularExpressions.Regex.IsMatch(line, @"\bclr\b",
-                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                {
-                    // Make sure it's not clrjit (which is a separate module)
-                    if (!line.Contains("clrjit", StringComparison.OrdinalIgnoreCase))
-                    {
-                        return true;
-                    }
-                }
-            }
-
-            // Check for other .NET indicators
-            var dotNetIndicators = new[]
-            {
-                "mscorwks",      // .NET Framework 2.0
-                "clrjit",        // JIT compiler (present in both Core and Framework)
-                "hostpolicy",    // .NET Core host
-                "hostfxr",       // .NET Core framework resolver
-                "System.Private.CoreLib", // .NET Core BCL
-            };
-
-            foreach (var indicator in dotNetIndicators)
-            {
-                if (moduleList.Contains(indicator, StringComparison.OrdinalIgnoreCase))
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            return IsDotNetModuleList(moduleList);
         }
         catch
         {
             // If we can't get module list, assume not .NET
             return false;
         }
+    }
+
+    /// <summary>
+    /// Determines whether a WinDbg <c>lm</c> module list indicates a .NET dump.
+    /// </summary>
+    /// <param name="moduleList">The raw output from the <c>lm</c> command.</param>
+    /// <returns><c>true</c> if known .NET runtime indicators are present; otherwise, <c>false</c>.</returns>
+    internal static bool IsDotNetModuleList(string? moduleList)
+    {
+        if (string.IsNullOrWhiteSpace(moduleList))
+        {
+            return false;
+        }
+
+        // Check for .NET Core/.NET 5+ runtime (most common modern case)
+        if (moduleList.Contains("coreclr", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Check for .NET Framework runtime - look for clr module name with word boundary
+        // Pattern: "clr " at start of module name or " clr " as whole word
+        // The lm output format is: "start end module_name"
+        // We need to avoid false positives like "aclr" or "clrjit" (handled separately)
+        var lines = moduleList.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var line in lines)
+        {
+            if (System.Text.RegularExpressions.Regex.IsMatch(
+                line,
+                @"\bclr\b",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            {
+                // Make sure it's not clrjit (which is a separate module)
+                if (!line.Contains("clrjit", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        // Check for other .NET indicators
+        var dotNetIndicators = new[]
+        {
+            "mscorwks",      // .NET Framework 2.0
+            "clrjit",        // JIT compiler (present in both Core and Framework)
+            "hostpolicy",    // .NET Core host
+            "hostfxr",       // .NET Core framework resolver
+            "System.Private.CoreLib", // .NET Core BCL
+        };
+
+        foreach (var indicator in dotNetIndicators)
+        {
+            if (moduleList.Contains(indicator, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
 

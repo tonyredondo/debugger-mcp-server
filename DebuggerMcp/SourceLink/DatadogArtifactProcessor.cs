@@ -353,7 +353,9 @@ public class DatadogArtifactProcessor
         // - universal-symbols/net6.0/Datadog.Trace.pdb
         // - tracer-home/net6.0/publish/...
 
-        return fullName.Contains($"/{tfmLower}/") ||
+        return fullName.StartsWith($"{tfmLower}/") ||
+               fullName.StartsWith($"{tfmLower}\\") ||
+               fullName.Contains($"/{tfmLower}/") ||
                fullName.Contains($"\\{tfmLower}\\") ||
                fullName.Contains($"/{tfmLower}\\") ||
                fullName.Contains($"\\{tfmLower}/");

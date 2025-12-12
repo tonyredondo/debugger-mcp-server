@@ -43,7 +43,11 @@
           <SkipAutoProps>true</SkipAutoProps>
           
           <!-- Deterministic report (for CI reproducibility) -->
-          <DeterministicReport>true</DeterministicReport>
+          <!--
+            NOTE: OpenCover reporter does not support deterministic reports.
+            If deterministic output is required, remove 'opencover' from <Format>.
+          -->
+          <DeterministicReport>false</DeterministicReport>
         </Configuration>
       </DataCollector>
     </DataCollectors>
@@ -59,4 +63,3 @@
     </InProcDataCollectors>
   </InProcDataCollectionRunSettings>
 </RunSettings>
-

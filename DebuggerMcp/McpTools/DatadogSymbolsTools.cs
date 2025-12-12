@@ -121,8 +121,13 @@ public class DatadogSymbolsTools(
 
         // Build output directory - Datadog symbols go in a .datadog subdirectory
         // to keep them separate from user-uploaded symbols
+        if (string.IsNullOrEmpty(session.CurrentDumpId))
+        {
+            throw new InvalidOperationException("No dump is currently open. Open a dump first.");
+        }
+
         var dumpStorage = SessionManager.GetDumpStoragePath();
-        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}", ".datadog");
+        var symbolsDir = BuildDatadogSymbolsDirectory(dumpStorage, sanitizedUserId, session.CurrentDumpId);
 
         // Create symbol service and download
         var symbolService = new DatadogSymbolService(session.ClrMdAnalyzer, Logger);
@@ -301,8 +306,13 @@ public class DatadogSymbolsTools(
 
         // Build output directory - Datadog symbols go in a .datadog subdirectory
         // to keep them separate from user-uploaded symbols
+        if (string.IsNullOrEmpty(session.CurrentDumpId))
+        {
+            throw new InvalidOperationException("No dump is currently open. Open a dump first.");
+        }
+
         var dumpStorage = SessionManager.GetDumpStoragePath();
-        var symbolsDir = Path.Combine(dumpStorage, sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}", ".datadog");
+        var symbolsDir = BuildDatadogSymbolsDirectory(dumpStorage, sanitizedUserId, session.CurrentDumpId);
 
         // Create the symbol service
         var symbolService = new DatadogSymbolService(session.ClrMdAnalyzer, Logger);
@@ -641,32 +651,109 @@ public class DatadogSymbolsTools(
     /// </summary>
     private PlatformInfo DetectPlatformFromSession(DebuggerSession session, string debuggerOutput)
     {
+        var (platform, detectedArchitectureFromDebugger, detectedAlpineFromDebugger) = DetectPlatformFromDebuggerOutput(debuggerOutput);
+        
+        // If LLDB didn't give us enough info (e.g., standalone app), try dotnet-symbol --verifycore
+        // This is the most reliable method as it directly parses the dump's module list
+        if ((!detectedAlpineFromDebugger || !detectedArchitectureFromDebugger) && session.Manager is LldbManager lldbManager)
+        {
+            Logger.LogDebug("[DatadogSymbols] Checking dotnet-symbol --verifycore result...");
+            
+            // Check if we already have verified core result (populated during dump open), or run it now
+            var verifyCoreResult = lldbManager.VerifiedCorePlatform;
+            if (verifyCoreResult == null && !string.IsNullOrEmpty(lldbManager.CurrentDumpPath))
+            {
+                Logger.LogDebug("[DatadogSymbols] Running dotnet-symbol --verifycore for platform detection...");
+                verifyCoreResult = lldbManager.VerifyCore(lldbManager.CurrentDumpPath);
+            }
+            
+            if (verifyCoreResult != null)
+            {
+                if (!detectedAlpineFromDebugger && verifyCoreResult.IsAlpine)
+                {
+                    platform.IsAlpine = true;
+                    platform.LibcType = "musl";
+                    Logger.LogInformation("[DatadogSymbols] Detected Alpine/musl via dotnet-symbol --verifycore");
+                }
+                
+                if (!detectedArchitectureFromDebugger && !string.IsNullOrEmpty(verifyCoreResult.Architecture))
+                {
+                    platform.Architecture = verifyCoreResult.Architecture;
+                    Logger.LogInformation("[DatadogSymbols] Detected architecture {Arch} via dotnet-symbol --verifycore", verifyCoreResult.Architecture);
+                }
+            }
+        }
+        
+        // Fallback to ClrMD if dotnet-symbol didn't work
+        if ((platform.IsAlpine != true || !detectedArchitectureFromDebugger) && session.ClrMdAnalyzer != null)
+        {
+            Logger.LogDebug("[DatadogSymbols] Trying ClrMD native modules as final fallback...");
+            
+            // Try to detect Alpine from ClrMD native modules
+            if (platform.IsAlpine != true && session.ClrMdAnalyzer.DetectIsAlpine())
+            {
+                platform.IsAlpine = true;
+                platform.LibcType = "musl";
+                Logger.LogInformation("[DatadogSymbols] Detected Alpine/musl via ClrMD native modules");
+            }
+            
+            // Also try to detect architecture from ClrMD if not detected
+            if (!detectedArchitectureFromDebugger)
+            {
+                var arch = session.ClrMdAnalyzer.DetectArchitecture();
+                if (!string.IsNullOrEmpty(arch))
+                {
+                    platform.Architecture = arch;
+                    Logger.LogInformation("[DatadogSymbols] Detected architecture {Arch} via ClrMD", arch);
+                }
+            }
+        }
+        
+        if (platform.Os == "Linux" && platform.IsAlpine != true)
+        {
+            // Default to glibc for Linux if musl not detected
+            platform.LibcType = "glibc";
+        }
+
+        return platform;
+    }
+
+    /// <summary>
+    /// Detects platform information purely from debugger output (e.g., LLDB <c>image list</c>).
+    /// </summary>
+    /// <param name="debuggerOutput">Debugger output containing module paths.</param>
+    /// <returns>Detected platform info along with whether key properties were inferred from the output.</returns>
+    /// <remarks>
+    /// This method is internal to enable deterministic unit testing of parsing behavior
+    /// without requiring a dump.
+    /// </remarks>
+    internal static (PlatformInfo Platform, bool DetectedArchitecture, bool DetectedAlpine) DetectPlatformFromDebuggerOutput(string debuggerOutput)
+    {
         var platform = new PlatformInfo
         {
             Os = "Linux",  // Default to Linux since most dumps will be Linux
             Architecture = "x64"  // Default, will be overridden if detected
         };
 
-        // Try to detect from debugger output first
-        var outputLower = debuggerOutput.ToLowerInvariant();
-        var detectedFromLldb = false;
+        var outputLower = (debuggerOutput ?? string.Empty).ToLowerInvariant();
+        var detectedArchitecture = false;
 
         // Detect architecture first - look for specific patterns in module paths
         // Common patterns: /lib/ld-musl-aarch64.so, /lib64/ld-linux-x86-64.so.2
         if (outputLower.Contains("aarch64") || outputLower.Contains("-arm64"))
         {
             platform.Architecture = "arm64";
-            detectedFromLldb = true;
+            detectedArchitecture = true;
         }
         else if (outputLower.Contains("x86_64") || outputLower.Contains("x86-64") || outputLower.Contains("amd64"))
         {
             platform.Architecture = "x64";
-            detectedFromLldb = true;
+            detectedArchitecture = true;
         }
-        else if (outputLower.Contains("i386") || outputLower.Contains("i686") || outputLower.Contains("x86"))
+        else if (outputLower.Contains("i386") || outputLower.Contains("i686"))
         {
             platform.Architecture = "x86";
-            detectedFromLldb = true;
+            detectedArchitecture = true;
         }
 
         // Detect OS from module extensions and paths
@@ -685,76 +772,33 @@ public class DatadogSymbolsTools(
 
         // Detect Alpine/musl - look for ld-musl in the loader path
         // e.g., /lib/ld-musl-aarch64.so.1 or /lib/ld-musl-x86_64.so.1
-        var detectedAlpineFromLldb = false;
+        var detectedAlpine = false;
         if (outputLower.Contains("ld-musl") || outputLower.Contains("musl-"))
         {
             platform.IsAlpine = true;
             platform.LibcType = "musl";
-            detectedAlpineFromLldb = true;
+            detectedAlpine = true;
         }
-        
-        // If LLDB didn't give us enough info (e.g., standalone app), try dotnet-symbol --verifycore
-        // This is the most reliable method as it directly parses the dump's module list
-        if ((!detectedAlpineFromLldb || !detectedFromLldb) && session.Manager is LldbManager lldbManager)
-        {
-            Logger.LogDebug("[DatadogSymbols] Checking dotnet-symbol --verifycore result...");
-            
-            // Check if we already have verified core result (populated during dump open), or run it now
-            var verifyCoreResult = lldbManager.VerifiedCorePlatform;
-            if (verifyCoreResult == null && !string.IsNullOrEmpty(lldbManager.CurrentDumpPath))
-            {
-                Logger.LogDebug("[DatadogSymbols] Running dotnet-symbol --verifycore for platform detection...");
-                verifyCoreResult = lldbManager.VerifyCore(lldbManager.CurrentDumpPath);
-            }
-            
-            if (verifyCoreResult != null)
-            {
-                if (!detectedAlpineFromLldb && verifyCoreResult.IsAlpine)
-                {
-                    platform.IsAlpine = true;
-                    platform.LibcType = "musl";
-                    Logger.LogInformation("[DatadogSymbols] Detected Alpine/musl via dotnet-symbol --verifycore");
-                }
-                
-                if (!detectedFromLldb && !string.IsNullOrEmpty(verifyCoreResult.Architecture))
-                {
-                    platform.Architecture = verifyCoreResult.Architecture;
-                    Logger.LogInformation("[DatadogSymbols] Detected architecture {Arch} via dotnet-symbol --verifycore", verifyCoreResult.Architecture);
-                }
-            }
-        }
-        
-        // Fallback to ClrMD if dotnet-symbol didn't work
-        if ((platform.IsAlpine != true || string.IsNullOrEmpty(platform.Architecture)) && session.ClrMdAnalyzer != null)
-        {
-            Logger.LogDebug("[DatadogSymbols] Trying ClrMD native modules as final fallback...");
-            
-            // Try to detect Alpine from ClrMD native modules
-            if (platform.IsAlpine != true && session.ClrMdAnalyzer.DetectIsAlpine())
-            {
-                platform.IsAlpine = true;
-                platform.LibcType = "musl";
-                Logger.LogInformation("[DatadogSymbols] Detected Alpine/musl via ClrMD native modules");
-            }
-            
-            // Also try to detect architecture from ClrMD if not detected
-            if (string.IsNullOrEmpty(platform.Architecture))
-            {
-                var arch = session.ClrMdAnalyzer.DetectArchitecture();
-                if (!string.IsNullOrEmpty(arch))
-                {
-                    platform.Architecture = arch;
-                    Logger.LogInformation("[DatadogSymbols] Detected architecture {Arch} via ClrMD", arch);
-                }
-            }
-        }
-        
+
         if (platform.Os == "Linux" && platform.IsAlpine != true)
         {
-            // Default to glibc for Linux if musl not detected
             platform.LibcType = "glibc";
         }
 
-        return platform;
+        return (platform, detectedArchitecture, detectedAlpine);
+    }
+
+    /// <summary>
+    /// Builds the per-dump Datadog symbols directory.
+    /// </summary>
+    internal static string BuildDatadogSymbolsDirectory(string dumpStoragePath, string sanitizedUserId, string currentDumpId)
+    {
+        if (string.IsNullOrEmpty(currentDumpId))
+        {
+            throw new InvalidOperationException("No dump is currently open. Open a dump first.");
+        }
+
+        var dumpName = Path.GetFileNameWithoutExtension(currentDumpId);
+        return Path.Combine(dumpStoragePath, sanitizedUserId, $".symbols_{dumpName}", ".datadog");
     }
 }

@@ -6,6 +6,7 @@ namespace DebuggerMcp.Tests.SourceLink;
 /// <summary>
 /// Tests for the DatadogTraceSymbolsConfig class.
 /// </summary>
+[Collection("NonParallelEnvironment")]
 public class DatadogTraceSymbolsConfigTests
 {
     [Fact]
@@ -240,4 +241,3 @@ public class DatadogTraceSymbolsConfigTests
         Assert.Equal(expected, result);
     }
 }
-

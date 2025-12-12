@@ -24,6 +24,15 @@ public class Program
     public const string Version = "1.0.0";
 
     /// <summary>
+    /// Exit handler used by command implementations.
+    /// </summary>
+    /// <remarks>
+    /// This indirection enables unit tests to validate error-path behavior without
+    /// terminating the test process.
+    /// </remarks>
+    internal static Action<int> Exit { get; set; } = Environment.Exit;
+
+    /// <summary>
     /// Main entry point.
     /// </summary>
     /// <param name="args">Command-line arguments.</param>
@@ -145,7 +154,7 @@ public class Program
             if (string.IsNullOrEmpty(serverUrl))
             {
                 output.Error("No server URL specified. Use 'health <url>' or set DEBUGGER_MCP_URL environment variable.");
-                Environment.Exit(1);
+                Exit(1);
                 return;
             }
 
@@ -175,7 +184,7 @@ public class Program
                 else
                 {
                     output.Error($"Server is not healthy: {health.Status}");
-                    Environment.Exit(1);
+                    Exit(1);
                 }
             }
             catch (Exception ex)
@@ -185,7 +194,7 @@ public class Program
                 {
                     console.WriteException(ex);
                 }
-                Environment.Exit(1);
+                Exit(1);
             }
         }, urlArgument, serverOption, apiKeyOption, verboseOption);
 
@@ -224,7 +233,7 @@ public class Program
             }
 
             var exitCode = await RunInteractiveShellAsync(settings, verbose, settings.OutputFormat);
-            Environment.Exit(exitCode);
+            Exit(exitCode);
         }, verboseOption, outputOption, serverOption, apiKeyOption);
 
         rootCommand.AddCommand(interactiveCommand);
@@ -329,7 +338,7 @@ public class Program
             if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
             {
                 output.Error($"Invalid URL format: {url}");
-                Environment.Exit(1);
+                Exit(1);
                 return;
             }
 
@@ -426,7 +435,7 @@ public class Program
             else
             {
                 output.Error($"Server not found: {urlOrName}");
-                Environment.Exit(1);
+                Exit(1);
             }
         }, removeArgument, verboseOption);
         serverCommand.AddCommand(removeCommand);
@@ -456,14 +465,14 @@ public class Program
             {
                 output.Error($"Server not found: {urlOrName}");
                 output.Info("Use 'server list' to see available servers.");
-                Environment.Exit(1);
+                Exit(1);
                 return;
             }
 
             if (!server.IsOnline)
             {
                 output.Error($"Server is offline: {server.ShortUrl} ({server.ErrorMessage})");
-                Environment.Exit(1);
+                Exit(1);
                 return;
             }
 
@@ -798,7 +807,7 @@ public class Program
     /// <summary>
     /// Builds the shell prompt based on current state.
     /// </summary>
-    private static string BuildPrompt(ShellState state)
+    internal static string BuildPrompt(ShellState state)
     {
         var parts = new List<string> { "[grey]dbg-mcp[/]" };
 
@@ -836,7 +845,7 @@ public class Program
     /// <summary>
     /// Parses a command line into parts, respecting quotes.
     /// </summary>
-    private static string[] ParseCommandLine(string input)
+    internal static string[] ParseCommandLine(string input)
     {
         var parts = new List<string>();
         var current = new System.Text.StringBuilder();
@@ -1030,7 +1039,7 @@ public class Program
     /// <summary>
     /// Shows help information.
     /// </summary>
-    private static void ShowHelp(ConsoleOutput output, string[] args)
+    internal static void ShowHelp(ConsoleOutput output, string[] args)
     {
         if (args.Length == 0)
         {
@@ -1345,7 +1354,7 @@ public class Program
                     output.WriteLine();
                     output.Markup("[bold]FEATURES[/]");
                     output.Markup("  • Recursively inspects nested objects");
-                    output.Markup("  • Handles circular references ([this], [seen])");
+                    output.Markup("  • Handles circular references ([[this]], [[seen]])");
                     output.Markup("  • Expands arrays (shows length + first N elements)");
                     output.Markup("  • Truncates long strings (1024 chars)");
                     output.Markup("  • Resolves primitive values directly");
@@ -1395,7 +1404,7 @@ public class Program
                     output.Markup("Compare two memory dumps to find differences.");
                     output.WriteLine();
                     output.Markup("[bold]USAGE[/]");
-                    output.Markup("  compare [type] <baseline-session> <target-session>");
+                    output.Markup("  compare [[type]] <baseline-session> <target-session>");
                     output.WriteLine();
                     output.Markup("[bold]COMPARISON TYPES[/]");
                     output.Markup("  [cyan]all[/]           Full comparison (default)");
@@ -1422,7 +1431,7 @@ public class Program
                     output.Markup("[bold]SUBCOMMANDS[/]");
                     output.Markup("  [green]add[/] <expr>     Add a watch expression");
                     output.Markup("  [green]list[/]          List all watches (default)");
-                    output.Markup("  [green]eval[/] [id]     Evaluate watches (all or specific)");
+                    output.Markup("  [green]eval[/] [[id]]     Evaluate watches (all or specific)");
                     output.Markup("  [green]remove[/] <id>   Remove a watch");
                     output.Markup("  [green]clear[/]         Clear all watches");
                     output.WriteLine();
@@ -1482,7 +1491,7 @@ public class Program
                     output.Markup("Resolve source file paths to browsable URLs.");
                     output.WriteLine();
                     output.Markup("[bold]USAGE[/]");
-                    output.Markup("  sourcelink [resolve] <path> [line]");
+                    output.Markup("  sourcelink [[resolve]] <path> [[line]]");
                     output.Markup("  sourcelink info");
                     output.WriteLine();
                     output.Markup("[bold]SUBCOMMANDS[/]");
@@ -1512,7 +1521,7 @@ public class Program
                     output.Markup("Manage multi-server connections for cross-platform dump analysis.");
                     output.WriteLine();
                     output.Markup("[bold]USAGE[/]");
-                    output.Markup("  server <subcommand> [options]");
+                    output.Markup("  server <subcommand> [[options]]");
                     output.WriteLine();
                     output.Markup("[bold]SUBCOMMANDS[/]");
                     output.Markup("  [green]list[/]              List all configured servers with capabilities");
@@ -1607,7 +1616,7 @@ public class Program
     /// <summary>
     /// Handles the history command.
     /// </summary>
-    private static void HandleHistoryCommand(string[] args, ConsoleOutput output, CommandHistory history)
+    internal static void HandleHistoryCommand(string[] args, ConsoleOutput output, CommandHistory history)
     {
         if (args.Length == 0)
         {
@@ -6436,7 +6445,7 @@ public class Program
             output.Error("Comparison requires baseline and target session IDs.");
             output.WriteLine();
             output.Markup("[bold]Usage:[/]");
-            output.Markup("  compare [type] <baseline-session> <target-session>");
+            output.Markup("  compare [[type]] <baseline-session> <target-session>");
             output.WriteLine();
             output.Markup("[bold]Comparison Types:[/]");
             output.Markup("  [cyan]all[/]         Full comparison (default)");
@@ -7638,4 +7647,3 @@ public class Program
     }
 
 }
-

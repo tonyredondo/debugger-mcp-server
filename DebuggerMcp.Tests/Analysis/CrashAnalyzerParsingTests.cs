@@ -16,6 +16,8 @@ public class CrashAnalyzerParsingTests
     {
         public TestableCrashAnalyzer() : base(new Mock<DebuggerMcp.IDebuggerManager>().Object, null) { }
 
+        public TestableCrashAnalyzer(IDebuggerManager debuggerManager) : base(debuggerManager, null) { }
+
         public void TestParseWinDbgException(string output, CrashAnalysisResult result)
             => ParseWinDbgException(output, result);
 
@@ -42,6 +44,15 @@ public class CrashAnalyzerParsingTests
 
         public void TestGenerateSummary(CrashAnalysisResult result)
             => GenerateSummary(result);
+
+        public Task TestAnalyzeMemoryLeaksLldbAsync(CrashAnalysisResult result)
+            => AnalyzeMemoryLeaksLldbAsync(result);
+
+        public Task TestAnalyzeDeadlocksLldbAsync(CrashAnalysisResult result)
+            => AnalyzeDeadlocksLldbAsync(result);
+
+        public void TestDetectPlatformInfo(string modulesOutput, CrashAnalysisResult result)
+            => DetectPlatformInfo(modulesOutput, result);
 
         public static bool TestTryParseHexOrDecimal(string value, out long result)
             => TryParseHexOrDecimal(value, out result);
@@ -127,6 +138,69 @@ ExceptionMessage: Object reference not set to an instance of an object";
         Assert.NotEmpty(result.Threads!.All!);
         Assert.NotEmpty(result.Threads!.All![0].CallStack);
         Assert.True(result.Threads!.All![0].CallStack.Count >= 2);
+    }
+
+    [Fact]
+    public void DetectPlatformInfo_WithMuslAndX64_SetsLinuxAlpineAndX64()
+    {
+        var result = CreateInitializedResult();
+
+        var modules = @"
+[  0] 00000000-00000000 0x0000ffffefc00000 /lib/ld-musl-x86_64.so.1
+[  1] 00000000-00000000 0x0000ffffefc10000 /usr/lib/libc.so
+";
+
+        _analyzer.TestDetectPlatformInfo(modules, result);
+
+        Assert.NotNull(result.Environment!.Platform);
+        Assert.Equal("Linux", result.Environment.Platform!.Os);
+        Assert.True(result.Environment.Platform.IsAlpine);
+        Assert.Equal("musl", result.Environment.Platform.LibcType);
+        Assert.Equal("x64", result.Environment.Platform.Architecture);
+        Assert.Equal(64, result.Environment.Platform.PointerSize);
+    }
+
+    [Fact]
+    public async Task AnalyzeMemoryLeaksLldbAsync_WithLargeRegions_SetsHighSeverityAndRecommendation()
+    {
+        var mockManager = new Mock<IDebuggerManager>();
+        mockManager.Setup(m => m.ExecuteCommand("process status")).Returns("Process status");
+        mockManager.Setup(m => m.ExecuteCommand("memory region --all")).Returns(@"
+[0x00000000-0x80000000) rw-
+[0x80000000-0x90000000) rw-");
+
+        var analyzer = new TestableCrashAnalyzer(mockManager.Object);
+        var result = CreateInitializedResult();
+
+        await analyzer.TestAnalyzeMemoryLeaksLldbAsync(result);
+
+        Assert.NotNull(result.Memory!.LeakAnalysis);
+        Assert.True(result.Memory.LeakAnalysis.Detected);
+        Assert.Equal("High", result.Memory.LeakAnalysis.Severity);
+        Assert.Contains(result.Summary!.Recommendations!, r => r.Contains("High memory footprint", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeDeadlocksLldbAsync_WithTwoWaitingThreads_DetectsPotentialDeadlock()
+    {
+        var mockManager = new Mock<IDebuggerManager>();
+        var analyzer = new TestableCrashAnalyzer(mockManager.Object);
+
+        var result = CreateInitializedResult();
+        result.RawCommands!["bt all"] =
+            "* thread #1\n" +
+            "  frame #0: 0x00000000 0xDEADBEEF pthread_mutex_lock\n" +
+            "  frame #1: 0x00000000 something\n" +
+            "thread #2\n" +
+            "  frame #0: 0x00000000 0xCAFEBABE semaphore_wait\n";
+
+        await analyzer.TestAnalyzeDeadlocksLldbAsync(result);
+
+        Assert.NotNull(result.Threads!.Deadlock);
+        Assert.True(result.Threads.Deadlock!.Detected);
+        Assert.Equal("Potential Deadlock", result.Summary!.CrashType);
+        Assert.True(result.Threads.Deadlock.InvolvedThreads.Count >= 2);
+        Assert.Contains(result.Summary.Recommendations!, r => r.Contains("deadlock", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

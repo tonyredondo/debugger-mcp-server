@@ -85,6 +85,107 @@ public class McpClient : IMcpClient
     }
 
     /// <summary>
+    /// Parses an SSE stream until an MCP message endpoint is discovered.
+    /// </summary>
+    /// <param name="reader">The SSE stream reader.</param>
+    /// <param name="serverUrl">Normalized server base URL.</param>
+    /// <returns>The absolute message endpoint to post JSON-RPC requests to, or null if none was found.</returns>
+    internal static async Task<string?> TryReadMessageEndpointAsync(StreamReader reader, string serverUrl, CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line == null)
+            {
+                return null;
+            }
+
+            if (string.IsNullOrEmpty(line))
+            {
+                continue;
+            }
+
+            // SSE event format: "event: endpoint\ndata: /mcp/message?sessionId=xxx\n\n"
+            if (!line.StartsWith("data: ", StringComparison.Ordinal))
+            {
+                // Some servers emit an explicit event type marker.
+                continue;
+            }
+
+            var data = line[6..];
+
+            // Skip "endpoint" event type markers
+            if (string.Equals(data, "endpoint", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            if (data.StartsWith("/") || data.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+            {
+                return data.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                    ? data
+                    : $"{serverUrl}{data}";
+            }
+
+            // Try parsing as JSON in case the endpoint is sent as JSON
+            if (data.StartsWith("{"))
+            {
+                try
+                {
+                    using var json = JsonDocument.Parse(data);
+                    if (json.RootElement.TryGetProperty("endpoint", out var endpointProp))
+                    {
+                        var endpoint = endpointProp.GetString();
+                        if (!string.IsNullOrEmpty(endpoint))
+                        {
+                            return endpoint.StartsWith("http", StringComparison.OrdinalIgnoreCase)
+                                ? endpoint
+                                : $"{serverUrl}{endpoint}";
+                        }
+                    }
+                }
+                catch
+                {
+                    // Not JSON; ignore.
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Processes a full SSE event payload (including possible multi-line data fields).
+    /// </summary>
+    internal static bool TryProcessSseEventPayload(string? payloadJson, Action<int, string> onResponse)
+    {
+        if (string.IsNullOrWhiteSpace(payloadJson) || !payloadJson.StartsWith("{"))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("id", out var idProp))
+            {
+                return false;
+            }
+
+            var id = idProp.ValueKind == JsonValueKind.Number
+                ? idProp.GetInt32()
+                : int.Parse(idProp.GetString() ?? "0");
+
+            onResponse(id, payloadJson);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Initializes the MCP connection by connecting to SSE endpoint.
     /// </summary>
     private async Task InitializeMcpConnectionAsync(string? apiKey, CancellationToken cancellationToken)
@@ -130,72 +231,7 @@ public class McpClient : IMcpClient
             var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
             var reader = new StreamReader(stream);
 
-            // Read SSE events until we get the endpoint
-            while (true)
-            {
-                var line = await reader.ReadLineAsync(cancellationToken);
-                if (line == null)
-                {
-                    break; // End of stream
-                }
-
-                if (string.IsNullOrEmpty(line))
-                {
-                    continue;
-                }
-
-                // SSE event format: "event: endpoint\ndata: /mcp/message?sessionId=xxx\n\n"
-                if (line.StartsWith("data: "))
-                {
-                    var data = line[6..];
-
-                    // Skip "endpoint" event type markers
-                    if (data == "endpoint")
-                    {
-                        continue;
-                    }
-
-                    // Check if this is a URL path
-                    if (data.StartsWith("/") || data.StartsWith("http"))
-                    {
-                        _messageEndpoint = data.StartsWith("http")
-                            ? data
-                            : $"{_serverUrl}{data}";
-                        break;
-                    }
-
-                    // Try parsing as JSON in case the endpoint is sent as JSON
-                    if (data.StartsWith("{"))
-                    {
-                        try
-                        {
-                            var json = JsonDocument.Parse(data);
-                            if (json.RootElement.TryGetProperty("endpoint", out var endpointProp))
-                            {
-                                var endpoint = endpointProp.GetString();
-                                if (!string.IsNullOrEmpty(endpoint))
-                                {
-                                    _messageEndpoint = endpoint.StartsWith("http")
-                                        ? endpoint
-                                        : $"{_serverUrl}{endpoint}";
-                                    break;
-                                }
-                            }
-                        }
-                        catch
-                        {
-                            // Not JSON, continue
-                        }
-                    }
-                }
-
-                // Check for event type
-                if (line.StartsWith("event: endpoint"))
-                {
-                    // Next data line should be the endpoint
-                    continue;
-                }
-            }
+            _messageEndpoint = await TryReadMessageEndpointAsync(reader, _serverUrl!, cancellationToken);
 
             // If we couldn't get the endpoint from SSE, try the default
             if (string.IsNullOrEmpty(_messageEndpoint))
@@ -280,34 +316,15 @@ public class McpClient : IMcpClient
     /// </summary>
     private void ProcessSseData(string data)
     {
-        if (string.IsNullOrWhiteSpace(data) || !data.StartsWith("{"))
-        {
-            return;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(data);
-            var root = doc.RootElement;
-
-            // Get the request ID
-            if (root.TryGetProperty("id", out var idProp))
+        if (!TryProcessSseEventPayload(data, (id, payload) =>
             {
-                var id = idProp.ValueKind == JsonValueKind.Number
-                    ? idProp.GetInt32()
-                    : int.Parse(idProp.GetString() ?? "0");
-
                 if (_pendingRequests.TryRemove(id, out var tcs))
                 {
-                    tcs.SetResult(data);
+                    tcs.SetResult(payload);
                 }
-            }
-        }
-        catch (Exception ex)
+            }))
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"Error processing SSE response: {ex.Message}");
-            Console.ResetColor();
+            return;
         }
     }
 

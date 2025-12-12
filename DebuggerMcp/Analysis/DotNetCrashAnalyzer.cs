@@ -549,7 +549,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Parses LLDB backtrace output to extract frame indices and stack pointers.
     /// </summary>
-    private static List<(int FrameIndex, ulong SP)> ParseBacktraceForSPs(string btOutput)
+    internal static List<(int FrameIndex, ulong SP)> ParseBacktraceForSPs(string btOutput)
     {
         var result = new List<(int, ulong)>();
         
@@ -591,7 +591,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Parses LLDB register output into a dictionary.
     /// </summary>
-    private static Dictionary<string, string> ParseRegisterOutput(string output)
+    internal static Dictionary<string, string> ParseRegisterOutput(string output)
     {
         var result = new Dictionary<string, string>();
         
@@ -700,26 +700,41 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// Parses a stack pointer string to ulong.
     /// Handles formats: "0x0000FFFFCA31B4C0", "0000FFFFCA31B4C0", "[SP=0x0000FFFFCA31B4C0]"
     /// </summary>
-    private static ulong? ParseStackPointer(string? spString)
+    internal static ulong? ParseStackPointer(string? spString)
     {
-        if (string.IsNullOrEmpty(spString))
+        if (string.IsNullOrWhiteSpace(spString))
             return null;
-        
-        // Extract hex value from various formats
-        var match = Regex.Match(spString, @"(?:0x)?([0-9a-fA-F]+)", RegexOptions.IgnoreCase);
-        if (!match.Success)
+
+        var trimmed = spString.Trim();
+
+        // Common variants we intentionally support:
+        // - 0x0000FFFFCA31B4C0
+        // - 0000FFFFCA31B4C0
+        // - [SP=0x0000FFFFCA31B4C0]
+        if (trimmed.StartsWith("[SP=", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.StartsWith("SP=", StringComparison.OrdinalIgnoreCase))
+        {
+            var equalsIndex = trimmed.IndexOf('=');
+            if (equalsIndex < 0 || equalsIndex == trimmed.Length - 1)
+                return null;
+            trimmed = trimmed[(equalsIndex + 1)..].TrimEnd(']');
+        }
+
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[2..];
+
+        if (string.IsNullOrEmpty(trimmed) || !IsValidHexString(trimmed))
             return null;
-        
-        if (ulong.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out var result))
-            return result;
-        
-        return null;
+
+        return ulong.TryParse(trimmed, System.Globalization.NumberStyles.HexNumber, null, out var result)
+            ? result
+            : null;
     }
 
     /// <summary>
     /// Extracts module name from a type name.
     /// </summary>
-    private static string? ExtractModuleName(string? typeName)
+    internal static string? ExtractModuleName(string? typeName)
     {
         if (string.IsNullOrEmpty(typeName))
             return null;
@@ -739,7 +754,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Formats ClrMD inspection result to look similar to dumpobj output.
     /// </summary>
-    private static string FormatClrMdAsDumpObj(ClrMdObjectInspection result)
+    internal static string FormatClrMdAsDumpObj(ClrMdObjectInspection result)
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine($"Name:        {result.Type}");
@@ -778,7 +793,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// </summary>
     /// <param name="output">The command output to check.</param>
     /// <returns>True if the output indicates an error or SOS is not available.</returns>
-    private static bool IsSosErrorOutput(string output)
+    internal static bool IsSosErrorOutput(string output)
     {
         if (string.IsNullOrWhiteSpace(output))
             return true;
@@ -2069,7 +2084,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// Handles formats like "0x1234", "1234", "0x1234 (System.String)", etc.
     /// Returns just the hex digits without 0x prefix.
     /// </summary>
-    private static string? ExtractHexAddress(string? address)
+    internal static string? ExtractHexAddress(string? address)
     {
         if (string.IsNullOrEmpty(address))
             return null;
@@ -2095,7 +2110,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Checks if a string is a valid hexadecimal number.
     /// </summary>
-    private static bool IsValidHexString(string s)
+    internal static bool IsValidHexString(string s)
     {
         foreach (var c in s)
         {
@@ -2109,7 +2124,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// Normalizes an address by removing 0x prefix and converting to lowercase.
     /// Used for consistent address comparisons.
     /// </summary>
-    private static string NormalizeAddress(string? address)
+    internal static string NormalizeAddress(string? address)
     {
         if (string.IsNullOrEmpty(address)) return string.Empty;
         
@@ -2124,7 +2139,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Formats an HResult code with 0x prefix.
     /// </summary>
-    private static string? FormatHResult(string? hresult)
+    internal static string? FormatHResult(string? hresult)
     {
         if (string.IsNullOrEmpty(hresult)) return null;
         
@@ -6198,7 +6213,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Parses the exception message to extract type name, member name, and signature.
     /// </summary>
-    private static (string? typeName, string? memberName, string? signature) ParseExceptionForTypeAndMember(
+    internal static (string? typeName, string? memberName, string? signature) ParseExceptionForTypeAndMember(
         string exceptionType, string exceptionMessage)
     {
         string? typeName = null;
@@ -6265,7 +6280,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Parses method descriptors from !dumpmt -md output.
     /// </summary>
-    private static List<MethodDescriptorInfo> ParseMethodDescriptors(string dumpmtOutput)
+    internal static List<MethodDescriptorInfo> ParseMethodDescriptors(string dumpmtOutput)
     {
         var methods = new List<MethodDescriptorInfo>();
         
@@ -6375,7 +6390,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Generates a diagnosis message based on the resolution analysis.
     /// </summary>
-    private static string GenerateResolutionDiagnosis(
+    internal static string GenerateResolutionDiagnosis(
         string memberName, bool exactMatch, int similarCount, int totalMethods, string exceptionType)
     {
         // Determine member type from exception for accurate messaging
@@ -6409,7 +6424,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Parses generic instantiation information from the type name and dumpmt output.
     /// </summary>
-    private static GenericInstantiationInfo? ParseGenericInstantiation(string typeName, string dumpmtOutput)
+    internal static GenericInstantiationInfo? ParseGenericInstantiation(string typeName, string dumpmtOutput)
     {
         // Check if it's a generic type (contains backtick)
         if (!typeName.Contains('`')) return null;
@@ -6674,7 +6689,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// Checks if a JIT compiler module is loaded.
     /// NativeAOT applications don't have clrjit since all code is AOT compiled.
     /// </summary>
-    private static bool HasJitCompiler(string modulesOutput)
+    internal static bool HasJitCompiler(string modulesOutput)
     {
         if (string.IsNullOrEmpty(modulesOutput)) return true; // Assume JIT if we can't check
         
@@ -6685,7 +6700,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Detects NativeAOT indicators from stack frames with actual frame data.
     /// </summary>
-    private static List<NativeAotIndicator> DetectNativeAotFromStackFrames(CrashAnalysisResult result)
+    internal static List<NativeAotIndicator> DetectNativeAotFromStackFrames(CrashAnalysisResult result)
     {
         var indicators = new List<NativeAotIndicator>();
         
@@ -6800,7 +6815,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Detects NativeAOT indicators from loaded modules with actual data.
     /// </summary>
-    private static List<NativeAotIndicator> DetectNativeAotFromModules(string modulesOutput)
+    internal static List<NativeAotIndicator> DetectNativeAotFromModules(string modulesOutput)
     {
         var indicators = new List<NativeAotIndicator>();
         
@@ -6992,7 +7007,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Generates a recommendation for fixing trimming issues.
     /// </summary>
-    private static string GenerateTrimmingRecommendation(string missingMember, string exceptionType)
+    internal static string GenerateTrimmingRecommendation(string missingMember, string exceptionType)
     {
         var recommendations = new List<string>();
         
@@ -7070,7 +7085,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <summary>
     /// Detects reflection usage patterns in stack traces that may be problematic in NativeAOT.
     /// </summary>
-    private static List<ReflectionUsageInfo> DetectReflectionUsage(CrashAnalysisResult result)
+    internal static List<ReflectionUsageInfo> DetectReflectionUsage(CrashAnalysisResult result)
     {
         var usage = new List<ReflectionUsageInfo>();
         

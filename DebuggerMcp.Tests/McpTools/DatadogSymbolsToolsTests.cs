@@ -1,91 +1,123 @@
+using System.Text.Json;
+using DebuggerMcp.McpTools;
 using DebuggerMcp.SourceLink;
+using DebuggerMcp.Watches;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace DebuggerMcp.Tests.McpTools;
 
-/// <summary>
-/// Tests for DatadogSymbolsTools MCP tools configuration.
-/// These tests verify the static configuration without requiring full tool setup.
-/// </summary>
+[Collection("NonParallelEnvironment")]
 public class DatadogSymbolsToolsTests
 {
     [Fact]
-    public void DatadogTraceSymbolsConfig_AzureDevOpsOrganization_ReturnsDatadoghq()
+    public void GetDatadogSymbolsConfig_ReturnsJson()
     {
-        // Assert
-        Assert.Equal("datadoghq", DatadogTraceSymbolsConfig.AzureDevOpsOrganization);
+        var tools = CreateTools();
+
+        var json = tools.GetDatadogSymbolsConfig();
+        using var doc = JsonDocument.Parse(json);
+
+        Assert.True(doc.RootElement.TryGetProperty("enabled", out _));
+        Assert.True(doc.RootElement.TryGetProperty("azureDevOps", out _));
+        Assert.True(doc.RootElement.TryGetProperty("environmentVariables", out _));
     }
 
     [Fact]
-    public void DatadogTraceSymbolsConfig_AzureDevOpsProject_ReturnsDdTraceDotnet()
+    public async Task PrepareDatadogSymbols_WhenDisabled_ReturnsErrorJson()
     {
-        // Assert
-        Assert.Equal("dd-trace-dotnet", DatadogTraceSymbolsConfig.AzureDevOpsProject);
+        var original = Environment.GetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED");
+        try
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", "false");
+            var tools = CreateTools();
+
+            var json = await tools.PrepareDatadogSymbols("s", "u");
+            using var doc = JsonDocument.Parse(json);
+
+            Assert.False(doc.RootElement.GetProperty("success").GetBoolean());
+            Assert.Contains("disabled", doc.RootElement.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", original);
+        }
     }
 
     [Fact]
-    public void DatadogTraceSymbolsConfig_AzureDevOpsBaseUrl_ContainsAzureDevOps()
+    public async Task ListDatadogArtifacts_WhenDisabled_ReturnsErrorJson()
     {
-        // Assert
-        Assert.Contains("dev.azure.com", DatadogTraceSymbolsConfig.AzureDevOpsBaseUrl);
+        var original = Environment.GetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED");
+        try
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", "false");
+            var tools = CreateTools();
+
+            var json = await tools.ListDatadogArtifacts(commitSha: "deadbeef");
+            using var doc = JsonDocument.Parse(json);
+
+            Assert.False(doc.RootElement.GetProperty("success").GetBoolean());
+            Assert.Contains("disabled", doc.RootElement.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", original);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("abc")]
+    public async Task DownloadDatadogSymbols_WithShortOrMissingSha_ThrowsArgumentException(string? commitSha)
+    {
+        var original = Environment.GetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED");
+        try
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", "true");
+            var tools = CreateTools();
+
+            await Assert.ThrowsAsync<ArgumentException>(
+                () => tools.DownloadDatadogSymbols("s", "u", commitSha!, loadIntoDebugger: false));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", original);
+        }
     }
 
     [Fact]
-    public void DatadogTraceSymbolsConfig_GetTimeoutSeconds_ReturnsPositiveValue()
+    public async Task DownloadDatadogSymbols_WhenDisabled_ReturnsErrorJson()
     {
-        // Act
-        var timeout = DatadogTraceSymbolsConfig.GetTimeoutSeconds();
+        var original = Environment.GetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED");
+        try
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", "false");
+            var tools = CreateTools();
 
-        // Assert
-        Assert.True(timeout > 0);
+            var json = await tools.DownloadDatadogSymbols("s", "u", commitSha: "deadbeef", loadIntoDebugger: false);
+            using var doc = JsonDocument.Parse(json);
+
+            Assert.False(doc.RootElement.GetProperty("success").GetBoolean());
+            Assert.Contains("disabled", doc.RootElement.GetProperty("error").GetString(), StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", original);
+        }
     }
 
-    [Fact]
-    public void DatadogTraceSymbolsConfig_GetMaxArtifactSize_ReturnsPositiveValue()
+    private static DatadogSymbolsTools CreateTools()
     {
-        // Act
-        var maxSize = DatadogTraceSymbolsConfig.GetMaxArtifactSize();
+        // These tests only cover the pure JSON paths that don't require a real session/dump.
+        var sessionManager = new DebuggerSessionManager(dumpStoragePath: Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N")));
+        var symbolManager = new SymbolManager();
+        var watchStore = new WatchStore();
 
-        // Assert
-        Assert.True(maxSize > 0);
-    }
+        // Create a session used for API validation paths.
+        var sessionId = sessionManager.CreateSession("u");
+        _ = sessionManager.GetSessionInfo(sessionId, "u");
 
-    [Fact]
-    public void DatadogTraceSymbolsConfig_GetShortSha_WithValidSha_ReturnsTruncated()
-    {
-        // Act
-        var result = DatadogTraceSymbolsConfig.GetShortSha("1234567890abcdef");
-
-        // Assert
-        Assert.Equal("12345678", result);
-    }
-
-    [Fact]
-    public void DatadogTraceSymbolsConfig_GetShortSha_WithShortSha_ReturnsOriginal()
-    {
-        // Act
-        var result = DatadogTraceSymbolsConfig.GetShortSha("abc");
-
-        // Assert
-        Assert.Equal("abc", result);
-    }
-
-    [Fact]
-    public void DatadogTraceSymbolsConfig_GetShortSha_WithNull_ReturnsUnknown()
-    {
-        // Act
-        var result = DatadogTraceSymbolsConfig.GetShortSha(null);
-
-        // Assert
-        Assert.Equal("(unknown)", result);
-    }
-
-    [Fact]
-    public void DatadogTraceSymbolsConfig_GetShortSha_WithEmpty_ReturnsUnknown()
-    {
-        // Act
-        var result = DatadogTraceSymbolsConfig.GetShortSha("");
-
-        // Assert
-        Assert.Equal("(unknown)", result);
+        return new DatadogSymbolsTools(sessionManager, symbolManager, watchStore, NullLogger<DatadogSymbolsTools>.Instance);
     }
 }

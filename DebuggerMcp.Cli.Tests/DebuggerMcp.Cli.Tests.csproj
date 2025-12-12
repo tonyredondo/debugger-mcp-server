@@ -6,6 +6,15 @@
     <Nullable>enable</Nullable>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
+
+    <!-- Code Coverage Configuration -->
+    <CollectCoverage>true</CollectCoverage>
+    <CoverletOutputFormat>cobertura,opencover,lcov</CoverletOutputFormat>
+    <CoverletOutput>./TestResults/coverage/</CoverletOutput>
+    <ExcludeByAttribute>Obsolete,GeneratedCodeAttribute,CompilerGeneratedAttribute,ExcludeFromCodeCoverage</ExcludeByAttribute>
+    <Include>[dbg-mcp]*</Include>
+    <Exclude>[DebuggerMcp.Cli.Tests]*</Exclude>
+    <ThresholdType>line,branch,method</ThresholdType>
   </PropertyGroup>
 
   <ItemGroup>
@@ -37,4 +46,3 @@
   </ItemGroup>
 
 </Project>
-

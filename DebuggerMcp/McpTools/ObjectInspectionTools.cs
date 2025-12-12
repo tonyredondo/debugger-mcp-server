@@ -92,6 +92,39 @@ public class ObjectInspectionTools(
                 new JsonSerializerOptions { WriteIndented = true });
         }
 
+        // Parse address early so we can return a useful error even if the dump isn't a .NET dump.
+        var cleanAddress = address.Trim();
+        if (cleanAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            cleanAddress = cleanAddress[2..];
+        }
+
+        if (!ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
+        {
+            return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" },
+                new JsonSerializerOptions { WriteIndented = true });
+        }
+
+        // Parse optional method table.
+        ulong? methodTableValue = null;
+        if (!string.IsNullOrWhiteSpace(methodTable))
+        {
+            var cleanMt = methodTable.Trim();
+            if (cleanMt.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            {
+                cleanMt = cleanMt[2..];
+            }
+
+            if (ulong.TryParse(cleanMt, System.Globalization.NumberStyles.HexNumber, null, out var mtValue))
+            {
+                methodTableValue = mtValue;
+            }
+            else
+            {
+                Logger.LogWarning("Invalid method table format: {MT}, ignoring", methodTable);
+            }
+        }
+
         // ClrMD is required - no SOS fallback
         if (session.ClrMdAnalyzer == null || !session.ClrMdAnalyzer.IsOpen)
         {
@@ -101,31 +134,6 @@ public class ObjectInspectionTools(
 
         try
         {
-            // Parse address
-            var cleanAddress = address.Trim();
-            if (cleanAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                cleanAddress = cleanAddress[2..];
-            
-            if (!ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
-            {
-                return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" }, 
-                    new JsonSerializerOptions { WriteIndented = true });
-            }
-
-            // Parse optional method table
-            ulong? methodTableValue = null;
-            if (!string.IsNullOrWhiteSpace(methodTable))
-            {
-                var cleanMt = methodTable.Trim();
-                if (cleanMt.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-                    cleanMt = cleanMt[2..];
-                
-                if (ulong.TryParse(cleanMt, System.Globalization.NumberStyles.HexNumber, null, out var mtValue))
-                    methodTableValue = mtValue;
-                else
-                    Logger.LogWarning("Invalid method table format: {MT}, ignoring", methodTable);
-            }
-
             // Inspect using ClrMD with VT/RT fallback when MT is provided
             var result = session.ClrMdAnalyzer.InspectObject(
                 addressValue, 
@@ -209,6 +217,20 @@ public class ObjectInspectionTools(
                 new JsonSerializerOptions { WriteIndented = true });
         }
 
+        // Parse address early so we can return a useful error even if the dump isn't a .NET dump.
+        // Only strip 0x prefix, not leading zeros.
+        var cleanAddress = address.Trim();
+        if (cleanAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            cleanAddress = cleanAddress[2..];
+        }
+
+        if (!ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
+        {
+            return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" },
+                new JsonSerializerOptions { WriteIndented = true });
+        }
+
         // Check if ClrMD analyzer is available
         if (session.ClrMdAnalyzer == null || !session.ClrMdAnalyzer.IsOpen)
         {
@@ -218,19 +240,6 @@ public class ObjectInspectionTools(
 
         try
         {
-            // Parse address - only strip 0x prefix, not leading zeros
-            var cleanAddress = address.Trim();
-            if (cleanAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
-            {
-                cleanAddress = cleanAddress[2..];
-            }
-            
-            if (!ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
-            {
-                return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" }, 
-                    new JsonSerializerOptions { WriteIndented = true });
-            }
-
             // Inspect using ClrMD
             var result = session.ClrMdAnalyzer.InspectModule(addressValue);
             

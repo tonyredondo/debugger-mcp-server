@@ -18,6 +18,7 @@ namespace DebuggerMcp.Cli.Shell;
 public class ShellReadLine
 {
     private readonly IAnsiConsole _console;
+    private readonly ISystemConsole _systemConsole;
     private readonly CommandHistory _history;
     private readonly AutoComplete _autoComplete;
     private readonly ShellState _state;
@@ -39,9 +40,11 @@ public class ShellReadLine
         IAnsiConsole console,
         CommandHistory history,
         AutoComplete autoComplete,
-        ShellState state)
+        ShellState state,
+        ISystemConsole? systemConsole = null)
     {
         _console = console;
+        _systemConsole = systemConsole ?? new SystemConsole();
         _history = history;
         _autoComplete = autoComplete;
         _state = state;
@@ -66,19 +69,19 @@ public class ShellReadLine
         while (!cancellationToken.IsCancellationRequested)
         {
             // Check for available key
-            if (!Console.KeyAvailable)
+            if (!_systemConsole.KeyAvailable)
             {
                 await Task.Delay(10, cancellationToken);
                 continue;
             }
 
-            var key = Console.ReadKey(intercept: true);
+            var key = _systemConsole.ReadKey(intercept: true);
 
             // Handle special keys
             switch (key.Key)
             {
                 case ConsoleKey.Enter:
-                    Console.WriteLine();
+                    _systemConsole.WriteLine();
                     if (!string.IsNullOrWhiteSpace(_currentLine))
                     {
                         _history.Add(_currentLine);
@@ -105,7 +108,7 @@ public class ShellReadLine
                     if (_cursorPosition > 0)
                     {
                         _cursorPosition--;
-                        Console.CursorLeft--;
+                        _systemConsole.CursorLeft--;
                     }
                     break;
 
@@ -113,7 +116,7 @@ public class ShellReadLine
                     if (_cursorPosition < _currentLine.Length)
                     {
                         _cursorPosition++;
-                        Console.CursorLeft++;
+                        _systemConsole.CursorLeft++;
                     }
                     break;
 
@@ -139,12 +142,12 @@ public class ShellReadLine
 
                 case ConsoleKey.C when key.Modifiers.HasFlag(ConsoleModifiers.Control):
                     // Cancel current line
-                    Console.WriteLine("^C");
+                    _systemConsole.WriteLine("^C");
                     return null;
 
                 case ConsoleKey.L when key.Modifiers.HasFlag(ConsoleModifiers.Control):
                     // Clear screen
-                    Console.Clear();
+                    _systemConsole.Clear();
                     WritePrompt();
                     WriteCurrentLine();
                     break;
@@ -193,7 +196,7 @@ public class ShellReadLine
         }
 
         // Cancellation requested - write newline so next output starts on fresh line
-        Console.WriteLine();
+        _systemConsole.WriteLine();
         return null;
     }
 
@@ -211,11 +214,11 @@ public class ShellReadLine
     private void WriteCurrentLine()
     {
         var promptLength = PromptBuilder.GetPromptLength(_state);
-        Console.Write(_currentLine);
+        _systemConsole.Write(_currentLine);
 
         // Position cursor correctly
         var targetPosition = promptLength + _cursorPosition;
-        Console.CursorLeft = targetPosition;
+        _systemConsole.CursorLeft = targetPosition;
     }
 
     /// <summary>
@@ -224,9 +227,9 @@ public class ShellReadLine
     private void ClearLine()
     {
         var promptLength = PromptBuilder.GetPromptLength(_state);
-        Console.CursorLeft = promptLength;
-        Console.Write(new string(' ', _currentLine.Length + 10));
-        Console.CursorLeft = promptLength;
+        _systemConsole.CursorLeft = promptLength;
+        _systemConsole.Write(new string(' ', _currentLine.Length + 10));
+        _systemConsole.CursorLeft = promptLength;
     }
 
     /// <summary>
@@ -274,7 +277,7 @@ public class ShellReadLine
     {
         _cursorPosition = 0;
         var promptLength = PromptBuilder.GetPromptLength(_state);
-        Console.CursorLeft = promptLength;
+        _systemConsole.CursorLeft = promptLength;
     }
 
     /// <summary>
@@ -284,7 +287,7 @@ public class ShellReadLine
     {
         _cursorPosition = _currentLine.Length;
         var promptLength = PromptBuilder.GetPromptLength(_state);
-        Console.CursorLeft = promptLength + _currentLine.Length;
+        _systemConsole.CursorLeft = promptLength + _currentLine.Length;
     }
 
     /// <summary>
@@ -315,6 +318,15 @@ public class ShellReadLine
         var next = _history.GetNext();
         if (next != null)
         {
+            // CommandHistory returns string.Empty when reaching the end.
+            // If we previously saved an in-progress line, restore it.
+            if (next.Length == 0 && _savedLine != null)
+            {
+                SetLine(_savedLine);
+                _savedLine = null;
+                return;
+            }
+
             SetLine(next);
         }
         else if (_savedLine != null)
@@ -351,7 +363,7 @@ public class ShellReadLine
         if (!_lastCompletions.HasCompletions)
         {
             // Beep to indicate no completions
-            Console.Beep();
+            _systemConsole.Beep();
             return;
         }
 
@@ -422,11 +434,11 @@ public class ShellReadLine
             return;
         }
 
-        Console.WriteLine();
+        _systemConsole.WriteLine();
 
         // Display completions in columns
         var maxWidth = _lastCompletions.Completions.Max(c => c.Length) + 2;
-        var columns = Math.Max(1, Console.WindowWidth / maxWidth);
+        var columns = Math.Max(1, _systemConsole.WindowWidth / maxWidth);
         var rows = (int)Math.Ceiling(_lastCompletions.Completions.Count / (double)columns);
 
         for (var row = 0; row < rows; row++)
@@ -437,10 +449,10 @@ public class ShellReadLine
                 if (index < _lastCompletions.Completions.Count)
                 {
                     var completion = _lastCompletions.Completions[index];
-                    Console.Write(completion.PadRight(maxWidth));
+                    _systemConsole.Write(completion.PadRight(maxWidth));
                 }
             }
-            Console.WriteLine();
+            _systemConsole.WriteLine();
         }
 
         // Rewrite prompt and current line
@@ -478,4 +490,3 @@ public class ShellReadLine
         WriteCurrentLine();
     }
 }
-

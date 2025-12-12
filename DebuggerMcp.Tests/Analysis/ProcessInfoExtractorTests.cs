@@ -526,6 +526,206 @@ public class ProcessInfoExtractorTests
         mockDebugger.Verify(d => d.ExecuteCommand("bt all"), Times.Never);
     }
 
+    [Fact]
+    public async Task ExtractProcessInfoAsync_NoMainFrame_StackScanFallback_CanExtractArgsAndEnv()
+    {
+        // Arrange
+        var stackStart = 0x0000ffffefcb0000UL;
+        var stackEnd = 0x0000ffffefcc0000UL;
+
+        var mockDebugger = new Mock<IDebuggerManager>();
+        mockDebugger.Setup(d => d.DebuggerType).Returns("LLDB");
+        mockDebugger.Setup(d => d.ExecuteCommand("bt all"))
+            .Returns("frame #0: 0x12345678 libc.so`abort");
+
+        mockDebugger.Setup(d => d.ExecuteCommand("memory region --all"))
+            .Returns($"[0x{stackStart:X}-0x{stackEnd:X}) rw- [stack]");
+
+        mockDebugger.Setup(d => d.ExecuteCommand(It.Is<string>(s => s.StartsWith("memory read --force -fx", StringComparison.Ordinal))))
+            .Returns(
+                $"0x{stackStart:X}: 0x0000ffffefcb1000 0x0000ffffefcb1010\n" +
+                $"0x{stackStart + 0x10:X}: 0x0000000000000000 0x0000ffffefcb1100\n" +
+                $"0x{stackStart + 0x20:X}: 0x0000ffffefcb1110 0x0000000000000000\n");
+
+        mockDebugger.Setup(d => d.ExecuteCommand("expr -- (char*)0x0000ffffefcb1000"))
+            .Returns("(char *) $1 = 0x0000ffffefcb1000 \"dotnet\"");
+        mockDebugger.Setup(d => d.ExecuteCommand("expr -- (char*)0x0000ffffefcb1010"))
+            .Returns("(char *) $2 = 0x0000ffffefcb1010 \"/app/MyApp.dll\"");
+        mockDebugger.Setup(d => d.ExecuteCommand("expr -- (char*)0x0000ffffefcb1100"))
+            .Returns("(char *) $3 = 0x0000ffffefcb1100 \"DD_API_KEY=secret\"");
+        mockDebugger.Setup(d => d.ExecuteCommand("expr -- (char*)0x0000ffffefcb1110"))
+            .Returns("(char *) $4 = 0x0000ffffefcb1110 \"PATH=/usr/bin\"");
+
+        var rawCommands = new Dictionary<string, string>();
+
+        // Act
+        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null, backtraceOutput: null, rawCommands);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(2, result!.Argc);
+        Assert.Contains("dotnet", result.Arguments);
+        Assert.Contains("/app/MyApp.dll", result.Arguments);
+        Assert.True(result.SensitiveDataFiltered);
+        Assert.Contains("DD_API_KEY=<redacted>", result.EnvironmentVariables);
+        Assert.Contains("PATH=/usr/bin", result.EnvironmentVariables);
+
+        Assert.Contains("memory region --all (for stack scan)", rawCommands.Keys);
+        Assert.Contains("memory read (pointer scan)", rawCommands.Keys);
+    }
+
+    [Fact]
+    public async Task ExtractProcessInfoAsync_NoMainFrame_StringScanFallback_CanExtractArgsAndEnv()
+    {
+        // Arrange
+        var stackStart = 0x0000ffffefcb0000UL;
+        var stackEnd = 0x0000ffffefcc0000UL;
+
+        var mockDebugger = new Mock<IDebuggerManager>();
+        mockDebugger.Setup(d => d.DebuggerType).Returns("LLDB");
+        mockDebugger.Setup(d => d.ExecuteCommand("bt all"))
+            .Returns("frame #0: 0x12345678 libc.so`abort");
+
+        mockDebugger.Setup(d => d.ExecuteCommand("memory region --all"))
+            .Returns($"[0x{stackStart:X}-0x{stackEnd:X}) rw- [stack]");
+
+        // Pointer scan returns pointers, but we don't provide any readable argv[0] string for them,
+        // so the extractor will fall back to the legacy string scan.
+        mockDebugger.Setup(d => d.ExecuteCommand(It.Is<string>(s => s.StartsWith("memory read --force -fx", StringComparison.Ordinal))))
+            .Returns(
+                $"0x{stackStart:X}: 0x0000ffffefcb2000 0x0000ffffefcb2010\n" +
+                $"0x{stackStart + 0x10:X}: 0x0000000000000000 0x0000000000000000\n");
+
+        // String scan memory read (no -fx).
+        mockDebugger.Setup(d => d.ExecuteCommand(It.Is<string>(s => s.StartsWith("memory read --force -c", StringComparison.Ordinal))))
+            .Returns(
+                "0x0000ffffefcbff00: " +
+                "2f 61 70 70 2f 4d 79 41 70 70 2e 64 6c 6c 00 " + // /app/MyApp.dll\0
+                "2d 2d 68 65 6c 70 00 " +                         // --help\0
+                "44 44 5f 41 50 49 5f 4b 45 59 3d 73 65 63 72 65 74 00 " + // DD_API_KEY=secret\0
+                "50 41 54 48 3d 2f 75 73 72 2f 62 69 6e 00 \n"); // PATH=/usr/bin\0 (note trailing space for regex)
+
+        var rawCommands = new Dictionary<string, string>();
+
+        // Act
+        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null, backtraceOutput: null, rawCommands);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(2, result!.Argc);
+        Assert.Contains("/app/MyApp.dll", result.Arguments);
+        Assert.Contains("--help", result.Arguments);
+        Assert.True(result.SensitiveDataFiltered);
+        Assert.Contains("DD_API_KEY=<redacted>", result.EnvironmentVariables);
+        Assert.Contains("PATH=/usr/bin", result.EnvironmentVariables);
+
+        Assert.Contains("memory read (string scan)", rawCommands.Keys);
+    }
+
+    [Fact]
+    public async Task ExtractProcessInfoAsync_MainFrameWithNullArgv_FallsBackToStackScan()
+    {
+        // Arrange
+        var stackStart = 0x0000ffffefcb0000UL;
+        var stackEnd = 0x0000ffffefcc0000UL;
+
+        var mockDebugger = new Mock<IDebuggerManager>();
+        mockDebugger.Setup(d => d.DebuggerType).Returns("LLDB");
+        mockDebugger.Setup(d => d.ExecuteCommand("bt all"))
+            .Returns("frame #48: dotnet`main(argc=1, argv=0x0000000000000000)");
+
+        mockDebugger.Setup(d => d.ExecuteCommand("memory region --all"))
+            .Returns($"[0x{stackStart:X}-0x{stackEnd:X}) rw- [stack]");
+
+        mockDebugger.Setup(d => d.ExecuteCommand(It.Is<string>(s => s.StartsWith("memory read --force -fx", StringComparison.Ordinal))))
+            .Returns(
+                $"0x{stackStart:X}: 0x0000ffffefcb1000 0x0000000000000000\n" +
+                $"0x{stackStart + 0x10:X}: 0x0000000000000000\n");
+
+        mockDebugger.Setup(d => d.ExecuteCommand("expr -- (char*)0x0000ffffefcb1000"))
+            .Returns("(char *) $1 = 0x0000ffffefcb1000 \"dotnet\"");
+
+        // Act
+        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Equal(1, result!.Argc);
+        Assert.Equal("dotnet", result.Arguments[0]);
+    }
+
+    [Fact]
+    public async Task ExtractProcessInfoAsync_StringScan_IgnoresTooShortArguments()
+    {
+        // Arrange
+        var stackStart = 0x0000ffffefcb0000UL;
+        var stackEnd = 0x0000ffffefcc0000UL;
+
+        var mockDebugger = new Mock<IDebuggerManager>();
+        mockDebugger.Setup(d => d.DebuggerType).Returns("LLDB");
+        mockDebugger.Setup(d => d.ExecuteCommand("bt all"))
+            .Returns("frame #0: 0x12345678 libc.so`abort");
+
+        mockDebugger.Setup(d => d.ExecuteCommand("memory region --all"))
+            .Returns($"[0x{stackStart:X}-0x{stackEnd:X}) rw- [stack]");
+
+        // Pointer scan: no readable argv[0], triggers string scan fallback.
+        mockDebugger.Setup(d => d.ExecuteCommand(It.Is<string>(s => s.StartsWith("memory read --force -fx", StringComparison.Ordinal))))
+            .Returns($"0x{stackStart:X}: 0x0000ffffefcb2000 0x0000ffffefcb2010\n0x{stackStart + 0x10:X}: 0x0000000000000000 0x0000000000000000\n");
+
+        // String scan output includes a short "-v" argument which should be rejected.
+        mockDebugger.Setup(d => d.ExecuteCommand(It.Is<string>(s => s.StartsWith("memory read --force -c", StringComparison.Ordinal))))
+            .Returns(
+                "0x0000ffffefcbff00: " +
+                "2f 61 70 70 2f 4d 79 41 70 70 2e 64 6c 6c 00 " + // /app/MyApp.dll\0
+                "2d 76 00 " +                                       // -v\0
+                "50 41 54 48 3d 2f 75 73 72 2f 62 69 6e 00 \n");   // PATH=/usr/bin\0
+
+        // Act
+        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Single(result!.Arguments);
+        Assert.Equal("/app/MyApp.dll", result.Arguments[0]);
+        Assert.Contains("PATH=/usr/bin", result.EnvironmentVariables);
+    }
+
+    [Fact]
+    public async Task ExtractProcessInfoAsync_StackRegionWithoutAnnotation_ChoosesHighestRwCandidate()
+    {
+        // Arrange
+        var lowStart = 0x0000000000400000UL;
+        var lowEnd = 0x0000000000500000UL;
+        var highStart = 0x0000ffffefcb0000UL;
+        var highEnd = 0x0000ffffefcc0000UL;
+
+        var mockDebugger = new Mock<IDebuggerManager>();
+        mockDebugger.Setup(d => d.DebuggerType).Returns("LLDB");
+        mockDebugger.Setup(d => d.ExecuteCommand("bt all"))
+            .Returns("frame #0: 0x12345678 libc.so`abort");
+
+        mockDebugger.Setup(d => d.ExecuteCommand("memory region --all"))
+            .Returns($"[0x{lowStart:X}-0x{lowEnd:X}) rw-\n[0x{highStart:X}-0x{highEnd:X}) rw-\n");
+
+        mockDebugger.Setup(d => d.ExecuteCommand(It.Is<string>(s =>
+                s.StartsWith("memory read --force -fx", StringComparison.Ordinal) &&
+                s.Contains($"0x{highStart:X}", StringComparison.OrdinalIgnoreCase))))
+            .Returns(
+                $"0x{highStart:X}: 0x0000ffffefcb1000 0x0000000000000000\n" +
+                $"0x{highStart + 0x10:X}: 0x0000000000000000\n");
+
+        mockDebugger.Setup(d => d.ExecuteCommand("expr -- (char*)0x0000ffffefcb1000"))
+            .Returns("(char *) $1 = 0x0000ffffefcb1000 \"dotnet\"");
+
+        // Act
+        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null);
+
+        // Assert
+        Assert.NotNull(result);
+        Assert.Contains("dotnet", result!.Arguments);
+    }
+
 
 
     [Theory]
@@ -616,4 +816,3 @@ public class ProcessInfoExtractorTests
     }
 
 }
-

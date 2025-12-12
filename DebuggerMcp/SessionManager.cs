@@ -68,6 +68,8 @@ public class DebuggerSessionManager
     /// </summary>
     private readonly PersistentSessionStore _sessionStore;
 
+    private readonly Func<ILoggerFactory, IDebuggerManager> _debuggerFactory;
+
     /// <summary>
     /// Optional callback invoked when a session is closed.
     /// Used to clean up related resources like symbol paths.
@@ -96,11 +98,20 @@ public class DebuggerSessionManager
     /// If a custom dumpStoragePath is provided but sessionStoragePath is not, sessions are stored
     /// in a "sessions" subdirectory of the dump storage path.
     /// </param>
-    public DebuggerSessionManager(string? dumpStoragePath = null, ILoggerFactory? loggerFactory = null, string? sessionStoragePath = null)
+    /// <param name="debuggerFactory">
+    /// Optional factory for creating debugger managers.
+    /// This is primarily intended for unit tests to avoid spawning real debugger processes.
+    /// </param>
+    public DebuggerSessionManager(
+        string? dumpStoragePath = null,
+        ILoggerFactory? loggerFactory = null,
+        string? sessionStoragePath = null,
+        Func<ILoggerFactory, IDebuggerManager>? debuggerFactory = null)
     {
         _dumpStoragePath = dumpStoragePath ?? EnvironmentConfig.GetDumpStoragePath();
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = _loggerFactory.CreateLogger<DebuggerSessionManager>();
+        _debuggerFactory = debuggerFactory ?? DebuggerFactory.CreateDebugger;
 
         // Determine session storage path:
         // 1. Use explicit sessionStoragePath if provided
@@ -200,7 +211,7 @@ public class DebuggerSessionManager
             {
                 SessionId = sessionId,
                 UserId = userId,
-                Manager = DebuggerFactory.CreateDebugger(_loggerFactory),
+                Manager = _debuggerFactory(_loggerFactory),
                 CreatedAt = DateTime.UtcNow,
                 LastAccessedAt = DateTime.UtcNow
             };
@@ -371,7 +382,7 @@ public class DebuggerSessionManager
         {
             SessionId = metadata.SessionId,
             UserId = metadata.UserId,
-            Manager = DebuggerFactory.CreateDebugger(_loggerFactory),
+            Manager = _debuggerFactory(_loggerFactory),
             CreatedAt = metadata.CreatedAt,
             LastAccessedAt = DateTime.UtcNow,
             CurrentDumpId = metadata.CurrentDumpId
