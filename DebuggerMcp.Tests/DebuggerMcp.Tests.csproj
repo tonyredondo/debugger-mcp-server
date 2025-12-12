@@ -39,6 +39,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\DebuggerMcp\DebuggerMcp.csproj" />
+    <ProjectReference Include="..\DebuggerMcp.DumpTarget\DebuggerMcp.DumpTarget.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
 </Project>

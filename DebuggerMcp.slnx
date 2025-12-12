@@ -5,6 +5,7 @@
   </Folder>
   <Project Path="DebuggerMcp/DebuggerMcp.csproj" />
   <Project Path="DebuggerMcp.Tests/DebuggerMcp.Tests.csproj" />
+  <Project Path="DebuggerMcp.DumpTarget/DebuggerMcp.DumpTarget.csproj" />
   <Project Path="DebuggerMcp.Cli/DebuggerMcp.Cli.csproj" />
   <Project Path="DebuggerMcp.Cli.Tests/DebuggerMcp.Cli.Tests.csproj" />
 </Solution>

@@ -2597,6 +2597,19 @@ public class LldbManager : IDebuggerManager
     /// <returns>The path to dotnet-symbol, or null if not found.</returns>
     private string? FindDotnetSymbolTool()
     {
+        // Allow an explicit override (useful for tests and custom deployments).
+        var overridePath = EnvironmentConfig.GetDotnetSymbolToolPath();
+        if (!string.IsNullOrWhiteSpace(overridePath))
+        {
+            if (File.Exists(overridePath))
+            {
+                _logger.LogDebug("[dotnet-symbol] Using override path: {Path}", overridePath);
+                return overridePath;
+            }
+
+            _logger.LogWarning("[dotnet-symbol] DOTNET_SYMBOL_TOOL_PATH set but file does not exist: {Path}", overridePath);
+        }
+
         var searchPaths = new[]
         {
             // Dockerfile copies tools to /tools

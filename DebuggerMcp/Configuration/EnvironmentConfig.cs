@@ -75,6 +75,11 @@ namespace DebuggerMcp.Configuration;
 ///     <term>Timeout (minutes) for symbol downloads via dotnet-symbol</term>
 ///   </item>
 ///   <item>
+///     <term>DOTNET_SYMBOL_TOOL_PATH</term>
+///     <term>Auto-detect</term>
+///     <term>Optional override path for the dotnet-symbol tool</term>
+///   </item>
+///   <item>
 ///     <term>SESSION_STORAGE_PATH</term>
 ///     <term>/app/sessions</term>
 ///     <term>Directory for persistent session storage (shared volume)</term>
@@ -295,6 +300,14 @@ public static class EnvironmentConfig
     public const string SosPluginPath = "SOS_PLUGIN_PATH";
 
     /// <summary>
+    /// Environment variable name for overriding the dotnet-symbol tool path.
+    /// </summary>
+    /// <remarks>
+    /// When set, this path is used instead of auto-discovery (useful for containers, custom installs, and tests).
+    /// </remarks>
+    public const string DotnetSymbolToolPath = "DOTNET_SYMBOL_TOOL_PATH";
+
+    /// <summary>
     /// Environment variable name for symbol download timeout in minutes.
     /// </summary>
     /// <remarks>
@@ -475,6 +488,12 @@ public static class EnvironmentConfig
     /// </summary>
     /// <returns>The SOS plugin path or null for auto-detection.</returns>
     public static string? GetSosPluginPath() => Environment.GetEnvironmentVariable(SosPluginPath);
+
+    /// <summary>
+    /// Gets the configured dotnet-symbol tool path override, if any.
+    /// </summary>
+    /// <returns>The dotnet-symbol tool path override, or null to auto-detect.</returns>
+    public static string? GetDotnetSymbolToolPath() => Environment.GetEnvironmentVariable(DotnetSymbolToolPath);
 
     /// <summary>
     /// Gets the configured symbol download timeout in minutes.
