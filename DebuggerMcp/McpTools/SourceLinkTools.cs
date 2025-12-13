@@ -77,24 +77,8 @@ public class SourceLinkTools(
         // Get the session to validate ownership
         var session = GetSessionInfo(sessionId, sanitizedUserId);
 
-        // Create Source Link resolver with symbol paths
-        var resolver = new SourceLinkResolver(Logger);
-        if (!string.IsNullOrEmpty(session.CurrentDumpId))
-        {
-            // Symbol path is .symbols_{dumpId} folder where dotnet-symbol downloads PDBs
-            var dumpIdWithoutExt = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
-            var symbolPath = Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{dumpIdWithoutExt}");
-            Logger.LogInformation("[SourceLinkTools] Looking for symbols in: {SymbolPath}", symbolPath);
-            if (Directory.Exists(symbolPath))
-            {
-                resolver.AddSymbolSearchPath(symbolPath);
-            }
-            else
-            {
-                // Warn so the user knows Source Link may fail due to missing PDBs
-                Logger.LogWarning("[SourceLinkTools] Symbol path does not exist: {SymbolPath}", symbolPath);
-            }
-        }
+        // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
+        var resolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId) ?? new SourceLinkResolver(Logger);
 
         // Try to resolve the source file using the Resolve method
         // The Resolve method returns a SourceLocation object
@@ -146,8 +130,11 @@ public class SourceLinkTools(
 
         // Build info about symbol paths
         // Symbol path is .symbols_{dumpId} folder where dotnet-symbol downloads PDBs
-        var symbolPath = !string.IsNullOrEmpty(session.CurrentDumpId)
-            ? Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{Path.GetFileNameWithoutExtension(session.CurrentDumpId)}")
+        var cleanDumpId = !string.IsNullOrEmpty(session.CurrentDumpId)
+            ? Path.GetFileNameWithoutExtension(session.CurrentDumpId)
+            : null;
+        var symbolPath = !string.IsNullOrEmpty(cleanDumpId)
+            ? Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{cleanDumpId}")
             : null;
 
         var info = new

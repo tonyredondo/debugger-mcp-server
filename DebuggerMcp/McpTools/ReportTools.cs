@@ -108,24 +108,8 @@ public class ReportTools(
             MaxCallStackFrames = maxStackFrames
         };
 
-        // Create Source Link resolver with symbol paths
-        var sourceLinkResolver = new SourceLinkResolver(Logger);
-        if (!string.IsNullOrEmpty(session.CurrentDumpId))
-        {
-            // Symbol path is .symbols_{dumpId} folder where dotnet-symbol downloads PDBs
-            var dumpIdWithoutExt = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
-            var symbolPath = Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{dumpIdWithoutExt}");
-            Logger.LogInformation("[ReportTools] Looking for symbols in: {SymbolPath}", symbolPath);
-            if (Directory.Exists(symbolPath))
-            {
-                sourceLinkResolver.AddSymbolSearchPath(symbolPath);
-            }
-            else
-            {
-                // Proceed without Source Link when symbol directory is missing
-                Logger.LogWarning("[ReportTools] Symbol path does not exist: {SymbolPath}", symbolPath);
-            }
-        }
+        // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
+        var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
         // Use appropriate analyzer based on whether SOS is loaded
         // If SOS is loaded: Use DotNetCrashAnalyzer for CLR info, managed exceptions, heap stats, etc.
@@ -250,23 +234,8 @@ public class ReportTools(
         var options = ReportOptions.SummaryReport;
         options.Format = reportFormat;
 
-        // Create Source Link resolver
-        var sourceLinkResolver = new SourceLinkResolver(Logger);
-        if (!string.IsNullOrEmpty(session.CurrentDumpId))
-        {
-            // Symbol path is .symbols_{dumpId} folder where dotnet-symbol downloads PDBs
-            var dumpIdWithoutExt = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
-            var symbolPath = Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{dumpIdWithoutExt}");
-            Logger.LogInformation("[ReportTools] Looking for symbols in: {SymbolPath}", symbolPath);
-            if (Directory.Exists(symbolPath))
-            {
-                sourceLinkResolver.AddSymbolSearchPath(symbolPath);
-            }
-            else
-            {
-                Logger.LogWarning("[ReportTools] Symbol path does not exist: {SymbolPath}", symbolPath);
-            }
-        }
+        // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
+        var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
         // Use appropriate analyzer based on whether SOS is loaded
         CrashAnalysisResult result;

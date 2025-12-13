@@ -1,4 +1,5 @@
 using DebuggerMcp.Analysis;
+using DebuggerMcp.SourceLink;
 
 namespace DebuggerMcp;
 
@@ -75,6 +76,71 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     /// </remarks>
     public ClrMdAnalyzer? ClrMdAnalyzer { get; set; }
 
+    private readonly object _sourceLinkResolverLock = new();
+
+    /// <summary>
+    /// Gets the cached Source Link resolver for the current dump, if one was created.
+    /// </summary>
+    /// <remarks>
+    /// This resolver caches PDB/Source Link metadata and is safe to reuse across tool calls
+    /// for the same dump. When the current dump changes, callers should create a new resolver.
+    /// </remarks>
+    public SourceLinkResolver? SourceLinkResolver { get; private set; }
+
+    /// <summary>
+    /// Gets the dump ID associated with the cached <see cref="SourceLinkResolver"/>.
+    /// </summary>
+    public string? SourceLinkResolverDumpId { get; private set; }
+
+    /// <summary>
+    /// Returns the cached <see cref="SourceLinkResolver"/> for a dump, or creates and caches a new one.
+    /// </summary>
+    /// <param name="dumpId">The dump ID the resolver should be associated with.</param>
+    /// <param name="factory">Factory used to create a new resolver when needed.</param>
+    /// <returns>A cached or newly created resolver.</returns>
+    /// <exception cref="ArgumentException">Thrown when dumpId is null or empty.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when factory is null.</exception>
+    public SourceLinkResolver GetOrCreateSourceLinkResolver(string dumpId, Func<SourceLinkResolver> factory)
+    {
+        if (string.IsNullOrWhiteSpace(dumpId))
+        {
+            throw new ArgumentException("dumpId cannot be null or empty", nameof(dumpId));
+        }
+
+        ArgumentNullException.ThrowIfNull(factory);
+
+        var normalizedDumpId = Path.GetFileNameWithoutExtension(dumpId);
+        if (string.IsNullOrWhiteSpace(normalizedDumpId))
+        {
+            normalizedDumpId = dumpId;
+        }
+
+        lock (_sourceLinkResolverLock)
+        {
+            if (SourceLinkResolver != null &&
+                string.Equals(SourceLinkResolverDumpId, normalizedDumpId, StringComparison.OrdinalIgnoreCase))
+            {
+                return SourceLinkResolver;
+            }
+
+            SourceLinkResolver = factory();
+            SourceLinkResolverDumpId = normalizedDumpId;
+            return SourceLinkResolver;
+        }
+    }
+
+    /// <summary>
+    /// Clears the cached <see cref="SourceLinkResolver"/> (if any).
+    /// </summary>
+    public void ClearSourceLinkResolver()
+    {
+        lock (_sourceLinkResolverLock)
+        {
+            SourceLinkResolver = null;
+            SourceLinkResolverDumpId = null;
+        }
+    }
+
     /// <summary>
     /// Releases all resources used by this session.
     /// </summary>
@@ -82,6 +148,7 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     {
         ClrMdAnalyzer?.Dispose();
         ClrMdAnalyzer = null;
+        ClearSourceLinkResolver();
         Manager?.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -94,6 +161,7 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     {
         ClrMdAnalyzer?.Dispose();
         ClrMdAnalyzer = null;
+        ClearSourceLinkResolver();
         if (Manager != null)
         {
             await Manager.DisposeAsync().ConfigureAwait(false);

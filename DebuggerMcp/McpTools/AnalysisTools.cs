@@ -76,24 +76,8 @@ public class AnalysisTools(
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
-        // Create Source Link resolver with symbol paths for source code navigation
-        var sourceLinkResolver = new SourceLinkResolver(Logger);
-        if (!string.IsNullOrEmpty(session.CurrentDumpId))
-        {
-            // Symbol path is .symbols_{dumpId} folder where dotnet-symbol downloads PDBs
-            var dumpIdWithoutExt = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
-            var symbolPath = Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{dumpIdWithoutExt}");
-            Logger.LogInformation("[AnalysisTools] Looking for symbols in: {SymbolPath}", symbolPath);
-            if (Directory.Exists(symbolPath))
-            {
-                // Only add existing symbol paths to avoid unnecessary resolution attempts.
-                sourceLinkResolver.AddSymbolSearchPath(symbolPath);
-            }
-            else
-            {
-                Logger.LogWarning("[AnalysisTools] Symbol path does not exist: {SymbolPath}", symbolPath);
-            }
-        }
+        // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
+        var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
         // Use DotNetCrashAnalyzer for more complete analysis (CLR info, managed exceptions,
         // heap stats, interleaved call stacks from clrstack -f -r -all, async deadlock detection)
@@ -182,23 +166,8 @@ public class AnalysisTools(
         // Check if a dump is open
         ValidateDumpIsOpen(manager);
 
-        // Create Source Link resolver with symbol paths for source code navigation
-        var sourceLinkResolver = new SourceLinkResolver(Logger);
-        if (!string.IsNullOrEmpty(session.CurrentDumpId))
-        {
-            // Symbol path is .symbols_{dumpId} folder where dotnet-symbol downloads PDBs
-            var dumpIdWithoutExt = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
-            var symbolPath = Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{dumpIdWithoutExt}");
-            Logger.LogInformation("[AnalysisTools] Looking for symbols in: {SymbolPath}", symbolPath);
-            if (Directory.Exists(symbolPath))
-            {
-                sourceLinkResolver.AddSymbolSearchPath(symbolPath);
-            }
-            else
-            {
-                Logger.LogWarning("[AnalysisTools] Symbol path does not exist: {SymbolPath}", symbolPath);
-            }
-        }
+        // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
+        var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
         // Create .NET analyzer and perform analysis
         var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);

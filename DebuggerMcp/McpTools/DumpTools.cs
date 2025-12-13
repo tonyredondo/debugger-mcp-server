@@ -303,6 +303,7 @@ public class DumpTools(
         // Close ClrMD analyzer if open
         session.ClrMdAnalyzer?.Dispose();
         session.ClrMdAnalyzer = null;
+        session.ClearSourceLinkResolver();
 
         // Clear the tracked dump ID and persist to disk
         session.CurrentDumpId = null;

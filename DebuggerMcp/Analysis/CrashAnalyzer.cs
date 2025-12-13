@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -1719,6 +1720,15 @@ public class CrashAnalyzer
             return true;
         }
 
+        // Fallback: if we already enriched assemblies with repository/commit metadata (e.g. via ClrMD),
+        // build a browsable URL directly even when we don't have a Portable PDB with Source Link data.
+        if (TryResolveSourceLinkFromAssemblyMetadata(frame, result, out var fallbackUrl, out var fallbackProvider))
+        {
+            frame.SourceUrl = fallbackUrl;
+            frame.SourceProvider = fallbackProvider;
+            return true;
+        }
+
         return false;
     }
 
@@ -1730,6 +1740,22 @@ public class CrashAnalyzer
         if (string.IsNullOrEmpty(moduleName))
         {
             return null;
+        }
+
+        // Managed assemblies are not always present in the native module list. Prefer the enriched assemblies list
+        // when available so dotted names like "System.Threading.Tasks" are treated as assembly names, not file extensions.
+        var assemblies = result.Assemblies?.Items;
+        if (assemblies != null && assemblies.Count > 0)
+        {
+            var assembly = assemblies.FirstOrDefault(a =>
+                a.Name.Equals(moduleName, StringComparison.OrdinalIgnoreCase) ||
+                (!string.IsNullOrEmpty(a.Path) &&
+                 Path.GetFileNameWithoutExtension(a.Path).Equals(moduleName, StringComparison.OrdinalIgnoreCase)));
+
+            if (!string.IsNullOrWhiteSpace(assembly?.Path))
+            {
+                return assembly.Path;
+            }
         }
 
         // Try exact match first
@@ -1752,6 +1778,185 @@ public class CrashAnalyzer
             m.Name.Contains(moduleName, StringComparison.OrdinalIgnoreCase));
 
         return module?.Name;
+    }
+
+    private static bool TryResolveSourceLinkFromAssemblyMetadata(
+        StackFrame frame,
+        CrashAnalysisResult result,
+        out string url,
+        out string provider)
+    {
+        url = string.Empty;
+        provider = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(frame.SourceFile) || !frame.LineNumber.HasValue)
+        {
+            return false;
+        }
+
+        var assemblies = result.Assemblies?.Items;
+        if (assemblies == null || assemblies.Count == 0)
+        {
+            return false;
+        }
+
+        // Heuristics to pick the best assembly metadata:
+        // - First, match by the frame module name (often equals assembly name for app code).
+        // - Then, match by source file path containing the assembly name (useful for dotnet/runtime-style paths).
+        // - Finally, pick any assembly with repository+commit data.
+        AssemblyVersionInfo? assembly = null;
+        if (!string.IsNullOrWhiteSpace(frame.Module))
+        {
+            assembly = assemblies.FirstOrDefault(a =>
+                !string.IsNullOrWhiteSpace(a.Name) &&
+                a.Name.Equals(frame.Module, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (assembly == null)
+        {
+            assembly = assemblies.FirstOrDefault(a =>
+                !string.IsNullOrWhiteSpace(a.Name) &&
+                frame.SourceFile.Contains(a.Name, StringComparison.OrdinalIgnoreCase));
+        }
+
+        assembly ??= assemblies.FirstOrDefault(a =>
+            !string.IsNullOrWhiteSpace(a.RepositoryUrl) &&
+            (!string.IsNullOrWhiteSpace(a.CommitHash) || !string.IsNullOrWhiteSpace(a.SourceUrl)));
+
+        if (assembly == null)
+        {
+            return false;
+        }
+
+        var repositoryUrl = assembly.RepositoryUrl;
+        if (string.IsNullOrWhiteSpace(repositoryUrl))
+        {
+            return false;
+        }
+
+        var commitHash = !string.IsNullOrWhiteSpace(assembly.CommitHash)
+            ? assembly.CommitHash
+            : TryExtractCommitHashFromTreeUrl(assembly.SourceUrl);
+
+        if (string.IsNullOrWhiteSpace(commitHash))
+        {
+            return false;
+        }
+
+        var relativePath = NormalizeRepoRelativePath(frame.SourceFile);
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return false;
+        }
+
+        var sourceProvider = SourceLinkResolver.DetectProvider(repositoryUrl);
+        if (sourceProvider == SourceProvider.Unknown)
+        {
+            return false;
+        }
+
+        // Build a raw URL when possible so we can reuse existing provider-specific formatting logic.
+        // If we can't build a raw URL for the provider, fall back to a blob-like URL and append the line.
+        var rawUrl = sourceProvider switch
+        {
+            SourceProvider.GitHub => BuildGitHubRawUrl(repositoryUrl, commitHash, relativePath),
+            SourceProvider.GitLab => $"{repositoryUrl.TrimEnd('/')}/-/raw/{commitHash}/{relativePath}",
+            SourceProvider.Bitbucket => $"{repositoryUrl.TrimEnd('/')}/raw/{commitHash}/{relativePath}",
+            _ => $"{repositoryUrl.TrimEnd('/')}/blob/{commitHash}/{relativePath}"
+        };
+
+        if (string.IsNullOrWhiteSpace(rawUrl))
+        {
+            return false;
+        }
+
+        url = SourceLinkResolver.ConvertToBrowsableUrl(rawUrl, frame.LineNumber.Value, sourceProvider);
+        provider = sourceProvider.ToString();
+        return !string.IsNullOrWhiteSpace(url);
+    }
+
+    /// <summary>
+    /// Extracts a commit hash from a repository tree/commit URL (best-effort).
+    /// </summary>
+    private static string? TryExtractCommitHashFromTreeUrl(string? treeUrl)
+    {
+        if (string.IsNullOrWhiteSpace(treeUrl))
+        {
+            return null;
+        }
+
+        // Common formats:
+        // - https://github.com/org/repo/tree/<sha>
+        // - https://github.com/org/repo/commit/<sha>
+        var match = Regex.Match(treeUrl, @"/(tree|commit)/([0-9a-fA-F]{7,40})(?:/|$)");
+        return match.Success ? match.Groups[2].Value : null;
+    }
+
+    /// <summary>
+    /// Normalizes a compiler/PDB source path into a repository-relative path suitable for URL construction.
+    /// </summary>
+    private static string? NormalizeRepoRelativePath(string sourceFile)
+    {
+        var normalized = sourceFile.Replace('\\', '/').Trim();
+
+        // Common dotnet/runtime Source Link paths start with "/_/".
+        if (normalized.StartsWith("/_/", StringComparison.Ordinal))
+        {
+            normalized = normalized.Substring(3);
+        }
+
+        // Try to anchor at a repo root marker when the compiler embeds absolute paths.
+        // Prefer the first "src/" segment, but avoid trimming dotnet/runtime-style paths that already start with "src/".
+        if (!normalized.StartsWith("src/", StringComparison.OrdinalIgnoreCase))
+        {
+            var srcIndex = normalized.IndexOf("/src/", StringComparison.OrdinalIgnoreCase);
+            if (srcIndex >= 0)
+            {
+                normalized = normalized.Substring(srcIndex + 1);
+            }
+        }
+
+        normalized = normalized.TrimStart('/');
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        // Escape each segment so spaces and special characters are safe in URLs.
+        var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        return string.Join('/', parts.Select(Uri.EscapeDataString));
+    }
+
+    /// <summary>
+    /// Builds a raw.githubusercontent.com URL from a GitHub repository URL.
+    /// </summary>
+    private static string? BuildGitHubRawUrl(string repositoryUrl, string commitHash, string relativePath)
+    {
+        // Expect repositoryUrl like https://github.com/org/repo[.git]
+        if (!Uri.TryCreate(repositoryUrl, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(uri.Host) || !uri.Host.Contains("github.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var segments = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 2)
+        {
+            return null;
+        }
+
+        var org = segments[0];
+        var repo = segments[1];
+        if (repo.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            repo = repo.Substring(0, repo.Length - 4);
+        }
+
+        return $"https://raw.githubusercontent.com/{org}/{repo}/{commitHash}/{relativePath}";
     }
 
     /// <summary>
