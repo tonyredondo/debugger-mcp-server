@@ -100,6 +100,22 @@ public class DotNetCrashAnalyzerPureHelpersTests
         Assert.Equal(expected, DotNetCrashAnalyzer.IsValidOsThreadId(osThreadId));
     }
 
+    [Theory]
+    [InlineData("/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.0/System.Private.CoreLib.dll", null, null, "System.Private.CoreLib")]
+    [InlineData("System.Private.CoreLib.dll", null, null, "System.Private.CoreLib")]
+    [InlineData("/some/path/libcoreclr.so", null, null, "libcoreclr.so")]
+    [InlineData(null, "System.Private.CoreLib", null, "System.Private.CoreLib")]
+    [InlineData(null, null, "System.Threading.Tasks.Task<System.__Canon>", "System.Threading.Tasks")]
+    public void ExtractManagedModuleName_PrefersClrMdModuleThenAssemblyThenType(
+        string? moduleNameOrPath,
+        string? assemblyName,
+        string? typeName,
+        string expected)
+    {
+        var actual = DotNetCrashAnalyzer.ExtractManagedModuleName(moduleNameOrPath, assemblyName, typeName);
+        Assert.Equal(expected, actual);
+    }
+
     [Fact]
     public void ParseStackPointer_ParsesCommonFormats()
     {

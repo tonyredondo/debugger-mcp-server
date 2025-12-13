@@ -3464,10 +3464,13 @@ public class ClrMdAnalyzer : IDisposable
                                 // Get method info
                                 if (frame.Method != null)
                                 {
+                                    var clrModule = frame.Method.Type?.Module;
                                     frameInfo.Method = new ClrMethodInfo
                                     {
                                         Signature = frame.Method.Signature,
                                         TypeName = frame.Method.Type?.Name,
+                                        ModuleName = clrModule?.Name,
+                                        AssemblyName = clrModule?.AssemblyName,
                                         MethodName = frame.Method.Name,
                                         MetadataToken = (uint)frame.Method.MetadataToken,
                                         NativeCode = frame.Method.NativeCode,
@@ -4589,6 +4592,21 @@ public class ClrMethodInfo
     [System.Text.Json.Serialization.JsonPropertyName("typeName")]
     [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
     public string? TypeName { get; set; }
+
+    /// <summary>
+    /// Module name or path (as reported by ClrMD).
+    /// For file-backed modules this is often the full path to the assembly.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("moduleName")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? ModuleName { get; set; }
+
+    /// <summary>
+    /// Assembly display name (as reported by ClrMD).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("assemblyName")]
+    [System.Text.Json.Serialization.JsonIgnore(Condition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull)]
+    public string? AssemblyName { get; set; }
 
     /// <summary>
     /// Method name.

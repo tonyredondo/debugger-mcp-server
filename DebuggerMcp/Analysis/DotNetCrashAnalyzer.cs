@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using DebuggerMcp.SourceLink;
@@ -228,7 +229,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     if (clrFrame.Method != null)
                     {
                         frame.Function = clrFrame.Method.Signature ?? clrFrame.Method.MethodName ?? string.Empty;
-                        frame.Module = ExtractModuleName(clrFrame.Method.TypeName) ?? string.Empty;
+                        frame.Module = ExtractManagedModuleName(
+                                         clrFrame.Method.ModuleName,
+                                         clrFrame.Method.AssemblyName,
+                                         clrFrame.Method.TypeName)
+                                     ?? string.Empty;
 
                         // Source location from sequence points
                         if (clrFrame.SourceLocation != null)
@@ -763,6 +768,49 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// <returns><c>true</c> when the thread ID can be used; otherwise <c>false</c>.</returns>
     internal static bool IsValidOsThreadId(uint osThreadId)
         => osThreadId != 0;
+
+    /// <summary>
+    /// Extracts a stable module/assembly name for managed frames.
+    /// Prefers the ClrMD module path/name, then ClrMD assembly name, then a namespace-derived fallback.
+    /// </summary>
+    /// <param name="moduleNameOrPath">ClrMD module name or full path.</param>
+    /// <param name="assemblyName">ClrMD assembly display name.</param>
+    /// <param name="typeName">Declaring type name (fallback only).</param>
+    /// <returns>The module name for reporting, or <c>null</c> if unknown.</returns>
+    internal static string? ExtractManagedModuleName(string? moduleNameOrPath, string? assemblyName, string? typeName)
+    {
+        if (!string.IsNullOrWhiteSpace(moduleNameOrPath))
+        {
+            var trimmed = moduleNameOrPath.Trim();
+
+            // Prefer file stem when the module name is a path or ends with a well-known extension.
+            // Example: /usr/share/dotnet/shared/.../System.Private.CoreLib.dll -> System.Private.CoreLib
+            var fileName = Path.GetFileName(trimmed);
+            if (!string.IsNullOrEmpty(fileName))
+            {
+                if (fileName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase) ||
+                    fileName.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
+                {
+                    return Path.GetFileNameWithoutExtension(fileName);
+                }
+
+                // If it's a path without an extension, the filename itself is still a better module name than the full path.
+                if (!string.Equals(fileName, trimmed, StringComparison.Ordinal))
+                {
+                    return fileName;
+                }
+            }
+
+            return trimmed;
+        }
+
+        if (!string.IsNullOrWhiteSpace(assemblyName))
+        {
+            return assemblyName.Trim();
+        }
+
+        return ExtractModuleName(typeName);
+    }
 
     /// <summary>
     /// Extracts module name from a type name.
