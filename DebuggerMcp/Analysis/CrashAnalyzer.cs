@@ -1675,6 +1675,12 @@ public class CrashAnalyzer
     /// <returns>True if source link was resolved, false otherwise.</returns>
     private bool ResolveFrameSourceLink(StackFrame frame, CrashAnalysisResult result)
     {
+        // Skip work when the frame already has a source URL.
+        if (!string.IsNullOrWhiteSpace(frame.SourceUrl))
+        {
+            return true;
+        }
+
         // Skip if no source info available
         if (string.IsNullOrEmpty(frame.Source) && (string.IsNullOrEmpty(frame.SourceFile) || !frame.LineNumber.HasValue))
         {

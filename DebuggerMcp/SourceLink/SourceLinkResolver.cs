@@ -40,6 +40,68 @@ public class SourceLinkResolver
 
     // Source Link custom debug information GUID
     private static readonly Guid SourceLinkGuid = new("CC110556-A091-4D38-9FEC-25AB9A351A6A");
+    private static readonly string[] KnownBinaryExtensions = [".dll", ".exe", ".so", ".dylib", ".pdb"];
+
+    /// <summary>
+    /// Gets a stable module identifier for caching and PDB lookup.
+    /// </summary>
+    /// <remarks>
+    /// Stack frames can report modules as:
+    /// - A full file path (e.g. "/usr/share/dotnet/.../System.Threading.dll")
+    /// - A file name (e.g. "libcoreclr.so")
+    /// - A dotted assembly name (e.g. "System.Threading")
+    ///
+    /// For dotted assembly names, <see cref="Path.GetFileNameWithoutExtension(string)"/> would incorrectly
+    /// treat the suffix (".Threading") as a file extension. This helper keeps dotted names intact.
+    /// </remarks>
+    private static string GetModuleIdentifier(string modulePath)
+    {
+        if (string.IsNullOrWhiteSpace(modulePath))
+        {
+            return string.Empty;
+        }
+
+        var trimmed = modulePath.Trim();
+
+        // Treat anything with directory separators as a file path.
+        if (trimmed.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+        {
+            return Path.GetFileNameWithoutExtension(trimmed);
+        }
+
+        // Treat known binary extensions as file names.
+        var ext = Path.GetExtension(trimmed);
+        if (!string.IsNullOrWhiteSpace(ext) &&
+            KnownBinaryExtensions.Any(e => string.Equals(e, ext, StringComparison.OrdinalIgnoreCase)))
+        {
+            return Path.GetFileNameWithoutExtension(trimmed);
+        }
+
+        // Otherwise, assume the input is already an identifier (e.g. "System.Threading").
+        return trimmed;
+    }
+
+    /// <summary>
+    /// Determines whether a module string looks like a real file path or file name.
+    /// </summary>
+    private static bool LooksLikeFilePath(string modulePath)
+    {
+        if (string.IsNullOrWhiteSpace(modulePath))
+        {
+            return false;
+        }
+
+        var trimmed = modulePath.Trim();
+
+        if (trimmed.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+        {
+            return true;
+        }
+
+        var ext = Path.GetExtension(trimmed);
+        return !string.IsNullOrWhiteSpace(ext) &&
+               KnownBinaryExtensions.Any(e => string.Equals(e, ext, StringComparison.OrdinalIgnoreCase));
+    }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SourceLinkResolver"/> class.
@@ -134,7 +196,7 @@ public class SourceLinkResolver
 
         try
         {
-            var moduleName = Path.GetFileNameWithoutExtension(modulePath);
+            var moduleName = GetModuleIdentifier(modulePath);
             _logger?.LogDebug("[SourceLink] Module name extracted: {ModuleName}", moduleName);
 
             // Step 1: Get Source Link information from the module's PDB
@@ -233,7 +295,7 @@ public class SourceLinkResolver
     /// <returns>Source Link info if found, null otherwise.</returns>
     public SourceLinkInfo? GetSourceLinkForModule(string modulePath)
     {
-        var moduleName = Path.GetFileNameWithoutExtension(modulePath);
+        var moduleName = GetModuleIdentifier(modulePath);
         _logger?.LogDebug("[SourceLink] GetSourceLinkForModule: {ModuleName} (path: {ModulePath})", moduleName, modulePath);
 
         if (_cache.TryGetValue(moduleName, out var cached))
@@ -284,19 +346,28 @@ public class SourceLinkResolver
     /// </summary>
     private string? FindPdbFile(string modulePath)
     {
-        var pdbName = Path.GetFileNameWithoutExtension(modulePath) + ".pdb";
+        var moduleName = GetModuleIdentifier(modulePath);
+        if (string.IsNullOrWhiteSpace(moduleName))
+        {
+            return null;
+        }
+
+        var pdbName = moduleName + ".pdb";
         _logger?.LogDebug("[SourceLink] FindPdbFile: Looking for {PdbName}", pdbName);
         _logger?.LogDebug("[SourceLink] FindPdbFile: {Count} symbol search paths configured", _symbolSearchPaths.Count);
 
-        // Strategy 1: PDB next to module (exact path)
-        var pdbPath = Path.ChangeExtension(modulePath, ".pdb");
-        _logger?.LogDebug("[SourceLink] Strategy 1 - Check next to module: {Path}", pdbPath);
-        if (File.Exists(pdbPath))
+        // Strategy 1: PDB next to module (only when modulePath is a real file path/name)
+        if (LooksLikeFilePath(modulePath))
         {
-            _logger?.LogInformation("[SourceLink] ✓ Found PDB next to module: {Path}", pdbPath);
-            return pdbPath;
+            var pdbPath = Path.ChangeExtension(modulePath, ".pdb");
+            _logger?.LogDebug("[SourceLink] Strategy 1 - Check next to module: {Path}", pdbPath);
+            if (File.Exists(pdbPath))
+            {
+                _logger?.LogInformation("[SourceLink] ✓ Found PDB next to module: {Path}", pdbPath);
+                return pdbPath;
+            }
+            _logger?.LogDebug("[SourceLink] Strategy 1 - Not found");
         }
-        _logger?.LogDebug("[SourceLink] Strategy 1 - Not found");
 
         // Strategy 2: Search in symbol paths with case-insensitive matching
         // Symbol stores may use different casing (e.g., lowercase) than the original module name

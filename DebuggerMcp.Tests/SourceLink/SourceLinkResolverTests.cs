@@ -1,6 +1,8 @@
 using Xunit;
 using DebuggerMcp.SourceLink;
 using Microsoft.Extensions.Logging;
+using System.Collections.Concurrent;
+using System.Reflection;
 
 namespace DebuggerMcp.Tests.SourceLink;
 
@@ -248,6 +250,43 @@ public class SourceLinkResolverTests
 
         // Assert - Both return same (null) but no exception
         Assert.Equal(result1, result2);
+    }
+
+    [Fact]
+    public void GetSourceLinkForModule_WithDottedAssemblyName_UsesWholeNameForPdbLookup()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"sourcelink-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        var expectedPdbPath = Path.Combine(tempDir, "System.Threading.pdb");
+        File.WriteAllBytes(expectedPdbPath, [0x00, 0x01, 0x02, 0x03, 0x04]);
+
+        try
+        {
+            var resolver = new SourceLinkResolver();
+            resolver.AddSymbolSearchPath(tempDir);
+
+            // Populate cache entry.
+            resolver.GetSourceLinkForModule("System.Threading");
+
+            var cacheField = typeof(SourceLinkResolver).GetField("_cache", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(cacheField);
+
+            var cache = (ConcurrentDictionary<string, ModuleSourceLinkCache>)cacheField!.GetValue(resolver)!;
+            Assert.True(cache.TryGetValue("System.Threading", out var entry));
+            Assert.Equal(expectedPdbPath, entry.PdbPath);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup for temp directory.
+            }
+        }
     }
 
     // ============================================================
@@ -858,4 +897,3 @@ public class SourceLinkResolverTests
         Assert.Contains("file.cs:42", result);
     }
 }
-

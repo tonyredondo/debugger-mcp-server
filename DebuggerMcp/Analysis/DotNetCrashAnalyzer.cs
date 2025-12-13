@@ -905,10 +905,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // and resolve string values using ClrMD
             await EnhanceVariableValuesAsync(result);
 
-            // Resolve Source Link URLs for the newly parsed stack frames
-            // This populates sourceUrl and sourceProvider for frames that have sourceFile and lineNumber
-            ResolveSourceLinks(result);
-
             // Get managed exception with nested exceptions for full exception chain
             // Use !pe -nested which works on WinDbg as-is and gets transformed for LLDB
             var exceptionOutput = await ExecuteCommandAsync("!pe -nested");
@@ -990,6 +986,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             
             // Enrich with GitHub commit metadata (author, committer, message)
             await EnrichAssemblyGitHubInfoAsync(result);
+
+            // Resolve Source Link URLs for stack frames now that assembly metadata (repo/commit) is available.
+            // This populates sourceUrl/sourceProvider even when Portable PDB Source Link data is missing.
+            ResolveSourceLinks(result);
             
             // === Phase 2 ClrMD Enrichment ===
             if (_clrMdAnalyzer?.IsOpen == true)
