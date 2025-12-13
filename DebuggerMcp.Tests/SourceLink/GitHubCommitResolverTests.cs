@@ -17,6 +17,9 @@ public class GitHubCommitResolverTests
     [InlineData("https://github.com/DataDog/dd-trace-dotnet", "DataDog/dd-trace-dotnet")]
     [InlineData("https://github.com/DataDog/dd-trace-dotnet.git", "DataDog/dd-trace-dotnet")]
     [InlineData("https://github.com/dotnet/aspnetcore/tree/abc123", "dotnet/aspnetcore")]
+    [InlineData("https://github.com/JamesNK/Newtonsoft.Json", "JamesNK/Newtonsoft.Json")]
+    [InlineData("https://github.com/JamesNK/Newtonsoft.Json/tree/4fba53a324c445f06ee08e45a015c346000a7ef2", "JamesNK/Newtonsoft.Json")]
+    [InlineData("https://github.com/JamesNK/Newtonsoft.Json.git", "JamesNK/Newtonsoft.Json")]
     [InlineData("git@github.com:owner/repo.git", "owner/repo")]
     [InlineData("https://github.com/Microsoft/TypeScript", "Microsoft/TypeScript")]
     [InlineData("https://github.com/user/repo?branch=main", "user/repo")]
@@ -576,4 +579,3 @@ public class MockHttpMessageHandler : HttpMessageHandler
         return Task.FromResult(response);
     }
 }
-

@@ -36,7 +36,7 @@ public class GitHubCommitResolver : IDisposable
     /// Matches: github.com/owner/repo, github.com:owner/repo, etc.
     /// </summary>
     private static readonly Regex GitHubUrlRegex = new(
-        @"github\.com[/:]([^/]+)/([^/\.\s\?#]+)",
+        @"github\.com[/:]([^/]+)/([^/\s\?#]+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     /// <summary>
