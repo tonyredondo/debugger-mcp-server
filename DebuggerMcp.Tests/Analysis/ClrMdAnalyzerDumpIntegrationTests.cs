@@ -36,7 +36,7 @@ public class ClrMdAnalyzerDumpIntegrationTests
         var tempDir = CreateTempDirectory();
         var dumpPath = Path.Combine(tempDir, $"dump-target-{Guid.NewGuid():N}.dmp");
 
-        using var process = StartDumpTarget(dumpTargetDll);
+        using var process = StartDumpTarget(dumpTargetDll, out var readyLine);
 
         try
         {
@@ -54,6 +54,32 @@ public class ClrMdAnalyzerDumpIntegrationTests
         {
             Assert.True(analyzer.IsOpen);
             Assert.NotNull(analyzer.Runtime);
+
+            // Exercise value-type inspection (dumpvc-like path) using a stack address provided by the dump target.
+            var readyTokens = ParseReadyTokens(readyLine);
+            if (readyTokens.TryGetValue("VT", out var vtAddressText) &&
+                readyTokens.TryGetValue("VTMT", out var vtMethodTableText))
+            {
+                var vtAddress = ParseHexAddress(vtAddressText);
+                var vtMethodTable = ParseHexAddress(vtMethodTableText);
+
+                Assert.NotNull(vtAddress);
+                Assert.NotNull(vtMethodTable);
+
+                var vtInspected = analyzer.InspectObject(
+                    vtAddress!.Value,
+                    methodTable: vtMethodTable!.Value,
+                    maxDepth: 3,
+                    maxArrayElements: 0,
+                    maxStringLength: 256);
+
+                Assert.NotNull(vtInspected);
+                Assert.Null(vtInspected!.Error);
+                Assert.NotNull(vtInspected.Fields);
+                Assert.Contains(vtInspected.Fields!, f => f.Name == "A" && f.Value?.ToString() == "123");
+                Assert.Contains(vtInspected.Fields!, f => f.Name == "B" && f.Value?.ToString() == "456");
+                Assert.Contains(vtInspected.Fields!, f => f.Name == "Nested" && f.NestedObject != null);
+            }
 
             // Modules + platform detection.
             var modules = analyzer.ListModules();
@@ -156,7 +182,68 @@ public class ClrMdAnalyzerDumpIntegrationTests
         }
     }
 
-    private static Process StartDumpTarget(string dumpTargetDll)
+    [Fact]
+    public void GetCombinedHeapAnalysis_WithServerGcDump_UsesParallelPath()
+    {
+        var repoRoot = FindRepoRoot();
+        var (configuration, tfm) = GetBuildConfigurationAndTfm();
+
+        var dumpTargetDll = Path.Combine(
+            repoRoot,
+            "DebuggerMcp.DumpTarget",
+            "bin",
+            configuration,
+            tfm,
+            "DebuggerMcp.DumpTarget.dll");
+
+        Assert.True(File.Exists(dumpTargetDll), $"Dump target not built: {dumpTargetDll}");
+
+        var tempDir = CreateTempDirectory();
+        var dumpPath = Path.Combine(tempDir, $"dump-target-servergc-{Guid.NewGuid():N}.dmp");
+
+        using var process = StartDumpTarget(
+            dumpTargetDll,
+            out _,
+            new Dictionary<string, string?>
+            {
+                ["DOTNET_GCServer"] = "1",
+                ["COMPlus_gcServer"] = "1",
+            });
+
+        try
+        {
+            CreateDumpWithCreatedump(processId: process.Id, dumpPath: dumpPath, tempDir: tempDir);
+        }
+        finally
+        {
+            SafeKill(process);
+        }
+
+        using var analyzer = new ClrMdAnalyzer(NullLogger.Instance);
+        Assert.True(analyzer.OpenDump(dumpPath));
+
+        try
+        {
+            Assert.NotNull(analyzer.Runtime);
+            Assert.True(analyzer.Runtime!.Heap.IsServer, "Expected server GC dump (Heap.IsServer=true)");
+
+            var combined = analyzer.GetCombinedHeapAnalysis(topN: 5, maxStringLength: 64, timeoutMs: 15000);
+            Assert.NotNull(combined);
+            Assert.True(combined!.UsedParallel, "Expected parallel combined heap analysis to be selected");
+            Assert.True(combined.SegmentsProcessed > 1, "Expected multiple heap segments for server GC");
+        }
+        finally
+        {
+            analyzer.CloseDump();
+            SafeDeleteFile(dumpPath);
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
+    private static Process StartDumpTarget(
+        string dumpTargetDll,
+        out string readyLine,
+        IReadOnlyDictionary<string, string?>? environmentVariables = null)
     {
         var startInfo = new ProcessStartInfo
         {
@@ -168,6 +255,21 @@ public class ClrMdAnalyzerDumpIntegrationTests
             CreateNoWindow = true,
         };
 
+        if (environmentVariables != null)
+        {
+            foreach (var (key, value) in environmentVariables)
+            {
+                if (value == null)
+                {
+                    startInfo.Environment.Remove(key);
+                }
+                else
+                {
+                    startInfo.Environment[key] = value;
+                }
+            }
+        }
+
         var process = Process.Start(startInfo);
         Assert.NotNull(process);
 
@@ -176,11 +278,40 @@ public class ClrMdAnalyzerDumpIntegrationTests
         var completed = Task.WhenAny(readyTask, Task.Delay(TimeSpan.FromSeconds(15))).GetAwaiter().GetResult();
         Assert.Same(readyTask, completed);
 
-        var ready = readyTask.GetAwaiter().GetResult();
-        Assert.NotNull(ready);
-        Assert.StartsWith("READY ", ready, StringComparison.Ordinal);
+        readyLine = readyTask.GetAwaiter().GetResult() ?? string.Empty;
+        Assert.StartsWith("READY ", readyLine, StringComparison.Ordinal);
 
         return process;
+    }
+
+    private static Dictionary<string, string> ParseReadyTokens(string line)
+    {
+        // Format: "READY <pid> KEY=value KEY2=value2"
+        var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var tokens = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        for (var i = 2; i < parts.Length; i++)
+        {
+            var part = parts[i];
+            var equals = part.IndexOf('=');
+            if (equals <= 0 || equals == part.Length - 1)
+                continue;
+
+            tokens[part[..equals]] = part[(equals + 1)..];
+        }
+
+        return tokens;
+    }
+
+    private static ulong? ParseHexAddress(string address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+            return null;
+
+        var trimmed = address.Trim();
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[2..];
+
+        return ulong.TryParse(trimmed, System.Globalization.NumberStyles.HexNumber, null, out var value) ? value : null;
     }
 
     private static void SafeKill(Process process)

@@ -126,6 +126,36 @@ public class AutoCompleteTests
     }
 
     [Fact]
+    public async Task GetCompletionsAsync_ForDumpUploadFilePath_SuggestsMatchingDumpFiles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", nameof(AutoCompleteTests), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var dumpPath = Path.Combine(tempDir, "example.dmp");
+            var ignoredPath = Path.Combine(tempDir, "ignored.txt");
+            File.WriteAllText(dumpPath, "dmp");
+            File.WriteAllText(ignoredPath, "txt");
+
+            var state = new ShellState();
+            state.SetConnected("http://localhost:5000");
+            var autoComplete = new AutoComplete(state);
+
+            var input = $"dumps upload {Path.Combine(tempDir, "exa")}";
+            var result = await autoComplete.GetCompletionsAsync(input, input.Length);
+
+            Assert.True(result.HasCompletions);
+            Assert.Contains(result.Completions, c => c.EndsWith("example.dmp", StringComparison.Ordinal));
+            Assert.DoesNotContain(result.Completions, c => c.EndsWith("ignored.txt", StringComparison.Ordinal));
+        }
+        finally
+        {
+            try { Directory.Delete(tempDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void CompletionResult_GetCommonPrefix_SingleMatch()
     {
         // Arrange
@@ -175,4 +205,3 @@ public class AutoCompleteTests
         Assert.Empty(result.Completions);
     }
 }
-

@@ -17,6 +17,173 @@ namespace DebuggerMcp.Tests;
 public class LldbManagerFakeToolIntegrationTests
 {
     [Fact]
+    public async Task OpenDumpFile_WhenDotnetSymbolIsDiscoveredViaWhich_LoadsSosFromSymbolCache()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var originalSosPluginPath = Environment.GetEnvironmentVariable(EnvironmentConfig.SosPluginPath);
+        var originalDotnetSymbolPath = Environment.GetEnvironmentVariable(EnvironmentConfig.DotnetSymbolToolPath);
+        var originalHome = Environment.GetEnvironmentVariable("HOME");
+
+        var tempDir = CreateTempDirectory();
+        var tempHome = Path.Combine(tempDir, "home");
+        Directory.CreateDirectory(tempHome);
+
+        var runtimeVersion = "99.99.99";
+        var fakeRuntimeDir = Path.Combine(tempHome, ".dotnet", "shared", "Microsoft.NETCore.App", runtimeVersion);
+        var fakeDotnetHost = Path.Combine(tempHome, ".dotnet", "dotnet");
+
+        try
+        {
+            Directory.CreateDirectory(fakeRuntimeDir);
+            File.WriteAllBytes(Path.Combine(fakeRuntimeDir, "libmscordaccore.so"), [0x7F, (byte)'E', (byte)'L', (byte)'F']);
+            File.WriteAllBytes(Path.Combine(fakeRuntimeDir, "libmscordaccore.dylib"), [0xCF, 0xFA, 0xED, 0xFE]);
+
+            WriteExecutableFile(fakeDotnetHost, "#!/usr/bin/env bash\necho \"fake dotnet\"\n");
+
+            var dumpPath = Path.Combine(tempDir, "test.core");
+            File.WriteAllText(dumpPath, "not-a-real-dump");
+
+            var nativeModule = Path.Combine(tempDir, "libfoo.so");
+            File.WriteAllText(nativeModule, "fake so");
+
+            var fakeToolsDir = Path.Combine(tempDir, "tools");
+            Directory.CreateDirectory(fakeToolsDir);
+
+            WriteExecutableFile(Path.Combine(fakeToolsDir, "lldb"), BuildFakeLldbScript());
+            WriteExecutableFile(
+                Path.Combine(fakeToolsDir, "dotnet-symbol"),
+                BuildFakeDotnetSymbolScript(
+                    runtimeVersion: runtimeVersion,
+                    verifyCoreDumpPath: dumpPath,
+                    verifyCoreLines:
+                    [
+                        dumpPath,
+                        // Make the main executable "dotnet" so LldbManager takes the framework-dependent path.
+                        $"0000000000000001 {fakeDotnetHost}",
+                        $"0000000000001000 {nativeModule}",
+                    ],
+                    createSosPlugin: true,
+                    createNestedDirs: true));
+
+            Environment.SetEnvironmentVariable("HOME", tempHome);
+            Environment.SetEnvironmentVariable("PATH", $"{fakeToolsDir}:{originalPath}");
+            Environment.SetEnvironmentVariable(EnvironmentConfig.SosPluginPath, null);
+            Environment.SetEnvironmentVariable(EnvironmentConfig.DotnetSymbolToolPath, null);
+
+            var manager = new LldbManager(NullLogger<LldbManager>.Instance);
+
+            await manager.InitializeAsync();
+            manager.OpenDumpFile(dumpPath, executablePath: null);
+
+            Assert.True(manager.IsInitialized);
+            Assert.True(manager.IsDumpOpen);
+            Assert.True(manager.IsDotNetDump);
+            Assert.True(manager.IsSosLoaded);
+
+            // DownloadSymbols should have run and created a marker file inside the per-dump symbol cache.
+            var symbolCacheDir = Path.Combine(tempDir, ".symbols_test");
+            Assert.True(Directory.Exists(symbolCacheDir));
+            Assert.True(File.Exists(Path.Combine(symbolCacheDir, ".dotnet_symbol_ran")));
+
+            manager.Dispose();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            Environment.SetEnvironmentVariable(EnvironmentConfig.SosPluginPath, originalSosPluginPath);
+            Environment.SetEnvironmentVariable(EnvironmentConfig.DotnetSymbolToolPath, originalDotnetSymbolPath);
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public async Task OpenDumpFile_WhenSosNotInSymbolCache_SearchesHomeRuntimeDirs()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var originalSosPluginPath = Environment.GetEnvironmentVariable(EnvironmentConfig.SosPluginPath);
+        var originalDotnetSymbolPath = Environment.GetEnvironmentVariable(EnvironmentConfig.DotnetSymbolToolPath);
+        var originalHome = Environment.GetEnvironmentVariable("HOME");
+
+        var tempDir = CreateTempDirectory();
+        var tempHome = Path.Combine(tempDir, "home");
+        Directory.CreateDirectory(tempHome);
+
+        var runtimeVersion = "99.99.99";
+        var fakeRuntimeDir = Path.Combine(tempHome, ".dotnet", "shared", "Microsoft.NETCore.App", runtimeVersion);
+        var fakeDotnetHost = Path.Combine(tempHome, ".dotnet", "dotnet");
+
+        try
+        {
+            Directory.CreateDirectory(fakeRuntimeDir);
+            File.WriteAllBytes(Path.Combine(fakeRuntimeDir, "libmscordaccore.so"), [0x7F, (byte)'E', (byte)'L', (byte)'F']);
+            File.WriteAllText(Path.Combine(fakeRuntimeDir, "System.Private.CoreLib.dll"), "placeholder dll");
+            WriteExecutableFile(fakeDotnetHost, "#!/usr/bin/env bash\necho \"fake dotnet\"\n");
+
+            var dumpPath = Path.Combine(tempDir, "test.core");
+            File.WriteAllText(dumpPath, "not-a-real-dump");
+
+            var nativeModule = Path.Combine(tempDir, "libfoo.so");
+            File.WriteAllText(nativeModule, "fake so");
+
+            var fakeToolsDir = Path.Combine(tempDir, "tools");
+            Directory.CreateDirectory(fakeToolsDir);
+
+            WriteExecutableFile(Path.Combine(fakeToolsDir, "lldb"), BuildFakeLldbScript());
+            WriteExecutableFile(
+                Path.Combine(fakeToolsDir, "dotnet-symbol"),
+                BuildFakeDotnetSymbolScript(
+                    runtimeVersion: runtimeVersion,
+                    verifyCoreDumpPath: dumpPath,
+                    verifyCoreLines:
+                    [
+                        dumpPath,
+                        $"0000000000000001 {fakeDotnetHost}",
+                        $"0000000000001000 {nativeModule}",
+                    ],
+                    createSosPlugin: false,
+                    createNestedDirs: false));
+
+            Environment.SetEnvironmentVariable("HOME", tempHome);
+            Environment.SetEnvironmentVariable("PATH", $"{fakeToolsDir}:{originalPath}");
+            Environment.SetEnvironmentVariable(EnvironmentConfig.SosPluginPath, null);
+            Environment.SetEnvironmentVariable(EnvironmentConfig.DotnetSymbolToolPath, null);
+
+            var manager = new LldbManager(NullLogger<LldbManager>.Instance);
+
+            await manager.InitializeAsync();
+            manager.OpenDumpFile(dumpPath, executablePath: null);
+
+            Assert.True(manager.IsInitialized);
+            Assert.True(manager.IsDumpOpen);
+            Assert.True(manager.IsDotNetDump);
+            Assert.True(manager.IsSosLoaded);
+
+            manager.Dispose();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            Environment.SetEnvironmentVariable(EnvironmentConfig.SosPluginPath, originalSosPluginPath);
+            Environment.SetEnvironmentVariable(EnvironmentConfig.DotnetSymbolToolPath, originalDotnetSymbolPath);
+            Environment.SetEnvironmentVariable("HOME", originalHome);
+
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public async Task OpenDumpFile_WithFakeTools_RunsHappyPathAndLoadsSos()
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
@@ -383,7 +550,12 @@ done
 """;
     }
 
-    private static string BuildFakeDotnetSymbolScript(string runtimeVersion, string verifyCoreDumpPath, IEnumerable<string> verifyCoreLines)
+    private static string BuildFakeDotnetSymbolScript(
+        string runtimeVersion,
+        string verifyCoreDumpPath,
+        IEnumerable<string> verifyCoreLines,
+        bool createSosPlugin = true,
+        bool createNestedDirs = false)
     {
         var verifyCoreEchoLines = string.Join(
             "\n",
@@ -442,7 +614,8 @@ fi
 if [[ -n "$out_dir" ]]; then
   echo "Downloading symbols for Microsoft.NETCore.App/{{runtimeVersion}}"
   echo "fake-dll" > "$out_dir/System.Private.CoreLib.dll"
-  echo "fake-sos" > "$out_dir/libsosplugin.dylib"
+  {{(createSosPlugin ? "echo \"fake-sos\" > \"$out_dir/libsosplugin.dylib\"" : "")}}
+  {{(createNestedDirs ? "mkdir -p \"$out_dir/nested/sub\" && echo \"x\" > \"$out_dir/nested/sub/sample.txt\"" : "")}}
   echo "ran" > "$out_dir/.dotnet_symbol_ran"
 fi
 

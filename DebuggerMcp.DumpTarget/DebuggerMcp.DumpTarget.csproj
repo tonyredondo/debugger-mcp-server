@@ -5,7 +5,23 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!-- Give the dump target deterministic assembly metadata for ClrMD-based enrichment tests. -->
+    <AssemblyCompany>DebuggerMcp</AssemblyCompany>
+    <AssemblyProduct>DebuggerMcp.DumpTarget</AssemblyProduct>
+    <AssemblyInformationalVersion>1.0.0+abcdef1234567890</AssemblyInformationalVersion>
   </PropertyGroup>
 
-</Project>
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>RepositoryUrl</_Parameter1>
+      <_Parameter2>https://github.com/tonyredondo/debugger-mcp-server</_Parameter2>
+    </AssemblyAttribute>
+    <AssemblyAttribute Include="System.Reflection.AssemblyMetadataAttribute">
+      <_Parameter1>SourceCommitUrl</_Parameter1>
+      <_Parameter2>https://github.com/tonyredondo/debugger-mcp-server/commit/abcdef1234567890</_Parameter2>
+    </AssemblyAttribute>
+  </ItemGroup>
 
+</Project>

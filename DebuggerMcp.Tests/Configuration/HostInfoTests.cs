@@ -135,4 +135,67 @@ public class HostInfoTests
             try { Directory.Delete(root, recursive: true); } catch { }
         }
     }
+
+    [Theory]
+    [InlineData(true, "Alpine", "3.20.2", "x64", "Alpine Linux 3.20.2 (x64)")]
+    [InlineData(false, "Debian", "12", "arm64", "Debian 12 (arm64)")]
+    public void Description_WhenLinuxDistributionKnown_ReturnsExpected(
+        bool isAlpine,
+        string distro,
+        string version,
+        string arch,
+        string expected)
+    {
+        var host = new HostInfo
+        {
+            OsName = "Linux",
+            OsVersion = "0",
+            LinuxDistribution = distro,
+            LinuxDistributionVersion = version,
+            IsAlpine = isAlpine,
+            Architecture = arch
+        };
+
+        Assert.Equal(expected, host.Description);
+    }
+
+    [Fact]
+    public void Description_WhenNoLinuxDistribution_FallsBackToOsNameAndVersion()
+    {
+        var host = new HostInfo
+        {
+            OsName = "Windows",
+            OsVersion = "11.0",
+            Architecture = "x64",
+            LinuxDistribution = null,
+            LinuxDistributionVersion = null,
+            IsAlpine = false
+        };
+
+        Assert.Equal("Windows 11.0 (x64)", host.Description);
+    }
+
+    [Fact]
+    public void Detect_ReturnsHostInfoWithExpectedFields()
+    {
+        var host = HostInfo.Detect();
+
+        Assert.False(string.IsNullOrWhiteSpace(host.OsName));
+        Assert.False(string.IsNullOrWhiteSpace(host.OsVersion));
+        Assert.False(string.IsNullOrWhiteSpace(host.Architecture));
+        Assert.False(string.IsNullOrWhiteSpace(host.DotNetVersion));
+        Assert.False(string.IsNullOrWhiteSpace(host.DebuggerType));
+        Assert.False(string.IsNullOrWhiteSpace(host.Hostname));
+        Assert.NotEqual(default, host.ServerStartTime);
+        Assert.NotNull(host.InstalledRuntimes);
+    }
+
+    [Fact]
+    public void GetInstalledRuntimesFromPaths_WhenPathMissing_ReturnsEmpty()
+    {
+        var missingPath = Path.Combine(Path.GetTempPath(), $"HostInfoTests_missing_{Guid.NewGuid():N}");
+        var runtimes = HostInfo.GetInstalledRuntimesFromPaths(new[] { missingPath });
+
+        Assert.Empty(runtimes);
+    }
 }

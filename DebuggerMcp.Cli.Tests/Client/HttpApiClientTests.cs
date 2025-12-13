@@ -1,3 +1,5 @@
+using System.Net;
+using System.Reflection;
 using DebuggerMcp.Cli.Client;
 
 namespace DebuggerMcp.Cli.Tests.Client;
@@ -238,6 +240,39 @@ public class HttpApiClientTests
     }
 
     [Fact]
+    public void IsRetryableException_WithHttpRequestException_ReturnsTrue()
+    {
+        var method = typeof(HttpApiClient).GetMethod("IsRetryableException", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var result = (bool)method!.Invoke(null, [new HttpRequestException("boom")])!;
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsRetryableException_WithTimeoutTaskCanceled_ReturnsTrue()
+    {
+        var method = typeof(HttpApiClient).GetMethod("IsRetryableException", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var ex = new TaskCanceledException("timed out", new TimeoutException("t"));
+        var result = (bool)method!.Invoke(null, [ex])!;
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void GetRetryMessage_WithRateLimitException_ReturnsFriendlyMessage()
+    {
+        var method = typeof(HttpApiClient).GetMethod("GetRetryMessage", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var ex = new HttpApiException("rate limited", HttpStatusCode.TooManyRequests, errorCode: "rate_limit");
+        var message = (string)method!.Invoke(null, [ex])!;
+
+        Assert.Contains("Rate limit", message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task ListDumpsAsync_WithoutConfigure_ThrowsInvalidOperationException()
     {
         // Arrange
@@ -293,4 +328,3 @@ public class HttpApiClientTests
     }
 
 }
-

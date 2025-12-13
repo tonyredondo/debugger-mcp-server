@@ -119,6 +119,29 @@ public class ShellReadLineTests
         Assert.Equal("a", line);
     }
 
+    [Fact]
+    public async Task ReadLineAsync_WhenMultipleTabCompletions_ShowsCompletionList()
+    {
+        var testConsole = new TestConsole();
+        var history = new CommandHistory();
+        var state = new ShellState();
+        var autoComplete = new AutoComplete(state);
+
+        // "s" has multiple completions (server, session, set, status, symbols, ...).
+        var systemConsole = new FakeSystemConsole(
+            Key('s'),
+            Key(ConsoleKey.Tab),
+            Key(ConsoleKey.Enter));
+
+        var readline = new ShellReadLine(testConsole, history, autoComplete, state, systemConsole);
+
+        var line = await readline.ReadLineAsync();
+
+        Assert.Equal("server", line);
+        Assert.Contains("session", systemConsole.Output);
+        Assert.Contains("status", systemConsole.Output);
+    }
+
     private static ConsoleKeyInfo Key(char c) => new(c, (ConsoleKey)char.ToUpperInvariant(c), shift: false, alt: false, control: false);
 
     private static ConsoleKeyInfo Key(ConsoleKey key, bool shift = false, bool alt = false, bool control = false)
@@ -152,6 +175,7 @@ public class ShellReadLineTests
         {
             // Ignore in tests.
         }
+
+        public string Output => string.Concat(_writes);
     }
 }
-

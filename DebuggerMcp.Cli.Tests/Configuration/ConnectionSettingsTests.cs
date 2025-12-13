@@ -5,6 +5,7 @@ namespace DebuggerMcp.Cli.Tests.Configuration;
 /// <summary>
 /// Unit tests for <see cref="ConnectionSettings"/>.
 /// </summary>
+[Collection("NonParallelEnvironment")]
 public class ConnectionSettingsTests
 {
     [Fact]
@@ -34,6 +35,49 @@ public class ConnectionSettingsTests
             // Restore original values
             Environment.SetEnvironmentVariable(CliEnvironment.ServerUrl, originalUrl);
             Environment.SetEnvironmentVariable(CliEnvironment.ApiKey, originalKey);
+        }
+    }
+
+    [Fact]
+    public void Load_WithEnvironmentOverrides_ReturnsMergedSettings()
+    {
+        var originalUrl = Environment.GetEnvironmentVariable(CliEnvironment.ServerUrl);
+        var originalKey = Environment.GetEnvironmentVariable(CliEnvironment.ApiKey);
+        var originalUserId = Environment.GetEnvironmentVariable(CliEnvironment.UserId);
+        var originalTimeout = Environment.GetEnvironmentVariable(CliEnvironment.Timeout);
+        var originalOutput = Environment.GetEnvironmentVariable(CliEnvironment.OutputFormat);
+        var originalVerbose = Environment.GetEnvironmentVariable(CliEnvironment.Verbose);
+        var originalHistory = Environment.GetEnvironmentVariable(CliEnvironment.HistoryFile);
+
+        try
+        {
+            Environment.SetEnvironmentVariable(CliEnvironment.ServerUrl, "http://localhost:5000");
+            Environment.SetEnvironmentVariable(CliEnvironment.ApiKey, "k");
+            Environment.SetEnvironmentVariable(CliEnvironment.UserId, "u");
+            Environment.SetEnvironmentVariable(CliEnvironment.Timeout, "123");
+            Environment.SetEnvironmentVariable(CliEnvironment.OutputFormat, "json");
+            Environment.SetEnvironmentVariable(CliEnvironment.Verbose, "true");
+            Environment.SetEnvironmentVariable(CliEnvironment.HistoryFile, "/tmp/history.txt");
+
+            var settings = ConnectionSettings.Load();
+
+            Assert.Equal("http://localhost:5000", settings.ServerUrl);
+            Assert.Equal("k", settings.ApiKey);
+            Assert.Equal("u", settings.UserId);
+            Assert.Equal(123, settings.TimeoutSeconds);
+            Assert.Equal(OutputFormat.Json, settings.OutputFormat);
+            Assert.True(settings.Verbose);
+            Assert.Equal("/tmp/history.txt", settings.HistoryFile);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(CliEnvironment.ServerUrl, originalUrl);
+            Environment.SetEnvironmentVariable(CliEnvironment.ApiKey, originalKey);
+            Environment.SetEnvironmentVariable(CliEnvironment.UserId, originalUserId);
+            Environment.SetEnvironmentVariable(CliEnvironment.Timeout, originalTimeout);
+            Environment.SetEnvironmentVariable(CliEnvironment.OutputFormat, originalOutput);
+            Environment.SetEnvironmentVariable(CliEnvironment.Verbose, originalVerbose);
+            Environment.SetEnvironmentVariable(CliEnvironment.HistoryFile, originalHistory);
         }
     }
 
@@ -239,4 +283,3 @@ public class ConnectionSettingsTests
         Assert.False(result);
     }
 }
-

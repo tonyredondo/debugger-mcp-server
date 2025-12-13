@@ -5280,12 +5280,14 @@ public class Program
             _ => $"({debuggerType})>"
         };
 
+        var systemConsole = new SystemConsole();
+
         while (true)
         {
             try
             {
                 // Read command with history support
-                var command = ReadCmdLineWithHistory(console, promptPrefix, _cmdHistory);
+                var command = ReadCmdLineWithHistory(console, systemConsole, promptPrefix, _cmdHistory);
 
                 // Check for exit commands or Ctrl+C
                 if (command == null)
@@ -5407,7 +5409,7 @@ public class Program
     /// <summary>
     /// Reads a line of input with history support for cmd mode.
     /// </summary>
-    private static string? ReadCmdLineWithHistory(IAnsiConsole console, string prompt, CommandHistory history)
+    private static string? ReadCmdLineWithHistory(IAnsiConsole console, ISystemConsole systemConsole, string prompt, CommandHistory history)
     {
         var currentLine = string.Empty;
         var cursorPosition = 0;
@@ -5419,18 +5421,18 @@ public class Program
 
         while (true)
         {
-            var key = Console.ReadKey(intercept: true);
+            var key = systemConsole.ReadKey(intercept: true);
 
             switch (key.Key)
             {
                 case ConsoleKey.Enter:
-                    Console.WriteLine();
+                    systemConsole.WriteLine();
                     history.ResetPosition();
                     return currentLine;
 
                 case ConsoleKey.Escape:
                     // Clear current line
-                    ClearCmdLine(promptLength, currentLine.Length);
+                    ClearCmdLine(systemConsole, promptLength, currentLine.Length);
                     currentLine = string.Empty;
                     cursorPosition = 0;
                     break;
@@ -5440,9 +5442,9 @@ public class Program
                     {
                         currentLine = currentLine.Remove(cursorPosition - 1, 1);
                         cursorPosition--;
-                        ClearCmdLine(promptLength, currentLine.Length + 1);
-                        Console.Write(currentLine);
-                        Console.CursorLeft = promptLength + cursorPosition;
+                        ClearCmdLine(systemConsole, promptLength, currentLine.Length + 1);
+                        systemConsole.Write(currentLine);
+                        systemConsole.CursorLeft = promptLength + cursorPosition;
                     }
                     break;
 
@@ -5450,9 +5452,9 @@ public class Program
                     if (cursorPosition < currentLine.Length)
                     {
                         currentLine = currentLine.Remove(cursorPosition, 1);
-                        ClearCmdLine(promptLength, currentLine.Length + 1);
-                        Console.Write(currentLine);
-                        Console.CursorLeft = promptLength + cursorPosition;
+                        ClearCmdLine(systemConsole, promptLength, currentLine.Length + 1);
+                        systemConsole.Write(currentLine);
+                        systemConsole.CursorLeft = promptLength + cursorPosition;
                     }
                     break;
 
@@ -5460,7 +5462,7 @@ public class Program
                     if (cursorPosition > 0)
                     {
                         cursorPosition--;
-                        Console.CursorLeft--;
+                        systemConsole.CursorLeft--;
                     }
                     break;
 
@@ -5468,18 +5470,18 @@ public class Program
                     if (cursorPosition < currentLine.Length)
                     {
                         cursorPosition++;
-                        Console.CursorLeft++;
+                        systemConsole.CursorLeft++;
                     }
                     break;
 
                 case ConsoleKey.Home:
                     cursorPosition = 0;
-                    Console.CursorLeft = promptLength;
+                    systemConsole.CursorLeft = promptLength;
                     break;
 
                 case ConsoleKey.End:
                     cursorPosition = currentLine.Length;
-                    Console.CursorLeft = promptLength + currentLine.Length;
+                    systemConsole.CursorLeft = promptLength + currentLine.Length;
                     break;
 
                 case ConsoleKey.UpArrow:
@@ -5488,10 +5490,10 @@ public class Program
                     var previous = history.GetPrevious();
                     if (previous != null)
                     {
-                        ClearCmdLine(promptLength, currentLine.Length);
+                        ClearCmdLine(systemConsole, promptLength, currentLine.Length);
                         currentLine = previous;
                         cursorPosition = currentLine.Length;
-                        Console.Write(currentLine);
+                        systemConsole.Write(currentLine);
                     }
                     break;
 
@@ -5499,31 +5501,31 @@ public class Program
                     var next = history.GetNext();
                     if (next != null)
                     {
-                        ClearCmdLine(promptLength, currentLine.Length);
+                        ClearCmdLine(systemConsole, promptLength, currentLine.Length);
                         currentLine = next;
                         cursorPosition = currentLine.Length;
-                        Console.Write(currentLine);
+                        systemConsole.Write(currentLine);
                     }
                     else if (savedLine != null)
                     {
-                        ClearCmdLine(promptLength, currentLine.Length);
+                        ClearCmdLine(systemConsole, promptLength, currentLine.Length);
                         currentLine = savedLine;
                         cursorPosition = currentLine.Length;
-                        Console.Write(currentLine);
+                        systemConsole.Write(currentLine);
                         savedLine = null;
                     }
                     break;
 
                 case ConsoleKey.C when key.Modifiers.HasFlag(ConsoleModifiers.Control):
-                    Console.WriteLine("^C");
+                    systemConsole.WriteLine("^C");
                     history.ResetPosition();
                     return null; // Signal to exit
 
                 case ConsoleKey.L when key.Modifiers.HasFlag(ConsoleModifiers.Control):
-                    Console.Clear();
+                    systemConsole.Clear();
                     console.Markup($"[cyan]{prompt}[/] ");
-                    Console.Write(currentLine);
-                    Console.CursorLeft = promptLength + cursorPosition;
+                    systemConsole.Write(currentLine);
+                    systemConsole.CursorLeft = promptLength + cursorPosition;
                     break;
 
                 default:
@@ -5531,9 +5533,9 @@ public class Program
                     {
                         currentLine = currentLine.Insert(cursorPosition, key.KeyChar.ToString());
                         cursorPosition++;
-                        ClearCmdLine(promptLength, currentLine.Length - 1);
-                        Console.Write(currentLine);
-                        Console.CursorLeft = promptLength + cursorPosition;
+                        ClearCmdLine(systemConsole, promptLength, currentLine.Length - 1);
+                        systemConsole.Write(currentLine);
+                        systemConsole.CursorLeft = promptLength + cursorPosition;
                     }
                     break;
             }
@@ -5543,11 +5545,11 @@ public class Program
     /// <summary>
     /// Clears the command line area for cmd mode.
     /// </summary>
-    private static void ClearCmdLine(int promptLength, int lineLength)
+    private static void ClearCmdLine(ISystemConsole systemConsole, int promptLength, int lineLength)
     {
-        Console.CursorLeft = promptLength;
-        Console.Write(new string(' ', lineLength + 5));
-        Console.CursorLeft = promptLength;
+        systemConsole.CursorLeft = promptLength;
+        systemConsole.Write(new string(' ', lineLength + 5));
+        systemConsole.CursorLeft = promptLength;
     }
 
     /// <summary>

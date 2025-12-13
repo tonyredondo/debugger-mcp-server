@@ -224,6 +224,46 @@ public class SessionToolsTests : IDisposable
         Assert.Contains("Dump Open:", result);
     }
 
+    // ============================================================
+    // RestoreSession Tests
+    // ============================================================
+
+    [Fact]
+    public void RestoreSession_WithExistingSession_ReturnsStatusMessage()
+    {
+        var userId = "test-user";
+        var createResult = _tools.CreateSession(userId);
+        var sessionId = ExtractSessionId(createResult);
+
+        var result = _tools.RestoreSession(sessionId, userId);
+
+        Assert.Contains("Session restored successfully", result);
+        Assert.Contains(sessionId, result);
+    }
+
+    // ============================================================
+    // LoadVerifyCoreModules Tests
+    // ============================================================
+
+    [Fact]
+    public void LoadVerifyCoreModules_WithSession_ReturnsPlatformAppropriateMessage()
+    {
+        var userId = "test-user";
+        var createResult = _tools.CreateSession(userId);
+        var sessionId = ExtractSessionId(createResult);
+
+        var result = _tools.LoadVerifyCoreModules(sessionId, userId);
+
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Contains("only works with LLDB", result, StringComparison.OrdinalIgnoreCase);
+        }
+        else
+        {
+            Assert.Contains("No modules were loaded", result, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
     [Theory]
     [InlineData(null)]
     [InlineData("")]
@@ -282,4 +322,3 @@ public class SessionToolsTests : IDisposable
         return createResult[start..end].Trim();
     }
 }
-

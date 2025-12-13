@@ -107,6 +107,58 @@ public class DatadogSymbolsToolsTests
         }
     }
 
+    [Fact]
+    public void ClearDatadogSymbols_WhenDatadogDirectoryExists_DeletesFilesAndClearsApiCache()
+    {
+        var originalCacheDir = Environment.GetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_CACHE_DIR");
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", nameof(DatadogSymbolsToolsTests), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var dumpStoragePath = Path.Combine(tempRoot, "dumps");
+            var cacheDir = Path.Combine(tempRoot, "cache");
+            Directory.CreateDirectory(cacheDir);
+
+            File.WriteAllText(Path.Combine(cacheDir, "azure_pipelines_cache.json"), "{}");
+            File.WriteAllText(Path.Combine(cacheDir, "github_releases_cache.json"), "{}");
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_CACHE_DIR", cacheDir);
+
+            var sessionManager = new DebuggerSessionManager(dumpStoragePath: dumpStoragePath);
+            var symbolManager = new SymbolManager();
+            var watchStore = new WatchStore();
+            var tools = new DatadogSymbolsTools(sessionManager, symbolManager, watchStore, NullLogger<DatadogSymbolsTools>.Instance);
+
+            var userId = "u";
+            var sessionId = sessionManager.CreateSession(userId);
+            var session = sessionManager.GetSessionInfo(sessionId, userId);
+            session.CurrentDumpId = "dump1.dmp";
+
+            var dumpName = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
+            var datadogSymbolsDir = Path.Combine(dumpStoragePath, userId, $".symbols_{dumpName}", ".datadog");
+            Directory.CreateDirectory(Path.Combine(datadogSymbolsDir, "nested"));
+            File.WriteAllText(Path.Combine(datadogSymbolsDir, "a.txt"), "x");
+            File.WriteAllText(Path.Combine(datadogSymbolsDir, "nested", "b.txt"), "y");
+
+            var json = tools.ClearDatadogSymbols(sessionId, userId, clearApiCache: true);
+            using var doc = JsonDocument.Parse(json);
+
+            Assert.True(doc.RootElement.GetProperty("success").GetBoolean());
+            Assert.Equal(2, doc.RootElement.GetProperty("filesDeleted").GetInt32());
+            Assert.True(doc.RootElement.GetProperty("apiCacheCleared").GetBoolean());
+
+            Assert.False(Directory.Exists(datadogSymbolsDir));
+            Assert.False(File.Exists(Path.Combine(cacheDir, "azure_pipelines_cache.json")));
+            Assert.False(File.Exists(Path.Combine(cacheDir, "github_releases_cache.json")));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_CACHE_DIR", originalCacheDir);
+            try { Directory.Delete(tempRoot, recursive: true); } catch { }
+        }
+    }
+
     private static DatadogSymbolsTools CreateTools()
     {
         // These tests only cover the pure JSON paths that don't require a real session/dump.

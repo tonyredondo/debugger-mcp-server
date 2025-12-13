@@ -108,6 +108,148 @@ public class PdbPatcherTests
         }
     }
 
+    [Fact]
+    public void PatchPdbsToMatchModuleGuids_WithPortablePdb_PatchesAndVerifiesGuid()
+    {
+        var repoRoot = FindRepoRoot();
+        var (configuration, tfm) = GetBuildConfigurationAndTfm();
+
+        var sourcePdbPath = Path.Combine(repoRoot, "DebuggerMcp.DumpTarget", "bin", configuration, tfm, "DebuggerMcp.DumpTarget.pdb");
+        Assert.True(File.Exists(sourcePdbPath), $"PDB not built: {sourcePdbPath}");
+
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var destPdbPath = Path.Combine(tempDir, Path.GetFileName(sourcePdbPath));
+            File.Copy(sourcePdbPath, destPdbPath, overwrite: true);
+
+            var patcher = new PdbPatcher(NullLogger.Instance);
+
+            var originalGuid = patcher.ReadGuidFromPdb(destPdbPath);
+            Assert.NotNull(originalGuid);
+
+            var expectedGuid = Guid.NewGuid();
+            while (expectedGuid == originalGuid)
+                expectedGuid = Guid.NewGuid();
+
+            var results = patcher.PatchPdbsToMatchModuleGuids(
+                tempDir,
+                new Dictionary<string, Guid>
+                {
+                    [Path.GetFileNameWithoutExtension(destPdbPath)] = expectedGuid
+                });
+
+            Assert.Single(results);
+            Assert.True(results[0].WasPatched);
+            Assert.True(results[0].Success);
+            Assert.True(results[0].Verified);
+            Assert.Equal(expectedGuid, results[0].VerifiedGuid);
+
+            var patchedGuid = patcher.ReadGuidFromPdb(destPdbPath);
+            Assert.Equal(expectedGuid, patchedGuid);
+        }
+        finally
+        {
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void PatchAllPdbsInDirectory_WithMatchingDllAndPdb_ReturnsSuccessWithoutPatching()
+    {
+        var repoRoot = FindRepoRoot();
+        var (configuration, tfm) = GetBuildConfigurationAndTfm();
+
+        var buildDir = Path.Combine(repoRoot, "DebuggerMcp.DumpTarget", "bin", configuration, tfm);
+        var sourceDllPath = Path.Combine(buildDir, "DebuggerMcp.DumpTarget.dll");
+        var sourcePdbPath = Path.Combine(buildDir, "DebuggerMcp.DumpTarget.pdb");
+
+        Assert.True(File.Exists(sourceDllPath), $"DLL not built: {sourceDllPath}");
+        Assert.True(File.Exists(sourcePdbPath), $"PDB not built: {sourcePdbPath}");
+
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var destDll = Path.Combine(tempDir, Path.GetFileName(sourceDllPath));
+            var destPdb = Path.Combine(tempDir, Path.GetFileName(sourcePdbPath));
+            File.Copy(sourceDllPath, destDll, overwrite: true);
+            File.Copy(sourcePdbPath, destPdb, overwrite: true);
+
+            var patcher = new PdbPatcher(NullLogger.Instance);
+            var results = patcher.PatchAllPdbsInDirectory(tempDir);
+
+            Assert.Single(results);
+            Assert.True(results[0].Success);
+            Assert.False(results[0].WasPatched);
+            Assert.Equal(destPdb, results[0].PdbPath);
+            Assert.Equal(destDll, results[0].DllPath);
+        }
+        finally
+        {
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public void PatchPdbToMatchDll_WhenGuidMismatch_PatchesAndVerifies()
+    {
+        var repoRoot = FindRepoRoot();
+        var (configuration, tfm) = GetBuildConfigurationAndTfm();
+
+        var buildDir = Path.Combine(repoRoot, "DebuggerMcp.DumpTarget", "bin", configuration, tfm);
+        var sourceDllPath = Path.Combine(buildDir, "DebuggerMcp.DumpTarget.dll");
+        var sourcePdbPath = Path.Combine(buildDir, "DebuggerMcp.DumpTarget.pdb");
+
+        Assert.True(File.Exists(sourceDllPath), $"DLL not built: {sourceDllPath}");
+        Assert.True(File.Exists(sourcePdbPath), $"PDB not built: {sourcePdbPath}");
+
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var destDll = Path.Combine(tempDir, Path.GetFileName(sourceDllPath));
+            var destPdb = Path.Combine(tempDir, Path.GetFileName(sourcePdbPath));
+            File.Copy(sourceDllPath, destDll, overwrite: true);
+            File.Copy(sourcePdbPath, destPdb, overwrite: true);
+
+            var patcher = new PdbPatcher(NullLogger.Instance);
+
+            var dllGuid = patcher.ReadGuidFromDll(destDll);
+            Assert.NotNull(dllGuid);
+
+            var originalGuid = patcher.ReadGuidFromPdb(destPdb);
+            Assert.NotNull(originalGuid);
+
+            // Force a mismatch by patching the PDB to a random GUID first.
+            var wrongGuid = Guid.NewGuid();
+            while (wrongGuid == originalGuid)
+                wrongGuid = Guid.NewGuid();
+
+            _ = patcher.PatchPdbsToMatchModuleGuids(
+                tempDir,
+                new Dictionary<string, Guid>
+                {
+                    [Path.GetFileNameWithoutExtension(destPdb)] = wrongGuid
+                });
+
+            var mismatched = patcher.ReadGuidFromPdb(destPdb);
+            Assert.Equal(wrongGuid, mismatched);
+
+            var result = patcher.PatchPdbToMatchDll(destDll, destPdb);
+
+            Assert.True(result.Success);
+            Assert.True(result.WasPatched);
+            Assert.True(result.Verified);
+            Assert.Equal(dllGuid, result.VerifiedGuid);
+
+            var finalGuid = patcher.ReadGuidFromPdb(destPdb);
+            Assert.Equal(dllGuid, finalGuid);
+        }
+        finally
+        {
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
     private static byte[] CreateMinimalPortablePdbBytes(int pdbStreamOffset)
     {
         // This is not a fully valid PDB, but it is sufficient for exercising FindPdbIdOffset.
@@ -169,6 +311,30 @@ public class PdbPatcherTests
         return dir;
     }
 
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "DebuggerMcp.slnx")))
+            {
+                return dir.FullName;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate repo root (DebuggerMcp.slnx not found).");
+    }
+
+    private static (string configuration, string tfm) GetBuildConfigurationAndTfm()
+    {
+        var testAssemblyDir = new FileInfo(typeof(PdbPatcherTests).Assembly.Location).Directory;
+        var tfm = testAssemblyDir?.Name ?? "net10.0";
+        var config = testAssemblyDir?.Parent?.Name ?? "Debug";
+        return (config, tfm);
+    }
+
     private static void SafeDeleteDirectory(string dir)
     {
         try
@@ -182,4 +348,3 @@ public class PdbPatcherTests
         }
     }
 }
-

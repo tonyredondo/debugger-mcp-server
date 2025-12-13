@@ -215,6 +215,128 @@ public class AzurePipelinesResolverTests
             try { Directory.Delete(cacheDir, recursive: true); } catch { }
         }
     }
+
+    [Fact]
+    public async Task FindBuildByCommitAsync_WhenBuildMatchesCommit_ParsesAndReturnsBuild()
+    {
+        var cacheDir = Path.Combine(Path.GetTempPath(), $"az-cache-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(cacheDir);
+
+        try
+        {
+            const string commit = "abcdef1234567890";
+
+            var handler = new CountingHttpMessageHandler(_ =>
+            {
+                var payload = $$"""
+{ "value": [
+  { "id": 1, "buildNumber": "b1", "status": "completed", "result": "succeeded", "sourceVersion": "0000000", "sourceBranch": "refs/heads/main" },
+  { "id": 2, "buildNumber": "b2", "status": "completed", "result": "succeeded", "sourceVersion": "{{commit}}", "sourceBranch": "refs/heads/main",
+    "_links": { "web": { "href": "https://example.invalid/build/2" } } }
+] }
+""";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
+                };
+            });
+
+            using var httpClient = new HttpClient(handler);
+            using var resolver = new AzurePipelinesResolver(cacheDir, null, httpClient);
+
+            var build = await resolver.FindBuildByCommitAsync("org", "project", commit);
+
+            Assert.NotNull(build);
+            Assert.Equal(2, build!.Id);
+            Assert.Equal("b2", build.BuildNumber);
+            Assert.Equal(commit, build.SourceVersion);
+            Assert.Equal("https://example.invalid/build/2", build.WebUrl);
+        }
+        finally
+        {
+            try { Directory.Delete(cacheDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task FindBuildByCommitAsync_WhenNoExactSourceVersionMatch_ReturnsNull()
+    {
+        var cacheDir = Path.Combine(Path.GetTempPath(), $"az-cache-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(cacheDir);
+
+        try
+        {
+            var handler = new CountingHttpMessageHandler(_ =>
+            {
+                var payload = """
+{ "value": [ { "id": 1, "buildNumber": "b1", "status": "completed", "result": "succeeded", "sourceVersion": "different" } ] }
+""";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
+                };
+            });
+
+            using var httpClient = new HttpClient(handler);
+            using var resolver = new AzurePipelinesResolver(cacheDir, null, httpClient);
+
+            var build = await resolver.FindBuildByCommitAsync("org", "project", commitSha: "expected");
+
+            Assert.Null(build);
+        }
+        finally
+        {
+            try { Directory.Delete(cacheDir, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public async Task ListArtifactsAsync_WhenResponseContainsArtifacts_ParsesArtifacts()
+    {
+        var cacheDir = Path.Combine(Path.GetTempPath(), $"az-cache-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(cacheDir);
+
+        try
+        {
+            var handler = new CountingHttpMessageHandler(_ =>
+            {
+                var payload = """
+{
+  "value": [
+    {
+      "id": 10,
+      "name": "symbols",
+      "resource": {
+        "downloadUrl": "https://example.invalid/artifacts/symbols.zip",
+        "type": "container"
+      }
+    }
+  ]
+}
+""";
+
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
+                };
+            });
+
+            using var httpClient = new HttpClient(handler);
+            using var resolver = new AzurePipelinesResolver(cacheDir, null, httpClient);
+
+            var artifacts = await resolver.ListArtifactsAsync("org", "project", buildId: 123);
+
+            Assert.Single(artifacts);
+            Assert.Equal(10, artifacts[0].Id);
+            Assert.Equal("symbols", artifacts[0].Name);
+            Assert.Equal("https://example.invalid/artifacts/symbols.zip", artifacts[0].DownloadUrl);
+            Assert.Equal("container", artifacts[0].ResourceType);
+        }
+        finally
+        {
+            try { Directory.Delete(cacheDir, recursive: true); } catch { }
+        }
+    }
 }
 
 internal sealed class CountingHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
