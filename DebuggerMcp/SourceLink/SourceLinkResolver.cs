@@ -625,11 +625,27 @@ public class SourceLinkResolver
                     var repo = githubMatch.Groups[2].Value;
                     var commit = githubMatch.Groups[3].Value;
                     var path = githubMatch.Groups[4].Value;
+                    if (string.Equals(user, "dotnet", StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(repo, "dotnet", StringComparison.OrdinalIgnoreCase) &&
+                        (path.StartsWith("src/libraries/", StringComparison.OrdinalIgnoreCase) ||
+                         path.StartsWith("src/coreclr/", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        path = $"src/runtime/{path}";
+                    }
                     return $"https://github.com/{user}/{repo}/blob/{commit}/{path}#L{lineNumber}";
                 }
                 // Already a github.com URL
                 if (rawUrl.Contains("github.com") && !rawUrl.Contains("#L"))
                 {
+                    // dotnet/dotnet repository layout nests runtime sources under src/runtime/.
+                    if (rawUrl.Contains("github.com/dotnet/dotnet/", StringComparison.OrdinalIgnoreCase) &&
+                        (rawUrl.Contains("/src/libraries/", StringComparison.OrdinalIgnoreCase) ||
+                         rawUrl.Contains("/src/coreclr/", StringComparison.OrdinalIgnoreCase)) &&
+                        !rawUrl.Contains("/src/runtime/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        rawUrl = rawUrl.Replace("/src/libraries/", "/src/runtime/src/libraries/", StringComparison.OrdinalIgnoreCase)
+                                       .Replace("/src/coreclr/", "/src/runtime/src/coreclr/", StringComparison.OrdinalIgnoreCase);
+                    }
                     return $"{rawUrl}#L{lineNumber}";
                 }
                 break;

@@ -101,6 +101,18 @@ public class SourceLinkResolverHelpersTests
     }
 
     [Fact]
+    public void ConvertToBrowsableUrl_GitHubRawUrl_DotnetDotnetRuntimePaths_AreRewritten()
+    {
+        var raw = "https://raw.githubusercontent.com/dotnet/dotnet/abc123/src/libraries/System.Private.CoreLib/src/System/Threading/Lock.cs";
+
+        var url = SourceLinkResolver.ConvertToBrowsableUrl(raw, 754, SourceProvider.GitHub);
+
+        Assert.Equal(
+            "https://github.com/dotnet/dotnet/blob/abc123/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/Lock.cs#L754",
+            url);
+    }
+
+    [Fact]
     public void ConvertToBrowsableUrl_GitHubBlobUrl_AppendsLine()
     {
         var raw = "https://github.com/user/repo/blob/main/src/file.cs";
@@ -108,6 +120,18 @@ public class SourceLinkResolverHelpersTests
         var url = SourceLinkResolver.ConvertToBrowsableUrl(raw, 123, SourceProvider.GitHub);
 
         Assert.Equal("https://github.com/user/repo/blob/main/src/file.cs#L123", url);
+    }
+
+    [Fact]
+    public void ConvertToBrowsableUrl_GitHubBlobUrl_DotnetDotnetRuntimePaths_AreRewritten()
+    {
+        var raw = "https://github.com/dotnet/dotnet/blob/abc123/src/libraries/System.Private.CoreLib/src/System/Threading/Lock.cs";
+
+        var url = SourceLinkResolver.ConvertToBrowsableUrl(raw, 754, SourceProvider.GitHub);
+
+        Assert.Equal(
+            "https://github.com/dotnet/dotnet/blob/abc123/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/Lock.cs#L754",
+            url);
     }
 
     [Fact]
@@ -160,4 +184,3 @@ public class SourceLinkResolverHelpersTests
         Assert.Equal(raw, url);
     }
 }
-
