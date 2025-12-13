@@ -1728,7 +1728,8 @@ public class CrashAnalyzer
 
         // Fallback: if we already enriched assemblies with repository/commit metadata (e.g. via ClrMD),
         // build a browsable URL directly even when we don't have a Portable PDB with Source Link data.
-        if (TryResolveSourceLinkFromAssemblyMetadata(frame, result, out var fallbackUrl, out var fallbackProvider))
+        if (frame.IsManaged == true &&
+            TryResolveSourceLinkFromAssemblyMetadata(frame, modulePath, result, out var fallbackUrl, out var fallbackProvider))
         {
             frame.SourceUrl = fallbackUrl;
             frame.SourceProvider = fallbackProvider;
@@ -1788,6 +1789,7 @@ public class CrashAnalyzer
 
     private static bool TryResolveSourceLinkFromAssemblyMetadata(
         StackFrame frame,
+        string? resolvedModulePath,
         CrashAnalysisResult result,
         out string url,
         out string provider)
@@ -1806,28 +1808,27 @@ public class CrashAnalyzer
             return false;
         }
 
-        // Heuristics to pick the best assembly metadata:
-        // - First, match by the frame module name (often equals assembly name for app code).
-        // - Then, match by source file path containing the assembly name (useful for dotnet/runtime-style paths).
-        // - Finally, pick any assembly with repository+commit data.
+        // Only use a strong match to avoid generating incorrect URLs:
+        // - Match by the resolved module/assembly path when available
+        // - Otherwise match by the frame module name (assembly simple name)
         AssemblyVersionInfo? assembly = null;
-        if (!string.IsNullOrWhiteSpace(frame.Module))
+        if (!string.IsNullOrWhiteSpace(resolvedModulePath))
+        {
+            var resolvedFileName = Path.GetFileName(resolvedModulePath);
+            if (!string.IsNullOrWhiteSpace(resolvedFileName))
+            {
+                assembly = assemblies.FirstOrDefault(a =>
+                    !string.IsNullOrWhiteSpace(a.Path) &&
+                    string.Equals(Path.GetFileName(a.Path), resolvedFileName, StringComparison.OrdinalIgnoreCase));
+            }
+        }
+
+        if (assembly == null && !string.IsNullOrWhiteSpace(frame.Module))
         {
             assembly = assemblies.FirstOrDefault(a =>
                 !string.IsNullOrWhiteSpace(a.Name) &&
                 a.Name.Equals(frame.Module, StringComparison.OrdinalIgnoreCase));
         }
-
-        if (assembly == null)
-        {
-            assembly = assemblies.FirstOrDefault(a =>
-                !string.IsNullOrWhiteSpace(a.Name) &&
-                frame.SourceFile.Contains(a.Name, StringComparison.OrdinalIgnoreCase));
-        }
-
-        assembly ??= assemblies.FirstOrDefault(a =>
-            !string.IsNullOrWhiteSpace(a.RepositoryUrl) &&
-            (!string.IsNullOrWhiteSpace(a.CommitHash) || !string.IsNullOrWhiteSpace(a.SourceUrl)));
 
         if (assembly == null)
         {
@@ -1849,7 +1850,7 @@ public class CrashAnalyzer
             return false;
         }
 
-        var relativePath = NormalizeRepoRelativePath(frame.SourceFile);
+        var relativePath = NormalizeRepoRelativePath(frame.SourceFile, repositoryUrl);
         if (string.IsNullOrWhiteSpace(relativePath))
         {
             return false;
@@ -1901,7 +1902,7 @@ public class CrashAnalyzer
     /// <summary>
     /// Normalizes a compiler/PDB source path into a repository-relative path suitable for URL construction.
     /// </summary>
-    private static string? NormalizeRepoRelativePath(string sourceFile)
+    private static string? NormalizeRepoRelativePath(string sourceFile, string repositoryUrl)
     {
         var normalized = sourceFile.Replace('\\', '/').Trim();
 
@@ -1926,6 +1927,19 @@ public class CrashAnalyzer
         if (string.IsNullOrWhiteSpace(normalized))
         {
             return null;
+        }
+
+        // dotnet/dotnet repository layout nests runtime sources under src/runtime/.
+        // Portable PDBs often record paths as src/libraries/... and src/coreclr/... (runtime repo layout).
+        // When repositoryUrl points at dotnet/dotnet, rewrite to src/runtime/src/... to avoid 404s.
+        if (repositoryUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.StartsWith("src/runtime/", StringComparison.OrdinalIgnoreCase))
+        {
+            if (normalized.StartsWith("src/libraries/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.StartsWith("src/coreclr/", StringComparison.OrdinalIgnoreCase))
+            {
+                normalized = $"src/runtime/{normalized}";
+            }
         }
 
         // Escape each segment so spaces and special characters are safe in URLs.

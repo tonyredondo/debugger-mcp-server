@@ -59,7 +59,7 @@ public class CrashAnalyzerSourceLinkFallbackTests
         analyzer.ResolveSourceLinksForTest(result);
 
         Assert.Equal(
-            "https://github.com/dotnet/dotnet/blob/b0f34d51fccc69fd334253924abd8d6853fad7aa/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.ThreadCounts.cs#L38",
+            "https://github.com/dotnet/dotnet/blob/b0f34d51fccc69fd334253924abd8d6853fad7aa/src/runtime/src/libraries/System.Private.CoreLib/src/System/Threading/PortableThreadPool.ThreadCounts.cs#L38",
             frame.SourceUrl);
         Assert.Equal("GitHub", frame.SourceProvider);
     }
@@ -120,4 +120,3 @@ public class CrashAnalyzerSourceLinkFallbackTests
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
-
