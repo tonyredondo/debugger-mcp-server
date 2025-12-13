@@ -148,6 +148,30 @@ public class SequencePointResolverTests
         }
     }
 
+    [Fact]
+    public void GetSourceLocation_WithGuidMatchButRevisionMismatch_StillResolves()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var (dllPath, pdbPath) = CompileAssemblyWithPdb(tempDir, sourceFile: "RevMismatch.cs");
+            var (methodRow, firstOffset) = ReadAnyMethodSequencePoint(pdbPath);
+            var (guid, revision) = ReadPortablePdbSignature(pdbPath);
+
+            var resolver = new SequencePointResolver();
+            resolver.AddPdbSearchPath(tempDir);
+
+            // Deliberately pass a mismatched revision. GUID should be enough.
+            var location = resolver.GetSourceLocation(dllPath, guid, revision + 1, methodRow, firstOffset);
+            Assert.NotNull(location);
+            Assert.EndsWith("RevMismatch.cs", location!.SourceFile, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
     private static (string dllPath, string pdbPath) CompileAssemblyWithPdb(string outputDir)
         => CompileAssemblyWithPdb(outputDir, sourceFile: "TestClass.cs");
 

@@ -191,7 +191,8 @@ public class SequencePointResolver
         if (string.IsNullOrEmpty(moduleName))
             return null;
 
-        var cacheKey = CreateCacheKey(moduleName, pdbGuid, pdbRevision);
+        // Cache by module + GUID. The portable PDB "stamp" doesn't reliably match ClrMD's revision value.
+        var cacheKey = CreateCacheKey(moduleName, pdbGuid);
         return _cache.GetOrAdd(cacheKey, _ =>
         {
             var pdbPath = FindPdbFile(modulePath, pdbGuid, pdbRevision);
@@ -283,14 +284,12 @@ public class SequencePointResolver
         return null;
     }
 
-    private static string CreateCacheKey(string moduleName, Guid? pdbGuid, int? pdbRevision)
+    private static string CreateCacheKey(string moduleName, Guid? pdbGuid)
     {
         if (pdbGuid == null || pdbGuid.Value == Guid.Empty)
             return moduleName;
 
-        return pdbRevision.HasValue
-            ? $"{moduleName}|{pdbGuid:D}|{pdbRevision.Value}"
-            : $"{moduleName}|{pdbGuid:D}";
+        return $"{moduleName}|{pdbGuid:D}";
     }
 
     private static bool IsMatchingPortablePdb(string pdbPath, Guid? expectedGuid, int? expectedRevision)
@@ -304,7 +303,11 @@ public class SequencePointResolver
         if (guid != expectedGuid.Value)
             return false;
 
-        return !expectedRevision.HasValue || revision == expectedRevision.Value;
+        // ClrMD's PDB revision value does not consistently match the portable PDB "stamp" stored in the PDB file.
+        // The GUID is sufficient to disambiguate and avoids selecting the wrong PDB when multiple are present.
+        _ = expectedRevision;
+        _ = revision;
+        return true;
     }
 
     private static bool TryReadPortablePdbSignature(string pdbPath, out Guid guid, out int revision)
