@@ -122,6 +122,32 @@ public class SequencePointResolverTests
         }
     }
 
+    [Fact]
+    public void GetSourceLocation_WithLowercasePdbInSearchPath_FindsPortablePdb()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var (dllPath, pdbPath) = CompileAssemblyWithPdb(tempDir, sourceFile: "Lower.cs");
+            var (methodRow, firstOffset) = ReadAnyMethodSequencePoint(pdbPath);
+
+            // Rename the PDB to lowercase (common in Linux symbol-store layouts).
+            var lowerPath = Path.Combine(tempDir, Path.GetFileName(pdbPath).ToLowerInvariant());
+            File.Move(pdbPath, lowerPath, overwrite: true);
+
+            var resolver = new SequencePointResolver();
+            resolver.AddPdbSearchPath(tempDir);
+
+            var location = resolver.GetSourceLocation(dllPath, methodToken: methodRow, ilOffset: firstOffset);
+            Assert.NotNull(location);
+            Assert.EndsWith("Lower.cs", location!.SourceFile, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
     private static (string dllPath, string pdbPath) CompileAssemblyWithPdb(string outputDir)
         => CompileAssemblyWithPdb(outputDir, sourceFile: "TestClass.cs");
 

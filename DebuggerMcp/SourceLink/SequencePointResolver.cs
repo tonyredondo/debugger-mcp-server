@@ -224,6 +224,7 @@ public class SequencePointResolver
             return null;
 
         var pdbName = moduleName + ".pdb";
+        var pdbNameLower = pdbName.ToLowerInvariant();
 
         // Check alongside module first
         var moduleDir = Path.GetDirectoryName(modulePath);
@@ -232,6 +233,11 @@ public class SequencePointResolver
             var sideBySide = Path.Combine(moduleDir, pdbName);
             if (File.Exists(sideBySide) && IsMatchingPortablePdb(sideBySide, expectedGuid, expectedRevision))
                 return sideBySide;
+
+            // Some symbol caches store PDBs in lowercase (Linux containers); try that too.
+            var sideBySideLower = Path.Combine(moduleDir, pdbNameLower);
+            if (File.Exists(sideBySideLower) && IsMatchingPortablePdb(sideBySideLower, expectedGuid, expectedRevision))
+                return sideBySideLower;
         }
 
         // Check search paths
@@ -248,10 +254,21 @@ public class SequencePointResolver
             if (File.Exists(pdbPath) && IsMatchingPortablePdb(pdbPath, expectedGuid, expectedRevision))
                 return pdbPath;
 
+            var pdbPathLower = Path.Combine(searchPath, pdbNameLower);
+            if (File.Exists(pdbPathLower) && IsMatchingPortablePdb(pdbPathLower, expectedGuid, expectedRevision))
+                return pdbPathLower;
+
             // Also check subdirectories (symbol cache structure)
             try
             {
                 foreach (var found in Directory.GetFiles(searchPath, pdbName, SearchOption.AllDirectories))
+                {
+                    if (IsMatchingPortablePdb(found, expectedGuid, expectedRevision))
+                        return found;
+                }
+
+                // Many symbol stores normalize to lowercase file names.
+                foreach (var found in Directory.GetFiles(searchPath, pdbNameLower, SearchOption.AllDirectories))
                 {
                     if (IsMatchingPortablePdb(found, expectedGuid, expectedRevision))
                         return found;
