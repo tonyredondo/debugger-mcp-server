@@ -81,11 +81,23 @@ public class DotNetCrashAnalyzerPureHelpersTests
     [Theory]
     [InlineData("System.String", "System")]
     [InlineData("MyNamespace.MyType", "MyNamespace")]
+    [InlineData("System.Collections.Generic.List`1[[System.__Canon, System.Private.CoreLib]]", "System.Collections.Generic")]
+    [InlineData("System.Collections.Generic.List<System.__Canon>", "System.Collections.Generic")]
+    [InlineData("System.Threading.Tasks.Task<System.__Canon>", "System.Threading.Tasks")]
     [InlineData("NoDots", null)]
     [InlineData(null, null)]
     public void ExtractModuleName_ExtractsNamespace(string? typeName, string? expected)
     {
         Assert.Equal(expected, DotNetCrashAnalyzer.ExtractModuleName(typeName));
+    }
+
+    [Theory]
+    [InlineData(0u, false)]
+    [InlineData(1u, true)]
+    [InlineData(884u, true)]
+    public void IsValidOsThreadId_RejectsZero(uint osThreadId, bool expected)
+    {
+        Assert.Equal(expected, DotNetCrashAnalyzer.IsValidOsThreadId(osThreadId));
     }
 
     [Fact]

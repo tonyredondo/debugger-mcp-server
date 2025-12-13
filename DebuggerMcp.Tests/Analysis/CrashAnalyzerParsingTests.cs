@@ -161,6 +161,25 @@ ExceptionMessage: Object reference not set to an instance of an object";
     }
 
     [Fact]
+    public void DetectPlatformInfo_WithCoreClrAndSharedFrameworkPaths_SetsLinux()
+    {
+        var result = CreateInitializedResult();
+
+        var modules = @"
+[  0] 00000000-00000000 0x0000ffffefc00000 /usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.0/libcoreclr.so
+[  1] 00000000-00000000 0x0000ffffefc10000 /usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.0/System.Private.CoreLib.dll
+arm64
+";
+
+        _analyzer.TestDetectPlatformInfo(modules, result);
+
+        Assert.NotNull(result.Environment!.Platform);
+        Assert.Equal("Linux", result.Environment.Platform!.Os);
+        Assert.Equal("arm64", result.Environment.Platform.Architecture);
+        Assert.Equal(64, result.Environment.Platform.PointerSize);
+    }
+
+    [Fact]
     public async Task AnalyzeMemoryLeaksLldbAsync_WithLargeRegions_SetsHighSeverityAndRecommendation()
     {
         var mockManager = new Mock<IDebuggerManager>();

@@ -1148,6 +1148,14 @@ public class CrashAnalyzer
         {
             platform.Os = "Windows";
         }
+        else if (modulesOutput.Contains("libcoreclr.so", StringComparison.OrdinalIgnoreCase) ||
+                 modulesOutput.Contains("/usr/share/dotnet/", StringComparison.OrdinalIgnoreCase) ||
+                 modulesOutput.Contains("Microsoft.NETCore.App", StringComparison.OrdinalIgnoreCase))
+        {
+            // Linux dumps from .NET containers frequently include libcoreclr and shared framework paths
+            // but may not list the dynamic loader or libc in 'image list' output.
+            platform.Os = "Linux";
+        }
 
         // Detect architecture from loader or module paths
         if (modulesOutput.Contains("aarch64", StringComparison.OrdinalIgnoreCase) ||

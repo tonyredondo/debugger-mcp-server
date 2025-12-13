@@ -150,6 +150,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
             foreach (var clrThread in clrStackResult.Threads)
             {
+                // Some dumps can contain ClrMD thread entries with OSThreadId = 0.
+                // These don't map to an OS thread and should not create a synthetic "0x0" entry in the report.
+                if (!IsValidOsThreadId(clrThread.OSThreadId))
+                {
+                    _logger?.LogDebug("[ClrStack] Skipping ClrMD thread with OSThreadId=0");
+                    continue;
+                }
+
                 // Find matching thread by OS thread ID
                 // bt all produces thread IDs like "1 (tid: 884) \"dotnet\"" where 884 is the TID
                 // ClrMD gives us OSThreadId as a numeric value (e.g., 884)
@@ -179,9 +187,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     existingThread = new ThreadInfo
                     {
                         ThreadId = threadIdHex,
-                        State = clrThread.IsAlive ? "Running" : "Dead"
+                        State = clrThread.IsAlive ? "Running" : "Dead",
+                        IsDead = !clrThread.IsAlive,
+                        IsBackground = clrThread.IsBackground
                     };
                     result.Threads.All.Add(existingThread);
+                }
+                else
+                {
+                    // If ClrMD indicates the thread is dead, reflect that consistently.
+                    existingThread.IsDead |= !clrThread.IsAlive;
+                    existingThread.IsBackground ??= clrThread.IsBackground;
                 }
 
                 // Update thread properties
@@ -274,6 +290,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
                 // Merge managed frames into existing native frames by SP
                 MergeManagedFramesIntoCallStack(existingThread, managedFramesBySp);
+
+                // Keep TopFunction consistent for threads that did not originate from 'bt all'.
+                if (string.IsNullOrWhiteSpace(existingThread.TopFunction) && existingThread.CallStack.Count > 0)
+                {
+                    var firstFrame = existingThread.CallStack[0];
+                    var function = firstFrame.Function ?? string.Empty;
+                    var module = firstFrame.Module ?? string.Empty;
+                    existingThread.TopFunction = !string.IsNullOrEmpty(module) ? $"{module}!{function}" : function;
+                }
             }
 
             // Apply registers to ALL frames in faulting thread (including native frames)
@@ -732,6 +757,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     }
 
     /// <summary>
+    /// Determines whether an OS thread ID from ClrMD is usable for report threading.
+    /// </summary>
+    /// <param name="osThreadId">The operating system thread ID.</param>
+    /// <returns><c>true</c> when the thread ID can be used; otherwise <c>false</c>.</returns>
+    internal static bool IsValidOsThreadId(uint osThreadId)
+        => osThreadId != 0;
+
+    /// <summary>
     /// Extracts module name from a type name.
     /// </summary>
     internal static string? ExtractModuleName(string? typeName)
@@ -739,8 +772,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         if (string.IsNullOrEmpty(typeName))
             return null;
 
-        // For types like "System.String", "MyNamespace.MyClass" etc.
-        // The module is typically inferred from the namespace
+        // For types like:
+        // - System.String
+        // - MyNamespace.MyType
+        // - System.Collections.Generic.List`1[[System.__Canon, System.Private.CoreLib]]
+        // - System.Collections.Generic.List<System.__Canon>
+        //
+        // We want the namespace portion, but we must ignore generic arguments
+        // (which can contain dots and would otherwise corrupt the result).
+        var genericStart = typeName.IndexOfAny(['<', '[']);
+        if (genericStart > 0)
+        {
+            typeName = typeName[..genericStart];
+        }
+
         var lastDot = typeName.LastIndexOf('.');
         if (lastDot > 0)
         {
@@ -2531,6 +2576,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             var count = int.Parse(deadMatch.Groups[1].Value);
             result.Threads.Summary.Dead = count;
         }
+
+        // Derive foreground threads so the breakdown matches ThreadCount.
+        // In SOS output, ThreadCount includes both foreground and background threads.
+        // Some dumps will otherwise show Total != (Background + Unstarted + Pending + Dead).
+        result.Threads.Summary.Foreground = Math.Max(
+            0,
+            result.Threads.Summary.Total
+            - result.Threads.Summary.Background
+            - result.Threads.Summary.Unstarted
+            - result.Threads.Summary.Pending
+            - result.Threads.Summary.Dead);
 
         var hostedMatch = Regex.Match(output, @"Hosted Runtime:\s*(yes|no)", RegexOptions.IgnoreCase);
         if (hostedMatch.Success)

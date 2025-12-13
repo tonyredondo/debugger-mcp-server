@@ -393,6 +393,7 @@ Ready for finalization 10 objects";
         _analyzer.TestParseClrThreads(output, result);
 
         Assert.Equal(13, result.Threads!.Summary!.Total);
+        Assert.Equal(1, result.Threads.Summary.Foreground);
         Assert.Equal(10, result.Threads.Summary.Background);
         Assert.True(result.Environment!.Runtime!.IsHosted);
 

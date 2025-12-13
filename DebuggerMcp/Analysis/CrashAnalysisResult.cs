@@ -2361,6 +2361,13 @@ public class ThreadSummary
     public int Total { get; set; }
 
     /// <summary>
+    /// Foreground thread count.
+    /// This is derived from CLR thread statistics when available.
+    /// </summary>
+    [JsonPropertyName("foreground")]
+    public int Foreground { get; set; }
+
+    /// <summary>
     /// Background thread count.
     /// </summary>
     [JsonPropertyName("background")]
@@ -2637,4 +2644,3 @@ public class SecurityFinding
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Recommendation { get; set; }
 }
-
