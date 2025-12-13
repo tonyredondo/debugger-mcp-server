@@ -3481,6 +3481,7 @@ public class ClrMdAnalyzer : IDisposable
                                     if (_sequencePointResolver != null)
                                     {
                                         var modulePath = frame.Method.Type?.Module?.Name;
+                                        var pdb = frame.Method.Type?.Module?.Pdb;
                                         if (!string.IsNullOrEmpty(modulePath))
                                         {
                                             var ilOffset = frameInfo.Method.ILOffset;
@@ -3491,8 +3492,10 @@ public class ClrMdAnalyzer : IDisposable
                                             
                                             frameInfo.SourceLocation = _sequencePointResolver.GetSourceLocation(
                                                 modulePath,
-                                                (uint)(frame.Method.MetadataToken & 0x00FFFFFF), // Row number only
-                                                ilOffset
+                                                pdbGuid: pdb?.Guid,
+                                                pdbRevision: pdb?.Revision,
+                                                methodToken: (uint)(frame.Method.MetadataToken & 0x00FFFFFF), // Row number only
+                                                ilOffset: ilOffset
                                             );
                                         }
                                     }

@@ -83,22 +83,64 @@ public class SequencePointResolverTests
         }
     }
 
+    [Fact]
+    public void GetSourceLocation_WithExpectedPdbGuid_SelectsCorrectPdbFromSearchPaths()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            var dirA = Path.Combine(tempDir, "a");
+            var dirB = Path.Combine(tempDir, "b");
+            Directory.CreateDirectory(dirA);
+            Directory.CreateDirectory(dirB);
+
+            var (dllA, pdbA) = CompileAssemblyWithPdb(dirA, sourceFile: "A.cs");
+            var (methodRowA, firstOffsetA) = ReadAnyMethodSequencePoint(pdbA);
+            var (guidA, revA) = ReadPortablePdbSignature(pdbA);
+
+            var (_, pdbB) = CompileAssemblyWithPdb(dirB, sourceFile: "B.cs");
+            var (guidB, revB) = ReadPortablePdbSignature(pdbB);
+
+            // Intentionally add B first so naive discovery would pick the wrong PDB.
+            var resolver = new SequencePointResolver();
+            resolver.AddPdbSearchPath(dirB);
+            resolver.AddPdbSearchPath(dirA);
+
+            var modulePath = "/tmp/SeqPointTestAssembly.dll"; // doesn't exist; forces search paths
+            var a = resolver.GetSourceLocation(modulePath, guidA, revA, methodRowA, firstOffsetA);
+            Assert.NotNull(a);
+            Assert.EndsWith("A.cs", a!.SourceFile, StringComparison.OrdinalIgnoreCase);
+
+            // And ensure a different signature can resolve from the other PDB.
+            var b = resolver.GetSourceLocation(modulePath, guidB, revB, methodRowA, firstOffsetA);
+            Assert.NotNull(b);
+            Assert.EndsWith("B.cs", b!.SourceFile, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
     private static (string dllPath, string pdbPath) CompileAssemblyWithPdb(string outputDir)
+        => CompileAssemblyWithPdb(outputDir, sourceFile: "TestClass.cs");
+
+    private static (string dllPath, string pdbPath) CompileAssemblyWithPdb(string outputDir, string sourceFile)
     {
         var source = @"
-using System;
+	using System;
 
-public class TestClass
+	public class TestClass
 {
     public static int Add(int a, int b)
     {
         // keep a few lines so we have stable sequence points
         var c = a + b;
         return c;
-    }
-}";
+	    }
+	}";
 
-        var syntaxTree = CSharpSyntaxTree.ParseText(SourceText.From(source, Encoding.UTF8), path: "TestClass.cs");
+        var syntaxTree = CSharpSyntaxTree.ParseText(SourceText.From(source, Encoding.UTF8), path: sourceFile);
         var compilation = CSharpCompilation.Create(
             assemblyName: "SeqPointTestAssembly",
             syntaxTrees: new[] { syntaxTree },
@@ -145,6 +187,24 @@ public class TestClass
         }
 
         throw new InvalidOperationException("No sequence points found in test PDB");
+    }
+
+    private static (Guid guid, int revision) ReadPortablePdbSignature(string pdbPath)
+    {
+        using var stream = File.OpenRead(pdbPath);
+        using var provider = MetadataReaderProvider.FromPortablePdbStream(stream);
+        var reader = provider.GetMetadataReader();
+
+        var header = reader.DebugMetadataHeader;
+        Assert.NotNull(header);
+
+        var id = header!.Id;
+        if (id.IsDefaultOrEmpty || id.Length < 20)
+            throw new InvalidOperationException("Unexpected portable PDB id length");
+
+        var guid = new Guid(id.AsSpan(0, 16));
+        var revision = BitConverter.ToInt32(id.AsSpan(16, 4));
+        return (guid, revision);
     }
 
     private static string CreateTempDirectory()

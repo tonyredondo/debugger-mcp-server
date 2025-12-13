@@ -118,6 +118,18 @@ public class SequencePointResolver
     /// <param name="ilOffset">IL offset within the method.</param>
     /// <returns>Source location if found; null otherwise.</returns>
     public SourceLocation? GetSourceLocation(string modulePath, uint methodToken, int ilOffset)
+        => GetSourceLocation(modulePath, pdbGuid: null, pdbRevision: null, methodToken, ilOffset);
+
+    /// <summary>
+    /// Gets the source location for a method at a specific IL offset, using an optional expected PDB signature.
+    /// </summary>
+    /// <param name="modulePath">Full path to the module.</param>
+    /// <param name="pdbGuid">Expected PDB GUID for the module (if available).</param>
+    /// <param name="pdbRevision">Expected PDB revision/stamp for the module (if available).</param>
+    /// <param name="methodToken">Metadata token row number of the method.</param>
+    /// <param name="ilOffset">IL offset within the method.</param>
+    /// <returns>Source location if found; null otherwise.</returns>
+    public SourceLocation? GetSourceLocation(string modulePath, Guid? pdbGuid, int? pdbRevision, uint methodToken, int ilOffset)
     {
         // Accept IL offset 0 as fallback for "method entry point"
         // Negative values are still invalid
@@ -128,7 +140,7 @@ public class SequencePointResolver
             return null;
         }
 
-        var modulePoints = GetOrLoadModuleSequencePoints(modulePath);
+        var modulePoints = GetOrLoadModuleSequencePoints(modulePath, pdbGuid, pdbRevision);
         if (modulePoints == null)
         {
             _logger?.LogTrace("[SeqPoints] No sequence points for module {Module}", modulePath);
@@ -173,18 +185,20 @@ public class SequencePointResolver
     /// <summary>
     /// Gets or loads sequence points for a module, with caching.
     /// </summary>
-    private ModuleSequencePoints? GetOrLoadModuleSequencePoints(string modulePath)
+    private ModuleSequencePoints? GetOrLoadModuleSequencePoints(string modulePath, Guid? pdbGuid, int? pdbRevision)
     {
         var moduleName = Path.GetFileNameWithoutExtension(modulePath);
         if (string.IsNullOrEmpty(moduleName))
             return null;
 
-        return _cache.GetOrAdd(moduleName, _ =>
+        var cacheKey = CreateCacheKey(moduleName, pdbGuid, pdbRevision);
+        return _cache.GetOrAdd(cacheKey, _ =>
         {
-            var pdbPath = FindPdbFile(modulePath);
+            var pdbPath = FindPdbFile(modulePath, pdbGuid, pdbRevision);
             if (pdbPath == null)
             {
-                _logger?.LogDebug("[SeqPoints] No PDB found for {Module}", moduleName);
+                _logger?.LogDebug("[SeqPoints] No matching PDB found for {Module} (expected {Guid}/{Rev})",
+                    moduleName, pdbGuid, pdbRevision);
                 return null;
             }
 
@@ -203,7 +217,7 @@ public class SequencePointResolver
     /// <summary>
     /// Finds the PDB file for a module.
     /// </summary>
-    private string? FindPdbFile(string modulePath)
+    private string? FindPdbFile(string modulePath, Guid? expectedGuid, int? expectedRevision)
     {
         var moduleName = Path.GetFileNameWithoutExtension(modulePath);
         if (string.IsNullOrEmpty(moduleName))
@@ -216,7 +230,7 @@ public class SequencePointResolver
         if (!string.IsNullOrEmpty(moduleDir))
         {
             var sideBySide = Path.Combine(moduleDir, pdbName);
-            if (File.Exists(sideBySide))
+            if (File.Exists(sideBySide) && IsMatchingPortablePdb(sideBySide, expectedGuid, expectedRevision))
                 return sideBySide;
         }
 
@@ -231,15 +245,17 @@ public class SequencePointResolver
         {
             // Direct file in search path
             var pdbPath = Path.Combine(searchPath, pdbName);
-            if (File.Exists(pdbPath))
+            if (File.Exists(pdbPath) && IsMatchingPortablePdb(pdbPath, expectedGuid, expectedRevision))
                 return pdbPath;
 
             // Also check subdirectories (symbol cache structure)
             try
             {
-                var found = Directory.GetFiles(searchPath, pdbName, SearchOption.AllDirectories).FirstOrDefault();
-                if (found != null)
-                    return found;
+                foreach (var found in Directory.GetFiles(searchPath, pdbName, SearchOption.AllDirectories))
+                {
+                    if (IsMatchingPortablePdb(found, expectedGuid, expectedRevision))
+                        return found;
+                }
             }
             catch
             {
@@ -248,6 +264,61 @@ public class SequencePointResolver
         }
 
         return null;
+    }
+
+    private static string CreateCacheKey(string moduleName, Guid? pdbGuid, int? pdbRevision)
+    {
+        if (pdbGuid == null || pdbGuid.Value == Guid.Empty)
+            return moduleName;
+
+        return pdbRevision.HasValue
+            ? $"{moduleName}|{pdbGuid:D}|{pdbRevision.Value}"
+            : $"{moduleName}|{pdbGuid:D}";
+    }
+
+    private static bool IsMatchingPortablePdb(string pdbPath, Guid? expectedGuid, int? expectedRevision)
+    {
+        if (expectedGuid == null || expectedGuid.Value == Guid.Empty)
+            return true;
+
+        if (!TryReadPortablePdbSignature(pdbPath, out var guid, out var revision))
+            return false;
+
+        if (guid != expectedGuid.Value)
+            return false;
+
+        return !expectedRevision.HasValue || revision == expectedRevision.Value;
+    }
+
+    private static bool TryReadPortablePdbSignature(string pdbPath, out Guid guid, out int revision)
+    {
+        guid = Guid.Empty;
+        revision = 0;
+
+        try
+        {
+            using var stream = File.OpenRead(pdbPath);
+            using var provider = MetadataReaderProvider.FromPortablePdbStream(stream);
+            var reader = provider.GetMetadataReader();
+
+            var header = reader.DebugMetadataHeader;
+            if (header == null)
+                return false;
+
+            var id = header.Id;
+
+            // Portable PDB ID is 20 bytes: 16-byte GUID + 4-byte stamp (little-endian).
+            if (id.IsDefaultOrEmpty || id.Length < 20)
+                return false;
+
+            guid = new Guid(id.AsSpan(0, 16));
+            revision = BitConverter.ToInt32(id.AsSpan(16, 4));
+            return guid != Guid.Empty;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -312,4 +383,3 @@ public class SequencePointResolver
         return result;
     }
 }
-
