@@ -377,6 +377,22 @@ arm64
         Assert.NotEmpty(result.Threads!.All![0].CallStack);
     }
 
+    [Fact]
+    public void ParseLldbBacktraceAll_WithNestedBackticks_DoesNotCorruptModuleName()
+    {
+        var output = @"* thread #1, stop reason = signal SIGSTOP
+  * frame #0: 0x0000f58559fe943c SP=0x0000ffffca31ade0 libcoreclr.so`ds_ipc_stream_factory_get_next_available_stream(callback=(libcoreclr.so`server_warning_callback(char const*, unsigned int) + 0 at ds-server.c:110:1";
+
+        var result = CreateInitializedResult();
+        result.Threads!.All!.Add(new ThreadInfo { ThreadId = "1", IsFaulting = true });
+        _analyzer.TestParseLldbBacktraceAll(output, result);
+
+        var frame0 = Assert.Single(result.Threads.All[0].CallStack);
+        Assert.Equal("libcoreclr.so", frame0.Module);
+        Assert.Equal("server_warning_callback(char const*, unsigned int)", frame0.Function);
+        Assert.Equal("ds-server.c:110:1", frame0.Source);
+    }
+
     // ============================================================
     // ParseLldbModules Tests
     // ============================================================

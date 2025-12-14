@@ -17,6 +17,15 @@ public class CrashAnalyzerPrivateHelpersTests
         return (StackFrame?)method!.Invoke(analyzer, new object[] { line });
     }
 
+    private static void RefreshSummaryCounts(CrashAnalysisResult result)
+    {
+        var method = typeof(CrashAnalyzer).GetMethod(
+            "RefreshSummaryCounts",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method!.Invoke(null, new object[] { result });
+    }
+
     [Fact]
     public void ParseSingleFrame_WithBacktickAndSp_ParsesModuleFunctionAndSource()
     {
@@ -101,5 +110,40 @@ public class CrashAnalyzerPrivateHelpersTests
         Assert.Equal(string.Empty, frame.Module);
         Assert.Equal("[someSymbol]", frame.Function);
         Assert.Equal("/src/file.c:12", frame.Source);
+    }
+
+    [Fact]
+    public void RefreshSummaryCounts_WhenDescriptionHasCounts_UpdatesToFinalThreadAndFrameCounts()
+    {
+        var result = new CrashAnalysisResult
+        {
+            Summary = new AnalysisSummary
+            {
+                Description = "Crash Type: Unknown. Found 47 threads (1280 total frames, 49 in faulting thread), 11 modules.  .NET Analysis: CLR 10.0.0.0. "
+            },
+            Threads = new ThreadsInfo
+            {
+                All =
+                [
+                    new ThreadInfo
+                    {
+                        ThreadId = "1",
+                        IsFaulting = true,
+                        CallStack = [new StackFrame(), new StackFrame(), new StackFrame()]
+                    },
+                    new ThreadInfo
+                    {
+                        ThreadId = "2",
+                        CallStack = [new StackFrame()]
+                    }
+                ]
+            },
+            Modules = [new ModuleInfo(), new ModuleInfo()]
+        };
+
+        RefreshSummaryCounts(result);
+
+        Assert.Equal(2, result.Threads!.OsThreadCount);
+        Assert.Contains("Found 2 threads (4 total frames, 3 in faulting thread), 2 modules.", result.Summary!.Description);
     }
 }

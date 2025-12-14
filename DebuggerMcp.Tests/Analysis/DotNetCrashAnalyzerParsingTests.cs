@@ -388,6 +388,7 @@ Ready for finalization 10 objects";
             "1     1     8954 0000F714F13A4010    20020 Preemptive  0000F7158EE6AA88:0000F7158EE6C1F8 0000F7559002B110 -00001 Ukn (Threadpool Worker) System.MissingMethodException 1234abcd");
 
         var result = CreateInitializedResult();
+        result.Summary!.Recommendations = new List<string>();
         result.Threads!.All!.Add(new ThreadInfo { ThreadId = "0x8954", CallStack = new List<StackFrame>() });
 
         _analyzer.TestParseClrThreads(output, result);
@@ -396,6 +397,7 @@ Ready for finalization 10 objects";
         Assert.Equal(1, result.Threads.Summary.Foreground);
         Assert.Equal(10, result.Threads.Summary.Background);
         Assert.True(result.Environment!.Runtime!.IsHosted);
+        Assert.Contains(result.Summary.Recommendations, r => r.Contains("dead managed thread", StringComparison.OrdinalIgnoreCase));
 
         var thread = result.Threads.All.Single(t => t.ThreadId.Equals("0x8954", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(1, thread.ManagedThreadId);
@@ -588,6 +590,25 @@ Ready for finalization 10 objects";
         Assert.NotNull(result.Assemblies.Items);
         Assert.Contains(result.Assemblies.Items!, a => a.Name == "My.Assembly" && a.Path == "/path/to/My.Assembly.dll");
         Assert.Contains(result.Assemblies.Items!, a => a.Name == "Other.Assembly" && a.Path!.EndsWith("Other.Assembly.dll", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ParseAssemblyVersions_WithDuplicateEntries_DeduplicatesByPath()
+    {
+        var output = string.Join(
+            "\n",
+            "Assembly:   0000f7558b725348 [My.Assembly]",
+            "Module Name    0000f7558b7254c8  /path/to/My.Assembly.dll",
+            "Assembly:   0000f7558b725349 [My.Assembly]",
+            "Module Name    0000f7558b7254c8  /path/to/My.Assembly.dll");
+
+        var result = CreateInitializedResult();
+        _analyzer.TestParseAssemblyVersions(output, result);
+
+        Assert.NotNull(result.Assemblies);
+        Assert.Single(result.Assemblies!.Items!);
+        Assert.Equal("My.Assembly", result.Assemblies.Items![0].Name);
+        Assert.Equal("/path/to/My.Assembly.dll", result.Assemblies.Items![0].Path);
     }
 
     [Fact]

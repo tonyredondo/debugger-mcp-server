@@ -770,6 +770,11 @@ public class CrashAnalyzer
             var stackPointer = frameMatch.Groups[3].Success && frameMatch.Groups[3].Length > 0 
                 ? frameMatch.Groups[3].Value : null;
             var moduleName = frameMatch.Groups[4].Value;
+            var firstBacktickIndex = moduleName.IndexOf('`', StringComparison.Ordinal);
+            if (firstBacktickIndex > 0)
+            {
+                moduleName = moduleName[..firstBacktickIndex];
+            }
             var functionName = frameMatch.Groups[5].Value.Trim();
             var sourceInfo = frameMatch.Groups[6].Success && frameMatch.Groups[6].Length > 0 
                 ? frameMatch.Groups[6].Value.Trim() : null;
@@ -1598,7 +1603,40 @@ public class CrashAnalyzer
         result.Summary.ModuleCount = result.Modules?.Count ?? 0;
 
         // Update thread summary
-        result.Threads!.Summary!.Total = threads.Count;
+        result.Threads!.OsThreadCount = threads.Count;
+        result.Threads.FaultingThread = faultingThread;
+    }
+
+    /// <summary>
+    /// Refreshes thread/frame/module counts embedded in <see cref="AnalysisSummary.Description"/>.
+    /// This is used after late-stage enrichment (e.g., managed stack merging) changes the final stack counts.
+    /// </summary>
+    /// <param name="result">The analysis result to update.</param>
+    internal static void RefreshSummaryCounts(CrashAnalysisResult result)
+    {
+        var threads = result.Threads?.All ?? [];
+        var totalFrames = threads.Sum(t => t.CallStack.Count);
+        var faultingThread = threads.FirstOrDefault(t => t.IsFaulting);
+        var faultingFrames = faultingThread?.CallStack.Count ?? 0;
+        var moduleCount = result.Modules?.Count ?? 0;
+
+        result.Summary ??= new AnalysisSummary();
+        result.Threads ??= new ThreadsInfo();
+        result.Threads.OsThreadCount = threads.Count;
+        result.Summary.ThreadCount = threads.Count;
+        result.Summary.ModuleCount = moduleCount;
+
+        var description = result.Summary.Description ?? string.Empty;
+
+        // Replace existing count clause if present.
+        // Example: "Found 47 threads (1280 total frames, 49 in faulting thread), 11 modules."
+        description = Regex.Replace(
+            description,
+            @"Found\s+\d+\s+threads\s+\(\d+\s+total\s+frames,\s+\d+\s+in\s+faulting\s+thread\),\s+\d+\s+modules\.",
+            $"Found {threads.Count} threads ({totalFrames} total frames, {faultingFrames} in faulting thread), {moduleCount} modules.",
+            RegexOptions.IgnoreCase);
+
+        result.Summary.Description = description;
         result.Threads.FaultingThread = faultingThread;
     }
 

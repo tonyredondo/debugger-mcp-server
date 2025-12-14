@@ -631,13 +631,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             var name = match.Groups[1].Value.ToLowerInvariant();
             var value = match.Groups[2].Value;
-            
-            // Store just the hex digits without 0x prefix, truncated like SOS clrstack
-            var hexValue = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) 
-                ? value[2..] 
-                : value;
-            
-            result[name] = hexValue;
+
+            // Normalize to a consistent pointer-like format with 0x prefix for JSON consumers.
+            // LLDB always prints hex with 0x prefix; preserve the digits exactly as returned.
+            result[name] = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value : $"0x{value}";
         }
         
         return result;
@@ -724,6 +721,15 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Replace the call stack
         thread.CallStack.Clear();
         thread.CallStack.AddRange(mergedFrames);
+
+        // Keep TopFunction consistent with the final merged stack.
+        if (thread.CallStack.Count > 0)
+        {
+            var firstFrame = thread.CallStack[0];
+            var function = firstFrame.Function ?? string.Empty;
+            var module = firstFrame.Module ?? string.Empty;
+            thread.TopFunction = !string.IsNullOrEmpty(module) ? $"{module}!{function}" : function;
+        }
     }
     
     /// <summary>
@@ -1171,6 +1177,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
             // Update summary with .NET info
             UpdateDotNetSummary(result);
+
+            // Managed stack enrichment can change the final frame counts; refresh count fields in the summary.
+            CrashAnalyzer.RefreshSummaryCounts(result);
         }
         catch (Exception ex)
         {
@@ -2787,7 +2796,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         var deadThreadCount = result.Threads?.Summary?.Dead;
         if (deadThreadCount > 0)
         {
-            var rec = $"Found {deadThreadCount} dead thread(s). This may indicate thread pool exhaustion or improper thread management.";
+            var rec = $"CLR reports {deadThreadCount} dead managed thread(s). These may not appear in the OS thread list.";
             result.Summary?.Recommendations?.Add(rec);
         }
     }
@@ -5443,7 +5452,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         }
         
         // Sort by name for easier reading
-        assemblies = assemblies.OrderBy(a => a.Name).ToList();
+        assemblies = assemblies
+            .Where(a => !string.IsNullOrWhiteSpace(a.Name))
+            .GroupBy(a => GetAssemblyDedupKey(a), StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.First())
+            .OrderBy(a => a.Name)
+            .ToList();
         
         if (assemblies.Count > 0)
         {
@@ -5456,6 +5470,23 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             
             // Also set in old structure during migration
         }
+    }
+
+    /// <summary>
+    /// Produces a stable deduplication key for assembly entries in dumpdomain output.
+    /// Prefer the resolved path when available; fall back to module id or name.
+    /// </summary>
+    /// <param name="assembly">The assembly entry.</param>
+    /// <returns>A key suitable for deduplication.</returns>
+    private static string GetAssemblyDedupKey(AssemblyVersionInfo assembly)
+    {
+        if (!string.IsNullOrWhiteSpace(assembly.Path))
+            return assembly.Path;
+
+        if (!string.IsNullOrWhiteSpace(assembly.ModuleId))
+            return $"{assembly.Name}|{assembly.ModuleId}";
+
+        return assembly.Name;
     }
     
     /// <summary>
@@ -5641,6 +5672,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 {
                     MapAttributeToAssembly(assembly, attr);
                 }
+
+                // Only keep commit hashes when we can associate the assembly with a repository.
+                if (ShouldExtractCommitHash(assembly))
+                {
+                    if (string.IsNullOrEmpty(assembly.CommitHash))
+                    {
+                        ExtractCommitHash(assembly, assembly.InformationalVersion);
+                    }
+                }
+                else
+                {
+                    assembly.CommitHash = null;
+                    assembly.SourceUrl = null;
+                }
             }
         }
         catch (Exception)
@@ -5676,7 +5721,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 break;
             case "System.Reflection.AssemblyInformationalVersionAttribute":
                 assembly.InformationalVersion = attr.Value;
-                ExtractCommitHash(assembly, attr.Value);
                 break;
             case "System.Reflection.AssemblyMetadataAttribute":
                 if (attr.Key == "RepositoryUrl")
@@ -5697,6 +5741,20 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 assembly.CustomAttributes[shortName] = attr.Value ?? "";
                 break;
         }
+    }
+
+    /// <summary>
+    /// Determines whether an assembly has enough repository context to treat its informational-version hash as a commit.
+    /// </summary>
+    /// <param name="assembly">The assembly metadata.</param>
+    /// <returns><c>true</c> when a repository can be determined; otherwise <c>false</c>.</returns>
+    internal static bool ShouldExtractCommitHash(AssemblyVersionInfo assembly)
+    {
+        if (!string.IsNullOrWhiteSpace(assembly.RepositoryUrl))
+            return true;
+
+        var sourceCommitUrl = assembly.CustomAttributes?.GetValueOrDefault("SourceCommitUrl");
+        return !string.IsNullOrWhiteSpace(sourceCommitUrl);
     }
     
     /// <summary>

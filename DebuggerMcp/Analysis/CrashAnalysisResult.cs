@@ -2342,6 +2342,14 @@ public class ThreadsInfo
     public ThreadPoolInfo? ThreadPool { get; set; }
 
     /// <summary>
+    /// Operating system thread count as reported by the debugger thread list.
+    /// This may differ from CLR thread statistics (e.g., !clrthreads ThreadCount).
+    /// </summary>
+    [JsonPropertyName("osThreadCount")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? OsThreadCount { get; set; }
+
+    /// <summary>
     /// Deadlock information.
     /// </summary>
     [JsonPropertyName("deadlock")]

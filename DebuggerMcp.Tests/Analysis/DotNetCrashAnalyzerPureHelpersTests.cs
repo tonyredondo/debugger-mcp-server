@@ -11,6 +11,15 @@ namespace DebuggerMcp.Tests.Analysis;
 /// </summary>
 public class DotNetCrashAnalyzerPureHelpersTests
 {
+    private static bool ShouldExtractCommitHash(AssemblyVersionInfo assembly)
+    {
+        var method = typeof(DotNetCrashAnalyzer).GetMethod(
+            "ShouldExtractCommitHash",
+            System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Public);
+        Assert.NotNull(method);
+        return (bool)method!.Invoke(null, new object[] { assembly })!;
+    }
+
     [Theory]
     [InlineData("0x1234", "1234")]
     [InlineData("1234", "1234")]
@@ -126,13 +135,52 @@ public class DotNetCrashAnalyzerPureHelpersTests
     }
 
     [Fact]
-    public void ParseRegisterOutput_ExtractsRegistersAndStrips0x()
+    public void ParseRegisterOutput_ExtractsRegistersAndPreserves0x()
     {
         var output = "rax = 0x0000000000001234\nrbx = 0xABCDEF";
         var regs = DotNetCrashAnalyzer.ParseRegisterOutput(output);
 
-        Assert.Equal("0000000000001234", regs["rax"]);
-        Assert.Equal("ABCDEF", regs["rbx"]);
+        Assert.Equal("0x0000000000001234", regs["rax"]);
+        Assert.Equal("0xABCDEF", regs["rbx"]);
+    }
+
+    [Fact]
+    public void ShouldExtractCommitHash_WithRepositoryUrl_ReturnsTrue()
+    {
+        var assembly = new AssemblyVersionInfo
+        {
+            Name = "Example",
+            RepositoryUrl = "https://github.com/example/repo"
+        };
+
+        Assert.True(ShouldExtractCommitHash(assembly));
+    }
+
+    [Fact]
+    public void ShouldExtractCommitHash_WithSourceCommitUrlAttribute_ReturnsTrue()
+    {
+        var assembly = new AssemblyVersionInfo
+        {
+            Name = "Example",
+            CustomAttributes = new Dictionary<string, string>
+            {
+                ["SourceCommitUrl"] = "https://github.com/example/repo/commit/abc123"
+            }
+        };
+
+        Assert.True(ShouldExtractCommitHash(assembly));
+    }
+
+    [Fact]
+    public void ShouldExtractCommitHash_WithoutRepositoryContext_ReturnsFalse()
+    {
+        var assembly = new AssemblyVersionInfo
+        {
+            Name = "Example",
+            InformationalVersion = "1.0.0+abc123def"
+        };
+
+        Assert.False(ShouldExtractCommitHash(assembly));
     }
 
     [Fact]
