@@ -11,6 +11,23 @@ namespace DebuggerMcp.Tests.Analysis;
 /// </summary>
 public class DotNetCrashAnalyzerPureHelpersTests
 {
+    private class TestableDotNetCrashAnalyzer : DotNetCrashAnalyzer
+    {
+        public TestableDotNetCrashAnalyzer()
+            : base(new Moq.Mock<DebuggerMcp.IDebuggerManager>().Object, null)
+        {
+        }
+    }
+
+    private static void MergeNativeAndManagedFramesBySP(DotNetCrashAnalyzer analyzer, CrashAnalysisResult result)
+    {
+        var method = typeof(DotNetCrashAnalyzer).GetMethod(
+            "MergeNativeAndManagedFramesBySP",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        method!.Invoke(analyzer, new object[] { result });
+    }
+
     private static bool ShouldExtractCommitHash(AssemblyVersionInfo assembly)
     {
         var method = typeof(DotNetCrashAnalyzer).GetMethod(
@@ -142,6 +159,43 @@ public class DotNetCrashAnalyzerPureHelpersTests
 
         Assert.Equal("0x0000000000001234", regs["rax"]);
         Assert.Equal("0xABCDEF", regs["rbx"]);
+    }
+
+    [Fact]
+    public void MergeNativeAndManagedFramesBySP_RecomputesTopFunctionAfterReordering()
+    {
+        var analyzer = new TestableDotNetCrashAnalyzer();
+
+        var result = new CrashAnalysisResult
+        {
+            Threads = new ThreadsInfo
+            {
+                All = new List<ThreadInfo>
+                {
+                    new()
+                    {
+                        ThreadId = "1",
+                        TopFunction = "old",
+                        CallStack = new List<StackFrame>
+                        {
+                            // Placeholder frame with the lowest SP (will sort first).
+                            new() { FrameNumber = 0, IsManaged = true, StackPointer = "0x0000000000001000", Module = "", Function = "[JIT Code @ 0x0000]" },
+                            // Meaningful native frame.
+                            new() { FrameNumber = 1, IsManaged = false, StackPointer = "0x0000000000001010", Module = "libcoreclr.so", Function = "CorUnix::CPalSynchronizationManager::ThreadNativeWait(...)" },
+                            // Another frame to ensure both managed + native exist.
+                            new() { FrameNumber = 2, IsManaged = true, StackPointer = "0x0000000000001020", Module = "System.Private.CoreLib", Function = "System.Threading.Monitor.Wait(System.Object, Int32)" }
+                        }
+                    }
+                },
+                Summary = new ThreadSummary()
+            }
+        };
+
+        MergeNativeAndManagedFramesBySP(analyzer, result);
+
+        var thread = result.Threads!.All![0];
+        Assert.Equal("libcoreclr.so!CorUnix::CPalSynchronizationManager::ThreadNativeWait(...)", thread.TopFunction);
+        Assert.Equal("[JIT Code @ 0x0000]", thread.CallStack[0].Function);
     }
 
     [Fact]

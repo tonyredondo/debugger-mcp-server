@@ -293,7 +293,7 @@ In the regenerated `6239b1aa.json`, some threads have:
 `topFunction` is computed from:
 - `thread list` headers (often truncated or placeholder-y), and/or
 - the first frame in `bt all` (which can be `[JIT Code @ ...]`),
-and was not re-selected after enrichment/merging with a “meaningful” frame policy.
+and was not re-selected after late-stage SP-based stack merging reorders frames.
 
 ### Final solution implemented
 - Implemented deterministic “meaningful top frame” selection that:
@@ -303,12 +303,15 @@ and was not re-selected after enrichment/merging with a “meaningful” frame p
 - Applied consistently in:
   - LLDB `bt all` parsing (`CrashAnalyzer.ParseLldbBacktraceAll`)
   - managed/native merge (`DotNetCrashAnalyzer.MergeManagedFramesIntoCallStack`)
+  - SP-based reordering merge (`DotNetCrashAnalyzer.MergeNativeAndManagedFramesBySP`)
   - ClrMD thread creation where `TopFunction` was missing (`DotNetCrashAnalyzer.PopulateManagedStacksViaClrMd`)
 
 ### Tests
 - `DebuggerMcp.Tests/Analysis/CrashAnalyzerParsingTests.cs`:
   - `ComputeMeaningfulTopFunction_SkipsJitAndRuntimePlaceholders`
   - `ParseLldbBacktraceAll_WhenFirstFrameIsJit_UsesFirstNonPlaceholderAsTopFunction`
+- `DebuggerMcp.Tests/Analysis/DotNetCrashAnalyzerPureHelpersTests.cs`:
+  - `MergeNativeAndManagedFramesBySP_RecomputesTopFunctionAfterReordering`
 
 ### Notes / Discussion
 - Verification step: regenerate `DebuggerMcp.Cli/6239b1aa.json` and confirm `topFunction` equals the first non-placeholder frame in `callStack` for each thread.

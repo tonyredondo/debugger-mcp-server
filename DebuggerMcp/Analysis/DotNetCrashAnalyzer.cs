@@ -4167,6 +4167,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             
             // Replace call stack with merged version
             thread.CallStack = sortedFrames;
+
+            // TopFunction must reflect the final merged/reordered call stack, not the pre-merge header value.
+            thread.TopFunction = ComputeMeaningfulTopFunction(thread.CallStack, thread.TopFunction);
             
             _logger?.LogDebug("Merged {NativeCount} native + {ManagedCount} managed frames for thread {ThreadId} ({WithSp} had SP)",
                 nativeFrames.Count, managedFrames.Count, thread.ThreadId, framesWithSp.Count);
