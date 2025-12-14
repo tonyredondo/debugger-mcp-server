@@ -68,6 +68,7 @@ internal static class SourceContextEnricher
 
     private const int MaxEntries = 10;
     private const int MaxEntriesPerThread = 2;
+    private const int MaxEntriesFaultingThread = 10;
     private const int ContextWindow = 3; // ±3 lines
     private const int MaxLinesPerEntry = (ContextWindow * 2) + 1;
     private const int MaxLineLength = 400;
@@ -194,6 +195,16 @@ internal static class SourceContextEnricher
         }
 
         analysis.SourceContext = entries;
+
+        // Also embed source context under the faulting thread for convenient per-thread consumption.
+        // (Top-level analysis.sourceContext remains as a bounded cross-thread summary.)
+        var faultingThread = analysis.Threads?.FaultingThread;
+        if (faultingThread != null)
+        {
+            faultingThread.SourceContext = entries
+                .Where(e => string.Equals(e.ThreadId, faultingThread.ThreadId, StringComparison.Ordinal))
+                .ToList();
+        }
     }
 
     internal static void Apply(CrashAnalysisResult analysis, DateTime generatedAtUtc, HttpClient? httpClient = null)
@@ -227,15 +238,16 @@ internal static class SourceContextEnricher
             }
 
             perThreadCount.TryGetValue(thread, out var used);
-            if (used >= MaxEntriesPerThread)
+            var perThreadLimit = thread.IsFaulting ? MaxEntriesFaultingThread : MaxEntriesPerThread;
+            if (used >= perThreadLimit)
             {
                 continue;
             }
 
-            // Pick up to two meaningful frames per thread.
+            // Pick bounded meaningful frames per thread (faulting thread gets a larger allowance).
             foreach (var frame in thread.CallStack)
             {
-                if (selected.Count >= MaxEntries || used >= MaxEntriesPerThread)
+                if (selected.Count >= MaxEntries || used >= perThreadLimit)
                 {
                     break;
                 }

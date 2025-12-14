@@ -366,6 +366,14 @@ public class ThreadInfo
     [JsonPropertyName("callStack")]
     public List<StackFrame> CallStack { get; set; } = new();
 
+    /// <summary>
+    /// Bounded source snippets for selected frames within this thread.
+    /// This is currently populated only for the faulting thread.
+    /// </summary>
+    [JsonPropertyName("sourceContext")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SourceContextEntry>? SourceContext { get; set; }
+
     // --- CLR Thread Info (from !clrthreads) ---
 
     /// <summary>

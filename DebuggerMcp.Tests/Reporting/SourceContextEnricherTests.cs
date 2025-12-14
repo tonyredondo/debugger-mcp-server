@@ -416,4 +416,66 @@ public class SourceContextEnricherTests
             SourceContextEnricher.LocalSourceRoots = originalRoots;
         }
     }
+
+    [Fact]
+    public void GenerateJsonReport_WhenFaultingThreadHasManySourceFrames_EmbedsMoreThanTwoEntriesUnderFaultingThread()
+    {
+        var file = new StringBuilder();
+        for (var i = 1; i <= 60; i++)
+        {
+            file.AppendLine($"line {i}");
+        }
+
+        var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(file.ToString(), Encoding.UTF8, "text/plain")
+        });
+
+        var originalFactory = SourceContextEnricher.HttpClientFactory;
+        var originalRoots = SourceContextEnricher.LocalSourceRoots;
+        try
+        {
+            SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
+            SourceContextEnricher.LocalSourceRoots = Array.Empty<string>();
+
+            var faulting = new ThreadInfo
+            {
+                ThreadId = "t1",
+                IsFaulting = true,
+                CallStack =
+                [
+                    new StackFrame { FrameNumber = 0, InstructionPointer = "0x1", Module = "m", Function = "f0", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 10, SourceRawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs" },
+                    new StackFrame { FrameNumber = 1, InstructionPointer = "0x2", Module = "m", Function = "f1", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 20, SourceRawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs" },
+                    new StackFrame { FrameNumber = 2, InstructionPointer = "0x3", Module = "m", Function = "f2", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 30, SourceRawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs" },
+                    new StackFrame { FrameNumber = 3, InstructionPointer = "0x4", Module = "m", Function = "f3", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 40, SourceRawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs" },
+                ]
+            };
+
+            var analysis = new CrashAnalysisResult
+            {
+                Summary = new AnalysisSummary { Description = "Found 1 threads (4 total frames, 4 in faulting thread), 0 modules." },
+                Threads = new ThreadsInfo { All = [ faulting ] },
+                Modules = []
+            };
+
+            CrashAnalysisResultFinalizer.Finalize(analysis);
+
+            var service = new ReportService();
+            var content = service.GenerateReport(
+                analysis,
+                new ReportOptions { Format = ReportFormat.Json },
+                new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+            using var doc = JsonDocument.Parse(content);
+            var faultingThread = doc.RootElement.GetProperty("analysis").GetProperty("threads").GetProperty("faultingThread");
+            Assert.True(faultingThread.TryGetProperty("sourceContext", out var embedded));
+            Assert.Equal(JsonValueKind.Array, embedded.ValueKind);
+            Assert.True(embedded.GetArrayLength() > 2);
+        }
+        finally
+        {
+            SourceContextEnricher.HttpClientFactory = originalFactory;
+            SourceContextEnricher.LocalSourceRoots = originalRoots;
+        }
+    }
 }
