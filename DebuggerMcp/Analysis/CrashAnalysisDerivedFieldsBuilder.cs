@@ -149,12 +149,8 @@ internal static class CrashAnalysisDerivedFieldsBuilder
             .Select(m => m.Name)
             .Where(n => !string.IsNullOrWhiteSpace(n))
             .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
             .ToList() ?? [];
-
-        var nativeExamples = nativeMissing
-            .Where(n => !n.StartsWith("[", StringComparison.Ordinal))
-            .Take(5)
-            .ToList();
 
         var managedMissingCount = 0;
         var managedMissingModules = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -190,12 +186,14 @@ internal static class CrashAnalysisDerivedFieldsBuilder
             Native = new SymbolsModuleSummary
             {
                 MissingCount = nativeMissing.Count,
-                Examples = nativeExamples.Count > 0 ? nativeExamples : null
+                Examples = nativeMissing.Count > 0 ? nativeMissing : null
             },
             Managed = new ManagedSymbolsSummary
             {
                 PdbMissingCount = managedMissingCount,
-                Examples = managedMissingModules.Count > 0 ? managedMissingModules.Take(5).ToList() : null
+                Examples = managedMissingModules.Count > 0
+                    ? managedMissingModules.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList()
+                    : null
             },
             SourceLink = new SourceLinkHealthSummary
             {

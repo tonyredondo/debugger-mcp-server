@@ -292,7 +292,7 @@ public class ManagedSymbolsSummary
     public int PdbMissingCount { get; set; }
 
     /// <summary>
-    /// Example managed module names where source resolution is missing.
+    /// Managed module names where source resolution is missing.
     /// </summary>
     [JsonPropertyName("examples")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -311,7 +311,7 @@ public class SymbolsModuleSummary
     public int MissingCount { get; set; }
 
     /// <summary>
-    /// Example module names.
+    /// Module names missing symbols.
     /// </summary>
     [JsonPropertyName("examples")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
