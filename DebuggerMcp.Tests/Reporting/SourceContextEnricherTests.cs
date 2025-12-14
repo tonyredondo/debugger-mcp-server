@@ -247,4 +247,173 @@ public class SourceContextEnricherTests
             tempRoot.Delete(recursive: true);
         }
     }
+
+    [Fact]
+    public void GenerateJsonReport_WhenSourceFileTraversesSymlinkedDirectory_DoesNotReadLocalSource()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
+        var tempRoot = Directory.CreateTempSubdirectory("source-context-root-");
+        var externalRoot = Directory.CreateTempSubdirectory("source-context-external-");
+        try
+        {
+            var externalFile = Path.Combine(externalRoot.FullName, "file.cs");
+            File.WriteAllText(externalFile, "line 1\nline 2\nline 3\nline 4\nline 5\n");
+
+            var linkPath = Path.Combine(tempRoot.FullName, "link");
+            try
+            {
+                Directory.CreateSymbolicLink(linkPath, externalRoot.FullName);
+            }
+            catch
+            {
+                // If the environment doesn't allow symlinks, skip the assertion.
+                return;
+            }
+
+            var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("should-not-fetch", Encoding.UTF8, "text/plain")
+            });
+
+            var originalFactory = SourceContextEnricher.HttpClientFactory;
+            var originalRoots = SourceContextEnricher.LocalSourceRoots;
+            try
+            {
+                SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
+                SourceContextEnricher.LocalSourceRoots = new[] { tempRoot.FullName };
+
+                var analysis = new CrashAnalysisResult
+                {
+                    Summary = new AnalysisSummary { Description = "Found 1 threads (1 total frames, 1 in faulting thread), 0 modules." },
+                    Threads = new ThreadsInfo
+                    {
+                        All =
+                        [
+                            new ThreadInfo
+                            {
+                                ThreadId = "t1",
+                                IsFaulting = true,
+                                CallStack =
+                                [
+                                    new StackFrame
+                                    {
+                                        FrameNumber = 0,
+                                        InstructionPointer = "0x1",
+                                        Module = "m",
+                                        Function = "f",
+                                        IsManaged = true,
+                                        SourceFile = Path.Combine(linkPath, "file.cs"),
+                                        LineNumber = 3
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    Modules = []
+                };
+
+                CrashAnalysisResultFinalizer.Finalize(analysis);
+
+                var service = new ReportService();
+                var content = service.GenerateReport(
+                    analysis,
+                    new ReportOptions { Format = ReportFormat.Json },
+                    new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+                Assert.Equal(0, handler.CallCount);
+
+                using var doc = JsonDocument.Parse(content);
+                var entry = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext")[0];
+                Assert.Equal("unavailable", entry.GetProperty("status").GetString());
+            }
+            finally
+            {
+                SourceContextEnricher.HttpClientFactory = originalFactory;
+                SourceContextEnricher.LocalSourceRoots = originalRoots;
+            }
+        }
+        finally
+        {
+            externalRoot.Delete(recursive: true);
+            tempRoot.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GenerateJsonReport_WhenAzureDevOpsSourceUrlPresent_FetchesAndParsesContentJson()
+    {
+        var file = new StringBuilder();
+        for (var i = 1; i <= 20; i++)
+        {
+            file.AppendLine($"line {i}");
+        }
+
+        var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent($"{{\"content\":{JsonSerializer.Serialize(file.ToString())}}}", Encoding.UTF8, "application/json")
+        });
+
+        var originalFactory = SourceContextEnricher.HttpClientFactory;
+        var originalRoots = SourceContextEnricher.LocalSourceRoots;
+        try
+        {
+            SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
+            SourceContextEnricher.LocalSourceRoots = Array.Empty<string>();
+
+            var analysis = new CrashAnalysisResult
+            {
+                Summary = new AnalysisSummary { Description = "Found 1 threads (1 total frames, 1 in faulting thread), 0 modules." },
+                Threads = new ThreadsInfo
+                {
+                    All =
+                    [
+                        new ThreadInfo
+                        {
+                            ThreadId = "t1",
+                            IsFaulting = true,
+                            CallStack =
+                            [
+                                new StackFrame
+                                {
+                                    FrameNumber = 0,
+                                    InstructionPointer = "0x1",
+                                    Module = "m",
+                                    Function = "f",
+                                    IsManaged = true,
+                                    SourceFile = "/_/src/file.cs",
+                                    LineNumber = 10,
+                                    SourceUrl = "https://dev.azure.com/org/proj/_git/repo?path=%2Ffile.cs&version=GCabcdef"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                Modules = []
+            };
+
+            CrashAnalysisResultFinalizer.Finalize(analysis);
+
+            var service = new ReportService();
+            var content = service.GenerateReport(
+                analysis,
+                new ReportOptions { Format = ReportFormat.Json },
+                new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+            Assert.True(handler.CallCount >= 1);
+
+            using var doc = JsonDocument.Parse(content);
+            var entry = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext")[0];
+            Assert.Equal("remote", entry.GetProperty("status").GetString());
+            Assert.Equal(7, entry.GetProperty("lines").GetArrayLength());
+        }
+        finally
+        {
+            SourceContextEnricher.HttpClientFactory = originalFactory;
+            SourceContextEnricher.LocalSourceRoots = originalRoots;
+        }
+    }
 }

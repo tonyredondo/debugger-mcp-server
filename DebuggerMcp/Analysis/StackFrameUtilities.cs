@@ -47,7 +47,10 @@ internal static class StackFrameUtilities
         }
     }
 
-    private static bool IsMeaningfulTopFrameCandidate(StackFrame frame)
+    /// <summary>
+    /// Determines whether a frame is a candidate for "meaningful top frame" selection.
+    /// </summary>
+    internal static bool IsMeaningfulTopFrameCandidate(StackFrame frame)
     {
         var function = frame.Function?.Trim();
         if (string.IsNullOrWhiteSpace(function))
@@ -88,4 +91,3 @@ internal static class StackFrameUtilities
             : function;
     }
 }
-

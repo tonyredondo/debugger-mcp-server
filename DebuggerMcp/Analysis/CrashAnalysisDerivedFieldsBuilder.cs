@@ -75,7 +75,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                     break;
                 }
 
-                if (StackFrameSelection.IsMeaningfulTopFrameCandidate(frame))
+                if (StackFrameUtilities.IsMeaningfulTopFrameCandidate(frame))
                 {
                     var normalized = StackFrameSelection.FormatNormalizedFrame(frame);
                     if (!topFrames.Contains(normalized, StringComparer.Ordinal))
@@ -420,7 +420,9 @@ internal static class CrashAnalysisDerivedFieldsBuilder
             }
         }
 
-        foreach (var kvp in threadToOwner.Take(50))
+        foreach (var kvp in threadToOwner
+                     .OrderBy(k => k.Key, StringComparer.Ordinal)
+                     .Take(50))
         {
             var root = kvp.Key;
             var chain = new List<string> { root };
@@ -762,7 +764,7 @@ internal static class StackFrameSelection
         for (var i = 0; i < callStack.Count; i++)
         {
             var frame = callStack[i];
-            if (IsMeaningfulTopFrameCandidate(frame))
+            if (StackFrameUtilities.IsMeaningfulTopFrameCandidate(frame))
             {
                 return new SelectionResult { SelectedFrameIndex = i, SkippedFrames = skipped };
             }
@@ -772,37 +774,6 @@ internal static class StackFrameSelection
 
         // If everything is a placeholder, fall back to index 0 to keep deterministic behavior.
         return new SelectionResult { SelectedFrameIndex = 0, SkippedFrames = skipped };
-    }
-
-    internal static bool IsMeaningfulTopFrameCandidate(StackFrame frame)
-    {
-        var function = frame.Function?.Trim();
-        if (string.IsNullOrWhiteSpace(function))
-        {
-            return false;
-        }
-
-        if (function.Equals("[Runtime]", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (function.Equals("[ManagedMethod]", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (function.StartsWith("[JIT Code @", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (function.StartsWith("[Native Code @", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return true;
     }
 
     internal static string FormatNormalizedFrame(StackFrame frame)

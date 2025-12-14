@@ -6,6 +6,7 @@ using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -34,7 +35,8 @@ internal static class SourceContextEnricher
     private static readonly HashSet<string> AllowedRawHosts = new(StringComparer.OrdinalIgnoreCase)
     {
         "raw.githubusercontent.com",
-        "gitlab.com"
+        "gitlab.com",
+        "dev.azure.com"
     };
 
     // Hosts that are allowed as inputs for inference (not necessarily fetched directly).
@@ -42,7 +44,8 @@ internal static class SourceContextEnricher
     {
         "github.com",
         "gitlab.com",
-        "raw.githubusercontent.com"
+        "raw.githubusercontent.com",
+        "dev.azure.com"
     };
 
     private static readonly Regex GitHubBlobRegex = new(
@@ -52,6 +55,16 @@ internal static class SourceContextEnricher
     private static readonly Regex GitLabBlobRegex = new(
         @"^/(.+?)/-/blob/([^/]+)/(.+)$",
         RegexOptions.Compiled);
+
+    private static bool IsAzureHost(string host) =>
+        host.Equals("dev.azure.com", StringComparison.OrdinalIgnoreCase) ||
+        host.EndsWith(".visualstudio.com", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsAllowedBrowsableHost(string host) =>
+        AllowedBrowsableHosts.Contains(host) || IsAzureHost(host);
+
+    private static bool IsAllowedRawHost(string host) =>
+        AllowedRawHosts.Contains(host) || IsAzureHost(host);
 
     private const int MaxEntries = 10;
     private const int MaxEntriesPerThread = 2;
@@ -227,7 +240,7 @@ internal static class SourceContextEnricher
                     break;
                 }
 
-                if (!StackFrameSelection.IsMeaningfulTopFrameCandidate(frame))
+                if (!StackFrameUtilities.IsMeaningfulTopFrameCandidate(frame))
                 {
                     continue;
                 }
@@ -270,7 +283,7 @@ internal static class SourceContextEnricher
             }
 
             var fullPath = Path.GetFullPath(sourceFile);
-            if (!IsPathUnderAnyRoot(fullPath, LocalSourceRoots))
+            if (!TryGetMatchingRoot(fullPath, LocalSourceRoots, out var matchedRoot))
             {
                 return false;
             }
@@ -281,8 +294,15 @@ internal static class SourceContextEnricher
                 return false;
             }
 
-            // Avoid symlink escapes by refusing to read symlinks.
-            if (!string.IsNullOrWhiteSpace(fileInfo.LinkTarget))
+            // Avoid symlink/junction escapes by refusing to read paths that traverse symlinked directories.
+            if (HasSymlinkSegmentsBetweenRootAndPath(matchedRoot, fullPath))
+            {
+                return false;
+            }
+
+            // Avoid reading symlinked files as well.
+            if (!string.IsNullOrWhiteSpace(fileInfo.LinkTarget) ||
+                fileInfo.Attributes.HasFlag(FileAttributes.ReparsePoint))
             {
                 return false;
             }
@@ -368,19 +388,109 @@ internal static class SourceContextEnricher
             return false;
         }
 
-        // Reject query strings to avoid inadvertently embedding tokens.
-        if (!string.IsNullOrEmpty(uri.Query))
+        // Reject query strings for non-Azure hosts to avoid inadvertently embedding tokens.
+        if (!string.IsNullOrEmpty(uri.Query) && !IsAzureHost(uri.Host))
         {
             return false;
         }
 
-        if (!AllowedRawHosts.Contains(uri.Host))
+        if (!IsAllowedRawHost(uri.Host))
         {
             return false;
+        }
+
+        // Extra hardening: validate raw URL path shapes for known providers.
+        if (string.Equals(uri.Host, "gitlab.com", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!uri.AbsolutePath.Contains("/-/raw/", StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+        else if (string.Equals(uri.Host, "raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase))
+        {
+            // raw.githubusercontent.com/{owner}/{repo}/{commit}/{path...}
+            var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length < 4)
+            {
+                return false;
+            }
+        }
+        else if (IsAzureHost(uri.Host))
+        {
+            // Azure DevOps raw fetch uses the Git Items API endpoint (query-based).
+            // We only allow the items endpoint and disallow token-like query keys.
+            if (!uri.AbsolutePath.Contains("/_apis/git/repositories/", StringComparison.OrdinalIgnoreCase) ||
+                !uri.AbsolutePath.EndsWith("/items", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (string.IsNullOrWhiteSpace(uri.Query))
+            {
+                return false;
+            }
+
+            if (!TryValidateAzureQuery(uri.Query))
+            {
+                return false;
+            }
         }
 
         validated = uri.ToString();
         return true;
+    }
+
+    private static bool TryValidateAzureQuery(string query)
+    {
+        // Very small parser: query comes in as "?a=b&c=d".
+        // Disallow suspicious keys and allow only a known-safe subset.
+        var q = query.StartsWith("?", StringComparison.Ordinal) ? query.Substring(1) : query;
+        var parts = q.Split('&', StringSplitOptions.RemoveEmptyEntries);
+        var hasPath = false;
+
+        foreach (var part in parts)
+        {
+            var kv = part.Split('=', 2);
+            var key = Uri.UnescapeDataString(kv[0]).Trim();
+            var value = kv.Length == 2 ? Uri.UnescapeDataString(kv[1]).Trim() : string.Empty;
+
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                return false;
+            }
+
+            // Block obvious secret-bearing keys.
+            if (key.Contains("token", StringComparison.OrdinalIgnoreCase) ||
+                key.Contains("sig", StringComparison.OrdinalIgnoreCase) ||
+                key.Contains("secret", StringComparison.OrdinalIgnoreCase) ||
+                key.Contains("password", StringComparison.OrdinalIgnoreCase) ||
+                key.Contains("access", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
+            if (key.Equals("path", StringComparison.OrdinalIgnoreCase))
+            {
+                hasPath = !string.IsNullOrWhiteSpace(value);
+                continue;
+            }
+
+            // Allow a small subset needed to request file content.
+            if (key.Equals("download", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("includeContent", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("resolveLfs", StringComparison.OrdinalIgnoreCase) ||
+                key.Equals("api-version", StringComparison.OrdinalIgnoreCase) ||
+                key.StartsWith("versionDescriptor.", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Unknown query keys are not allowed.
+            return false;
+        }
+
+        return hasPath;
     }
 
     private static bool TryInferRawUrlFromBrowsable(string sourceUrl, out string rawUrl)
@@ -391,12 +501,12 @@ internal static class SourceContextEnricher
             return false;
         }
 
-        if (!AllowedBrowsableHosts.Contains(uri.Host))
+        if (!IsAllowedBrowsableHost(uri.Host))
         {
             return false;
         }
 
-        if (!string.IsNullOrEmpty(uri.Query) || !string.IsNullOrWhiteSpace(uri.UserInfo))
+        if (!string.IsNullOrWhiteSpace(uri.UserInfo))
         {
             return false;
         }
@@ -438,7 +548,97 @@ internal static class SourceContextEnricher
             return true;
         }
 
+        if (IsAzureHost(uri.Host))
+        {
+            if (!TryInferAzureItemsApiUrl(uri, out var azureRaw))
+            {
+                return false;
+            }
+
+            rawUrl = azureRaw;
+            return true;
+        }
+
         return false;
+    }
+
+    private static bool TryInferAzureItemsApiUrl(Uri browsable, out string rawUrl)
+    {
+        rawUrl = string.Empty;
+
+        // Expect: https://dev.azure.com/{org}/{project}/_git/{repo}?path=...&version=...
+        // Emit:   https://dev.azure.com/{org}/{project}/_apis/git/repositories/{repo}/items?path=...&includeContent=true&api-version=7.0
+        var path = browsable.AbsolutePath.Trim('/');
+        var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (segments.Length < 4)
+        {
+            return false;
+        }
+
+        var org = segments[0];
+        var project = segments[1];
+        if (!string.Equals(segments[2], "_git", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var repo = segments[3];
+        if (string.IsNullOrWhiteSpace(repo))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(browsable.Query))
+        {
+            return false;
+        }
+
+        var query = ParseQuery(browsable.Query);
+        if (!query.TryGetValue("path", out var filePath) || string.IsNullOrWhiteSpace(filePath))
+        {
+            return false;
+        }
+
+        // Best-effort: if a commit is present, pass it through as versionDescriptor.version.
+        // Azure UI commonly uses version=GC<sha> or version=<sha>.
+        string? commit = null;
+        if (query.TryGetValue("version", out var version) && !string.IsNullOrWhiteSpace(version))
+        {
+            commit = version.StartsWith("GC", StringComparison.OrdinalIgnoreCase) ? version.Substring(2) : version;
+        }
+
+        var baseUri = $"{browsable.Scheme}://{browsable.Host}/{org}/{project}/_apis/git/repositories/{repo}/items";
+        var sb = new StringBuilder();
+        sb.Append(baseUri);
+        sb.Append("?path=");
+        sb.Append(Uri.EscapeDataString(filePath));
+        sb.Append("&includeContent=true");
+        if (!string.IsNullOrWhiteSpace(commit))
+        {
+            sb.Append("&versionDescriptor.version=");
+            sb.Append(Uri.EscapeDataString(commit));
+        }
+        sb.Append("&api-version=7.0");
+
+        rawUrl = sb.ToString();
+        return TryValidateRemoteUrl(rawUrl, out _);
+    }
+
+    private static Dictionary<string, string> ParseQuery(string query)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var q = query.StartsWith("?", StringComparison.Ordinal) ? query.Substring(1) : query;
+        foreach (var part in q.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var kv = part.Split('=', 2);
+            var key = Uri.UnescapeDataString(kv[0]);
+            var value = kv.Length == 2 ? Uri.UnescapeDataString(kv[1]) : string.Empty;
+            if (!result.ContainsKey(key))
+            {
+                result[key] = value;
+            }
+        }
+        return result;
     }
 
     private static async Task<string> FetchTextAsync(HttpClient client, string url, CancellationToken cancellationToken)
@@ -470,6 +670,12 @@ internal static class SourceContextEnricher
             throw new InvalidOperationException($"Unexpected content type '{mediaType}'.");
         }
 
+        // Explicitly reject HTML even though it is text/*.
+        if (string.Equals(mediaType, "text/html", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException("Unexpected content type 'text/html'.");
+        }
+
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
         try
@@ -493,7 +699,28 @@ internal static class SourceContextEnricher
                 ms.Write(buffer, 0, read);
             }
 
-            return Encoding.UTF8.GetString(ms.ToArray());
+            var text = Encoding.UTF8.GetString(ms.ToArray());
+
+            if (Uri.TryCreate(finalUri, UriKind.Absolute, out var finalParsed) &&
+                IsAzureHost(finalParsed.Host) &&
+                (string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase) ||
+                 (mediaType?.EndsWith("+json", StringComparison.OrdinalIgnoreCase) ?? false)))
+            {
+                try
+                {
+                    using var doc = JsonDocument.Parse(text);
+                    if (doc.RootElement.TryGetProperty("content", out var content) && content.ValueKind == JsonValueKind.String)
+                    {
+                        return content.GetString() ?? string.Empty;
+                    }
+                }
+                catch
+                {
+                    // Fall through: return the raw body as text if JSON parsing fails.
+                }
+            }
+
+            return text;
         }
         finally
         {
@@ -525,18 +752,29 @@ internal static class SourceContextEnricher
             return Array.Empty<string>();
         }
 
+        var separators = OperatingSystem.IsWindows()
+            ? new[] { ';' }
+            : new[] { ';', ':' };
+
         return raw
-            .Split(new[] { ';' }, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .Split(separators, StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(Path.GetFullPath)
             .ToList();
     }
 
     private static bool IsPathUnderAnyRoot(string fullPath, IReadOnlyList<string> roots)
     {
+        return TryGetMatchingRoot(fullPath, roots, out _);
+    }
+
+    private static bool TryGetMatchingRoot(string fullPath, IReadOnlyList<string> roots, out string matchedRoot)
+    {
+        matchedRoot = string.Empty;
         var comparison = OperatingSystem.IsWindows()
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
 
+        var bestLength = -1;
         foreach (var root in roots)
         {
             if (string.IsNullOrWhiteSpace(root))
@@ -548,7 +786,13 @@ internal static class SourceContextEnricher
 
             if (fullPath.Equals(fullRoot, comparison))
             {
-                return true;
+                if (fullRoot.Length > bestLength)
+                {
+                    matchedRoot = fullRoot;
+                    bestLength = fullRoot.Length;
+                }
+
+                continue;
             }
 
             var prefix = fullRoot.EndsWith(Path.DirectorySeparatorChar)
@@ -557,8 +801,68 @@ internal static class SourceContextEnricher
 
             if (fullPath.StartsWith(prefix, comparison))
             {
+                if (prefix.Length > bestLength)
+                {
+                    matchedRoot = fullRoot;
+                    bestLength = prefix.Length;
+                }
+            }
+        }
+
+        return bestLength >= 0;
+    }
+
+    private static bool HasSymlinkSegmentsBetweenRootAndPath(string root, string fullPath)
+    {
+        // Both inputs are expected to be full paths.
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
+        var rootFull = Path.GetFullPath(root);
+        var targetFull = Path.GetFullPath(fullPath);
+
+        if (!targetFull.StartsWith(
+                rootFull.EndsWith(Path.DirectorySeparatorChar) ? rootFull : rootFull + Path.DirectorySeparatorChar,
+                comparison) &&
+            !targetFull.Equals(rootFull, comparison))
+        {
+            return true;
+        }
+
+        // Walk directories from the target up to (but excluding) the root.
+        // If any directory in the chain is a symlink/junction, refuse the local read.
+        var directory = new FileInfo(targetFull).Directory;
+        while (directory != null)
+        {
+            var dirPath = directory.FullName;
+            if (dirPath.Equals(rootFull, comparison))
+            {
+                break;
+            }
+
+            if (!string.IsNullOrWhiteSpace(directory.LinkTarget) ||
+                directory.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
                 return true;
             }
+
+            directory = directory.Parent;
+        }
+
+        // Also refuse reading when the root itself is a symlink/junction.
+        try
+        {
+            var rootDir = new DirectoryInfo(rootFull);
+            if (!string.IsNullOrWhiteSpace(rootDir.LinkTarget) ||
+                rootDir.Attributes.HasFlag(FileAttributes.ReparsePoint))
+            {
+                return true;
+            }
+        }
+        catch
+        {
+            return true;
         }
 
         return false;
