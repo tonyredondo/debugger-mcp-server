@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
@@ -30,7 +31,7 @@ public class DatadogSymbolsTools(
     /// <summary>
     /// JSON serialization options for results.
     /// </summary>
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.Indented;
 
     /// <summary>
     /// Downloads Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit.

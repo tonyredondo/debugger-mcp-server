@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DebuggerMcp.Cli.Serialization;
 
 namespace DebuggerMcp.Cli.Configuration;
 
@@ -41,12 +42,7 @@ public class ServerConfigManager
 {
     private const string ConfigFileName = "servers.json";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CamelCaseIndentedIgnoreNull;
 
     private readonly string _configPath;
 
@@ -217,4 +213,3 @@ public class ServerConfigManager
         return Path.Combine(directory, ConfigFileName);
     }
 }
-

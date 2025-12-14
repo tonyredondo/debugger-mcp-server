@@ -153,12 +153,22 @@ internal static class CrashAnalysisResultContract
         {
             Assert.False(string.IsNullOrWhiteSpace(frame.SourceProvider));
             Assert.False(string.IsNullOrWhiteSpace(frame.SourceFile));
-            Assert.True(frame.LineNumber.HasValue);
 
             var lineAnchor = Regex.Match(frame.SourceUrl, @"#L(\d+)$");
             if (lineAnchor.Success)
             {
+                Assert.True(frame.LineNumber.HasValue);
                 Assert.Equal(frame.LineNumber!.Value, int.Parse(lineAnchor.Groups[1].Value));
+                Assert.True(frame.LineNumber.Value > 0);
+            }
+            else
+            {
+                // Some native debug formats can provide a file but no stable line mapping (e.g. ":0" from LLDB/DWARF).
+                // In these cases we allow a file URL without an anchor and a missing line number.
+                if (frame.LineNumber.HasValue)
+                {
+                    Assert.True(frame.LineNumber.Value > 0);
+                }
             }
         }
 

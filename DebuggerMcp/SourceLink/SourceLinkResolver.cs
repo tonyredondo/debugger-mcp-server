@@ -613,6 +613,10 @@ public class SourceLinkResolver
     /// </summary>
     internal static string ConvertToBrowsableUrl(string rawUrl, int lineNumber, SourceProvider provider)
     {
+        // Line number 0 (or negative) is not meaningful for most providers; return a file URL without an anchor.
+        // LLDB/DWARF sometimes reports ":0" when the line is unknown.
+        var includeLineAnchor = lineNumber > 0;
+
         switch (provider)
         {
             case SourceProvider.GitHub:
@@ -632,7 +636,8 @@ public class SourceLinkResolver
                     {
                         path = $"src/runtime/{path}";
                     }
-                    return $"https://github.com/{user}/{repo}/blob/{commit}/{path}#L{lineNumber}";
+                    var url = $"https://github.com/{user}/{repo}/blob/{commit}/{path}";
+                    return includeLineAnchor ? $"{url}#L{lineNumber}" : url;
                 }
                 // Already a github.com URL
                 if (rawUrl.Contains("github.com") && !rawUrl.Contains("#L"))
@@ -646,7 +651,7 @@ public class SourceLinkResolver
                         rawUrl = rawUrl.Replace("/src/libraries/", "/src/runtime/src/libraries/", StringComparison.OrdinalIgnoreCase)
                                        .Replace("/src/coreclr/", "/src/runtime/src/coreclr/", StringComparison.OrdinalIgnoreCase);
                     }
-                    return $"{rawUrl}#L{lineNumber}";
+                    return includeLineAnchor ? $"{rawUrl}#L{lineNumber}" : rawUrl;
                 }
                 break;
 
@@ -659,11 +664,12 @@ public class SourceLinkResolver
                     var projectPath = gitlabMatch.Groups[1].Value;
                     var commit = gitlabMatch.Groups[2].Value;
                     var path = gitlabMatch.Groups[3].Value;
-                    return $"https://gitlab.com/{projectPath}/-/blob/{commit}/{path}#L{lineNumber}";
+                    var url = $"https://gitlab.com/{projectPath}/-/blob/{commit}/{path}";
+                    return includeLineAnchor ? $"{url}#L{lineNumber}" : url;
                 }
                 if (rawUrl.Contains("gitlab.com") && !rawUrl.Contains("#L"))
                 {
-                    return $"{rawUrl}#L{lineNumber}";
+                    return includeLineAnchor ? $"{rawUrl}#L{lineNumber}" : rawUrl;
                 }
                 break;
 
@@ -679,7 +685,8 @@ public class SourceLinkResolver
                         var project = azureMatch.Groups[2].Value;
                         var repo = azureMatch.Groups[3].Value;
                         var path = Uri.UnescapeDataString(azureMatch.Groups[4].Value);
-                        return $"https://dev.azure.com/{org}/{project}/_git/{repo}?path={path}&line={lineNumber}";
+                        var url = $"https://dev.azure.com/{org}/{project}/_git/{repo}?path={path}";
+                        return includeLineAnchor ? $"{url}&line={lineNumber}" : url;
                     }
                 }
                 break;
@@ -694,7 +701,8 @@ public class SourceLinkResolver
                     var repo = bitbucketMatch.Groups[2].Value;
                     var commit = bitbucketMatch.Groups[3].Value;
                     var path = bitbucketMatch.Groups[4].Value;
-                    return $"https://bitbucket.org/{user}/{repo}/src/{commit}/{path}#lines-{lineNumber}";
+                    var url = $"https://bitbucket.org/{user}/{repo}/src/{commit}/{path}";
+                    return includeLineAnchor ? $"{url}#lines-{lineNumber}" : url;
                 }
                 break;
         }
@@ -702,7 +710,7 @@ public class SourceLinkResolver
         // Generic fallback - just append line number if possible
         if (!rawUrl.Contains("#"))
         {
-            return $"{rawUrl}#L{lineNumber}";
+            return includeLineAnchor ? $"{rawUrl}#L{lineNumber}" : rawUrl;
         }
 
         return rawUrl;

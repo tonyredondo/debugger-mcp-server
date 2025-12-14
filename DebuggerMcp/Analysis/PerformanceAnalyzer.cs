@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
+using DebuggerMcp.Serialization;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 
@@ -1406,9 +1407,6 @@ public class PerformanceAnalyzer
     /// </summary>
     public static string ToJson(PerformanceAnalysisResult result)
     {
-        return JsonSerializer.Serialize(result, new JsonSerializerOptions
-        {
-            WriteIndented = true
-        });
+        return JsonSerializer.Serialize(result, JsonSerializationDefaults.Indented);
     }
 }

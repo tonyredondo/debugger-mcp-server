@@ -44,6 +44,19 @@ internal static class CrashAnalysisResultFinalizer
                 thread.CallStack = new List<StackFrame>();
             }
 
+            // Normalize per-frame invariants that should be consistent for consumers regardless of upstream parser source.
+            // Example: LLDB can emit placeholder frames like "[ManagedMethod]" with incomplete metadata.
+            for (var frameIndex = 0; frameIndex < thread.CallStack.Count; frameIndex++)
+            {
+                var frame = thread.CallStack[frameIndex];
+                var function = frame.Function?.Trim();
+                if (string.Equals(function, "[ManagedMethod]", StringComparison.OrdinalIgnoreCase) ||
+                    (function?.StartsWith("[JIT Code @", StringComparison.OrdinalIgnoreCase) ?? false))
+                {
+                    frame.IsManaged = true;
+                }
+            }
+
             // Frame numbers are consumer-facing: keep them a stable 0..n-1 index.
             StackFrameUtilities.RenumberFramesSequential(thread.CallStack);
 

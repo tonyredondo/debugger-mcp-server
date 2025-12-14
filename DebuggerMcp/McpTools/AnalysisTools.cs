@@ -1,6 +1,8 @@
 using System.ComponentModel;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
+using DebuggerMcp.Reporting;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.Security;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
@@ -33,7 +35,7 @@ public class AnalysisTools(
     /// <summary>
     /// JSON serialization options for analysis results.
     /// </summary>
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.Indented;
 
     /// <summary>
     /// Performs automated crash analysis on the currently open dump.
@@ -87,25 +89,7 @@ public class AnalysisTools(
         // Run security analysis and include in results
         var securityAnalyzer = new SecurityAnalyzer(manager);
         var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
-        if (securityResult != null)
-        {
-            result.Security = new SecurityInfo
-            {
-                HasVulnerabilities = securityResult.Vulnerabilities?.Count > 0,
-                OverallRisk = securityResult.OverallRisk.ToString(),
-                Summary = securityResult.Summary,
-                AnalyzedAt = securityResult.AnalyzedAt.ToString("O"),
-                Findings = securityResult.Vulnerabilities?.Select(v => new SecurityFinding
-                {
-                    Type = v.Type.ToString(),
-                    Severity = v.Severity.ToString(),
-                    Description = v.Description,
-                    Location = v.Address,
-                    Recommendation = v.Details
-                }).ToList(),
-                Recommendations = securityResult.Recommendations
-            };
-        }
+        ReportEnrichment.ApplySecurity(result, securityResult);
 
         // Include watch evaluations if enabled and dump has watches
         if (includeWatches && !string.IsNullOrEmpty(session.CurrentDumpId))

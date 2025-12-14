@@ -5,6 +5,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.SourceLink;
 using Microsoft.Extensions.Logging;
 
@@ -806,6 +807,16 @@ public class CrashAnalyzer
                 functionName = functionName.Substring(0, plusIdx);
             }
 
+            var isManaged = false;
+            if (functionName.Equals("[ManagedMethod]", StringComparison.OrdinalIgnoreCase))
+            {
+                isManaged = true;
+            }
+            else if (functionName.StartsWith("[JIT Code @", StringComparison.OrdinalIgnoreCase))
+            {
+                isManaged = true;
+            }
+
             return new StackFrame
             {
                 FrameNumber = frameNum,
@@ -814,7 +825,7 @@ public class CrashAnalyzer
                 Module = moduleName,
                 Function = functionName,
                 Source = sourceInfo,
-                IsManaged = false
+                IsManaged = isManaged
             };
         }
 
@@ -971,6 +982,9 @@ public class CrashAnalyzer
                 }
             }
 
+            var isManaged = functionName.Equals("[ManagedMethod]", StringComparison.OrdinalIgnoreCase) ||
+                            functionName.StartsWith("[JIT Code @", StringComparison.OrdinalIgnoreCase);
+
             return new StackFrame
             {
                 FrameNumber = frameNum,
@@ -979,7 +993,7 @@ public class CrashAnalyzer
                 Module = moduleName,
                 Function = functionName,
                 Source = sourceInfo,
-                IsManaged = false
+                IsManaged = isManaged
             };
         }
 
@@ -1687,10 +1701,7 @@ public class CrashAnalyzer
     /// <returns>JSON string representation.</returns>
     public static string ToJson(CrashAnalysisResult result)
     {
-        return JsonSerializer.Serialize(result, new JsonSerializerOptions
-        {
-            WriteIndented = true
-        });
+        return JsonSerializer.Serialize(result, JsonSerializationDefaults.Indented);
     }
 
     /// <summary>
@@ -1701,8 +1712,7 @@ public class CrashAnalyzer
     {
         if (_sourceLinkResolver == null)
         {
-            // Log that we're skipping source link resolution
-            Console.WriteLine("[SourceLink] ResolveSourceLinks: _sourceLinkResolver is null, skipping");
+            _crashAnalyzerLogger?.LogDebug("[SourceLink] ResolveSourceLinks: _sourceLinkResolver is null, skipping");
             return;
         }
 
@@ -1712,8 +1722,10 @@ public class CrashAnalyzer
         var framesWithSource = 0;
         var framesResolved = 0;
 
-        // Log start of resolution
-        Console.WriteLine($"[SourceLink] ResolveSourceLinks: Starting resolution for {totalThreads} threads, {totalFrames} frames");
+        _crashAnalyzerLogger?.LogDebug(
+            "[SourceLink] ResolveSourceLinks: Starting resolution for {TotalThreads} threads, {TotalFrames} frames",
+            totalThreads,
+            totalFrames);
 
         // Iterate through all threads and their call stacks
         foreach (var thread in allThreads)
@@ -1731,8 +1743,10 @@ public class CrashAnalyzer
             }
         }
 
-        // Log summary
-        Console.WriteLine($"[SourceLink] ResolveSourceLinks: Completed - {framesWithSource} frames with source info, {framesResolved} resolved");
+        _crashAnalyzerLogger?.LogDebug(
+            "[SourceLink] ResolveSourceLinks: Completed - {FramesWithSource} frames with source info, {FramesResolved} resolved",
+            framesWithSource,
+            framesResolved);
     }
 
     /// <summary>
@@ -1764,16 +1778,19 @@ public class CrashAnalyzer
                 frame.SourceFile = match.Groups[1].Value.Trim();
                 if (int.TryParse(match.Groups[2].Value, out int line))
                 {
-                    frame.LineNumber = line;
+                    // LLDB/DWARF can emit ":0" when line info is unknown. Treat as missing rather than a real line.
+                    frame.LineNumber = line > 0 ? line : null;
                 }
             }
         }
 
-        // Skip if we still don't have source info
-        if (string.IsNullOrEmpty(frame.SourceFile) || !frame.LineNumber.HasValue)
+        // Skip if we still don't have a file. Line number may be missing/unknown (e.g., ":0" from LLDB).
+        if (string.IsNullOrEmpty(frame.SourceFile))
         {
             return false;
         }
+
+        var hasValidLine = frame.LineNumber.HasValue && frame.LineNumber.Value > 0;
 
         // Native frames on Linux/macOS typically use DWARF, not PDB.
         // Avoid noisy PDB warnings by skipping SourceLinkResolver for native binaries and using safe heuristics instead.
@@ -1785,6 +1802,13 @@ public class CrashAnalyzer
             frame.SourceProvider = runtimeProvider;
             return true;
         }
+
+        if (!hasValidLine)
+        {
+            return false;
+        }
+
+        var lineNumber = frame.LineNumber.GetValueOrDefault();
 
         // Find the module path (try to locate it from the modules list)
         var modulePath = FindModulePath(frame.Module, result);
@@ -1801,7 +1825,7 @@ public class CrashAnalyzer
         }
 
         // Resolve source link
-        var location = _sourceLinkResolver!.Resolve(modulePath, frame.SourceFile, frame.LineNumber.Value);
+        var location = _sourceLinkResolver!.Resolve(modulePath, frame.SourceFile, lineNumber);
         if (location.Resolved)
         {
             frame.SourceUrl = location.Url;
@@ -1857,7 +1881,7 @@ public class CrashAnalyzer
         url = string.Empty;
         provider = string.Empty;
 
-        if (string.IsNullOrWhiteSpace(frame.SourceFile) || !frame.LineNumber.HasValue)
+        if (string.IsNullOrWhiteSpace(frame.SourceFile))
         {
             return false;
         }
@@ -1916,7 +1940,8 @@ public class CrashAnalyzer
             return false;
         }
 
-        url = SourceLinkResolver.ConvertToBrowsableUrl(rawUrl, frame.LineNumber.Value, sourceProvider);
+        // If the line is unknown, ConvertToBrowsableUrl will return a file URL without an anchor.
+        url = SourceLinkResolver.ConvertToBrowsableUrl(rawUrl, frame.LineNumber.GetValueOrDefault(), sourceProvider);
         provider = sourceProvider.ToString();
         return !string.IsNullOrWhiteSpace(url);
     }

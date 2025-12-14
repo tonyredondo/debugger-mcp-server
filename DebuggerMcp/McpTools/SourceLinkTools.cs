@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using DebuggerMcp.SourceLink;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -31,7 +32,7 @@ public class SourceLinkTools(
     /// <summary>
     /// JSON serialization options for Source Link results.
     /// </summary>
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.Indented;
 
     /// <summary>
     /// Resolves a source file path to a browsable Source Link URL.

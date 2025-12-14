@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DebuggerMcp.Serialization;
 
 namespace DebuggerMcp.SourceLink;
 
@@ -130,7 +131,7 @@ public class GitHubReleasesCache
                 DownloadedSymbols = _downloadedSymbols
             };
 
-            var json = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+            var json = JsonSerializer.Serialize(data, JsonSerializationDefaults.Indented);
             File.WriteAllText(_cacheFilePath, json);
         }
         catch
@@ -318,4 +319,3 @@ public class GitHubReleasesCache
         public Dictionary<string, string>? DownloadedSymbols { get; set; }
     }
 }
-

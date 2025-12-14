@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DebuggerMcp.Serialization;
 
 namespace DebuggerMcp.SourceLink;
 
@@ -139,8 +140,7 @@ public class AzurePipelinesCache
             LastUpdated = DateTime.UtcNow;
 
             var cachePath = Path.Combine(cacheDirectory, CacheFileName);
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(this, options);
+            var json = JsonSerializer.Serialize(this, JsonSerializationDefaults.Indented);
             File.WriteAllText(cachePath, json);
         }
         catch

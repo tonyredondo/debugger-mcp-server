@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text.Json;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.ObjectInspection;
 using DebuggerMcp.Security;
 using DebuggerMcp.Watches;
@@ -19,6 +20,9 @@ public class ObjectInspectionTools(
     ILogger<ObjectInspectionTools> logger)
     : DebuggerToolsBase(sessionManager, symbolManager, watchStore, logger)
 {
+    private static readonly JsonSerializerOptions IndentedJson = JsonSerializationDefaults.Indented;
+    private static readonly JsonSerializerOptions IndentedJsonIgnoreNull = JsonSerializationDefaults.IndentedIgnoreNull;
+    private static readonly JsonSerializerOptions IndentedCamelCaseJsonIgnoreNull = JsonSerializationDefaults.IndentedCamelCaseIgnoreNull;
 
     /// <summary>
     /// Inspects a .NET object or value type at the given address using ClrMD.
@@ -76,8 +80,7 @@ public class ObjectInspectionTools(
 
         if (string.IsNullOrWhiteSpace(address))
         {
-            return JsonSerializer.Serialize(new { error = "Address is required" }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "Address is required" }, IndentedJson);
         }
 
         // Get session with user ownership validation
@@ -88,8 +91,7 @@ public class ObjectInspectionTools(
         }
         catch (InvalidOperationException ex)
         {
-            return JsonSerializer.Serialize(new { error = ex.Message }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = ex.Message }, IndentedJson);
         }
 
         // Parse address early so we can return a useful error even if the dump isn't a .NET dump.
@@ -101,8 +103,7 @@ public class ObjectInspectionTools(
 
         if (!ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
         {
-            return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" },
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" }, IndentedJson);
         }
 
         // Parse optional method table.
@@ -128,8 +129,9 @@ public class ObjectInspectionTools(
         // ClrMD is required - no SOS fallback
         if (session.ClrMdAnalyzer == null || !session.ClrMdAnalyzer.IsOpen)
         {
-            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(
+                new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." },
+                IndentedJson);
         }
 
         try
@@ -148,14 +150,10 @@ public class ObjectInspectionTools(
                 {
                     error = "Failed to inspect object",
                     address
-                }, new JsonSerializerOptions { WriteIndented = true });
+                }, IndentedJson);
             }
 
-            return JsonSerializer.Serialize(result, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-            });
+            return JsonSerializer.Serialize(result, IndentedJsonIgnoreNull);
         }
         catch (Exception ex)
         {
@@ -164,7 +162,7 @@ public class ObjectInspectionTools(
             {
                 error = ex.Message,
                 address
-            }, new JsonSerializerOptions { WriteIndented = true });
+            }, IndentedJson);
         }
     }
 
@@ -201,8 +199,7 @@ public class ObjectInspectionTools(
 
         if (string.IsNullOrWhiteSpace(address))
         {
-            return JsonSerializer.Serialize(new { error = "Address is required" }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "Address is required" }, IndentedJson);
         }
 
         // Get session with user ownership validation
@@ -213,8 +210,7 @@ public class ObjectInspectionTools(
         }
         catch (InvalidOperationException ex)
         {
-            return JsonSerializer.Serialize(new { error = ex.Message }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = ex.Message }, IndentedJson);
         }
 
         // Parse address early so we can return a useful error even if the dump isn't a .NET dump.
@@ -227,15 +223,13 @@ public class ObjectInspectionTools(
 
         if (!ulong.TryParse(cleanAddress, System.Globalization.NumberStyles.HexNumber, null, out var addressValue))
         {
-            return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" },
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" }, IndentedJson);
         }
 
         // Check if ClrMD analyzer is available
         if (session.ClrMdAnalyzer == null || !session.ClrMdAnalyzer.IsOpen)
         {
-            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, IndentedJson);
         }
 
         try
@@ -249,14 +243,10 @@ public class ObjectInspectionTools(
                 {
                     error = "Failed to inspect module",
                     address
-                }, new JsonSerializerOptions { WriteIndented = true });
+                }, IndentedJson);
             }
 
-            return JsonSerializer.Serialize(result, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-            });
+            return JsonSerializer.Serialize(result, IndentedJsonIgnoreNull);
         }
         catch (Exception ex)
         {
@@ -265,7 +255,7 @@ public class ObjectInspectionTools(
             {
                 error = ex.Message,
                 address
-            }, new JsonSerializerOptions { WriteIndented = true });
+            }, IndentedJson);
         }
     }
 
@@ -292,15 +282,13 @@ public class ObjectInspectionTools(
         }
         catch (InvalidOperationException ex)
         {
-            return JsonSerializer.Serialize(new { error = ex.Message }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = ex.Message }, IndentedJson);
         }
 
         // Check if ClrMD analyzer is available
         if (session.ClrMdAnalyzer == null || !session.ClrMdAnalyzer.IsOpen)
         {
-            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, IndentedJson);
         }
 
         try
@@ -311,11 +299,7 @@ public class ObjectInspectionTools(
             {
                 count = modules.Count,
                 modules
-            }, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-            });
+            }, IndentedJsonIgnoreNull);
         }
         catch (Exception ex)
         {
@@ -323,7 +307,7 @@ public class ObjectInspectionTools(
             return JsonSerializer.Serialize(new
             {
                 error = ex.Message
-            }, new JsonSerializerOptions { WriteIndented = true });
+            }, IndentedJson);
         }
     }
 
@@ -363,8 +347,7 @@ public class ObjectInspectionTools(
 
         if (string.IsNullOrWhiteSpace(typeName))
         {
-            return JsonSerializer.Serialize(new { error = "Type name is required" }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "Type name is required" }, IndentedJson);
         }
 
         // Get session with user ownership validation
@@ -375,15 +358,13 @@ public class ObjectInspectionTools(
         }
         catch (InvalidOperationException ex)
         {
-            return JsonSerializer.Serialize(new { error = ex.Message }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = ex.Message }, IndentedJson);
         }
 
         // Check if ClrMD analyzer is available
         if (session.ClrMdAnalyzer == null || !session.ClrMdAnalyzer.IsOpen)
         {
-            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, IndentedJson);
         }
 
         try
@@ -396,11 +377,7 @@ public class ObjectInspectionTools(
                 result.Modules = result.Modules.Where(m => m.TypeFound != null).ToList();
             }
 
-            return JsonSerializer.Serialize(result, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-            });
+            return JsonSerializer.Serialize(result, IndentedJsonIgnoreNull);
         }
         catch (Exception ex)
         {
@@ -409,7 +386,7 @@ public class ObjectInspectionTools(
             {
                 error = ex.Message,
                 typeName
-            }, new JsonSerializerOptions { WriteIndented = true });
+            }, IndentedJson);
         }
     }
 
@@ -434,14 +411,12 @@ public class ObjectInspectionTools(
 
         if (string.IsNullOrWhiteSpace(typeName))
         {
-            return JsonSerializer.Serialize(new { error = "Type name is required" }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "Type name is required" }, IndentedJson);
         }
 
         if (string.IsNullOrWhiteSpace(methodName))
         {
-            return JsonSerializer.Serialize(new { error = "Method name is required" }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "Method name is required" }, IndentedJson);
         }
 
         // Get session with user ownership validation
@@ -452,26 +427,20 @@ public class ObjectInspectionTools(
         }
         catch (InvalidOperationException ex)
         {
-            return JsonSerializer.Serialize(new { error = ex.Message }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = ex.Message }, IndentedJson);
         }
 
         // Check if ClrMD analyzer is available
         if (session.ClrMdAnalyzer == null || !session.ClrMdAnalyzer.IsOpen)
         {
-            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." }, IndentedJson);
         }
 
         try
         {
             var result = session.ClrMdAnalyzer.Name2EEMethod(typeName, methodName);
 
-            return JsonSerializer.Serialize(result, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-            });
+            return JsonSerializer.Serialize(result, IndentedJsonIgnoreNull);
         }
         catch (Exception ex)
         {
@@ -481,7 +450,7 @@ public class ObjectInspectionTools(
                 error = ex.Message,
                 typeName,
                 methodName
-            }, new JsonSerializerOptions { WriteIndented = true });
+            }, IndentedJson);
         }
     }
 
@@ -510,15 +479,14 @@ public class ObjectInspectionTools(
         }
         catch (InvalidOperationException ex)
         {
-            return JsonSerializer.Serialize(new { error = ex.Message }, 
-                new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = ex.Message }, IndentedJson);
         }
 
         // Check if ClrMD analyzer is available
         if (session.ClrMdAnalyzer?.IsOpen != true)
         {
             return JsonSerializer.Serialize(new { error = "ClrMD analyzer not available. Dump may not be a .NET dump." },
-                new JsonSerializerOptions { WriteIndented = true });
+                IndentedJson);
         }
 
         try
@@ -551,18 +519,13 @@ public class ObjectInspectionTools(
                 }
             }
 
-            return JsonSerializer.Serialize(result, new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-            });
+            return JsonSerializer.Serialize(result, IndentedCamelCaseJsonIgnoreNull);
         }
         catch (Exception ex)
         {
             Logger.LogError(ex, "Error in ClrStack");
             return JsonSerializer.Serialize(new { error = ex.Message },
-                new JsonSerializerOptions { WriteIndented = true });
+                IndentedJson);
         }
     }
 }

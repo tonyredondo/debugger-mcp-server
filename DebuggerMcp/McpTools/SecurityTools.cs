@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Security;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -32,7 +33,7 @@ public class SecurityTools(
     /// <summary>
     /// JSON serialization options for security results.
     /// </summary>
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.Indented;
 
     /// <summary>
     /// Performs comprehensive security vulnerability analysis.

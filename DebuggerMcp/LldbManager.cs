@@ -5,6 +5,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DebuggerMcp.Configuration;
+using DebuggerMcp.Serialization;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -1372,7 +1373,7 @@ public class LldbManager : IDebuggerManager
     {
         try
         {
-            var updatedJson = JsonSerializer.Serialize(metadata, new JsonSerializerOptions { WriteIndented = true });
+            var updatedJson = JsonSerializer.Serialize(metadata, JsonSerializationDefaults.Indented);
             File.WriteAllText(metadataPath, updatedJson);
             return true;
         }

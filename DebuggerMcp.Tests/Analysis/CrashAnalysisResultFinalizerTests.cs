@@ -55,6 +55,34 @@ public class CrashAnalysisResultFinalizerTests
     }
 
     [Fact]
+    public void Finalize_WhenManagedMethodPlaceholderHasIsManagedFalse_SetsIsManagedTrue()
+    {
+        var result = new CrashAnalysisResult
+        {
+            Summary = new AnalysisSummary { Description = "Found 1 threads (0 total frames, 0 in faulting thread), 0 modules." },
+            Modules = new List<ModuleInfo>(),
+            Threads = new ThreadsInfo
+            {
+                All = new List<ThreadInfo>
+                {
+                    new()
+                    {
+                        ThreadId = "t1",
+                        CallStack = new List<StackFrame>
+                        {
+                            new() { FrameNumber = 0, InstructionPointer = "0x1", Module = "", Function = "[ManagedMethod]", IsManaged = false }
+                        }
+                    }
+                }
+            }
+        };
+
+        CrashAnalysisResultFinalizer.Finalize(result);
+
+        Assert.True(result.Threads!.All![0].CallStack[0].IsManaged);
+    }
+
+    [Fact]
     public void Finalize_RefreshesCountsClause_WhenPresent()
     {
         var result = new CrashAnalysisResult
@@ -91,4 +119,3 @@ public class CrashAnalysisResultFinalizerTests
         Assert.Equal("t1", result.Threads.FaultingThread!.ThreadId);
     }
 }
-

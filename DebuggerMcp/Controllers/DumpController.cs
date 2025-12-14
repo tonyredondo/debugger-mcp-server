@@ -1018,25 +1018,7 @@ public class DumpController : ControllerBase
             // Run security analysis and include in results
             var securityAnalyzer = new SecurityAnalyzer(manager);
             var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
-            if (securityResult != null)
-            {
-                analysisResult.Security = new SecurityInfo
-                {
-                    HasVulnerabilities = securityResult.Vulnerabilities?.Count > 0,
-                    OverallRisk = securityResult.OverallRisk.ToString(),
-                    Summary = securityResult.Summary,
-                    AnalyzedAt = securityResult.AnalyzedAt.ToString("O"),
-                    Findings = securityResult.Vulnerabilities?.Select(v => new SecurityFinding
-                    {
-                        Type = v.Type.ToString(),
-                        Severity = v.Severity.ToString(),
-                        Description = v.Description,
-                        Location = v.Address,
-                        Recommendation = v.Details
-                    }).ToList(),
-                    Recommendations = securityResult.Recommendations
-                };
-            }
+            ReportEnrichment.ApplySecurity(analysisResult, securityResult);
 
             // Include watch results if any exist
             if (await _watchStore.HasWatchesAsync(sanitizedUserId, sanitizedDumpId))

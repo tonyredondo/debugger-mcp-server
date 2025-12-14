@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Security;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -33,7 +34,7 @@ public class ComparisonTools(
     /// <summary>
     /// JSON serialization options for comparison results.
     /// </summary>
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.Indented;
 
     /// <summary>
     /// Compares two memory dumps to identify differences in memory, threads, and modules.

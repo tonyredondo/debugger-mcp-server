@@ -1,5 +1,6 @@
 using System.Text.Json;
 using DebuggerMcp.Configuration;
+using DebuggerMcp.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace DebuggerMcp;
@@ -30,11 +31,7 @@ public class PersistentSessionStore
     private readonly object _fileLock = new();
     private readonly string _serverId;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
+    private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.IndentedCamelCase;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="PersistentSessionStore"/> class.

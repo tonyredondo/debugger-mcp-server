@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DebuggerMcp.Analysis;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.ObjectInspection.Models;
 using Microsoft.Extensions.Logging;
 
@@ -245,14 +246,10 @@ public partial class ObjectInspector
 
         if (result == null)
         {
-            return JsonSerializer.Serialize(new { error = "Failed to inspect object" }, new JsonSerializerOptions { WriteIndented = true });
+            return JsonSerializer.Serialize(new { error = "Failed to inspect object" }, JsonSerializationDefaults.Indented);
         }
 
-        return JsonSerializer.Serialize(result, new JsonSerializerOptions
-        {
-            WriteIndented = true,
-            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-        });
+        return JsonSerializer.Serialize(result, JsonSerializationDefaults.IndentedIgnoreNull);
     }
 
     private async Task<InspectedObject?> InspectRecursiveAsync(

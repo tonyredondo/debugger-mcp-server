@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using DebuggerMcp.Cli.Serialization;
 using DebuggerMcp.Cli.Models;
 
 namespace DebuggerMcp.Cli.Client;
@@ -35,12 +36,7 @@ public class HttpApiClient : IHttpApiClient
     /// </summary>
     public static readonly TimeSpan MaxRetryDelay = TimeSpan.FromSeconds(30);
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
+    private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CaseInsensitiveCamelCase;
 
     /// <inheritdoc/>
     public bool IsConfigured => _httpClient != null && !string.IsNullOrEmpty(_serverUrl);
@@ -911,4 +907,3 @@ public class HttpApiException : Exception
         ErrorCode = errorCode;
     }
 }
-

@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DebuggerMcp.Configuration;
+using DebuggerMcp.Serialization;
 
 namespace DebuggerMcp.Watches;
 
@@ -28,11 +29,7 @@ public class WatchStore
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _fileLocks = new();
 
     private const string WatchesFileName = "watches.json";
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
+    private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.IndentedCamelCase;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="WatchStore"/> class.
@@ -439,4 +436,3 @@ public class WatchStore
         await File.WriteAllTextAsync(filePath, json);
     }
 }
-

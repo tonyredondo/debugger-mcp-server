@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DebuggerMcp.Analysis;
+using DebuggerMcp.Serialization;
 using Microsoft.Extensions.Logging;
 
 namespace DebuggerMcp.SourceLink;
@@ -354,8 +355,7 @@ public class GitHubCommitResolver : IDisposable
             Directory.CreateDirectory(_cacheDirectory);
             _cache.LastUpdated = DateTime.UtcNow;
 
-            var options = new JsonSerializerOptions { WriteIndented = true };
-            var json = JsonSerializer.Serialize(_cache, options);
+            var json = JsonSerializer.Serialize(_cache, JsonSerializationDefaults.Indented);
             File.WriteAllText(cachePath, json);
 
             _cacheModified = false;

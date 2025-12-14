@@ -3,6 +3,7 @@ using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Reporting;
 using DebuggerMcp.Security;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
@@ -128,27 +129,7 @@ public class ReportTools(
         {
             var securityAnalyzer = new SecurityAnalyzer(manager);
             var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
-
-            // Populate Security structure
-            if (securityResult != null)
-            {
-                result.Security = new SecurityInfo
-                {
-                    HasVulnerabilities = securityResult.Vulnerabilities?.Count > 0,
-                    OverallRisk = securityResult.OverallRisk.ToString(),
-                    Summary = securityResult.Summary,
-                    AnalyzedAt = securityResult.AnalyzedAt.ToString("O"),
-                    Findings = securityResult.Vulnerabilities?.Select(v => new SecurityFinding
-                    {
-                        Type = v.Type.ToString(),
-                        Severity = v.Severity.ToString(),
-                        Description = v.Description,
-                        Location = v.Address,
-                        Recommendation = v.Details
-                    }).ToList(),
-                    Recommendations = securityResult.Recommendations
-                };
-            }
+            ReportEnrichment.ApplySecurity(result, securityResult);
         }
 
         // Include watch evaluations if enabled and dump has watches
@@ -250,27 +231,7 @@ public class ReportTools(
         // Run security analysis for critical findings
         var securityAnalyzer = new SecurityAnalyzer(manager);
         var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
-
-        // Populate Security structure
-        if (securityResult != null)
-        {
-            result.Security = new SecurityInfo
-            {
-                HasVulnerabilities = securityResult.Vulnerabilities?.Count > 0,
-                OverallRisk = securityResult.OverallRisk.ToString(),
-                Summary = securityResult.Summary,
-                AnalyzedAt = securityResult.AnalyzedAt.ToString("O"),
-                Findings = securityResult.Vulnerabilities?.Select(v => new SecurityFinding
-                {
-                    Type = v.Type.ToString(),
-                    Severity = v.Severity.ToString(),
-                    Description = v.Description,
-                    Location = v.Address,
-                    Recommendation = v.Details
-                }).ToList(),
-                Recommendations = securityResult.Recommendations
-            };
-        }
+        ReportEnrichment.ApplySecurity(result, securityResult);
 
         // Create metadata
         var metadata = new ReportMetadata
@@ -299,12 +260,6 @@ public class ReportTools(
 /// </summary>
 internal class JsonReportGenerator : IReportGenerator
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-    };
-
     /// <inheritdoc />
     public string Generate(CrashAnalysisResult analysis, ReportOptions options, ReportMetadata metadata)
     {
@@ -314,6 +269,6 @@ internal class JsonReportGenerator : IReportGenerator
             analysis
         };
 
-        return JsonSerializer.Serialize(report, JsonOptions);
+        return JsonSerializer.Serialize(report, JsonSerializationDefaults.IndentedIgnoreNull);
     }
 }

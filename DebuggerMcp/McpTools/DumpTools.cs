@@ -3,6 +3,7 @@ using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Controllers;
 using DebuggerMcp.Security;
+using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -539,8 +540,9 @@ public class DumpTools(
             // Save updated metadata if changes were made (back to the same file we read from)
             if (updated)
             {
-                var options = new JsonSerializerOptions { WriteIndented = true };
-                await File.WriteAllTextAsync(actualMetadataPath, JsonSerializer.Serialize(metadata, options));
+                await File.WriteAllTextAsync(
+                    actualMetadataPath,
+                    JsonSerializer.Serialize(metadata, JsonSerializationDefaults.Indented));
                 Logger.LogInformation("[OpenDump] Saved updated metadata for dump {DumpId}", dumpId);
             }
         }

@@ -2,6 +2,7 @@ using System;
 using System.Text;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
+using DebuggerMcp.Serialization;
 
 namespace DebuggerMcp.Reporting;
 
@@ -13,13 +14,6 @@ public class ReportService
 {
     private readonly MarkdownReportGenerator _markdownGenerator;
     private readonly HtmlReportGenerator _htmlGenerator;
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
-    };
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ReportService"/> class.
@@ -166,7 +160,6 @@ public class ReportService
             analysis
         };
 
-        return JsonSerializer.Serialize(report, JsonOptions);
+        return JsonSerializer.Serialize(report, JsonSerializationDefaults.IndentedCamelCaseIgnoreNull);
     }
 }
-

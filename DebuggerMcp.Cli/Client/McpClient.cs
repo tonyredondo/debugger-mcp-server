@@ -3,6 +3,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DebuggerMcp.Cli.Serialization;
 
 namespace DebuggerMcp.Cli.Client;
 
@@ -29,12 +30,7 @@ public class McpClient : IMcpClient
     private CancellationTokenSource? _sseListenerCts;
     private readonly ConcurrentDictionary<int, TaskCompletionSource<string>> _pendingRequests = new();
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CaseInsensitiveCamelCaseIgnoreNull;
 
     /// <inheritdoc/>
     public bool IsConnected => _httpClient != null && !string.IsNullOrEmpty(_messageEndpoint);

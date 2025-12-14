@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using DebuggerMcp.Cli.Serialization;
 
 namespace DebuggerMcp.Cli.Configuration;
 
@@ -17,13 +18,8 @@ namespace DebuggerMcp.Cli.Configuration;
 /// </remarks>
 public class ConnectionSettings
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
+    private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CaseInsensitiveCamelCaseIndentedIgnoreNull;
+
     /// <summary>
     /// Default request timeout in seconds.
     /// Increased from 300 to 600 to handle dumps with many symbols that take longer to download.
@@ -469,4 +465,3 @@ internal class ConfigFile
     [JsonPropertyName("profiles")]
     public Dictionary<string, ServerProfile>? Profiles { get; set; }
 }
-
