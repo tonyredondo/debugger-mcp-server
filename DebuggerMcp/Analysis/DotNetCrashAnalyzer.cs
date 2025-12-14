@@ -299,10 +299,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Keep TopFunction consistent for threads that did not originate from 'bt all'.
                 if (string.IsNullOrWhiteSpace(existingThread.TopFunction) && existingThread.CallStack.Count > 0)
                 {
-                    var firstFrame = existingThread.CallStack[0];
-                    var function = firstFrame.Function ?? string.Empty;
-                    var module = firstFrame.Module ?? string.Empty;
-                    existingThread.TopFunction = !string.IsNullOrEmpty(module) ? $"{module}!{function}" : function;
+                    existingThread.TopFunction = ComputeMeaningfulTopFunction(existingThread.CallStack, existingThread.TopFunction);
                 }
             }
 
@@ -722,14 +719,8 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         thread.CallStack.Clear();
         thread.CallStack.AddRange(mergedFrames);
 
-        // Keep TopFunction consistent with the final merged stack.
-        if (thread.CallStack.Count > 0)
-        {
-            var firstFrame = thread.CallStack[0];
-            var function = firstFrame.Function ?? string.Empty;
-            var module = firstFrame.Module ?? string.Empty;
-            thread.TopFunction = !string.IsNullOrEmpty(module) ? $"{module}!{function}" : function;
-        }
+        // Keep TopFunction consistent with the final merged stack (skip placeholder frames deterministically).
+        thread.TopFunction = ComputeMeaningfulTopFunction(thread.CallStack, thread.TopFunction);
     }
     
     /// <summary>

@@ -44,6 +44,7 @@ Before implementing any “final fix” for an issue in this document:
 - [ISSUE-005: Register formatting inconsistent with pointers (`0x` prefix mismatch)](#issue-005-register-formatting-inconsistent-with-pointers-0x-prefix-mismatch)
 - [ISSUE-006: Many managed frames missing `sourceFile`/`lineNumber` (metric)](#issue-006-many-managed-frames-missing-sourcefilelinenumber-metric)
 - [ISSUE-007: Assemblies list contains duplicates and missing `repositoryUrl` for some `commitHash` values](#issue-007-assemblies-list-contains-duplicates-and-missing-repositoryurl-for-some-commithash-values)
+- [ISSUE-008: `threads.all[*].topFunction` points to placeholders (JIT/Runtime) instead of a meaningful frame](#issue-008-threadsalltopfunction-points-to-placeholders-jitruntime-instead-of-a-meaningful-frame)
 
 ---
 
@@ -271,3 +272,43 @@ Managed frame source coverage is not complete.
 Use this section to record decisions and link commits to issue IDs.
 
 - 2025-12-14: Implemented fixes for ISSUE-001..ISSUE-007 (see code changes; commit pending).
+
+---
+
+## ISSUE-008: `threads.all[*].topFunction` points to placeholders (JIT/Runtime) instead of a meaningful frame
+
+- **Severity**: Medium
+- **Status**: Fixed (needs report regen)
+- **Owner**:
+
+### Symptom
+Many threads have `topFunction` values like `[Runtime]` or a header-derived value that does not match the most meaningful frame in the final merged `callStack`.
+
+### Evidence
+In the regenerated `6239b1aa.json`, some threads have:
+- `topFunction = [Runtime]` while `callStack` includes meaningful frames such as `libcoreclr.so!...` or `System.*` managed methods.
+- `topFunction` pointing at the pre-merge header/function while the merged stack starts with placeholder frames like `[JIT Code @ ...]`.
+
+### Likely cause
+`topFunction` is computed from:
+- `thread list` headers (often truncated or placeholder-y), and/or
+- the first frame in `bt all` (which can be `[JIT Code @ ...]`),
+and was not re-selected after enrichment/merging with a “meaningful” frame policy.
+
+### Final solution implemented
+- Implemented deterministic “meaningful top frame” selection that:
+  - skips known placeholders: `[JIT Code @ ...]`, `[Native Code @ ...]`, `[Runtime]`, `[ManagedMethod]`
+  - selects the first non-placeholder frame in the call stack (top-to-bottom)
+  - falls back to the first frame if all frames are placeholders
+- Applied consistently in:
+  - LLDB `bt all` parsing (`CrashAnalyzer.ParseLldbBacktraceAll`)
+  - managed/native merge (`DotNetCrashAnalyzer.MergeManagedFramesIntoCallStack`)
+  - ClrMD thread creation where `TopFunction` was missing (`DotNetCrashAnalyzer.PopulateManagedStacksViaClrMd`)
+
+### Tests
+- `DebuggerMcp.Tests/Analysis/CrashAnalyzerParsingTests.cs`:
+  - `ComputeMeaningfulTopFunction_SkipsJitAndRuntimePlaceholders`
+  - `ParseLldbBacktraceAll_WhenFirstFrameIsJit_UsesFirstNonPlaceholderAsTopFunction`
+
+### Notes / Discussion
+- Verification step: regenerate `DebuggerMcp.Cli/6239b1aa.json` and confirm `topFunction` equals the first non-placeholder frame in `callStack` for each thread.

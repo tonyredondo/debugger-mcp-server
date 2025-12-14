@@ -56,6 +56,9 @@ public class CrashAnalyzerParsingTests
 
         public static bool TestTryParseHexOrDecimal(string value, out long result)
             => TryParseHexOrDecimal(value, out result);
+
+        public string TestComputeMeaningfulTopFunction(IReadOnlyList<StackFrame> callStack, string? existingTopFunction = null)
+            => ComputeMeaningfulTopFunction(callStack, existingTopFunction);
     }
 
     private readonly TestableCrashAnalyzer _analyzer = new();
@@ -244,6 +247,38 @@ arm64
         _analyzer.TestParseWinDbgBacktraceAll("", result);
 
         Assert.Empty(result.Threads!.All![0].CallStack);
+    }
+
+    [Fact]
+    public void ComputeMeaningfulTopFunction_SkipsJitAndRuntimePlaceholders()
+    {
+        var frames = new List<StackFrame>
+        {
+            new() { Module = "", Function = "[JIT Code @ 0x0000000100000000]" },
+            new() { Module = "", Function = "[Runtime]" },
+            new() { Module = "System.Private.CoreLib", Function = "System.Threading.Monitor.Wait(System.Object, Int32)" }
+        };
+
+        var top = _analyzer.TestComputeMeaningfulTopFunction(frames);
+        Assert.Equal("System.Private.CoreLib!System.Threading.Monitor.Wait(System.Object, Int32)", top);
+    }
+
+    [Fact]
+    public void ParseLldbBacktraceAll_WhenFirstFrameIsJit_UsesFirstNonPlaceholderAsTopFunction()
+    {
+        var result = CreateInitializedResult();
+        result.Threads!.All!.Add(new ThreadInfo { ThreadId = "1 (tid: 0x1)" });
+
+        var btAll = string.Join(
+            "\n",
+            "* thread #1",
+            "  * frame #0: 0x0000000100000000 SP=0x0000000000001000",
+            "    frame #1: 0x0000000100000100 SP=0x0000000000002000 libcoreclr.so`CEEInfo::resolveToken");
+
+        _analyzer.TestParseLldbBacktraceAll(btAll, result);
+
+        Assert.Single(result.Threads.All);
+        Assert.Equal("libcoreclr.so!CEEInfo::resolveToken", result.Threads.All[0].TopFunction);
     }
 
     // ============================================================

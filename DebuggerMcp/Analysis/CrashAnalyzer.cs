@@ -714,16 +714,88 @@ public class CrashAnalyzer
         {
             if (thread.CallStack.Count > 0)
             {
-                var firstFrame = thread.CallStack[0];
-                var function = firstFrame.Function ?? "";
-                var module = firstFrame.Module ?? "";
-                
-                // Format: module!function (full function name, no truncation)
-                thread.TopFunction = !string.IsNullOrEmpty(module) 
-                    ? $"{module}!{function}" 
-                    : function;
+                thread.TopFunction = ComputeMeaningfulTopFunction(thread.CallStack, thread.TopFunction);
             }
         }
+    }
+
+    /// <summary>
+    /// Computes a deterministic "meaningful" top frame display value for a thread.
+    /// Skips placeholder frames such as "[JIT Code @ ...]" and "[Runtime]" and chooses the first
+    /// non-placeholder frame in call stack order.
+    /// </summary>
+    /// <param name="callStack">The thread call stack (top frame first).</param>
+    /// <param name="existingTopFunction">Optional existing value used when no frames are available.</param>
+    /// <returns>A display string such as "Module!Function".</returns>
+    protected static string ComputeMeaningfulTopFunction(IReadOnlyList<StackFrame> callStack, string? existingTopFunction = null)
+    {
+        if (callStack.Count == 0)
+        {
+            return existingTopFunction ?? string.Empty;
+        }
+
+        foreach (var frame in callStack)
+        {
+            if (IsMeaningfulTopFrameCandidate(frame))
+            {
+                return FormatTopFrameDisplay(frame);
+            }
+        }
+
+        // If every frame is a placeholder, fall back to the first frame to keep the value deterministic.
+        return FormatTopFrameDisplay(callStack[0]);
+    }
+
+    /// <summary>
+    /// Determines whether a frame is a suitable candidate for the thread's "top function" display.
+    /// </summary>
+    /// <param name="frame">The stack frame.</param>
+    /// <returns><c>true</c> if the frame is meaningful; otherwise <c>false</c>.</returns>
+    private static bool IsMeaningfulTopFrameCandidate(StackFrame frame)
+    {
+        var function = frame.Function?.Trim();
+        if (string.IsNullOrWhiteSpace(function))
+        {
+            return false;
+        }
+
+        // Skip known placeholders that are not actionable to humans.
+        if (function.Equals("[Runtime]", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (function.Equals("[ManagedMethod]", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (function.StartsWith("[JIT Code @", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (function.StartsWith("[Native Code @", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Formats a frame into a "Module!Function" display string.
+    /// </summary>
+    /// <param name="frame">The stack frame to format.</param>
+    /// <returns>The formatted display string.</returns>
+    private static string FormatTopFrameDisplay(StackFrame frame)
+    {
+        var function = frame.Function ?? string.Empty;
+        var module = frame.Module ?? string.Empty;
+
+        return !string.IsNullOrWhiteSpace(module)
+            ? $"{module}!{function}"
+            : function;
     }
 
     /// <summary>
