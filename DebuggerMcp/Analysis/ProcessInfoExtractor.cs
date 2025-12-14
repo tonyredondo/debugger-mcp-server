@@ -597,12 +597,6 @@ public class ProcessInfoExtractor
             var cmd = $"expr -- (char*){address}";
             var output = await Task.Run(() => debuggerManager.ExecuteCommand(cmd));
 
-            // Store the command in rawCommands if provided (with sensitive data redacted)
-            if (rawCommands != null && !string.IsNullOrWhiteSpace(output))
-            {
-                rawCommands[cmd] = RedactSensitiveOutputValue(output);
-            }
-
             // Parse output: (char *) $317 = 0x0000ffffefcbbb24 "dotnet"
             // Also handle: (char *) $1 = 0x... "value with \"quotes\""
             var match = Regex.Match(output, @"\(char\s*\*\)\s*\$\d+\s*=\s*0x[0-9a-fA-F]+\s+""(.*)""$",
@@ -1417,4 +1411,3 @@ public class ProcessInfoExtractor
         return alphanumRatio >= 0.6;
     }
 }
-

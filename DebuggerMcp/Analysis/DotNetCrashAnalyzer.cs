@@ -5627,10 +5627,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 continue;
             }
-            
-                // Store module info as raw command for debugging
-                result.RawCommands![$"ClrMD:InspectModule({assembly.ModuleId})"] = 
-                    System.Text.Json.JsonSerializer.Serialize(moduleInfo, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 
                 // Update assembly info from ClrMD result
                 if (!string.IsNullOrEmpty(moduleInfo.Version) && string.IsNullOrEmpty(assembly.AssemblyVersion))

@@ -92,8 +92,31 @@ internal static class CrashAnalysisResultFinalizer
 
         result.Summary.Description = description;
 
+        PruneRawCommands(result);
+
         // Populate derived fields (signature, findings, timeline, etc.) based on the finalized stacks.
         // This is intentionally done at the end so consumers see deterministic data computed from the final report state.
         CrashAnalysisDerivedFieldsBuilder.PopulateDerivedFields(result);
+    }
+
+    private static void PruneRawCommands(CrashAnalysisResult result)
+    {
+        if (result.RawCommands == null || result.RawCommands.Count == 0)
+        {
+            return;
+        }
+
+        // Drop noisy low-value commands that can be very large and/or contain sensitive strings.
+        // These commands are still executed when needed for analysis; we just avoid embedding their raw output in reports.
+        var keysToRemove = result.RawCommands.Keys
+            .Where(k =>
+                k.StartsWith("expr -- (char*)", StringComparison.Ordinal) ||
+                k.StartsWith("ClrMD:InspectModule(", StringComparison.Ordinal))
+            .ToList();
+
+        foreach (var key in keysToRemove)
+        {
+            result.RawCommands.Remove(key);
+        }
     }
 }
