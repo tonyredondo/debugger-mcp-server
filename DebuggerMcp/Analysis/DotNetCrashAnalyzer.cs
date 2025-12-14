@@ -2739,10 +2739,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Threads from clrstack output have ThreadId like "0x8954"
             // Skip dead threads (OSID = 0) as they don't have an OS thread
             ThreadInfo? matchingThread = null;
+            var osIdDecimalString = (string?)null;
             
             if (osId != "0")
             {
                 var osIdDecimal = Convert.ToInt32(osId, 16);
+                osIdDecimalString = osIdDecimal.ToString();
                 var osIdHex = $"0x{osId}";
                 
                 var threads = result.Threads?.All;
@@ -2755,7 +2757,8 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                     t.ThreadId.Contains($"tid: {osIdDecimal}", StringComparison.OrdinalIgnoreCase) ||
                     t.ThreadId.Contains($"({osIdDecimal})", StringComparison.OrdinalIgnoreCase) ||
                     // Already has OsThreadId set (from a previous parse)
-                    (t.OsThreadId != null && t.OsThreadId.Equals(osId, StringComparison.OrdinalIgnoreCase)));
+                    (t.OsThreadId != null && t.OsThreadId.Equals(osId, StringComparison.OrdinalIgnoreCase)) ||
+                    (t.OsThreadIdDecimal != null && t.OsThreadIdDecimal.Equals(osIdDecimalString, StringComparison.OrdinalIgnoreCase)));
             }
 
             if (matchingThread != null)
@@ -2763,6 +2766,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Enrich with CLR thread info
                 matchingThread.ManagedThreadId = managedId;
                 matchingThread.OsThreadId = osId;
+                matchingThread.OsThreadIdDecimal = osIdDecimalString;
                 matchingThread.ThreadObject = $"0x{threadObj}";
                 matchingThread.ClrThreadState = $"0x{state}";
                 matchingThread.GcMode = gcMode;

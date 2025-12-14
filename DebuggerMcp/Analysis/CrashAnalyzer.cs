@@ -1827,12 +1827,29 @@ public class CrashAnalyzer
             return false;
         }
 
+        // Native frames on Linux/macOS typically use DWARF, not PDB.
+        // Avoid noisy PDB warnings by skipping SourceLinkResolver for native binaries and using safe heuristics instead.
+        if (frame.IsManaged == false &&
+            IsPosixPlatform(result) &&
+            TryResolveDotnetRuntimeSourceUrl(frame, result, out var runtimeUrl, out var runtimeProvider))
+        {
+            frame.SourceUrl = runtimeUrl;
+            frame.SourceProvider = runtimeProvider;
+            return true;
+        }
+
         // Find the module path (try to locate it from the modules list)
         var modulePath = FindModulePath(frame.Module, result);
         if (string.IsNullOrEmpty(modulePath))
         {
             // Use module name as path if we can't find the full path
             modulePath = frame.Module;
+        }
+
+        // Skip SourceLinkResolver for native Linux/macOS binaries to avoid repeated "PDB not found" warnings.
+        if (frame.IsManaged == false && IsPosixPlatform(result) && LooksLikePosixNativeBinary(modulePath))
+        {
+            return false;
         }
 
         // Resolve source link
@@ -1855,6 +1872,105 @@ public class CrashAnalyzer
         }
 
         return false;
+    }
+
+    private static bool IsPosixPlatform(CrashAnalysisResult result)
+    {
+        var os = result.Environment?.Platform?.Os;
+        return os != null &&
+               (os.Equals("Linux", StringComparison.OrdinalIgnoreCase) ||
+                os.Equals("macOS", StringComparison.OrdinalIgnoreCase) ||
+                os.Equals("OSX", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool LooksLikePosixNativeBinary(string? modulePath)
+    {
+        if (string.IsNullOrWhiteSpace(modulePath))
+        {
+            return false;
+        }
+
+        var normalized = modulePath.Trim();
+        if (normalized.Equals("dotnet", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        return normalized.EndsWith(".so", StringComparison.OrdinalIgnoreCase) ||
+               normalized.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryResolveDotnetRuntimeSourceUrl(
+        StackFrame frame,
+        CrashAnalysisResult result,
+        out string url,
+        out string provider)
+    {
+        url = string.Empty;
+        provider = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(frame.SourceFile) || !frame.LineNumber.HasValue)
+        {
+            return false;
+        }
+
+        // Only attempt this mapping for known dotnet build-agent paths to avoid producing incorrect URLs.
+        // Examples:
+        // - /__w/1/s/src/runtime/src/coreclr/vm/threads.cpp
+        // - /__w/1/s/src/native/corehost/corehost.cpp
+        var sourceFile = frame.SourceFile.Replace('\\', '/').Trim();
+        if (!sourceFile.StartsWith("/__w/1/s/src/", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        // Find a dotnet/dotnet assembly entry to obtain repository + commit.
+        var assemblies = result.Assemblies?.Items;
+        if (assemblies == null || assemblies.Count == 0)
+        {
+            return false;
+        }
+
+        var dotnetAssembly = assemblies.FirstOrDefault(a =>
+            a.Name.Equals("System.Private.CoreLib", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(a.RepositoryUrl) &&
+            a.RepositoryUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(a.CommitHash));
+
+        dotnetAssembly ??= assemblies.FirstOrDefault(a =>
+            !string.IsNullOrWhiteSpace(a.RepositoryUrl) &&
+            a.RepositoryUrl.Contains("github.com/dotnet/dotnet", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(a.CommitHash));
+
+        if (dotnetAssembly == null)
+        {
+            return false;
+        }
+
+        var repositoryUrl = dotnetAssembly.RepositoryUrl!;
+        var commitHash = dotnetAssembly.CommitHash!;
+
+        var relativePath = NormalizeRepoRelativePath(sourceFile, repositoryUrl);
+        if (string.IsNullOrWhiteSpace(relativePath))
+        {
+            return false;
+        }
+
+        var sourceProvider = SourceLinkResolver.DetectProvider(repositoryUrl);
+        if (sourceProvider != SourceProvider.GitHub)
+        {
+            return false;
+        }
+
+        var rawUrl = BuildGitHubRawUrl(repositoryUrl, commitHash, relativePath);
+        if (string.IsNullOrWhiteSpace(rawUrl))
+        {
+            return false;
+        }
+
+        url = SourceLinkResolver.ConvertToBrowsableUrl(rawUrl, frame.LineNumber.Value, sourceProvider);
+        provider = sourceProvider.ToString();
+        return !string.IsNullOrWhiteSpace(url);
     }
 
     /// <summary>
@@ -2054,7 +2170,8 @@ public class CrashAnalyzer
             !normalized.StartsWith("src/runtime/", StringComparison.OrdinalIgnoreCase))
         {
             if (normalized.StartsWith("src/libraries/", StringComparison.OrdinalIgnoreCase) ||
-                normalized.StartsWith("src/coreclr/", StringComparison.OrdinalIgnoreCase))
+                normalized.StartsWith("src/coreclr/", StringComparison.OrdinalIgnoreCase) ||
+                normalized.StartsWith("src/native/", StringComparison.OrdinalIgnoreCase))
             {
                 normalized = $"src/runtime/{normalized}";
             }

@@ -45,6 +45,8 @@ Before implementing any “final fix” for an issue in this document:
 - [ISSUE-006: Many managed frames missing `sourceFile`/`lineNumber` (metric)](#issue-006-many-managed-frames-missing-sourcefilelinenumber-metric)
 - [ISSUE-007: Assemblies list contains duplicates and missing `repositoryUrl` for some `commitHash` values](#issue-007-assemblies-list-contains-duplicates-and-missing-repositoryurl-for-some-commithash-values)
 - [ISSUE-008: `threads.all[*].topFunction` points to placeholders (JIT/Runtime) instead of a meaningful frame](#issue-008-threadsalltopfunction-points-to-placeholders-jitruntime-instead-of-a-meaningful-frame)
+- [ISSUE-009: `osThreadId` is hex while `threadId` shows decimal tid](#issue-009-osthreadid-is-hex-while-threadid-shows-decimal-tid)
+- [ISSUE-010: Native frames have source paths but missing `sourceUrl` (dotnet runtime paths)](#issue-010-native-frames-have-source-paths-but-missing-sourceurl-dotnet-runtime-paths)
 
 ---
 
@@ -272,6 +274,60 @@ Managed frame source coverage is not complete.
 Use this section to record decisions and link commits to issue IDs.
 
 - 2025-12-14: Implemented fixes for ISSUE-001..ISSUE-007 (see code changes; commit pending).
+- 2025-12-14: Implemented fixes for ISSUE-008 (see code changes; commit pending).
+
+---
+
+## ISSUE-009: `osThreadId` is hex while `threadId` shows decimal tid
+
+- **Severity**: Low (consumer clarity)
+- **Status**: Fixed
+- **Owner**:
+
+### Symptom
+`threads.all[*].threadId` shows `tid: <decimal>` (e.g. `tid: 884`) while `threads.all[*].osThreadId` comes from `!clrthreads` OSID and is represented as a hex string without `0x` (e.g. `374`).
+
+This is numerically consistent (`0x374 == 884`) but visually confusing, and can be misread as a mismatch.
+
+### Evidence
+- Example: `threadId: "1 (tid: 884) \"dotnet\""` and `osThreadId: "374"`.
+
+### Likely cause
+SOS `!clrthreads` reports OSID in hex, whereas LLDB thread list typically prints TID in decimal.
+
+### Final solution implemented
+- Added `threads.all[*].osThreadIdDecimal` (derived from `!clrthreads` OSID) so both forms are available without breaking existing consumers of `osThreadId`.
+
+### Tests
+- `DebuggerMcp.Tests/Analysis/DotNetCrashAnalyzerParsingTests.cs`: `ParseClrThreads_WithHeaderAndThreadLine_UpdatesSummaryAndEnrichesThread` asserts `osThreadIdDecimal`.
+
+---
+
+## ISSUE-010: Native frames have source paths but missing `sourceUrl` (dotnet runtime paths)
+
+- **Severity**: Medium
+- **Status**: Fixed
+- **Owner**:
+
+### Symptom
+Many native frames include `sourceFile`/`lineNumber` from DWARF (e.g. `/__w/1/s/src/runtime/src/coreclr/vm/threads.cpp:7058:5`), but `sourceUrl` is missing.
+
+### Likely cause
+The SourceLink resolver path is PDB-centric; native Linux/macOS frames typically have DWARF debug info rather than PDB/Portable PDB SourceLink metadata.
+
+### Guardrail validation
+Before generating URLs, restrict to known dotnet build-agent paths to avoid incorrect URL generation.
+
+### Final solution implemented
+- For Linux/macOS native frames, avoid attempting PDB-based SourceLink resolution (prevents noisy “PDB not found” warnings).
+- Add a safe dotnet-runtime URL mapping:
+  - `/__w/1/s/src/...` → `https://github.com/dotnet/dotnet/blob/<commit>/src/runtime/src/...#L<line>` (with repo-layout rewrites as needed)
+  - Commit is sourced from `analysis.assemblies.items` (prefers `System.Private.CoreLib`).
+
+### Tests
+- Add unit tests for the mapping and for the dotnet/dotnet `src/native` → `src/runtime/src/native` rewrite.
+  - `DebuggerMcp.Tests/Analysis/CrashAnalyzerPrivateHelpersTests.cs`: `NormalizeRepoRelativePath_WhenDotnetRepoAndSrcNative_RewritesToSrcRuntime`
+  - `DebuggerMcp.Tests/Analysis/CrashAnalyzerPrivateHelpersTests.cs`: `TryResolveDotnetRuntimeSourceUrl_WithDotnetAssemblyMetadata_ResolvesNativeRuntimePath`
 
 ---
 

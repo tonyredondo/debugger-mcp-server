@@ -26,6 +26,29 @@ public class CrashAnalyzerPrivateHelpersTests
         method!.Invoke(null, new object[] { result });
     }
 
+    private static string? NormalizeRepoRelativePath(string sourceFile, string repositoryUrl)
+    {
+        var method = typeof(CrashAnalyzer).GetMethod(
+            "NormalizeRepoRelativePath",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+        return (string?)method!.Invoke(null, new object[] { sourceFile, repositoryUrl });
+    }
+
+    private static (bool Resolved, string Url, string Provider) TryResolveDotnetRuntimeSourceUrl(
+        StackFrame frame,
+        CrashAnalysisResult result)
+    {
+        var method = typeof(CrashAnalyzer).GetMethod(
+            "TryResolveDotnetRuntimeSourceUrl",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var args = new object?[] { frame, result, null, null };
+        var resolved = (bool)method!.Invoke(null, args)!;
+        return (resolved, args[2] as string ?? string.Empty, args[3] as string ?? string.Empty);
+    }
+
     [Fact]
     public void ParseSingleFrame_WithBacktickAndSp_ParsesModuleFunctionAndSource()
     {
@@ -145,5 +168,50 @@ public class CrashAnalyzerPrivateHelpersTests
 
         Assert.Equal(2, result.Threads!.OsThreadCount);
         Assert.Contains("Found 2 threads (4 total frames, 3 in faulting thread), 2 modules.", result.Summary!.Description);
+    }
+
+    [Fact]
+    public void NormalizeRepoRelativePath_WhenDotnetRepoAndSrcNative_RewritesToSrcRuntime()
+    {
+        var repo = "https://github.com/dotnet/dotnet";
+        var relative = NormalizeRepoRelativePath("/__w/1/s/src/native/corehost/corehost.cpp", repo);
+        Assert.Equal("src/runtime/src/native/corehost/corehost.cpp", relative);
+    }
+
+    [Fact]
+    public void TryResolveDotnetRuntimeSourceUrl_WithDotnetAssemblyMetadata_ResolvesNativeRuntimePath()
+    {
+        var frame = new StackFrame
+        {
+            Module = "libcoreclr.so",
+            Function = "ManagedThreadBase::KickOff",
+            SourceFile = "/__w/1/s/src/runtime/src/coreclr/vm/threads.cpp",
+            LineNumber = 7058,
+            IsManaged = false
+        };
+
+        var result = new CrashAnalysisResult
+        {
+            Assemblies = new AssembliesInfo
+            {
+                Items =
+                [
+                    new AssemblyVersionInfo
+                    {
+                        Name = "System.Private.CoreLib",
+                        RepositoryUrl = "https://github.com/dotnet/dotnet",
+                        CommitHash = "b0f34d51fccc69fd334253924abd8d6853fad7aa"
+                    }
+                ]
+            },
+            Environment = new EnvironmentInfo { Platform = new PlatformInfo { Os = "Linux" } }
+        };
+
+        var (resolved, url, provider) = TryResolveDotnetRuntimeSourceUrl(frame, result);
+        Assert.True(resolved);
+        Assert.Equal("GitHub", provider);
+        Assert.Equal(
+            "https://github.com/dotnet/dotnet/blob/b0f34d51fccc69fd334253924abd8d6853fad7aa/src/runtime/src/coreclr/vm/threads.cpp#L7058",
+            url);
     }
 }

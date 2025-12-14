@@ -324,6 +324,14 @@ public class ThreadInfo
     public string? OsThreadId { get; set; }
 
     /// <summary>
+    /// Gets or sets the OS thread ID in decimal (derived from !clrthreads OSID).
+    /// This is provided because debugger thread identifiers often display TIDs in decimal.
+    /// </summary>
+    [JsonPropertyName("osThreadIdDecimal")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? OsThreadIdDecimal { get; set; }
+
+    /// <summary>
     /// Gets or sets the CLR thread object address.
     /// </summary>
     [JsonPropertyName("threadObject")]

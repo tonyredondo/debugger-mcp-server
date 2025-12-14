@@ -402,6 +402,7 @@ Ready for finalization 10 objects";
         var thread = result.Threads.All.Single(t => t.ThreadId.Equals("0x8954", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(1, thread.ManagedThreadId);
         Assert.Equal("8954", thread.OsThreadId);
+        Assert.Equal("35156", thread.OsThreadIdDecimal);
         Assert.Equal("0x0000F714F13A4010", thread.ThreadObject);
         Assert.Equal("0x20020", thread.ClrThreadState);
         Assert.Equal("Preemptive", thread.GcMode);
