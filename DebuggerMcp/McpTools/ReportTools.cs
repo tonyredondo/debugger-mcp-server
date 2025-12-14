@@ -31,11 +31,6 @@ public class ReportTools(
     : DebuggerToolsBase(sessionManager, symbolManager, watchStore, logger)
 {
     /// <summary>
-    /// JSON serialization options for report results.
-    /// </summary>
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
-
-    /// <summary>
     /// Generates a comprehensive crash analysis report.
     /// </summary>
     /// <param name="sessionId">The session ID.</param>

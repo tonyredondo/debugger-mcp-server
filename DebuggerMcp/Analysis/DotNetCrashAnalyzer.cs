@@ -295,12 +295,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
                 // Merge managed frames into existing native frames by SP
                 MergeManagedFramesIntoCallStack(existingThread, managedFramesBySp);
-
-                // Keep TopFunction consistent for threads that did not originate from 'bt all'.
-                if (string.IsNullOrWhiteSpace(existingThread.TopFunction) && existingThread.CallStack.Count > 0)
-                {
-                    existingThread.TopFunction = ComputeMeaningfulTopFunction(existingThread.CallStack, existingThread.TopFunction);
-                }
             }
 
             // Apply registers to ALL frames in faulting thread (including native frames)
@@ -718,9 +712,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Replace the call stack
         thread.CallStack.Clear();
         thread.CallStack.AddRange(mergedFrames);
-
-        // Keep TopFunction consistent with the final merged stack (skip placeholder frames deterministically).
-        thread.TopFunction = ComputeMeaningfulTopFunction(thread.CallStack, thread.TopFunction);
     }
     
     /// <summary>
@@ -941,7 +932,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         try
         {
             // Run base analysis first to reuse parsed environment/threads/modules in the .NET pass.
-            result = await AnalyzeCrashAsync(); // Base analysis first (caching already enabled)
+            result = await AnalyzeCrashCoreAsync(finalizeResult: false); // Base analysis first (caching already enabled)
 
             // === Datadog Symbol Download ===
             // Download Datadog.Trace symbols BEFORE detailed stack analysis for best stack traces.
@@ -1167,11 +1158,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
 
             // Update summary with .NET info
-            FinalizeThreadTopFunctions(result);
             UpdateDotNetSummary(result);
 
-            // Managed stack enrichment can change the final frame counts; refresh count fields in the summary.
-            CrashAnalyzer.RefreshSummaryCounts(result);
+            CrashAnalysisResultFinalizer.Finalize(result);
         }
         catch (Exception ex)
         {
@@ -1181,29 +1170,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         }
 
         return result;
-    }
-
-    /// <summary>
-    /// Ensures <see cref="ThreadInfo.TopFunction"/> is consistent with the final merged call stacks.
-    /// </summary>
-    /// <param name="result">The analysis result.</param>
-    private void FinalizeThreadTopFunctions(CrashAnalysisResult result)
-    {
-        var threads = result.Threads?.All;
-        if (threads == null || threads.Count == 0)
-        {
-            return;
-        }
-
-        foreach (var thread in threads)
-        {
-            if (thread.CallStack.Count == 0)
-            {
-                continue;
-            }
-
-            thread.TopFunction = ComputeMeaningfulTopFunction(thread.CallStack, thread.TopFunction);
-        }
     }
 
     /// <summary>
@@ -4195,9 +4161,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             
             // Replace call stack with merged version
             thread.CallStack = sortedFrames;
-
-            // TopFunction must reflect the final merged/reordered call stack, not the pre-merge header value.
-            thread.TopFunction = ComputeMeaningfulTopFunction(thread.CallStack, thread.TopFunction);
             
             _logger?.LogDebug("Merged {NativeCount} native + {ManagedCount} managed frames for thread {ThreadId} ({WithSp} had SP)",
                 nativeFrames.Count, managedFrames.Count, thread.ThreadId, framesWithSp.Count);

@@ -162,7 +162,7 @@ public class DotNetCrashAnalyzerPureHelpersTests
     }
 
     [Fact]
-    public void MergeNativeAndManagedFramesBySP_RecomputesTopFunctionAfterReordering()
+    public void CrashAnalysisResultFinalizer_RecomputesTopFunctionAfterSpReordering()
     {
         var analyzer = new TestableDotNetCrashAnalyzer();
 
@@ -192,6 +192,7 @@ public class DotNetCrashAnalyzerPureHelpersTests
         };
 
         MergeNativeAndManagedFramesBySP(analyzer, result);
+        CrashAnalysisResultFinalizer.Finalize(result);
 
         var thread = result.Threads!.All![0];
         Assert.Equal("libcoreclr.so!CorUnix::CPalSynchronizationManager::ThreadNativeWait(...)", thread.TopFunction);

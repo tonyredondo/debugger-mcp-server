@@ -40,6 +40,16 @@ public class CrashAnalyzer
     /// <returns>A structured crash analysis result.</returns>
     public virtual async Task<CrashAnalysisResult> AnalyzeCrashAsync()
     {
+        return await AnalyzeCrashCoreAsync(finalizeResult: true);
+    }
+
+    /// <summary>
+    /// Core crash analysis pipeline with optional finalization.
+    /// </summary>
+    /// <param name="finalizeResult">If true, runs a single post-processing pass to finalize derived fields for reporting.</param>
+    /// <returns>A structured crash analysis result.</returns>
+    protected virtual async Task<CrashAnalysisResult> AnalyzeCrashCoreAsync(bool finalizeResult)
+    {
         var result = new CrashAnalysisResult();
 
         // Initialize new hierarchical structures
@@ -78,6 +88,10 @@ public class CrashAnalyzer
             result.Summary!.Description = $"Analysis failed: {ex.Message}";
         }
 
+        if (finalizeResult)
+        {
+            CrashAnalysisResultFinalizer.Finalize(result);
+        }
         return result;
     }
 
@@ -729,73 +743,7 @@ public class CrashAnalyzer
     /// <returns>A display string such as "Module!Function".</returns>
     protected static string ComputeMeaningfulTopFunction(IReadOnlyList<StackFrame> callStack, string? existingTopFunction = null)
     {
-        if (callStack.Count == 0)
-        {
-            return existingTopFunction ?? string.Empty;
-        }
-
-        foreach (var frame in callStack)
-        {
-            if (IsMeaningfulTopFrameCandidate(frame))
-            {
-                return FormatTopFrameDisplay(frame);
-            }
-        }
-
-        // If every frame is a placeholder, fall back to the first frame to keep the value deterministic.
-        return FormatTopFrameDisplay(callStack[0]);
-    }
-
-    /// <summary>
-    /// Determines whether a frame is a suitable candidate for the thread's "top function" display.
-    /// </summary>
-    /// <param name="frame">The stack frame.</param>
-    /// <returns><c>true</c> if the frame is meaningful; otherwise <c>false</c>.</returns>
-    private static bool IsMeaningfulTopFrameCandidate(StackFrame frame)
-    {
-        var function = frame.Function?.Trim();
-        if (string.IsNullOrWhiteSpace(function))
-        {
-            return false;
-        }
-
-        // Skip known placeholders that are not actionable to humans.
-        if (function.Equals("[Runtime]", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (function.Equals("[ManagedMethod]", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (function.StartsWith("[JIT Code @", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        if (function.StartsWith("[Native Code @", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Formats a frame into a "Module!Function" display string.
-    /// </summary>
-    /// <param name="frame">The stack frame to format.</param>
-    /// <returns>The formatted display string.</returns>
-    private static string FormatTopFrameDisplay(StackFrame frame)
-    {
-        var function = frame.Function ?? string.Empty;
-        var module = frame.Module ?? string.Empty;
-
-        return !string.IsNullOrWhiteSpace(module)
-            ? $"{module}!{function}"
-            : function;
+        return StackFrameUtilities.ComputeMeaningfulTopFunction(callStack, existingTopFunction);
     }
 
     /// <summary>
