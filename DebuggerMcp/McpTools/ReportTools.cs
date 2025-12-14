@@ -263,6 +263,9 @@ internal class JsonReportGenerator : IReportGenerator
     /// <inheritdoc />
     public string Generate(CrashAnalysisResult analysis, ReportOptions options, ReportMetadata metadata)
     {
+        // Default-on: include bounded source context snippets and normalize timeline timestamps.
+        SourceContextEnricher.Apply(analysis, metadata.GeneratedAt);
+
         var report = new
         {
             metadata,

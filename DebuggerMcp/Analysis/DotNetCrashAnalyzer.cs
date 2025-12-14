@@ -2379,6 +2379,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 exFrame.SourceFile = matchingFrame.SourceFile;
                 exFrame.LineNumber = matchingFrame.LineNumber;
                 exFrame.SourceUrl = matchingFrame.SourceUrl;
+                exFrame.SourceRawUrl = matchingFrame.SourceRawUrl;
                 exFrame.SourceProvider = matchingFrame.SourceProvider;
                 
                 // Copy parameters and locals

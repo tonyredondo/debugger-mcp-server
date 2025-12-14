@@ -1926,6 +1926,7 @@ public class CrashAnalyzer
         if (location.Resolved)
         {
             frame.SourceUrl = location.Url;
+            frame.SourceRawUrl = SanitizeSourceRawUrl(location.RawUrl);
             frame.SourceProvider = location.Provider.ToString();
             return true;
         }
@@ -2036,6 +2037,8 @@ public class CrashAnalyzer
         {
             return false;
         }
+
+        frame.SourceRawUrl = SanitizeSourceRawUrl(rawUrl);
 
         // If the line is unknown, ConvertToBrowsableUrl will return a file URL without an anchor.
         url = SourceLinkResolver.ConvertToBrowsableUrl(rawUrl, frame.LineNumber.GetValueOrDefault(), sourceProvider);
@@ -2181,9 +2184,43 @@ public class CrashAnalyzer
             return false;
         }
 
+        frame.SourceRawUrl = SanitizeSourceRawUrl(rawUrl);
+
         url = SourceLinkResolver.ConvertToBrowsableUrl(rawUrl, frame.LineNumber.Value, sourceProvider);
         provider = sourceProvider.ToString();
         return !string.IsNullOrWhiteSpace(url);
+    }
+
+    private static string? SanitizeSourceRawUrl(string? rawUrl)
+    {
+        if (string.IsNullOrWhiteSpace(rawUrl))
+        {
+            return null;
+        }
+
+        if (!Uri.TryCreate(rawUrl, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        if (!string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        if (!string.IsNullOrEmpty(uri.Query) || !string.IsNullOrEmpty(uri.UserInfo))
+        {
+            return null;
+        }
+
+        // Strip fragments if present.
+        if (!string.IsNullOrEmpty(uri.Fragment))
+        {
+            var builder = new UriBuilder(uri) { Fragment = string.Empty };
+            return builder.Uri.ToString();
+        }
+
+        return uri.ToString();
     }
 
     /// <summary>

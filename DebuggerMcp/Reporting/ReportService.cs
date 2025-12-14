@@ -146,6 +146,9 @@ public class ReportService
 
     private static string GenerateJsonReport(CrashAnalysisResult analysis, ReportMetadata metadata)
     {
+        // Default-on: include bounded source context snippets and normalize timeline timestamps.
+        SourceContextEnricher.Apply(analysis, metadata.GeneratedAt);
+
         var report = new
         {
             metadata = new

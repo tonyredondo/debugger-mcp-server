@@ -102,6 +102,55 @@ public class CrashAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public Dictionary<string, string>? RawCommands { get; set; }
 
+    /// <summary>
+    /// Deterministic signature for deduplicating similar reports.
+    /// </summary>
+    [JsonPropertyName("signature")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AnalysisSignature? Signature { get; set; }
+
+    /// <summary>
+    /// Explains how each thread's "meaningful top frame" was selected.
+    /// </summary>
+    [JsonPropertyName("stackSelection")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StackSelectionInfo? StackSelection { get; set; }
+
+    /// <summary>
+    /// Structured findings derived from the report with evidence pointers.
+    /// </summary>
+    [JsonPropertyName("findings")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<AnalysisFinding>? Findings { get; set; }
+
+    /// <summary>
+    /// Root cause hypotheses (confidence + evidence), not a single asserted truth.
+    /// </summary>
+    [JsonPropertyName("rootCause")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public RootCauseAnalysis? RootCause { get; set; }
+
+    /// <summary>
+    /// Symbol and source resolution health summary.
+    /// </summary>
+    [JsonPropertyName("symbols")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public SymbolsHealthSummary? Symbols { get; set; }
+
+    /// <summary>
+    /// Snapshot timeline describing thread activity and best-effort wait relationships.
+    /// </summary>
+    [JsonPropertyName("timeline")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AnalysisTimeline? Timeline { get; set; }
+
+    /// <summary>
+    /// Bounded source code snippets around selected frames.
+    /// </summary>
+    [JsonPropertyName("sourceContext")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<SourceContextEntry>? SourceContext { get; set; }
+
 }
 
 /// <summary>
@@ -157,6 +206,14 @@ public class StackFrame
     /// </summary>
     [JsonPropertyName("sourceUrl")]
     public string? SourceUrl { get; set; }
+
+    /// <summary>
+    /// Gets or sets a raw content URL (when available) for fetching source text.
+    /// This is typically a provider-specific raw URL (e.g., raw.githubusercontent.com).
+    /// </summary>
+    [JsonPropertyName("sourceRawUrl")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? SourceRawUrl { get; set; }
 
     /// <summary>
     /// Gets or sets the source control provider (GitHub, GitLab, etc.).
