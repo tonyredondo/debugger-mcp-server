@@ -90,7 +90,7 @@ internal static class SourceContextEnricher
         var client = httpClient;
         if (client == null)
         {
-            ownedClient = HttpClientFactory?.Invoke() ?? new HttpClient();
+            ownedClient = HttpClientFactory?.Invoke() ?? new HttpClient(new HttpClientHandler { AllowAutoRedirect = false });
             client = ownedClient;
         }
 
@@ -450,7 +450,25 @@ internal static class SourceContextEnricher
 
         using var request = new HttpRequestMessage(HttpMethod.Get, validated);
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+
+        // Defend against allowlist bypass via redirects when the caller provides a custom HttpClient.
+        var finalUri = response.RequestMessage?.RequestUri?.ToString() ?? validated;
+        if (!TryValidateRemoteUrl(finalUri, out _))
+        {
+            throw new InvalidOperationException("Final source URL is not allowed.");
+        }
+
         response.EnsureSuccessStatusCode();
+
+        var mediaType = response.Content.Headers.ContentType?.MediaType;
+        if (!string.IsNullOrWhiteSpace(mediaType) &&
+            !mediaType.StartsWith("text/", StringComparison.OrdinalIgnoreCase) &&
+            !mediaType.EndsWith("+json", StringComparison.OrdinalIgnoreCase) &&
+            !mediaType.EndsWith("+xml", StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(mediaType, "application/json", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"Unexpected content type '{mediaType}'.");
+        }
 
         await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
         var buffer = ArrayPool<byte>.Shared.Rent(16 * 1024);
@@ -515,6 +533,10 @@ internal static class SourceContextEnricher
 
     private static bool IsPathUnderAnyRoot(string fullPath, IReadOnlyList<string> roots)
     {
+        var comparison = OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+
         foreach (var root in roots)
         {
             if (string.IsNullOrWhiteSpace(root))
@@ -524,7 +546,7 @@ internal static class SourceContextEnricher
 
             var fullRoot = Path.GetFullPath(root);
 
-            if (fullPath.Equals(fullRoot, StringComparison.Ordinal))
+            if (fullPath.Equals(fullRoot, comparison))
             {
                 return true;
             }
@@ -533,7 +555,7 @@ internal static class SourceContextEnricher
                 ? fullRoot
                 : fullRoot + Path.DirectorySeparatorChar;
 
-            if (fullPath.StartsWith(prefix, StringComparison.Ordinal))
+            if (fullPath.StartsWith(prefix, comparison))
             {
                 return true;
             }

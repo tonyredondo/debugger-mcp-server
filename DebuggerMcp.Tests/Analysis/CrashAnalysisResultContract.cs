@@ -429,7 +429,7 @@ internal static class CrashAnalysisResultContract
             {
                 foreach (var evidence in finding.Evidence)
                 {
-                    Assert.StartsWith("/", evidence.JsonPointer);
+                    Assert.StartsWith("/analysis/", evidence.JsonPointer);
                 }
             }
         }
@@ -444,7 +444,7 @@ internal static class CrashAnalysisResultContract
             {
                 foreach (var evidence in hypothesis.Evidence)
                 {
-                    Assert.StartsWith("/", evidence.JsonPointer);
+                    Assert.StartsWith("/analysis/", evidence.JsonPointer);
                 }
             }
         }

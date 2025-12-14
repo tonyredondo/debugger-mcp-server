@@ -12,6 +12,8 @@ namespace DebuggerMcp.Analysis;
 /// </summary>
 internal static class CrashAnalysisDerivedFieldsBuilder
 {
+    private const string JsonPointerAnalysisBase = "/analysis";
+
     internal static void PopulateDerivedFields(CrashAnalysisResult result)
     {
         if (result.Threads?.All == null)
@@ -260,13 +262,13 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                         Kind = waitKind,
                         Evidence = new List<AnalysisEvidence>
                         {
-                            new()
-                            {
-                                JsonPointer = $"/threads/all/{threadIndex}/callStack/{idx}",
-                                Note = "Top frame classified as wait-like"
-                            }
-                        }
-                    };
+                                    new()
+                                    {
+                                        JsonPointer = $"{JsonPointerAnalysisBase}/threads/all/{threadIndex}/callStack/{idx}",
+                                        Note = "Top frame classified as wait-like"
+                                    }
+                                }
+                            };
                 }
                 else
                 {
@@ -311,7 +313,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                     [
                         new AnalysisEvidence
                         {
-                            JsonPointer = "/synchronization/potentialDeadlocks",
+                            JsonPointer = $"{JsonPointerAnalysisBase}/synchronization/potentialDeadlocks",
                             Note = d.Description
                         }
                     ]
@@ -440,7 +442,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                         [
                             new AnalysisEvidence
                             {
-                                JsonPointer = "/synchronization/waitGraph",
+                                JsonPointer = $"{JsonPointerAnalysisBase}/synchronization/waitGraph",
                                 Note = "Cycle detected in wait graph"
                             }
                         ]
@@ -468,7 +470,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                     [
                         new AnalysisEvidence
                         {
-                            JsonPointer = "/synchronization/waitGraph",
+                            JsonPointer = $"{JsonPointerAnalysisBase}/synchronization/waitGraph",
                             Note = "Chain derived from wait graph edges"
                         }
                     ]
@@ -496,7 +498,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                 Summary = "Faulting thread stop reason is SIGSTOP, which commonly indicates a hang/snapshot capture rather than a crash.",
                 Evidence =
                 [
-                    new AnalysisEvidence { JsonPointer = "/threads/faultingThread/state", Note = "Stop reason contains SIGSTOP" }
+                    new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/threads/faultingThread/state", Note = "Stop reason contains SIGSTOP" }
                 ],
                 NextActions =
                 [
@@ -522,13 +524,13 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                 Severity = "warning",
                 Confidence = 0.6,
                 Summary = $"Synchronization analyzer detected {result.Synchronization.Summary.PotentialDeadlockCount} potential deadlock cycle(s).",
-                Evidence =
-                [
-                    new AnalysisEvidence { JsonPointer = "/synchronization/potentialDeadlocks", Note = "Potential deadlock cycles" }
-                ],
-                NextActions =
-                [
-                    "Inspect the deadlock cycles and identify which locks/resources form the cycle.",
+                    Evidence =
+                    [
+                        new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/synchronization/potentialDeadlocks", Note = "Potential deadlock cycles" }
+                    ],
+                    NextActions =
+                    [
+                        "Inspect the deadlock cycles and identify which locks/resources form the cycle.",
                     "Capture additional dumps to confirm the deadlock persists."
                 ]
             });
@@ -546,7 +548,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                 Summary = $"High number of active timers ({result.Async!.Timers!.Count}).",
                 Evidence =
                 [
-                    new AnalysisEvidence { JsonPointer = "/async/timers", Note = "Timer list" }
+                    new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/async/timers", Note = "Timer list" }
                 ],
                 NextActions =
                 [
@@ -573,8 +575,8 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                     Summary = $"Large Object Heap is {lohBytes.Value:N0} bytes (~{ratio:P0} of managed heap).",
                     Evidence =
                     [
-                        new AnalysisEvidence { JsonPointer = "/memory/gc/generationSizes/loh", Note = "LOH bytes" },
-                        new AnalysisEvidence { JsonPointer = "/memory/gc/totalHeapSize", Note = "Total managed heap bytes" }
+                        new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/memory/gc/generationSizes/loh", Note = "LOH bytes" },
+                        new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/memory/gc/totalHeapSize", Note = "Total managed heap bytes" }
                     ],
                     NextActions =
                     [
@@ -635,7 +637,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                 {
                     evidence.Add(new AnalysisEvidence
                     {
-                        JsonPointer = $"/threads/all/{threadIndex}/callStack/{frameIndex}",
+                        JsonPointer = $"{JsonPointerAnalysisBase}/threads/all/{threadIndex}/callStack/{frameIndex}",
                         Note = "Native frame has no source information"
                     });
                 }
@@ -677,7 +679,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                 Confidence = 0.7,
                 Evidence =
                 [
-                    new AnalysisEvidence { JsonPointer = "/environment/crashInfo/signalName", Note = "Signal name" }
+                    new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/environment/crashInfo/signalName", Note = "Signal name" }
                 ]
             });
         }
@@ -690,7 +692,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                 Confidence = 0.7,
                 Evidence =
                 [
-                    new AnalysisEvidence { JsonPointer = "/exception/type", Note = "Exception type" }
+                    new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/exception/type", Note = "Exception type" }
                 ]
             });
         }
@@ -703,7 +705,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                 Confidence = 0.8,
                 Evidence =
                 [
-                    new AnalysisEvidence { JsonPointer = "/threads/faultingThread/state", Note = "Stop reason contains SIGSTOP" }
+                    new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/threads/faultingThread/state", Note = "Stop reason contains SIGSTOP" }
                 ]
             });
         }
@@ -716,7 +718,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
                 Confidence = 0.6,
                 Evidence =
                 [
-                    new AnalysisEvidence { JsonPointer = "/synchronization/potentialDeadlocks", Note = "Potential deadlock cycles" }
+                    new AnalysisEvidence { JsonPointer = $"{JsonPointerAnalysisBase}/synchronization/potentialDeadlocks", Note = "Potential deadlock cycles" }
                 ]
             });
         }
