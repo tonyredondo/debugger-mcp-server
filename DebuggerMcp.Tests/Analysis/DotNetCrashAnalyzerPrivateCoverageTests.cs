@@ -347,7 +347,7 @@ public class DotNetCrashAnalyzerPrivateCoverageTests
 
         Assert.NotNull(parsedSimple);
         Assert.Equal(1, parsedSimple!.FrameNumber);
-        Assert.Equal(string.Empty, parsedSimple.InstructionPointer);
+        Assert.Equal("0x0", parsedSimple.InstructionPointer);
         Assert.True(parsedSimple.IsManaged);
         Assert.Equal(2, frameNumber);
 

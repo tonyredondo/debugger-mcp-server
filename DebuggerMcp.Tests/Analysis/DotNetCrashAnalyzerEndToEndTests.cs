@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.Json;
 using System.Threading.Tasks;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.SourceLink;
@@ -212,6 +213,13 @@ public class DotNetCrashAnalyzerEndToEndTests
             Assert.Contains("clrstack -a -r -all", manager.ExecutedCommands);
             Assert.Contains("!dumpheap -stat", manager.ExecutedCommands);
             Assert.Contains("!clrthreads", manager.ExecutedCommands);
+
+            CrashAnalysisResultContract.AssertValid(result);
+
+            var json = CrashAnalyzer.ToJson(result);
+            var roundTrip = JsonSerializer.Deserialize<CrashAnalysisResult>(json);
+            Assert.NotNull(roundTrip);
+            CrashAnalysisResultContract.AssertValid(roundTrip!);
         }
         finally
         {
@@ -291,6 +299,13 @@ public class DotNetCrashAnalyzerEndToEndTests
 
             Assert.Contains(heapCmd, result.RawCommands!.Keys);
             Assert.Contains(dumpmtCmd, result.RawCommands!.Keys);
+
+            CrashAnalysisResultContract.AssertValid(result);
+
+            var json = CrashAnalyzer.ToJson(result);
+            var roundTrip = JsonSerializer.Deserialize<CrashAnalysisResult>(json);
+            Assert.NotNull(roundTrip);
+            CrashAnalysisResultContract.AssertValid(roundTrip!);
         }
         finally
         {

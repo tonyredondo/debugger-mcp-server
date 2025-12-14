@@ -1167,6 +1167,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             }
 
             // Update summary with .NET info
+            FinalizeThreadTopFunctions(result);
             UpdateDotNetSummary(result);
 
             // Managed stack enrichment can change the final frame counts; refresh count fields in the summary.
@@ -1180,6 +1181,29 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Ensures <see cref="ThreadInfo.TopFunction"/> is consistent with the final merged call stacks.
+    /// </summary>
+    /// <param name="result">The analysis result.</param>
+    private void FinalizeThreadTopFunctions(CrashAnalysisResult result)
+    {
+        var threads = result.Threads?.All;
+        if (threads == null || threads.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var thread in threads)
+        {
+            if (thread.CallStack.Count == 0)
+            {
+                continue;
+            }
+
+            thread.TopFunction = ComputeMeaningfulTopFunction(thread.CallStack, thread.TopFunction);
+        }
     }
 
     /// <summary>
@@ -3855,7 +3879,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             FrameNumber = frameNumber++,
             StackPointer = $"0x{sp}",
-            InstructionPointer = ip != null ? $"0x{ip}" : "",
+            InstructionPointer = ip != null ? $"0x{ip}" : "0x0",
             Module = module,
             Function = function,
             SourceFile = sourceFile,
@@ -4031,7 +4055,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             return new StackFrame
             {
                 FrameNumber = frameNumber++,
-                InstructionPointer = "",
+                InstructionPointer = "0x0",
                 Module = module,
                 Function = method,
                 SourceFile = sourceFile,

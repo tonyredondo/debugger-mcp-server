@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text.Json;
 using DebuggerMcp.Analysis;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -264,6 +265,13 @@ public class DotNetCrashAnalyzerClrMdDumpIntegrationTests
 
                 // When ClrMD is available, the analyzer should take the fast-path and skip SOS clrstack.
                 Assert.DoesNotContain(manager.ExecutedCommands, c => c.Contains("clrstack -a -r -all", StringComparison.OrdinalIgnoreCase));
+
+                CrashAnalysisResultContract.AssertValid(result);
+
+                var json = CrashAnalyzer.ToJson(result);
+                var roundTrip = JsonSerializer.Deserialize<CrashAnalysisResult>(json);
+                Assert.NotNull(roundTrip);
+                CrashAnalysisResultContract.AssertValid(roundTrip!);
             }
             finally
             {

@@ -35,6 +35,20 @@ Before implementing any “final fix” for an issue in this document:
 
 ---
 
+## Regression Guardrails (Tests)
+
+To prevent these report issues from regressing silently, we enforce a set of report “contract” invariants in tests:
+
+- `DebuggerMcp.Tests/Analysis/CrashAnalysisResultContract.cs`: invariants (frame numbering, topFunction determinism, sourceUrl completeness, secrets redaction, assembly dedup, etc).
+- Wired into:
+  - `DebuggerMcp.Tests/Analysis/DotNetCrashAnalyzerEndToEndTests.cs` (stubbed end-to-end outputs)
+  - `DebuggerMcp.Tests/Analysis/DotNetCrashAnalyzerClrMdDumpIntegrationTests.cs` (real dump + ClrMD)
+- Both tests also validate JSON round-trip (`CrashAnalyzer.ToJson` → `JsonSerializer.Deserialize`) to catch serializer omissions.
+
+When adding new report fields or changing semantics, update the contract *and* add/adjust the most local unit test first, then re-run the end-to-end contract assertions.
+
+---
+
 ## Index
 
 - [ISSUE-001: `analysis.summary.description` counts don’t match report data](#issue-001-analysis-summarydescription-counts-dont-match-report-data)
@@ -47,6 +61,7 @@ Before implementing any “final fix” for an issue in this document:
 - [ISSUE-008: `threads.all[*].topFunction` points to placeholders (JIT/Runtime) instead of a meaningful frame](#issue-008-threadsalltopfunction-points-to-placeholders-jitruntime-instead-of-a-meaningful-frame)
 - [ISSUE-009: `osThreadId` is hex while `threadId` shows decimal tid](#issue-009-osthreadid-is-hex-while-threadid-shows-decimal-tid)
 - [ISSUE-010: Native frames have source paths but missing `sourceUrl` (dotnet runtime paths)](#issue-010-native-frames-have-source-paths-but-missing-sourceurl-dotnet-runtime-paths)
+- [ISSUE-011: Some CLR stack “marker” frames have no instruction pointer](#issue-011-some-clr-stack-marker-frames-have-no-instruction-pointer)
 
 ---
 
@@ -371,3 +386,31 @@ and was not re-selected after late-stage SP-based stack merging reorders frames.
 
 ### Notes / Discussion
 - Verification step: regenerate `DebuggerMcp.Cli/6239b1aa.json` and confirm `topFunction` equals the first non-placeholder frame in `callStack` for each thread.
+
+---
+
+## ISSUE-011: Some CLR stack “marker” frames have no instruction pointer
+
+- **Severity**: Low
+- **Status**: Fixed
+- **Owner**:
+
+### Symptom
+Some CLR stack marker frames (e.g. `[GCFrame]`, `[ExternalMethodFrame]`) can be emitted without an instruction pointer.
+
+### Impact
+Consumers that treat `instructionPointer` as required need special casing; it also breaks contract-style checks that assume the field is always present.
+
+### Likely cause
+`clrstack` outputs some marker frames with an empty IP column; our parser preserved that emptiness by emitting an empty string.
+
+### Final solution implemented
+- Emit a sentinel `"0x0"` instruction pointer for frames where the IP column is absent in `clrstack` output.
+- Also emit `"0x0"` for the “simple” managed frame format where no IP exists.
+
+### Tests
+- `DebuggerMcp.Tests/Analysis/DotNetCrashAnalyzerEndToEndTests.cs`: contract assertions now require non-empty `instructionPointer` for all frames.
+- `DebuggerMcp.Tests/Analysis/DotNetCrashAnalyzerPrivateCoverageTests.cs`: updated to expect `"0x0"` for the simple managed frame format.
+
+### Notes / Discussion
+- This preserves the shape of the field without claiming a real instruction address.
