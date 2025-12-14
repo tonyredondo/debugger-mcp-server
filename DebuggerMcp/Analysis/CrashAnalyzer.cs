@@ -1625,9 +1625,23 @@ public class CrashAnalyzer
             result.Summary.Recommendations.Add("No call stack found. Ensure symbols are configured correctly.");
         }
 
-        if (result.Modules != null && result.Modules.Any(m => !m.HasSymbols))
+        if (ShouldRecommendMissingSymbols(result))
         {
-            result.Summary.Recommendations.Add("Some modules are missing symbols. Upload symbol files for better analysis.");
+            var examples = GetMissingSymbolsExamples(result, max: 3);
+            var suffix = examples.Count > 0 ? $" (e.g., {string.Join(", ", examples)})" : string.Empty;
+            result.Summary.Recommendations.Add(
+                $"Some native modules are missing debug symbols{suffix}. Upload debug symbols if you need deeper native stack/source resolution.");
+        }
+
+        // If the faulting thread stop reason is SIGSTOP, this is usually a snapshot (hang/diagnostic capture), not a crash.
+        // Add context so consumers don’t over-interpret the crashType/severity.
+        if (faultingThread?.State != null &&
+            faultingThread.State.Contains("SIGSTOP", StringComparison.OrdinalIgnoreCase) &&
+            (result.Exception == null) &&
+            string.Equals(crashType, "Unknown", StringComparison.OrdinalIgnoreCase))
+        {
+            result.Summary.Recommendations.Add(
+                "Faulting thread stop reason is SIGSTOP. This looks like a captured snapshot rather than a crash; capture at the actual crash signal/exception for better crash classification.");
         }
 
         // Populate the new Summary properties
@@ -1639,6 +1653,89 @@ public class CrashAnalyzer
         // Update thread summary
         result.Threads!.OsThreadCount = threads.Count;
         result.Threads.FaultingThread = faultingThread;
+    }
+
+    private static bool ShouldRecommendMissingSymbols(CrashAnalysisResult result)
+    {
+        if (result.Modules == null || result.Modules.Count == 0)
+        {
+            return false;
+        }
+
+        var missing = result.Modules
+            .Where(m => !m.HasSymbols)
+            .Select(m => m.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+
+        if (missing.Count == 0)
+        {
+            return false;
+        }
+
+        // Ignore common non-actionable cases like [vdso] and libgcc_s.
+        missing = missing
+            .Where(n => !n.StartsWith("[", StringComparison.OrdinalIgnoreCase))
+            .Where(n => !n.Contains("vdso", StringComparison.OrdinalIgnoreCase))
+            .Where(n => !n.Equals("libgcc_s.so.1", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        if (missing.Count == 0)
+        {
+            return false;
+        }
+
+        // Only warn when missing symbols appear to affect frames that lack any source/location information.
+        var missingSet = missing.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var threads = result.Threads?.All ?? [];
+        foreach (var thread in threads)
+        {
+            foreach (var frame in thread.CallStack)
+            {
+                if (frame.IsManaged)
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(frame.Module))
+                {
+                    continue;
+                }
+
+                if (!missingSet.Contains(frame.Module))
+                {
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(frame.SourceUrl) &&
+                    string.IsNullOrWhiteSpace(frame.Source) &&
+                    string.IsNullOrWhiteSpace(frame.SourceFile))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static List<string> GetMissingSymbolsExamples(CrashAnalysisResult result, int max)
+    {
+        if (max <= 0 || result.Modules == null)
+        {
+            return [];
+        }
+
+        return result.Modules
+            .Where(m => !m.HasSymbols)
+            .Select(m => m.Name)
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Where(n => !n.StartsWith("[", StringComparison.OrdinalIgnoreCase))
+            .Where(n => !n.Contains("vdso", StringComparison.OrdinalIgnoreCase))
+            .Where(n => !n.Equals("libgcc_s.so.1", StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(max)
+            .ToList();
     }
 
     /// <summary>

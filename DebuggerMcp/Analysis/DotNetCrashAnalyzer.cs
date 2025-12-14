@@ -2781,8 +2781,10 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         var deadThreadCount = result.Threads?.Summary?.Dead;
         if (deadThreadCount > 0)
         {
-            var rec = $"CLR reports {deadThreadCount} dead managed thread(s). These may not appear in the OS thread list.";
-            result.Summary?.Recommendations?.Add(rec);
+            result.Summary ??= new AnalysisSummary();
+            result.Summary.Recommendations ??= [];
+            var rec = $"CLR reports {deadThreadCount} dead managed thread(s). This is often benign (threads already terminated); investigate only if correlated with hangs or resource starvation.";
+            result.Summary.Recommendations.Add(rec);
         }
     }
 
@@ -2975,8 +2977,30 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Add recommendations based on timer info
         if (timers.Count > 50)
         {
-            var rec = $"High number of active timers ({timers.Count}). This may indicate timer leaks or inefficient timer usage.";
-            result.Summary?.Recommendations?.Add(rec);
+            result.Summary ??= new AnalysisSummary();
+            result.Summary.Recommendations ??= [];
+
+            var isTestHost = result.Environment?.Process?.Arguments?.Any(a =>
+                a.Contains("testhost.dll", StringComparison.OrdinalIgnoreCase) ||
+                a.Contains("vstest", StringComparison.OrdinalIgnoreCase)) == true;
+
+            // Summarize top timer owners by state type (best-effort).
+            var topOwners = timers
+                .Where(t => !string.IsNullOrWhiteSpace(t.StateType))
+                .GroupBy(t => t.StateType!, StringComparer.Ordinal)
+                .Select(g => (Type: g.Key, Count: g.Count()))
+                .OrderByDescending(x => x.Count)
+                .Take(3)
+                .Select(x => $"{x.Type} ({x.Count})")
+                .ToList();
+
+            var ownersSuffix = topOwners.Count > 0 ? $" Top timer state types: {string.Join(", ", topOwners)}." : string.Empty;
+            var context = isTestHost
+                ? " In testhost/CI contexts this can be normal, but if it grows over time or appears in production investigate undisposed timers."
+                : " This can indicate timer leaks or inefficient timer usage; investigate undisposed timers.";
+
+            var rec = $"High number of active timers ({timers.Count}).{ownersSuffix}{context}";
+            result.Summary.Recommendations.Add(rec);
         }
         
         // Check for very short interval timers
@@ -3122,8 +3146,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         if (largeSingleAllocations.Any())
         {
             result.Memory!.LeakAnalysis.PotentialIssueIndicators.Add("Large Object Heap allocations present");
-            var lohRecommendation = "Large Object Heap allocations detected. Consider ArrayPool<T> for large arrays to reduce GC pressure.";
-            result.Summary?.Recommendations?.Add(lohRecommendation);
+            result.Summary ??= new AnalysisSummary();
+            result.Summary.Recommendations ??= [];
+
+            var lohBytes = result.Memory?.Gc?.GenerationSizes?.Loh;
+            var totalHeap = result.Memory?.Gc?.TotalHeapSize;
+            var lohHint = lohBytes.HasValue && totalHeap.HasValue && totalHeap.Value > 0
+                ? $" LOH is {lohBytes.Value:N0} bytes (~{(double)lohBytes.Value / totalHeap.Value:P0} of managed heap)."
+                : string.Empty;
+
+            var lohRecommendation = $"Large Object Heap allocations detected.{lohHint} Consider ArrayPool<T> for large arrays and avoid frequent >85KB allocations to reduce GC pressure.";
+            result.Summary.Recommendations.Add(lohRecommendation);
         }
 
         // 6. Very large managed heap - this is high consumption, NOT necessarily a leak
