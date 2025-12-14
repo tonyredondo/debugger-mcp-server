@@ -30,11 +30,19 @@ internal static class SourceContextEnricher
     /// </summary>
     internal static IReadOnlyList<string> LocalSourceRoots { get; set; } = ParseLocalSourceRoots();
 
-    private static readonly HashSet<string> AllowedHosts = new(StringComparer.OrdinalIgnoreCase)
+    // Only allow fetching raw content URLs. Avoid fetching HTML blob pages by default.
+    private static readonly HashSet<string> AllowedRawHosts = new(StringComparer.OrdinalIgnoreCase)
     {
-        "github.com",
         "raw.githubusercontent.com",
         "gitlab.com"
+    };
+
+    // Hosts that are allowed as inputs for inference (not necessarily fetched directly).
+    private static readonly HashSet<string> AllowedBrowsableHosts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "github.com",
+        "gitlab.com",
+        "raw.githubusercontent.com"
     };
 
     private static readonly Regex GitHubBlobRegex = new(
@@ -366,7 +374,7 @@ internal static class SourceContextEnricher
             return false;
         }
 
-        if (!AllowedHosts.Contains(uri.Host))
+        if (!AllowedRawHosts.Contains(uri.Host))
         {
             return false;
         }
@@ -383,7 +391,7 @@ internal static class SourceContextEnricher
             return false;
         }
 
-        if (!AllowedHosts.Contains(uri.Host))
+        if (!AllowedBrowsableHosts.Contains(uri.Host))
         {
             return false;
         }

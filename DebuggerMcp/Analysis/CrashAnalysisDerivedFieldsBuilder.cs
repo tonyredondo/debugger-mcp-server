@@ -91,18 +91,19 @@ internal static class CrashAnalysisDerivedFieldsBuilder
 
         var kind = ClassifyKind(result);
 
+        // Use '\n' explicitly so the signature is stable across OSes (AppendLine uses Environment.NewLine).
         var payload = new StringBuilder();
-        payload.AppendLine($"v=1");
-        payload.AppendLine($"kind={kind}");
-        payload.AppendLine($"exception={parts.ExceptionType ?? string.Empty}");
-        payload.AppendLine($"signal={parts.SignalName ?? string.Empty}");
-        payload.AppendLine($"runtime={parts.Runtime ?? string.Empty}");
-        payload.AppendLine($"os={parts.Os ?? string.Empty}");
+        payload.Append($"v=1\n");
+        payload.Append($"kind={kind}\n");
+        payload.Append($"exception={parts.ExceptionType ?? string.Empty}\n");
+        payload.Append($"signal={parts.SignalName ?? string.Empty}\n");
+        payload.Append($"runtime={parts.Runtime ?? string.Empty}\n");
+        payload.Append($"os={parts.Os ?? string.Empty}\n");
         if (parts.MeaningfulTopFrames != null)
         {
             foreach (var f in parts.MeaningfulTopFrames)
             {
-                payload.AppendLine($"frame={f}");
+                payload.Append($"frame={f}\n");
             }
         }
 

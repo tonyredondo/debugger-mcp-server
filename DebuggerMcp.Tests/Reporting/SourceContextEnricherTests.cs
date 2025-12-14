@@ -138,7 +138,7 @@ public class SourceContextEnricherTests
                                     IsManaged = true,
                                     SourceFile = "file.cs",
                                     LineNumber = 1,
-                                    SourceRawUrl = "https://raw.githubusercontent.com/org/repo/sha/file.cs?token=abc"
+                                    SourceRawUrl = "https://raw.githubusercontent.com/org/repo/sha/file.cs?q=1"
                                 }
                             ]
                         }
