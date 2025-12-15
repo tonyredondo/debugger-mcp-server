@@ -57,6 +57,9 @@ public sealed class CompactTools
 
     private static string Normalize(string value) => value.Trim().Replace('-', '_').ToLowerInvariant();
 
+    private static string NormalizeRequired(string? value, string name)
+        => Normalize(Require(value, name));
+
     private static string Require(string? value, string name)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -76,7 +79,7 @@ public sealed class CompactTools
         [Description("Action: create | list | close | restore | debugger_info")] string action,
         [Description("User ID (session owner)")] string userId,
         [Description("Session ID (required for close/restore/debugger_info)")] string? sessionId = null)
-        => Normalize(action) switch
+        => NormalizeRequired(action, nameof(action)) switch
         {
             "create" => _sessionTools.CreateSession(userId),
             "list" => _sessionTools.ListSessions(userId),
@@ -96,7 +99,7 @@ public sealed class CompactTools
         [Description("Session ID")] string sessionId,
         [Description("User ID (session owner)")] string userId,
         [Description("Dump ID (required for open)")] string? dumpId = null)
-        => Normalize(action) switch
+        => NormalizeRequired(action, nameof(action)) switch
         {
             "open" => _dumpTools.OpenDump(sessionId, userId, Require(dumpId, nameof(dumpId))),
             "close" => Task.FromResult(_dumpTools.CloseDump(sessionId, userId)),
@@ -127,7 +130,7 @@ public sealed class CompactTools
         [Description("Include watches (full only, default: true)")] bool includeWatches = true,
         [Description("Include security (full only, default: true)")] bool includeSecurity = true,
         [Description("Maximum stack frames (full only, 0 = all)")] int maxStackFrames = 0)
-        => Normalize(action) switch
+        => NormalizeRequired(action, nameof(action)) switch
         {
             "full" => _reportTools.GenerateReport(sessionId, userId, format, includeWatches, includeSecurity, maxStackFrames),
             "summary" => _reportTools.GenerateSummaryReport(sessionId, userId, format),
@@ -146,7 +149,7 @@ public sealed class CompactTools
         [Description("Optional action (security only): capabilities")] string? action = null,
         [Description("Include watches (default: true)")] bool includeWatches = true)
     {
-        return Normalize(kind) switch
+        return NormalizeRequired(kind, nameof(kind)) switch
         {
             "crash" => _analysisTools.AnalyzeCrash(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
             "dotnet_crash" => _analysisTools.AnalyzeDotNetCrash(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
@@ -173,7 +176,7 @@ public sealed class CompactTools
         [Description("Baseline user ID")] string baselineUserId,
         [Description("Target session ID")] string targetSessionId,
         [Description("Target user ID")] string targetUserId)
-        => Normalize(kind) switch
+        => NormalizeRequired(kind, nameof(kind)) switch
         {
             "dumps" => _comparisonTools.CompareDumps(baselineSessionId, baselineUserId, targetSessionId, targetUserId),
             "heaps" => _comparisonTools.CompareHeaps(baselineSessionId, baselineUserId, targetSessionId, targetUserId),
@@ -194,7 +197,7 @@ public sealed class CompactTools
         [Description("Watch ID (required for remove/evaluate)")] string? watchId = null,
         [Description("Watch expression (required for add)")] string? expression = null,
         [Description("Optional description (add)")] string? description = null)
-        => Normalize(action) switch
+        => NormalizeRequired(action, nameof(action)) switch
         {
             "add" => _watchTools.AddWatch(sessionId, userId, Require(expression, nameof(expression)), description),
             "remove" => _watchTools.RemoveWatch(sessionId, userId, Require(watchId, nameof(watchId))),
@@ -217,7 +220,7 @@ public sealed class CompactTools
         [Description("Dump ID (clear_cache)")] string? dumpId = null,
         [Description("Additional symbol paths (configure_additional)")] string? additionalPaths = null,
         [Description("Module names (verify_core_modules)")] string? moduleNames = null)
-        => Normalize(action) switch
+        => NormalizeRequired(action, nameof(action)) switch
         {
             "configure_additional" => _symbolTools.ConfigureAdditionalSymbols(
                 Require(sessionId, nameof(sessionId)),
@@ -241,7 +244,7 @@ public sealed class CompactTools
         [Description("User ID (required)")] string? userId = null,
         [Description("Source file path (resolve)")] string? sourceFile = null,
         [Description("Line number (resolve, optional)")] int? lineNumber = null)
-        => Normalize(action) switch
+        => NormalizeRequired(action, nameof(action)) switch
         {
             "resolve" => _sourceLinkTools.ResolveSourceLink(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), Require(sourceFile, nameof(sourceFile)), lineNumber),
             "info" => _sourceLinkTools.GetSourceLinkInfo(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId))),
@@ -270,7 +273,7 @@ public sealed class CompactTools
         [Description("Include locals (clr_stack)")] bool includeLocals = true,
         [Description("Include registers (clr_stack)")] bool includeRegisters = true,
         [Description("Filter to OS thread ID (0 = all)")] uint threadId = 0)
-        => Normalize(kind) switch
+        => NormalizeRequired(kind, nameof(kind)) switch
         {
             "object" => _objectInspectionTools.InspectObject(sessionId, userId, Require(address, nameof(address)), methodTable, maxDepth, maxArrayElements, maxStringLength),
             "module" => _objectInspectionTools.DumpModule(sessionId, userId, Require(address, nameof(address))),
@@ -298,7 +301,7 @@ public sealed class CompactTools
         [Description("Optional version (download)")] string? version = null,
         [Description("Clear API cache (clear, default: false)")] bool clearApiCache = false,
         [Description("Optional Azure Pipelines build ID (download)")] int? buildId = null)
-        => Normalize(action) switch
+        => NormalizeRequired(action, nameof(action)) switch
         {
             "prepare" => _datadogSymbolsTools.PrepareDatadogSymbols(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), loadIntoDebugger, forceVersion),
             "download" => _datadogSymbolsTools.DownloadDatadogSymbols(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), Require(commitSha, nameof(commitSha)), targetFramework, loadIntoDebugger, forceVersion, version, buildId),
