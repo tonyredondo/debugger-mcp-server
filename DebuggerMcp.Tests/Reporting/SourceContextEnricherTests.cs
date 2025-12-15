@@ -26,6 +26,83 @@ public class SourceContextEnricherTests
     }
 
     [Fact]
+    public void GenerateJsonReport_WhenMultipleFramesShareRemoteUrl_FetchesRemoteSourceOnce()
+    {
+        var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\n", Encoding.UTF8, "text/plain")
+        });
+
+        var originalFactory = SourceContextEnricher.HttpClientFactory;
+        var originalRoots = SourceContextEnricher.LocalSourceRoots;
+        try
+        {
+            SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
+            SourceContextEnricher.LocalSourceRoots = Array.Empty<string>();
+
+            var analysis = new CrashAnalysisResult
+            {
+                Summary = new AnalysisSummary { Description = "Found 1 threads (2 total frames, 2 in faulting thread), 0 modules." },
+                Threads = new ThreadsInfo
+                {
+                    All =
+                    [
+                        new ThreadInfo
+                        {
+                            ThreadId = "t1",
+                            IsFaulting = true,
+                            CallStack =
+                            [
+                                new StackFrame
+                                {
+                                    FrameNumber = 0,
+                                    InstructionPointer = "0x1",
+                                    Module = "MyApp.Core",
+                                    Function = "MyApp.Core.Foo.Bar()",
+                                    IsManaged = true,
+                                    SourceFile = "file.cs",
+                                    LineNumber = 3,
+                                    SourceRawUrl = "https://raw.githubusercontent.com/org/repo/sha/file.cs"
+                                },
+                                new StackFrame
+                                {
+                                    FrameNumber = 1,
+                                    InstructionPointer = "0x2",
+                                    Module = "MyApp.Core",
+                                    Function = "MyApp.Core.Foo.Baz()",
+                                    IsManaged = true,
+                                    SourceFile = "file.cs",
+                                    LineNumber = 6,
+                                    SourceRawUrl = "https://raw.githubusercontent.com/org/repo/sha/file.cs"
+                                }
+                            ]
+                        }
+                    ]
+                },
+                Modules = []
+            };
+
+            CrashAnalysisResultFinalizer.Finalize(analysis);
+
+            var service = new ReportService();
+            _ = service.GenerateReport(
+                analysis,
+                new ReportOptions { Format = ReportFormat.Json },
+                new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+            Assert.Equal(1, handler.CallCount);
+            Assert.NotNull(analysis.Threads!.FaultingThread);
+            Assert.NotNull(analysis.Threads.FaultingThread!.CallStack![0].SourceContext);
+            Assert.NotNull(analysis.Threads.FaultingThread.CallStack![1].SourceContext);
+        }
+        finally
+        {
+            SourceContextEnricher.HttpClientFactory = originalFactory;
+            SourceContextEnricher.LocalSourceRoots = originalRoots;
+        }
+    }
+
+    [Fact]
     public void GenerateJsonReport_WhenSourceRawUrlPresent_IncludesSourceContext()
     {
         var file = new StringBuilder();

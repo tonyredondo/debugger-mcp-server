@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
@@ -75,6 +76,7 @@ internal static class SourceContextEnricher
     private const int MaxLinesPerEntry = (ContextWindow * 2) + 1;
     private const int MaxLineLength = 400;
     private const int MaxRemoteBytes = 5 * 1024 * 1024;
+    private const int MaxConcurrentRemoteFetches = 6;
 
     internal static async Task ApplyAsync(CrashAnalysisResult analysis, DateTime generatedAtUtc, HttpClient? httpClient = null)
     {
@@ -112,11 +114,18 @@ internal static class SourceContextEnricher
 
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
-        var cache = new Dictionary<string, string>(StringComparer.Ordinal);
+        var cache = new ConcurrentDictionary<string, string[]>(StringComparer.Ordinal);
+        var inflight = new ConcurrentDictionary<string, Lazy<Task<string[]>>>(StringComparer.Ordinal);
         var summaryEntries = new List<SourceContextEntry>();
 
         try
         {
+            var urlsToPrefetch = CollectRemoteSourceUrls(candidates, analysis.Threads?.FaultingThread);
+            if (urlsToPrefetch.Count > 0)
+            {
+                await PrefetchRemoteSourcesAsync(client, cache, inflight, urlsToPrefetch, timeoutCts.Token).ConfigureAwait(false);
+            }
+
             foreach (var candidate in candidates)
             {
                 if (summaryEntries.Count >= MaxEntries)
@@ -132,7 +141,7 @@ internal static class SourceContextEnricher
 
                 try
                 {
-                    var entry = await BuildEntryAsync(thread, frame, client, cache, timeoutCts.Token).ConfigureAwait(false);
+                    var entry = await BuildEntryAsync(thread, frame, client, cache, inflight, timeoutCts.Token).ConfigureAwait(false);
                     summaryEntries.Add(entry);
                 }
                 catch (Exception ex)
@@ -170,7 +179,7 @@ internal static class SourceContextEnricher
 
                     try
                     {
-                        var entry = await BuildEntryAsync(faultingThread, frame, client, cache, timeoutCts.Token).ConfigureAwait(false);
+                        var entry = await BuildEntryAsync(faultingThread, frame, client, cache, inflight, timeoutCts.Token).ConfigureAwait(false);
                         frame.SourceContext = ToFrameSourceContext(entry);
                         embeddedCount++;
                     }
@@ -362,7 +371,8 @@ internal static class SourceContextEnricher
         ThreadInfo thread,
         StackFrame frame,
         HttpClient client,
-        Dictionary<string, string> cache,
+        ConcurrentDictionary<string, string[]> cache,
+        ConcurrentDictionary<string, Lazy<Task<string[]>>> inflight,
         CancellationToken cancellationToken)
     {
         if (frame.LineNumber is not int line || line <= 0)
@@ -411,13 +421,8 @@ internal static class SourceContextEnricher
             return entry;
         }
 
-        if (!cache.TryGetValue(rawUrl, out var text))
-        {
-            text = await FetchTextAsync(client, rawUrl, cancellationToken).ConfigureAwait(false);
-            cache[rawUrl] = text;
-        }
-
-        if (!TryExtractContext(text, line, out var remoteLines, out var remoteStart, out var remoteEnd))
+        var fileLines = await GetOrFetchRemoteLinesAsync(client, rawUrl, cache, inflight, cancellationToken).ConfigureAwait(false);
+        if (!TryExtractContext(fileLines, line, out var remoteLines, out var remoteStart, out var remoteEnd))
         {
             entry.Status = "error";
             entry.Error = "Line number outside fetched file content.";
@@ -911,6 +916,153 @@ internal static class SourceContextEnricher
         {
             ArrayPool<byte>.Shared.Return(buffer);
         }
+    }
+
+    private static HashSet<string> CollectRemoteSourceUrls(
+        IReadOnlyList<(ThreadInfo thread, StackFrame frame)> candidates,
+        ThreadInfo? faultingThread)
+    {
+        var urls = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var (_, frame) in candidates)
+        {
+            if (TryGetRemoteUrlForPrefetch(frame, out var url))
+            {
+                urls.Add(url);
+            }
+        }
+
+        if (faultingThread?.CallStack != null)
+        {
+            var seen = 0;
+            foreach (var frame in SelectFaultingThreadFramesUnbounded(faultingThread))
+            {
+                if (seen >= MaxFaultingThreadEmbeddedEntries)
+                {
+                    break;
+                }
+
+                if (TryGetRemoteUrlForPrefetch(frame, out var url))
+                {
+                    urls.Add(url);
+                }
+
+                seen++;
+            }
+        }
+
+        return urls;
+    }
+
+    private static bool TryGetRemoteUrlForPrefetch(StackFrame frame, out string url)
+    {
+        url = string.Empty;
+
+        if (frame.LineNumber is not int line || line <= 0)
+        {
+            return false;
+        }
+
+        // When local roots are configured and the source file is under them, prefer local reads and avoid prefetching.
+        if (!string.IsNullOrWhiteSpace(frame.SourceFile) &&
+            LocalSourceRoots.Count > 0 &&
+            Path.IsPathRooted(frame.SourceFile!))
+        {
+            try
+            {
+                var fullPath = Path.GetFullPath(frame.SourceFile!);
+                if (TryGetMatchingRoot(fullPath, LocalSourceRoots, out _) && File.Exists(fullPath))
+                {
+                    return false;
+                }
+            }
+            catch
+            {
+                // Fall back to remote prefetch when path normalization fails.
+            }
+        }
+
+        var rawUrl = GetRawUrl(frame);
+        if (rawUrl == null)
+        {
+            return false;
+        }
+
+        url = rawUrl;
+        return true;
+    }
+
+    private static async Task PrefetchRemoteSourcesAsync(
+        HttpClient client,
+        ConcurrentDictionary<string, string[]> cache,
+        ConcurrentDictionary<string, Lazy<Task<string[]>>> inflight,
+        IEnumerable<string> urls,
+        CancellationToken cancellationToken)
+    {
+        using var semaphore = new SemaphoreSlim(MaxConcurrentRemoteFetches);
+
+        var tasks = urls.Select(async url =>
+        {
+            if (cache.ContainsKey(url))
+            {
+                return;
+            }
+
+            await semaphore.WaitAsync(cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await GetOrFetchRemoteLinesAsync(client, url, cache, inflight, cancellationToken).ConfigureAwait(false);
+            }
+            finally
+            {
+                semaphore.Release();
+            }
+        });
+
+        await Task.WhenAll(tasks).ConfigureAwait(false);
+    }
+
+    private static Task<string[]> GetOrFetchRemoteLinesAsync(
+        HttpClient client,
+        string url,
+        ConcurrentDictionary<string, string[]> cache,
+        ConcurrentDictionary<string, Lazy<Task<string[]>>> inflight,
+        CancellationToken cancellationToken)
+    {
+        if (cache.TryGetValue(url, out var cached))
+        {
+            return Task.FromResult(cached);
+        }
+
+        var lazyTask = inflight.GetOrAdd(
+            url,
+            _ => new Lazy<Task<string[]>>(() => FetchRemoteLinesAsync(client, url, cancellationToken), LazyThreadSafetyMode.ExecutionAndPublication));
+
+        return AwaitAndCacheAsync(url, lazyTask, cache, inflight);
+    }
+
+    private static async Task<string[]> AwaitAndCacheAsync(
+        string url,
+        Lazy<Task<string[]>> lazyTask,
+        ConcurrentDictionary<string, string[]> cache,
+        ConcurrentDictionary<string, Lazy<Task<string[]>>> inflight)
+    {
+        try
+        {
+            var lines = await lazyTask.Value.ConfigureAwait(false);
+            cache.TryAdd(url, lines);
+            return lines;
+        }
+        finally
+        {
+            inflight.TryRemove(url, out _);
+        }
+    }
+
+    private static async Task<string[]> FetchRemoteLinesAsync(HttpClient client, string url, CancellationToken cancellationToken)
+    {
+        var text = await FetchTextAsync(client, url, cancellationToken).ConfigureAwait(false);
+        return text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
     }
 
     private static string SanitizeLine(string line)
