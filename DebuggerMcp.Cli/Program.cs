@@ -2300,6 +2300,7 @@ public class Program
             var serverIsAlpine = state.ServerInfo?.IsAlpine;
             var serverArch = state.ServerInfo?.Architecture;
             var hasIncompatibleDumps = false;
+            var nowUtc = DateTime.UtcNow;
 
             foreach (var dump in dumps)
             {
@@ -2361,7 +2362,7 @@ public class Program
                     hostType,
                     dump.UploadedAt == default 
                         ? "(unknown)" 
-                        : dump.UploadedAt.ToString("yyyy-MM-dd HH:mm"));
+                        : FormatUtcDateTimeWithAge(dump.UploadedAt, nowUtc, "yyyy-MM-dd HH:mm"));
             }
 
             console.Write(table);
@@ -5023,6 +5024,7 @@ public class Program
         SessionListResponse response)
     {
         var sessions = response.Sessions ?? [];
+        var nowUtc = DateTime.UtcNow;
 
         if (sessions.Count == 0)
         {
@@ -5046,8 +5048,8 @@ public class Program
         foreach (var session in sessions.OrderByDescending(s => s.LastActivityUtc ?? string.Empty, StringComparer.Ordinal))
         {
             var sessionId = session.SessionId ?? string.Empty;
-            var created = FormatUtcTimestamp(session.CreatedAtUtc);
-            var last = FormatUtcTimestamp(session.LastActivityUtc);
+            var created = FormatUtcTimestampWithAge(session.CreatedAtUtc, nowUtc);
+            var last = FormatUtcTimestampWithAge(session.LastActivityUtc, nowUtc);
             var dumpId = session.CurrentDumpId ?? string.Empty;
 
             var displayId = HighlightId(sessionId, state.SessionId);
@@ -5084,7 +5086,7 @@ public class Program
             : $"[yellow]{prefix}[/]";
     }
 
-    private static string FormatUtcTimestamp(string? utcTimestamp)
+    private static string FormatUtcTimestampWithAge(string? utcTimestamp, DateTime nowUtc)
     {
         if (string.IsNullOrWhiteSpace(utcTimestamp))
         {
@@ -5093,11 +5095,32 @@ public class Program
 
         if (DateTime.TryParse(utcTimestamp, null, DateTimeStyles.RoundtripKind, out var dt))
         {
-            var utc = dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();
-            return utc.ToString("yyyy-MM-dd HH:mm:ss");
+            return FormatUtcDateTimeWithAge(dt, nowUtc, "yyyy-MM-dd HH:mm:ss");
         }
 
         return utcTimestamp;
+    }
+
+    internal static string FormatUtcDateTimeWithAge(DateTime utcTimestamp, DateTime nowUtc, string format)
+    {
+        var utc = utcTimestamp.Kind == DateTimeKind.Utc ? utcTimestamp : utcTimestamp.ToUniversalTime();
+        var baseValue = utc.ToString(format);
+
+        var delta = nowUtc - utc;
+        if (delta.TotalSeconds < 0)
+        {
+            return $"{baseValue} (in future)";
+        }
+
+        if (delta.TotalDays < 1)
+        {
+            return $"{baseValue} (<1 day ago)";
+        }
+
+        var days = (int)Math.Floor(delta.TotalDays);
+        return days == 1
+            ? $"{baseValue} (1 day ago)"
+            : $"{baseValue} ({days} days ago)";
     }
 
     /// <summary>
