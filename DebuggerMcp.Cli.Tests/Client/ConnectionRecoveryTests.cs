@@ -171,6 +171,57 @@ public class ConnectionRecoveryTests
     }
 
     [Fact]
+    public async Task TryRecoverAsync_WhenSessionExists_SyncsDumpFromServerList()
+    {
+        var state = new ShellState { IsConnected = true };
+        state.Settings.ServerUrl = "http://localhost:5000";
+        state.Settings.ApiKey = "k";
+        state.Settings.UserId = "u";
+        state.SetSession("1234567890abcdef", "LLDB");
+        state.SetDumpLoaded("stale-dump");
+
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        var httpClient = new Mock<IHttpApiClient>();
+        httpClient
+            .Setup(c => c.CheckHealthAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new HealthStatus { Status = "Healthy" });
+
+        var mcpClient = new Mock<IMcpClient>();
+        mcpClient
+            .Setup(c => c.ConnectAsync("http://localhost:5000", "k", It.IsAny<CancellationToken>()))
+            .Returns(Task.CompletedTask);
+        mcpClient
+            .Setup(c => c.ListSessionsAsync("u", It.IsAny<CancellationToken>()))
+            .ReturnsAsync(JsonSerializer.Serialize(new SessionListResponse
+            {
+                UserId = "u",
+                Total = 1,
+                Sessions =
+                [
+                    new SessionListItem
+                    {
+                        SessionId = "1234567890abcdef",
+                        CurrentDumpId = "dump-999"
+                    }
+                ]
+            }));
+
+        var recovery = new ConnectionRecovery(httpClient.Object, mcpClient.Object, state, output)
+        {
+            MaxReconnectAttempts = 1,
+            ReconnectDelay = TimeSpan.Zero
+        };
+
+        var ok = await recovery.TryRecoverAsync();
+
+        Assert.True(ok);
+        Assert.True(state.HasSession);
+        Assert.Equal("dump-999", state.DumpId);
+    }
+
+    [Fact]
     public async Task ExecuteWithRecoveryAsync_WhenRecoverableErrorAndRecoverySucceeds_RetriesOperation()
     {
         var state = new ShellState { IsConnected = true };

@@ -4481,6 +4481,7 @@ public class Program
                         }
 
                         state.SessionId = resolvedSessionId;
+                        state.DumpId = null;
                         
                         // Extract debugger type from response
                         var debuggerTypeMatch = System.Text.RegularExpressions.Regex.Match(
@@ -4488,6 +4489,27 @@ public class Program
                         if (debuggerTypeMatch.Success)
                         {
                             state.DebuggerType = debuggerTypeMatch.Groups[1].Value;
+                        }
+
+                        // Sync current dump from the server's session list (sessions can already have a dump open).
+                        try
+                        {
+                            var listJson = await mcpClient.ListSessionsAsync(state.Settings.UserId);
+                            if (!IsErrorResult(listJson))
+                            {
+                                var parsed = System.Text.Json.JsonSerializer.Deserialize<SessionListResponse>(
+                                    listJson,
+                                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                                if (parsed != null)
+                                {
+                                    SessionStateSynchronizer.TrySyncCurrentDumpFromSessionList(state, parsed);
+                                }
+                            }
+                        }
+                        catch
+                        {
+                            // Best-effort: keep prompt usable even if session list parsing fails.
                         }
                         
                         output.Success($"Now using session: {resolvedSessionId}");

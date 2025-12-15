@@ -154,7 +154,14 @@ public class ConnectionRecovery
                 var parsed = JsonSerializer.Deserialize<SessionListResponse>(
                     sessionsResult,
                     new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-                sessionExists = parsed?.Sessions?.Any(s => string.Equals(s.SessionId, _state.SessionId, StringComparison.OrdinalIgnoreCase)) == true;
+                if (parsed != null)
+                {
+                    sessionExists = parsed.Sessions?.Any(s => string.Equals(s.SessionId, _state.SessionId, StringComparison.OrdinalIgnoreCase)) == true;
+                    if (sessionExists)
+                    {
+                        SessionStateSynchronizer.TrySyncCurrentDumpFromSessionList(_state, parsed);
+                    }
+                }
             }
             catch
             {
