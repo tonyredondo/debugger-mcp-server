@@ -673,4 +673,73 @@ public class SourceContextEnricherTests
             SourceContextEnricher.LocalSourceRoots = originalRoots;
         }
     }
+
+    [Fact]
+    public void GenerateJsonReport_WhenFaultingFrameContextIsUnavailable_DoesNotEmitFrameSourceContext()
+    {
+        var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("should-not-fetch", Encoding.UTF8, "text/plain")
+        });
+
+        var originalFactory = SourceContextEnricher.HttpClientFactory;
+        var originalRoots = SourceContextEnricher.LocalSourceRoots;
+        try
+        {
+            SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
+            SourceContextEnricher.LocalSourceRoots = Array.Empty<string>();
+
+            var analysis = new CrashAnalysisResult
+            {
+                Summary = new AnalysisSummary { Description = "Found 1 threads (1 total frames, 1 in faulting thread), 0 modules." },
+                Threads = new ThreadsInfo
+                {
+                    All =
+                    [
+                        new ThreadInfo
+                        {
+                            ThreadId = "t1",
+                            IsFaulting = true,
+                            CallStack =
+                            [
+                                new StackFrame
+                                {
+                                    FrameNumber = 0,
+                                    InstructionPointer = "0x1",
+                                    Module = "m",
+                                    Function = "f",
+                                    IsManaged = false,
+                                    SourceFile = "/_/src/file.c",
+                                    LineNumber = 10
+                                    // No sourceUrl/sourceRawUrl and local roots disabled -> unavailable.
+                                }
+                            ]
+                        }
+                    ]
+                },
+                Modules = []
+            };
+
+            CrashAnalysisResultFinalizer.Finalize(analysis);
+
+            var service = new ReportService();
+            var content = service.GenerateReport(
+                analysis,
+                new ReportOptions { Format = ReportFormat.Json },
+                new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+            using var doc = JsonDocument.Parse(content);
+            var frame = doc.RootElement.GetProperty("analysis")
+                .GetProperty("threads")
+                .GetProperty("faultingThread")
+                .GetProperty("callStack")[0];
+
+            Assert.False(frame.TryGetProperty("sourceContext", out _));
+        }
+        finally
+        {
+            SourceContextEnricher.HttpClientFactory = originalFactory;
+            SourceContextEnricher.LocalSourceRoots = originalRoots;
+        }
+    }
 }

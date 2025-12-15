@@ -431,8 +431,14 @@ internal static class SourceContextEnricher
         return entry;
     }
 
-    private static StackFrameSourceContext ToFrameSourceContext(SourceContextEntry entry)
+    private static StackFrameSourceContext? ToFrameSourceContext(SourceContextEntry entry)
     {
+        // Avoid emitting redundant payloads in callStack when we couldn't resolve any meaningful context.
+        if (string.Equals(entry.Status, "unavailable", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
         return new StackFrameSourceContext
         {
             Status = entry.Status,
