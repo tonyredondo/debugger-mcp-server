@@ -83,16 +83,34 @@ public class SessionManagerTests : IDisposable
     }
 
     [Fact]
-    public void CreateSession_ExceedingUserLimit_ThrowsInvalidOperationException()
+    public async Task CreateSession_WhenUserAtLimit_EvictsOldestSessionAndCreatesNewOne()
     {
-        // Arrange - Create sessions up to the limit (default 5)
-        for (int i = 0; i < 5; i++)
+        // Arrange - Create sessions up to the limit (default 10)
+        var userId = "limitedUser";
+        var firstSessionId = _sessionManager.CreateSession(userId);
+
+        // Ensure CreatedAt ordering is deterministic in the test.
+        for (var i = 0; i < 9; i++)
         {
-            _sessionManager.CreateSession("limitedUser");
+            await Task.Delay(5);
+            _sessionManager.CreateSession(userId);
         }
 
-        // Act & Assert
-        Assert.Throws<InvalidOperationException>(() => _sessionManager.CreateSession("limitedUser"));
+        // Act - create one more; should evict the oldest and still succeed.
+        await Task.Delay(5);
+        var newSessionId = _sessionManager.CreateSession(userId);
+
+        // Assert
+        Assert.NotEqual(firstSessionId, newSessionId);
+
+        // Still at the limit after rollover.
+        var sessions = _sessionManager.ListUserSessions(userId);
+        Assert.Equal(10, sessions.Count);
+        Assert.Contains(sessions, s => s.SessionId == newSessionId);
+        Assert.DoesNotContain(sessions, s => s.SessionId == firstSessionId);
+
+        // Oldest session should be closed and inaccessible.
+        Assert.Throws<InvalidOperationException>(() => _sessionManager.GetSession(firstSessionId, userId));
     }
 
     // ============================================================

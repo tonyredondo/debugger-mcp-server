@@ -149,9 +149,9 @@ public class EnvironmentConfigTests : IDisposable
     }
 
     [Fact]
-    public void DefaultMaxSessionsPerUser_Is5()
+    public void DefaultMaxSessionsPerUser_Is10()
     {
-        Assert.Equal(5, EnvironmentConfig.DefaultMaxSessionsPerUser);
+        Assert.Equal(10, EnvironmentConfig.DefaultMaxSessionsPerUser);
     }
 
     [Fact]
@@ -557,7 +557,7 @@ public class EnvironmentConfigTests : IDisposable
         var result = EnvironmentConfig.GetMaxSessionsPerUser();
 
         // Assert
-        Assert.Equal(5, result);
+        Assert.Equal(10, result);
     }
 
     [Fact]

@@ -2,6 +2,7 @@ using DebuggerMcp;
 using DebuggerMcp.McpTools;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using Xunit;
 
 namespace DebuggerMcp.Tests.McpTools;
@@ -187,6 +188,28 @@ public class SessionToolsTests : IDisposable
         // Assert
         Assert.Contains("Active sessions for user", result);
         Assert.Contains("SessionId:", result);
+    }
+
+    [Fact]
+    public void ListSessionsJson_WithActiveSessions_ReturnsMachineReadableJson()
+    {
+        var userId = "test-user";
+        _tools.CreateSession(userId);
+        _tools.CreateSession(userId);
+
+        var result = _tools.ListSessionsJson(userId);
+
+        using var doc = JsonDocument.Parse(result);
+        Assert.Equal(userId, doc.RootElement.GetProperty("userId").GetString());
+        Assert.True(doc.RootElement.GetProperty("total").GetInt32() >= 2);
+        var sessions = doc.RootElement.GetProperty("sessions");
+        Assert.Equal(JsonValueKind.Array, sessions.ValueKind);
+        Assert.True(sessions.GetArrayLength() >= 2);
+
+        var first = sessions[0];
+        Assert.False(string.IsNullOrWhiteSpace(first.GetProperty("sessionId").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(first.GetProperty("createdAtUtc").GetString()));
+        Assert.False(string.IsNullOrWhiteSpace(first.GetProperty("lastActivityUtc").GetString()));
     }
 
     [Theory]

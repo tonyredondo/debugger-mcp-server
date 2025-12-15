@@ -964,7 +964,7 @@ public class Program
 
             // Session operations (via MCP)
             case "session":
-                await HandleSessionAsync(args, output, state, mcpClient);
+                await HandleSessionAsync(args, console, output, state, mcpClient);
                 break;
 
             // Debugging operations (via MCP)
@@ -4310,6 +4310,7 @@ public class Program
     /// </summary>
     private static async Task HandleSessionAsync(
         string[] args,
+        IAnsiConsole console,
         ConsoleOutput output,
         ShellState state,
         McpClient mcpClient)
@@ -4374,10 +4375,7 @@ public class Program
 
                 case "list":
                 case "ls":
-                    var listResult = await output.WithSpinnerAsync(
-                        "Listing sessions...",
-                        () => mcpClient.ListSessionsAsync(state.Settings.UserId));
-                    output.Markup(listResult);
+                    await HandleSessionListAsync(console, output, state, mcpClient);
                     break;
 
                 case "close":
@@ -4978,6 +4976,126 @@ public class Program
             output.Dim($"[dim]Note: Could not verify server compatibility: {ex.Message}[/]");
             return ServerSwitchResult.NoSwitchNeeded;
         }
+    }
+
+    private static async Task HandleSessionListAsync(
+        IAnsiConsole console,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        // Prefer JSON from the server for reliable rendering.
+        // Fall back to text list for compatibility with older servers.
+        try
+        {
+            var listJson = await output.WithSpinnerAsync(
+                "Listing sessions...",
+                () => mcpClient.ListSessionsJsonAsync(state.Settings.UserId));
+
+            var parsed = System.Text.Json.JsonSerializer.Deserialize<SessionListResponse>(
+                listJson,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+            if (parsed?.Sessions == null)
+            {
+                output.Error("Failed to parse session list response.");
+                output.Dim(listJson);
+                return;
+            }
+
+            RenderSessionListTable(console, output, state, parsed);
+        }
+        catch (Exception ex) when (ex is McpClientException or InvalidOperationException or System.Text.Json.JsonException)
+        {
+            var listResult = await output.WithSpinnerAsync(
+                "Listing sessions...",
+                () => mcpClient.ListSessionsAsync(state.Settings.UserId));
+            output.Markup(listResult);
+        }
+    }
+
+    internal static void RenderSessionListTable(
+        IAnsiConsole console,
+        ConsoleOutput output,
+        ShellState state,
+        SessionListResponse response)
+    {
+        var sessions = response.Sessions ?? [];
+
+        if (sessions.Count == 0)
+        {
+            output.Info("No active sessions found.");
+            return;
+        }
+
+        output.Header($"Sessions ({sessions.Count} total)");
+        output.WriteLine();
+        output.Dim("Tip: Use partial IDs (like Docker) - e.g., 'session use 7532' or 'session close 7532'");
+        output.WriteLine();
+
+        var table = new Table()
+            .Border(TableBorder.Rounded)
+            .BorderColor(Color.Grey)
+            .AddColumn(new TableColumn("[cyan]ID[/]"))
+            .AddColumn(new TableColumn("[cyan]Created[/]"))
+            .AddColumn(new TableColumn("[cyan]Last Activity[/]"))
+            .AddColumn(new TableColumn("[cyan]Dump[/]"));
+
+        foreach (var session in sessions.OrderByDescending(s => s.LastActivityUtc ?? string.Empty, StringComparer.Ordinal))
+        {
+            var sessionId = session.SessionId ?? string.Empty;
+            var created = FormatUtcTimestamp(session.CreatedAtUtc);
+            var last = FormatUtcTimestamp(session.LastActivityUtc);
+            var dumpId = session.CurrentDumpId ?? string.Empty;
+
+            var displayId = HighlightId(sessionId, state.SessionId);
+            var displayDump = string.IsNullOrEmpty(dumpId) ? "(none)" : HighlightId(dumpId, null);
+
+            table.AddRow(displayId, created, last, displayDump);
+        }
+
+        console.Write(table);
+    }
+
+    private static string HighlightId(string id, string? highlightMatch)
+    {
+        if (string.IsNullOrEmpty(id))
+        {
+            return string.Empty;
+        }
+
+        var prefix = id.Length > 8 ? id[..8] : id;
+        var suffix = id.Length > 8 ? id[8..] : string.Empty;
+
+        var isCurrent = !string.IsNullOrEmpty(highlightMatch) &&
+                        string.Equals(id, highlightMatch, StringComparison.OrdinalIgnoreCase);
+
+        if (isCurrent)
+        {
+            return suffix.Length > 0
+                ? $"[bold green]{prefix}[/]{suffix}"
+                : $"[bold green]{prefix}[/]";
+        }
+
+        return suffix.Length > 0
+            ? $"[yellow]{prefix}[/]{suffix}"
+            : $"[yellow]{prefix}[/]";
+    }
+
+    private static string FormatUtcTimestamp(string? utcTimestamp)
+    {
+        if (string.IsNullOrWhiteSpace(utcTimestamp))
+        {
+            return "(unknown)";
+        }
+
+        if (DateTime.TryParse(utcTimestamp, null, DateTimeStyles.RoundtripKind, out var dt))
+        {
+            var utc = dt.Kind == DateTimeKind.Utc ? dt : dt.ToUniversalTime();
+            return utc.ToString("yyyy-MM-dd HH:mm:ss");
+        }
+
+        return utcTimestamp;
     }
 
     /// <summary>

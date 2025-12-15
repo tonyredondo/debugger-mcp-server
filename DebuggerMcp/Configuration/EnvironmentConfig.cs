@@ -46,7 +46,7 @@ namespace DebuggerMcp.Configuration;
 ///   </item>
 ///   <item>
 ///     <term>MAX_SESSIONS_PER_USER</term>
-///     <term>5</term>
+///     <term>10</term>
 ///     <term>Maximum concurrent sessions per user</term>
 ///   </item>
 ///   <item>
@@ -207,7 +207,7 @@ public static class EnvironmentConfig
     /// <summary>
     /// Default maximum sessions per user when environment variable is not set.
     /// </summary>
-    public const int DefaultMaxSessionsPerUser = 5;
+    public const int DefaultMaxSessionsPerUser = 10;
 
     /// <summary>
     /// Environment variable name for maximum total sessions.

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text.Json;
 using DebuggerMcp.Security;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
@@ -32,7 +33,7 @@ public class SessionTools(
     /// <param name="userId">Unique identifier for the user.</param>
     /// <returns>The session ID that should be used in subsequent operations.</returns>
     /// <remarks>
-    /// Each user can have multiple concurrent sessions (up to 5).
+    /// Each user can have multiple concurrent sessions (up to 10).
     /// The session ID must be provided to all other tools to identify which session to operate on.
     /// Sessions are automatically cleaned up after 24 hours of inactivity by default.
     /// This can be configured via the SESSION_INACTIVITY_THRESHOLD_MINUTES environment variable.
@@ -123,6 +124,54 @@ public class SessionTools(
         {
             Logger.LogError(ex, "[CloseSession] Unexpected error");
             return $"Error: Failed to close session - {ex.Message}";
+        }
+    }
+
+    /// <summary>
+    /// Lists all active sessions for a user as a machine-readable JSON payload.
+    /// </summary>
+    /// <param name="userId">The user ID.</param>
+    /// <returns>JSON session list (timestamps are UTC).</returns>
+    [McpServerTool, Description("List all active debugging sessions for a user as JSON (machine-readable).")]
+    public string ListSessionsJson(
+        [Description("User ID to list sessions for")] string userId)
+    {
+        try
+        {
+            var sanitizedUserId = SanitizeUserId(userId);
+            var sessions = SessionManager.ListUserSessions(sanitizedUserId);
+
+            var payload = new
+            {
+                userId = sanitizedUserId,
+                total = sessions.Count,
+                sessions = sessions
+                    .OrderByDescending(s => s.LastAccessedAt)
+                    .Select(s => new
+                    {
+                        sessionId = s.SessionId,
+                        createdAtUtc = s.CreatedAt.ToUniversalTime().ToString("O"),
+                        lastActivityUtc = s.LastAccessedAt.ToUniversalTime().ToString("O"),
+                        currentDumpId = string.IsNullOrWhiteSpace(s.CurrentDumpId) ? null : s.CurrentDumpId
+                    })
+                    .ToList()
+            };
+
+            return JsonSerializer.Serialize(payload, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = false
+            });
+        }
+        catch (ArgumentException ex)
+        {
+            Logger.LogWarning(ex, "[ListSessionsJson] Invalid user ID");
+            return $"Error: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "[ListSessionsJson] Unexpected error");
+            return $"Error: Failed to list sessions - {ex.Message}";
         }
     }
 

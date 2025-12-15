@@ -496,6 +496,15 @@ public class McpClient : IMcpClient
     }
 
     /// <inheritdoc/>
+    public async Task<string> ListSessionsJsonAsync(string userId, CancellationToken cancellationToken = default)
+    {
+        return await CallToolAsync("list_sessions_json", new Dictionary<string, object?>
+        {
+            ["userId"] = userId
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task<string> CloseSessionAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
         return await CallToolAsync("close_session", new Dictionary<string, object?>

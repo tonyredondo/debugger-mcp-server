@@ -21,7 +21,7 @@ namespace DebuggerMcp;
 /// - Default session timeout of 24 hours
 /// 
 /// Configuration via environment variables (see <see cref="EnvironmentConfig"/>):
-/// - MAX_SESSIONS_PER_USER: Maximum concurrent sessions per user (default: 5)
+/// - MAX_SESSIONS_PER_USER: Maximum concurrent sessions per user (default: 10)
 /// - MAX_TOTAL_SESSIONS: Maximum total concurrent sessions (default: 50)
 /// - SESSION_STORAGE_PATH: Directory for session persistence (default: /app/sessions)
 /// - SESSION_INACTIVITY_THRESHOLD_MINUTES: Session timeout (default: 1440 = 24 hours)
@@ -143,8 +143,7 @@ public class DebuggerSessionManager
     /// <returns>The newly created session ID.</returns>
     /// <exception cref="ArgumentException">Thrown when userId is null or empty.</exception>
     /// <exception cref="InvalidOperationException">
-    /// Thrown when the user has reached the maximum number of sessions or
-    /// the system has reached the maximum total sessions.
+    /// Thrown when the system has reached the maximum total sessions.
     /// </exception>
     public string CreateSession(string userId)
     {
@@ -189,10 +188,56 @@ public class DebuggerSessionManager
                 }
             }
 
+            // If the user is at/over the limit, evict the oldest sessions (rollover).
             if (userSessionCount >= _maxSessionsPerUser)
             {
-                throw new InvalidOperationException(
-                    $"User '{userId}' has reached the maximum number of sessions ({_maxSessionsPerUser})");
+                // Build a unique set of the user's non-expired sessions (avoid double counting persisted + in-memory).
+                var userSessions = new Dictionary<string, (DateTime CreatedAt, string SessionId)>(StringComparer.Ordinal);
+                foreach (var s in _sessions.Values.Where(s => s.UserId == userId && now - s.LastAccessedAt <= inactivityThreshold))
+                {
+                    userSessions[s.SessionId] = (s.CreatedAt, s.SessionId);
+                }
+
+                foreach (var persisted in persistedSessions.Where(m => m.UserId == userId))
+                {
+                    if (!userSessions.ContainsKey(persisted.SessionId))
+                    {
+                        userSessions[persisted.SessionId] = (persisted.CreatedAt, persisted.SessionId);
+                    }
+                }
+
+                while (userSessionCount >= _maxSessionsPerUser)
+                {
+                    if (userSessions.Count == 0)
+                    {
+                        break;
+                    }
+
+                    // Oldest is defined by CreatedAt (tie-break by SessionId for determinism).
+                    var oldest = userSessions.Values
+                        .OrderBy(s => s.CreatedAt)
+                        .ThenBy(s => s.SessionId, StringComparer.Ordinal)
+                        .FirstOrDefault();
+
+                    if (string.IsNullOrWhiteSpace(oldest.SessionId))
+                    {
+                        break;
+                    }
+
+                    try
+                    {
+                        CloseSession(oldest.SessionId, userId);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to evict oldest session {SessionId} for user {UserId}", oldest.SessionId, userId);
+                        break;
+                    }
+
+                    userSessions.Remove(oldest.SessionId);
+                    allSessionIds.Remove(oldest.SessionId);
+                    userSessionCount = Math.Max(0, userSessionCount - 1);
+                }
             }
 
             // Total unique sessions
