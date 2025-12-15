@@ -256,6 +256,53 @@ public class StackFrame
     [JsonPropertyName("locals")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<LocalVariable>? Locals { get; set; }
+
+    /// <summary>
+    /// Bounded source snippet metadata for this frame (only populated for the faulting thread).
+    /// </summary>
+    [JsonPropertyName("sourceContext")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public StackFrameSourceContext? SourceContext { get; set; }
+}
+
+/// <summary>
+/// Bounded source snippet metadata for a stack frame.
+/// </summary>
+public class StackFrameSourceContext
+{
+    /// <summary>
+    /// Resolution status (local, remote, unavailable, redacted, error).
+    /// </summary>
+    [JsonPropertyName("status")]
+    public string Status { get; set; } = "unavailable";
+
+    /// <summary>
+    /// First line number included in <see cref="Lines"/>.
+    /// </summary>
+    [JsonPropertyName("startLine")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? StartLine { get; set; }
+
+    /// <summary>
+    /// Last line number included in <see cref="Lines"/>.
+    /// </summary>
+    [JsonPropertyName("endLine")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public int? EndLine { get; set; }
+
+    /// <summary>
+    /// Source lines included in the context window.
+    /// </summary>
+    [JsonPropertyName("lines")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Lines { get; set; }
+
+    /// <summary>
+    /// Error message when status is error.
+    /// </summary>
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
 }
 
 /// <summary>
@@ -365,14 +412,6 @@ public class ThreadInfo
     /// </summary>
     [JsonPropertyName("callStack")]
     public List<StackFrame> CallStack { get; set; } = new();
-
-    /// <summary>
-    /// Bounded source snippets for selected frames within this thread.
-    /// This is currently populated only for the faulting thread.
-    /// </summary>
-    [JsonPropertyName("sourceContext")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<SourceContextEntry>? SourceContext { get; set; }
 
     // --- CLR Thread Info (from !clrthreads) ---
 

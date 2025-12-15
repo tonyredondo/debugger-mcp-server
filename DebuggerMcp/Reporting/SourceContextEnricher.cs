@@ -114,7 +114,6 @@ internal static class SourceContextEnricher
 
         var cache = new Dictionary<string, string>(StringComparer.Ordinal);
         var summaryEntries = new List<SourceContextEntry>();
-        var faultingEntries = new List<SourceContextEntry>();
 
         try
         {
@@ -160,10 +159,11 @@ internal static class SourceContextEnricher
             {
                 var faultingThread = analysis.Threads.FaultingThread;
                 var faultingCandidates = SelectFaultingThreadFramesUnbounded(faultingThread);
+                var embeddedCount = 0;
 
                 foreach (var frame in faultingCandidates)
                 {
-                    if (faultingEntries.Count >= MaxFaultingThreadEmbeddedEntries)
+                    if (embeddedCount >= MaxFaultingThreadEmbeddedEntries)
                     {
                         break;
                     }
@@ -171,23 +171,17 @@ internal static class SourceContextEnricher
                     try
                     {
                         var entry = await BuildEntryAsync(faultingThread, frame, client, cache, timeoutCts.Token).ConfigureAwait(false);
-                        faultingEntries.Add(entry);
+                        frame.SourceContext = ToFrameSourceContext(entry);
+                        embeddedCount++;
                     }
                     catch (Exception ex)
                     {
-                        faultingEntries.Add(new SourceContextEntry
+                        frame.SourceContext = new StackFrameSourceContext
                         {
-                            ThreadId = faultingThread.ThreadId ?? string.Empty,
-                            FrameNumber = frame.FrameNumber,
-                            Function = frame.Function ?? string.Empty,
-                            Module = frame.Module ?? string.Empty,
-                            SourceFile = frame.SourceFile,
-                            LineNumber = frame.LineNumber,
-                            SourceUrl = frame.SourceUrl,
-                            SourceRawUrl = frame.SourceRawUrl,
                             Status = "error",
                             Error = ex.Message
-                        });
+                        };
+                        embeddedCount++;
                     }
                 }
             }
@@ -198,10 +192,6 @@ internal static class SourceContextEnricher
         }
 
         analysis.SourceContext = summaryEntries;
-        if (analysis.Threads?.FaultingThread != null)
-        {
-            analysis.Threads.FaultingThread.SourceContext = faultingEntries.Count > 0 ? faultingEntries : null;
-        }
     }
 
     internal static void Apply(CrashAnalysisResult analysis, DateTime generatedAtUtc, HttpClient? httpClient = null)
@@ -439,6 +429,18 @@ internal static class SourceContextEnricher
         entry.EndLine = remoteEnd;
         entry.Lines = remoteLines;
         return entry;
+    }
+
+    private static StackFrameSourceContext ToFrameSourceContext(SourceContextEntry entry)
+    {
+        return new StackFrameSourceContext
+        {
+            Status = entry.Status,
+            StartLine = entry.StartLine,
+            EndLine = entry.EndLine,
+            Lines = entry.Lines,
+            Error = entry.Error
+        };
     }
 
     private static bool TryReadLocalContext(string sourceFile, int lineNumber, out List<string> lines, out int startLine, out int endLine)

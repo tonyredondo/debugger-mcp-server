@@ -481,21 +481,31 @@ public class SourceContextEnricherTests
 
             using var doc = JsonDocument.Parse(content);
             var faultingThread = doc.RootElement.GetProperty("analysis").GetProperty("threads").GetProperty("faultingThread");
-            Assert.True(faultingThread.TryGetProperty("sourceContext", out var embedded));
-            Assert.Equal(JsonValueKind.Array, embedded.ValueKind);
-            Assert.True(embedded.GetArrayLength() > 2);
+            Assert.False(faultingThread.TryGetProperty("sourceContext", out _));
 
+            var callStack = faultingThread.GetProperty("callStack");
+            Assert.Equal(JsonValueKind.Array, callStack.ValueKind);
+
+            var embeddedCount = 0;
             var managedCount = 0;
-            foreach (var entry in embedded.EnumerateArray())
+            foreach (var frame in callStack.EnumerateArray())
             {
-                if (entry.TryGetProperty("module", out var module) &&
+                if (!frame.TryGetProperty("sourceContext", out _))
+                {
+                    continue;
+                }
+
+                embeddedCount++;
+                if (frame.TryGetProperty("module", out var module) &&
                     string.Equals(module.GetString(), "System.Private.CoreLib", StringComparison.Ordinal))
                 {
                     managedCount++;
                 }
             }
 
+            Assert.True(embeddedCount > 2);
             Assert.True(managedCount >= 2);
+
         }
         finally
         {
@@ -527,10 +537,10 @@ public class SourceContextEnricherTests
 
             var rawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs";
 
-            var callStack = new List<StackFrame>();
+            var frames = new List<StackFrame>();
             for (var i = 0; i < 12; i++)
             {
-                callStack.Add(new StackFrame
+                frames.Add(new StackFrame
                 {
                     FrameNumber = i,
                     InstructionPointer = $"0x{i + 1:x}",
@@ -543,7 +553,7 @@ public class SourceContextEnricherTests
                 });
             }
 
-            var faulting = new ThreadInfo { ThreadId = "t1", IsFaulting = true, CallStack = callStack };
+            var faulting = new ThreadInfo { ThreadId = "t1", IsFaulting = true, CallStack = frames };
 
             var analysis = new CrashAnalysisResult
             {
@@ -564,8 +574,20 @@ public class SourceContextEnricherTests
             var summary = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext");
             Assert.Equal(10, summary.GetArrayLength());
 
-            var embedded = doc.RootElement.GetProperty("analysis").GetProperty("threads").GetProperty("faultingThread").GetProperty("sourceContext");
-            Assert.Equal(12, embedded.GetArrayLength());
+            var faultingThread = doc.RootElement.GetProperty("analysis").GetProperty("threads").GetProperty("faultingThread");
+            Assert.False(faultingThread.TryGetProperty("sourceContext", out _));
+
+            var callStackElement = faultingThread.GetProperty("callStack");
+            var embeddedCount = 0;
+            foreach (var frame in callStackElement.EnumerateArray())
+            {
+                if (frame.TryGetProperty("sourceContext", out _))
+                {
+                    embeddedCount++;
+                }
+            }
+
+            Assert.Equal(12, embeddedCount);
         }
         finally
         {
