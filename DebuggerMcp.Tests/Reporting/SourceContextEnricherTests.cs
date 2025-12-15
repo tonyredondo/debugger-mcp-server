@@ -573,4 +573,82 @@ public class SourceContextEnricherTests
             SourceContextEnricher.LocalSourceRoots = originalRoots;
         }
     }
+
+    [Fact]
+    public void GenerateJsonReport_WhenRemoteFileIsLargerThan256KbButUnder5Mb_FetchesSuccessfully()
+    {
+        // Previously, SourceContextEnricher capped remote fetches at 256KB.
+        // This test ensures we can fetch larger source files (still bounded for safety).
+        var sb = new StringBuilder();
+        for (var i = 1; i <= 40000; i++)
+        {
+            sb.AppendLine("0123456789");
+        }
+
+        var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(sb.ToString(), Encoding.UTF8, "text/plain")
+        });
+
+        var originalFactory = SourceContextEnricher.HttpClientFactory;
+        var originalRoots = SourceContextEnricher.LocalSourceRoots;
+        try
+        {
+            SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
+            SourceContextEnricher.LocalSourceRoots = Array.Empty<string>();
+
+            var rawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs";
+
+            var analysis = new CrashAnalysisResult
+            {
+                Summary = new AnalysisSummary { Description = "Found 1 threads (1 total frames, 1 in faulting thread), 0 modules." },
+                Threads = new ThreadsInfo
+                {
+                    All =
+                    [
+                        new ThreadInfo
+                        {
+                            ThreadId = "t1",
+                            IsFaulting = true,
+                            CallStack =
+                            [
+                                new StackFrame
+                                {
+                                    FrameNumber = 0,
+                                    InstructionPointer = "0x1",
+                                    Module = "System.Private.CoreLib",
+                                    Function = "managed",
+                                    IsManaged = true,
+                                    SourceFile = "/_/src/file.cs",
+                                    LineNumber = 20000,
+                                    SourceRawUrl = rawUrl
+                                }
+                            ]
+                        }
+                    ]
+                },
+                Modules = []
+            };
+
+            CrashAnalysisResultFinalizer.Finalize(analysis);
+
+            var service = new ReportService();
+            var content = service.GenerateReport(
+                analysis,
+                new ReportOptions { Format = ReportFormat.Json },
+                new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+            Assert.True(handler.CallCount >= 1);
+
+            using var doc = JsonDocument.Parse(content);
+            var entry = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext")[0];
+            Assert.Equal("remote", entry.GetProperty("status").GetString());
+            Assert.Equal(7, entry.GetProperty("lines").GetArrayLength());
+        }
+        finally
+        {
+            SourceContextEnricher.HttpClientFactory = originalFactory;
+            SourceContextEnricher.LocalSourceRoots = originalRoots;
+        }
+    }
 }

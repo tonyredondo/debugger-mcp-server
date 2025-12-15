@@ -74,7 +74,7 @@ internal static class SourceContextEnricher
     private const int ContextWindow = 3; // ±3 lines
     private const int MaxLinesPerEntry = (ContextWindow * 2) + 1;
     private const int MaxLineLength = 400;
-    private const int MaxRemoteBytes = 256 * 1024;
+    private const int MaxRemoteBytes = 5 * 1024 * 1024;
 
     internal static async Task ApplyAsync(CrashAnalysisResult analysis, DateTime generatedAtUtc, HttpClient? httpClient = null)
     {
