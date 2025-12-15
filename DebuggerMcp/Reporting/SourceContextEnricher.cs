@@ -69,6 +69,7 @@ internal static class SourceContextEnricher
     private const int MaxEntries = 10;
     private const int MaxEntriesPerThread = 2;
     private const int MaxEntriesFaultingThread = 10;
+    private const int MinFaultingManagedEntries = 2;
     private const int ContextWindow = 3; // ±3 lines
     private const int MaxLinesPerEntry = (ContextWindow * 2) + 1;
     private const int MaxLineLength = 400;
@@ -244,7 +245,25 @@ internal static class SourceContextEnricher
                 continue;
             }
 
-            // Pick bounded meaningful frames per thread (faulting thread gets a larger allowance).
+            if (thread.IsFaulting)
+            {
+                var remainingBudget = Math.Min(MaxEntries - selected.Count, perThreadLimit - used);
+                foreach (var frame in SelectFaultingThreadFrames(thread, remainingBudget))
+                {
+                    selected.Add((thread, frame));
+                    used++;
+                    perThreadCount[thread] = used;
+
+                    if (selected.Count >= MaxEntries || used >= perThreadLimit)
+                    {
+                        break;
+                    }
+                }
+
+                continue;
+            }
+
+            // Pick bounded meaningful frames per thread.
             foreach (var frame in thread.CallStack)
             {
                 if (selected.Count >= MaxEntries || used >= perThreadLimit)
@@ -252,17 +271,7 @@ internal static class SourceContextEnricher
                     break;
                 }
 
-                if (!StackFrameUtilities.IsMeaningfulTopFrameCandidate(frame))
-                {
-                    continue;
-                }
-
-                if (frame.LineNumber is not int line || line <= 0)
-                {
-                    continue;
-                }
-
-                if (string.IsNullOrWhiteSpace(frame.SourceFile) && string.IsNullOrWhiteSpace(frame.SourceUrl) && string.IsNullOrWhiteSpace(frame.SourceRawUrl))
+                if (!IsContextCandidate(frame))
                 {
                     continue;
                 }
@@ -274,6 +283,86 @@ internal static class SourceContextEnricher
         }
 
         return selected;
+    }
+
+    private static List<StackFrame> SelectFaultingThreadFrames(ThreadInfo thread, int remainingBudget)
+    {
+        if (remainingBudget <= 0)
+        {
+            return [];
+        }
+
+        var candidates = thread.CallStack.Where(IsContextCandidate).ToList();
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        var managedCandidates = candidates.Where(f => f.IsManaged).ToList();
+        var targetManaged = Math.Min(MinFaultingManagedEntries, Math.Min(managedCandidates.Count, remainingBudget));
+        if (targetManaged == 0)
+        {
+            return candidates.Take(remainingBudget).ToList();
+        }
+
+        // Reserve a small number of managed frames (by call stack order) so we don't end up with
+        // only native frames when native frames dominate the top of the stack.
+        var reservedManaged = new HashSet<StackFrame>(ReferenceEqualityComparer<StackFrame>.Instance);
+        for (var i = 0; i < targetManaged; i++)
+        {
+            reservedManaged.Add(managedCandidates[i]);
+        }
+
+        var selected = new List<StackFrame>();
+        var selectedManaged = 0;
+
+        foreach (var frame in candidates)
+        {
+            if (selected.Count >= remainingBudget)
+            {
+                break;
+            }
+
+            if (reservedManaged.Contains(frame))
+            {
+                selected.Add(frame);
+                selectedManaged++;
+                continue;
+            }
+
+            var remainingSlots = remainingBudget - selected.Count;
+            var remainingReserved = targetManaged - selectedManaged;
+
+            // Only take non-reserved frames if we can still fit all remaining reserved managed frames.
+            if (remainingSlots > remainingReserved)
+            {
+                selected.Add(frame);
+            }
+        }
+
+        return selected;
+    }
+
+    private static bool IsContextCandidate(StackFrame frame)
+    {
+        if (!StackFrameUtilities.IsMeaningfulTopFrameCandidate(frame))
+        {
+            return false;
+        }
+
+        if (frame.LineNumber is not int line || line <= 0)
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(frame.SourceFile) &&
+            string.IsNullOrWhiteSpace(frame.SourceUrl) &&
+            string.IsNullOrWhiteSpace(frame.SourceRawUrl))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     private static bool TryReadLocalContext(string sourceFile, int lineNumber, out List<string> lines, out int startLine, out int endLine)

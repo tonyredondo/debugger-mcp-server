@@ -438,16 +438,29 @@ public class SourceContextEnricherTests
             SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
             SourceContextEnricher.LocalSourceRoots = Array.Empty<string>();
 
+            var rawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs";
+
             var faulting = new ThreadInfo
             {
                 ThreadId = "t1",
                 IsFaulting = true,
                 CallStack =
                 [
-                    new StackFrame { FrameNumber = 0, InstructionPointer = "0x1", Module = "m", Function = "f0", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 10, SourceRawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs" },
-                    new StackFrame { FrameNumber = 1, InstructionPointer = "0x2", Module = "m", Function = "f1", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 20, SourceRawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs" },
-                    new StackFrame { FrameNumber = 2, InstructionPointer = "0x3", Module = "m", Function = "f2", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 30, SourceRawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs" },
-                    new StackFrame { FrameNumber = 3, InstructionPointer = "0x4", Module = "m", Function = "f3", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 40, SourceRawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs" },
+                    // 10 native frames first (dominates the top of stack)
+                    new StackFrame { FrameNumber = 0, InstructionPointer = "0x1", Module = "libcoreclr.so", Function = "native0", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 1, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 1, InstructionPointer = "0x2", Module = "libcoreclr.so", Function = "native1", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 2, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 2, InstructionPointer = "0x3", Module = "libcoreclr.so", Function = "native2", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 3, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 3, InstructionPointer = "0x4", Module = "libcoreclr.so", Function = "native3", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 4, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 4, InstructionPointer = "0x5", Module = "libcoreclr.so", Function = "native4", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 5, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 5, InstructionPointer = "0x6", Module = "libcoreclr.so", Function = "native5", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 6, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 6, InstructionPointer = "0x7", Module = "libcoreclr.so", Function = "native6", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 7, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 7, InstructionPointer = "0x8", Module = "libcoreclr.so", Function = "native7", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 8, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 8, InstructionPointer = "0x9", Module = "libcoreclr.so", Function = "native8", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 9, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 9, InstructionPointer = "0x10", Module = "libcoreclr.so", Function = "native9", IsManaged = false, SourceFile = "/_/src/file.cs", LineNumber = 10, SourceRawUrl = rawUrl },
+
+                    // Managed frames appear later; selection should still include at least two.
+                    new StackFrame { FrameNumber = 10, InstructionPointer = "0x11", Module = "System.Private.CoreLib", Function = "managed0", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 11, SourceRawUrl = rawUrl },
+                    new StackFrame { FrameNumber = 11, InstructionPointer = "0x12", Module = "System.Private.CoreLib", Function = "managed1", IsManaged = true, SourceFile = "/_/src/file.cs", LineNumber = 12, SourceRawUrl = rawUrl },
                 ]
             };
 
@@ -471,6 +484,18 @@ public class SourceContextEnricherTests
             Assert.True(faultingThread.TryGetProperty("sourceContext", out var embedded));
             Assert.Equal(JsonValueKind.Array, embedded.ValueKind);
             Assert.True(embedded.GetArrayLength() > 2);
+
+            var managedCount = 0;
+            foreach (var entry in embedded.EnumerateArray())
+            {
+                if (entry.TryGetProperty("module", out var module) &&
+                    string.Equals(module.GetString(), "System.Private.CoreLib", StringComparison.Ordinal))
+                {
+                    managedCount++;
+                }
+            }
+
+            Assert.True(managedCount >= 2);
         }
         finally
         {
