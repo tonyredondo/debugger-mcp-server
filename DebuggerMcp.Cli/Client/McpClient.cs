@@ -19,6 +19,7 @@ public class McpClient : IMcpClient
 {
     private HttpClient? _httpClient;
     private HttpClient? _sseClient;
+    private string? _apiKey;
     private string? _serverUrl;
     private string? _messageEndpoint;
     private readonly List<string> _availableTools = [];
@@ -28,6 +29,9 @@ public class McpClient : IMcpClient
     // SSE response handling
     private Task? _sseListenerTask;
     private CancellationTokenSource? _sseListenerCts;
+    private HttpResponseMessage? _sseResponse;
+    private StreamReader? _sseReader;
+    private readonly SemaphoreSlim _sseReconnectLock = new(1, 1);
     private readonly ConcurrentDictionary<int, TaskCompletionSource<string>> _pendingRequests = new();
 
     private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CaseInsensitiveCamelCaseIgnoreNull;
@@ -48,6 +52,7 @@ public class McpClient : IMcpClient
 
         // Normalize URL
         _serverUrl = serverUrl.TrimEnd('/');
+        _apiKey = apiKey;
 
         // Create HTTP client with long timeout for debugging operations
         _httpClient = new HttpClient
@@ -67,6 +72,7 @@ public class McpClient : IMcpClient
         try
         {
             await InitializeMcpConnectionAsync(apiKey, cancellationToken);
+            await DiscoverToolsAsync(cancellationToken);
         }
         catch (Exception ex)
         {
@@ -194,6 +200,8 @@ public class McpClient : IMcpClient
 
         try
         {
+            await StopSseListenerAsync().ConfigureAwait(false);
+
             // Dispose any existing SSE client
             _sseClient?.Dispose();
             
@@ -213,21 +221,21 @@ public class McpClient : IMcpClient
             // Request the SSE endpoint
             var request = new HttpRequestMessage(HttpMethod.Get, sseUrl);
 
-            var response = await _sseClient.SendAsync(
+            _sseResponse = await _sseClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
                 cancellationToken);
 
-            if (!response.IsSuccessStatusCode)
+            if (_sseResponse == null || !_sseResponse.IsSuccessStatusCode)
             {
-                throw new McpClientException($"SSE endpoint returned {response.StatusCode}. Is the server started with --mcp-http?");
+                throw new McpClientException($"SSE endpoint returned {_sseResponse?.StatusCode}. Is the server started with --mcp-http?");
             }
 
             // Read the first event which should contain the endpoint info
-            var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
-            var reader = new StreamReader(stream);
+            var stream = await _sseResponse.Content.ReadAsStreamAsync(cancellationToken);
+            _sseReader = new StreamReader(stream);
 
-            _messageEndpoint = await TryReadMessageEndpointAsync(reader, _serverUrl!, cancellationToken);
+            _messageEndpoint = await TryReadMessageEndpointAsync(_sseReader, _serverUrl!, cancellationToken);
 
             // If we couldn't get the endpoint from SSE, try the default
             if (string.IsNullOrEmpty(_messageEndpoint))
@@ -237,13 +245,10 @@ public class McpClient : IMcpClient
 
             // Start background SSE listener for responses
             _sseListenerCts = new CancellationTokenSource();
-            _sseListenerTask = Task.Run(() => ListenForSseResponsesAsync(reader, _sseListenerCts.Token));
+            _sseListenerTask = Task.Run(() => ListenForSseResponsesAsync(_sseReader, _sseListenerCts.Token));
 
             // Give the listener a moment to start
             await Task.Delay(100, cancellationToken);
-
-            // Now discover tools
-            await DiscoverToolsAsync(cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -301,9 +306,15 @@ public class McpClient : IMcpClient
         }
         catch (Exception ex)
         {
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"SSE listener error: {ex.Message}");
-            Console.ResetColor();
+            FailAllPendingRequests(new McpClientException($"SSE listener error: {ex.Message}", ex));
+            return;
+        }
+        finally
+        {
+            if (!cancellationToken.IsCancellationRequested)
+            {
+                FailAllPendingRequests(new McpClientException("SSE stream ended unexpectedly."));
+            }
         }
     }
 
@@ -327,31 +338,7 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task DisconnectAsync()
     {
-        // Cancel SSE listener
-        if (_sseListenerCts != null)
-        {
-            await _sseListenerCts.CancelAsync();
-            _sseListenerCts.Dispose();
-            _sseListenerCts = null;
-        }
-        
-        // Wait for SSE listener task to complete (with timeout)
-        if (_sseListenerTask != null)
-        {
-            try
-            {
-                await _sseListenerTask.WaitAsync(TimeSpan.FromSeconds(5));
-            }
-            catch (TimeoutException)
-            {
-                // Listener task didn't complete in time, continue with cleanup
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected when cancelled
-            }
-            _sseListenerTask = null;
-        }
+        await StopSseListenerAsync().ConfigureAwait(false);
 
         // Complete any pending requests with cancellation
         foreach (var kvp in _pendingRequests)
@@ -367,6 +354,7 @@ public class McpClient : IMcpClient
         _httpClient?.Dispose();
         _httpClient = null;
         _serverUrl = null;
+        _apiKey = null;
         _messageEndpoint = null;
         _availableTools.Clear();
     }
@@ -399,14 +387,81 @@ public class McpClient : IMcpClient
                 _availableTools.AddRange(response.Tools.Select(t => t.Name));
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            // Tools discovery failed
-            Console.ForegroundColor = ConsoleColor.Yellow;
-            Console.WriteLine($"Warning: Tool discovery failed: {ex.Message}");
-            Console.ResetColor();
+            // Tools discovery failed (non-fatal).
             _availableTools.Clear();
         }
+    }
+
+    private async Task EnsureSseConnectedAsync(CancellationToken cancellationToken)
+    {
+        if (_httpClient == null || string.IsNullOrEmpty(_serverUrl) || string.IsNullOrEmpty(_messageEndpoint))
+        {
+            return;
+        }
+
+        if (_sseListenerTask != null && !_sseListenerTask.IsCompleted)
+        {
+            return;
+        }
+
+        await _sseReconnectLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            if (_sseListenerTask != null && !_sseListenerTask.IsCompleted)
+            {
+                return;
+            }
+
+            await InitializeMcpConnectionAsync(_apiKey, cancellationToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            _sseReconnectLock.Release();
+        }
+    }
+
+    private void FailAllPendingRequests(McpClientException exception)
+    {
+        foreach (var kvp in _pendingRequests)
+        {
+            if (_pendingRequests.TryRemove(kvp.Key, out var tcs))
+            {
+                tcs.TrySetException(exception);
+            }
+        }
+    }
+
+    private async Task StopSseListenerAsync()
+    {
+        // Cancel SSE listener
+        if (_sseListenerCts != null)
+        {
+            await _sseListenerCts.CancelAsync().ConfigureAwait(false);
+            _sseListenerCts.Dispose();
+            _sseListenerCts = null;
+        }
+
+        // Wait for SSE listener task to complete (with timeout)
+        if (_sseListenerTask != null)
+        {
+            try
+            {
+                await _sseListenerTask.WaitAsync(TimeSpan.FromSeconds(5)).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Ignore shutdown failures; we'll dispose the response/stream below.
+            }
+            _sseListenerTask = null;
+        }
+
+        _sseReader?.Dispose();
+        _sseReader = null;
+
+        _sseResponse?.Dispose();
+        _sseResponse = null;
     }
 
     /// <summary>
@@ -416,6 +471,7 @@ public class McpClient : IMcpClient
         where T : class
     {
         EnsureConnected();
+        await EnsureSseConnectedAsync(cancellationToken).ConfigureAwait(false);
 
         // Create a completion source for this request
         var tcs = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
