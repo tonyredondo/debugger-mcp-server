@@ -321,7 +321,7 @@ Session 2: Analyzing memory leak
 Session 3: Comparing two dumps
 ...
 
-Use list_sessions(userId) to see all active sessions.
+Use list_sessions(userId) to see all active sessions (JSON).
 ```
 
 ### Comparing Two Dumps (Memory Leak Detection)

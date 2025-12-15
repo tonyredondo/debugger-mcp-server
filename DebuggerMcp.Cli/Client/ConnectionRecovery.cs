@@ -1,5 +1,7 @@
 using DebuggerMcp.Cli.Display;
+using DebuggerMcp.Cli.Models;
 using DebuggerMcp.Cli.Shell;
+using System.Text.Json;
 
 namespace DebuggerMcp.Cli.Client;
 
@@ -145,7 +147,20 @@ public class ConnectionRecovery
 
             // Check if session still exists by listing sessions
             var sessionsResult = await _mcpClient.ListSessionsAsync(_state.Settings.UserId, cancellationToken);
-            var sessionExists = sessionsResult.Contains(_state.SessionId, StringComparison.OrdinalIgnoreCase);
+            var sessionExists = false;
+
+            try
+            {
+                var parsed = JsonSerializer.Deserialize<SessionListResponse>(
+                    sessionsResult,
+                    new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+                sessionExists = parsed?.Sessions?.Any(s => string.Equals(s.SessionId, _state.SessionId, StringComparison.OrdinalIgnoreCase)) == true;
+            }
+            catch
+            {
+                // If parsing fails, keep the existing session state and report the issue to the user.
+                _output.Warning("Could not parse session list response while validating session state.");
+            }
 
             if (sessionExists)
             {

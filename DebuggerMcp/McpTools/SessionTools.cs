@@ -133,7 +133,7 @@ public class SessionTools(
     /// <param name="userId">The user ID.</param>
     /// <returns>JSON session list (timestamps are UTC).</returns>
     [McpServerTool, Description("List all active debugging sessions for a user as JSON (machine-readable).")]
-    public string ListSessionsJson(
+    public string ListSessions(
         [Description("User ID to list sessions for")] string userId)
     {
         try
@@ -162,58 +162,6 @@ public class SessionTools(
                 PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
                 WriteIndented = false
             });
-        }
-        catch (ArgumentException ex)
-        {
-            Logger.LogWarning(ex, "[ListSessionsJson] Invalid user ID");
-            return $"Error: {ex.Message}";
-        }
-        catch (Exception ex)
-        {
-            Logger.LogError(ex, "[ListSessionsJson] Unexpected error");
-            return $"Error: Failed to list sessions - {ex.Message}";
-        }
-    }
-
-    /// <summary>
-    /// Lists all active sessions for a user.
-    /// </summary>
-    /// <param name="userId">The user ID.</param>
-    /// <returns>List of active session IDs and their status.</returns>
-    /// <remarks>
-    /// This is useful for:
-    /// - Checking how many sessions a user has active
-    /// - Finding session IDs if they were lost
-    /// - Monitoring session usage
-    /// </remarks>
-    [McpServerTool, Description("List all active debugging sessions for a user.")]
-    public string ListSessions(
-        [Description("User ID to list sessions for")] string userId)
-    {
-        try
-        {
-            // Sanitize userId to prevent path traversal attacks
-            var sanitizedUserId = SanitizeUserId(userId);
-
-            // Get sessions for the user
-            var sessions = SessionManager.ListUserSessions(sanitizedUserId);
-
-            // Format the response - no sessions case
-            if (sessions.Count == 0)
-            {
-                // Explicitly signal absence instead of empty string for better UX
-                return $"No active sessions found for user: {sanitizedUserId}";
-            }
-
-            // Format the response - sessions found
-            var result = $"Active sessions for user {sanitizedUserId} ({sessions.Count} total):\n";
-            foreach (var session in sessions)
-            {
-                var dumpInfo = !string.IsNullOrEmpty(session.CurrentDumpId) ? $", Dump: {session.CurrentDumpId}" : "";
-                result += $"  - SessionId: {session.SessionId}, Created: {session.CreatedAt:yyyy-MM-dd HH:mm:ss}, LastActivity: {session.LastAccessedAt:yyyy-MM-dd HH:mm:ss}{dumpInfo}\n";
-            }
-
-            return result;
         }
         catch (ArgumentException ex)
         {

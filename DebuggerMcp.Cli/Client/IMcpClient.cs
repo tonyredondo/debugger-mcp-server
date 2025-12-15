@@ -50,14 +50,6 @@ public interface IMcpClient : IAsyncDisposable
     Task<string> ListSessionsAsync(string userId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Lists all sessions for a user as JSON (machine-readable).
-    /// </summary>
-    /// <param name="userId">The user ID.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>JSON session list payload.</returns>
-    Task<string> ListSessionsJsonAsync(string userId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Closes a debugging session.
     /// </summary>
     /// <param name="sessionId">The session ID.</param>

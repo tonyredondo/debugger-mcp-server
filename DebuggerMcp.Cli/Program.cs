@@ -675,13 +675,21 @@ public class Program
 
             try
             {
-                var listResult = await mcpClient.ListSessionsAsync(state.Settings.UserId);
-                // Parse session IDs from the result text
-                // Format: "  - SessionId: d0307dc3-5256-4eae-bbd2-5f12e67c6120, Created: ..."
-                var regex = new System.Text.RegularExpressions.Regex(@"SessionId:\s*([a-zA-Z0-9\-]+)");
-                var matches = regex.Matches(listResult);
-                return matches.Cast<System.Text.RegularExpressions.Match>()
-                    .Select(m => m.Groups[1].Value);
+                var listJson = await mcpClient.ListSessionsAsync(state.Settings.UserId);
+                if (IsErrorResult(listJson))
+                {
+                    return Enumerable.Empty<string>();
+                }
+
+                var parsed = System.Text.Json.JsonSerializer.Deserialize<SessionListResponse>(
+                    listJson,
+                    new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+                return parsed?.Sessions?
+                           .Select(s => s.SessionId)
+                           .Where(id => !string.IsNullOrWhiteSpace(id))
+                           .Select(id => id!)
+                       ?? Enumerable.Empty<string>();
             }
             catch
             {
@@ -4984,34 +4992,28 @@ public class Program
         ShellState state,
         McpClient mcpClient)
     {
-        // Prefer JSON from the server for reliable rendering.
-        // Fall back to text list for compatibility with older servers.
-        try
+        var listJson = await output.WithSpinnerAsync(
+            "Listing sessions...",
+            () => mcpClient.ListSessionsAsync(state.Settings.UserId));
+
+        if (IsErrorResult(listJson))
         {
-            var listJson = await output.WithSpinnerAsync(
-                "Listing sessions...",
-                () => mcpClient.ListSessionsJsonAsync(state.Settings.UserId));
-
-            var parsed = System.Text.Json.JsonSerializer.Deserialize<SessionListResponse>(
-                listJson,
-                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
-
-            if (parsed?.Sessions == null)
-            {
-                output.Error("Failed to parse session list response.");
-                output.Dim(listJson);
-                return;
-            }
-
-            RenderSessionListTable(console, output, state, parsed);
+            output.Error(listJson);
+            return;
         }
-        catch (Exception ex) when (ex is McpClientException or InvalidOperationException or System.Text.Json.JsonException)
+
+        var parsed = System.Text.Json.JsonSerializer.Deserialize<SessionListResponse>(
+            listJson,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+
+        if (parsed?.Sessions == null)
         {
-            var listResult = await output.WithSpinnerAsync(
-                "Listing sessions...",
-                () => mcpClient.ListSessionsAsync(state.Settings.UserId));
-            output.Markup(listResult);
+            output.Error("Failed to parse session list response.");
+            output.Dim(listJson);
+            return;
         }
+
+        RenderSessionListTable(console, output, state, parsed);
     }
 
     internal static void RenderSessionListTable(
@@ -5108,19 +5110,33 @@ public class Program
         ShellState state,
         McpClient mcpClient)
     {
-        // Get all sessions for the user
-        var listResult = await mcpClient.ListSessionsAsync(state.Settings.UserId);
-
-        // Parse session IDs from the result
-        // Format: "  - SessionId: d0307dc3-5256-4eae-bbd2-5f12e67c6120, Created: ..."
-        var sessionIds = new List<string>();
-        var regex = new System.Text.RegularExpressions.Regex(@"SessionId:\s*([a-zA-Z0-9\-]+)");
-        var matches = regex.Matches(listResult);
-
-        foreach (System.Text.RegularExpressions.Match match in matches)
+        // Get all sessions for the user (JSON)
+        var listJson = await mcpClient.ListSessionsAsync(state.Settings.UserId);
+        if (IsErrorResult(listJson))
         {
-            sessionIds.Add(match.Groups[1].Value);
+            output.Error(listJson);
+            return null;
         }
+
+        SessionListResponse? parsed;
+        try
+        {
+            parsed = System.Text.Json.JsonSerializer.Deserialize<SessionListResponse>(
+                listJson,
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        }
+        catch (Exception ex)
+        {
+            output.Error($"Failed to parse session list response: {ex.Message}");
+            output.Dim(listJson);
+            return null;
+        }
+
+        var sessionIds = parsed?.Sessions?
+            .Select(s => s.SessionId)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id!)
+            .ToList() ?? [];
 
         if (sessionIds.Count == 0)
         {

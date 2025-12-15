@@ -4,6 +4,7 @@ using DebuggerMcp.Cli.Models;
 using DebuggerMcp.Cli.Shell;
 using Moq;
 using Spectre.Console.Testing;
+using System.Text.Json;
 using Xunit;
 
 namespace DebuggerMcp.Cli.Tests.Client;
@@ -148,7 +149,12 @@ public class ConnectionRecoveryTests
             .Returns(Task.CompletedTask);
         mcpClient
             .Setup(c => c.ListSessionsAsync("u", It.IsAny<CancellationToken>()))
-            .ReturnsAsync("no sessions here");
+            .ReturnsAsync(JsonSerializer.Serialize(new SessionListResponse
+            {
+                UserId = "u",
+                Total = 0,
+                Sessions = []
+            }));
 
         var recovery = new ConnectionRecovery(httpClient.Object, mcpClient.Object, state, output)
         {
@@ -208,4 +214,3 @@ public class ConnectionRecoveryTests
         Assert.Contains("Retrying", console.Output);
     }
 }
-

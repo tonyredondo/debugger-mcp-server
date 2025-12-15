@@ -165,17 +165,19 @@ public class SessionToolsTests : IDisposable
     // ============================================================
 
     [Fact]
-    public void ListSessions_WithNoSessions_ReturnsNoSessionsMessage()
+    public void ListSessions_WithNoSessions_ReturnsJsonPayloadWithZeroSessions()
     {
         // Act
         var result = _tools.ListSessions("test-user");
 
-        // Assert
-        Assert.Contains("No active sessions found", result);
+        using var doc = JsonDocument.Parse(result);
+        Assert.Equal("test-user", doc.RootElement.GetProperty("userId").GetString());
+        Assert.Equal(0, doc.RootElement.GetProperty("total").GetInt32());
+        Assert.Equal(0, doc.RootElement.GetProperty("sessions").GetArrayLength());
     }
 
     [Fact]
-    public void ListSessions_WithActiveSessions_ReturnsSessionList()
+    public void ListSessions_WithActiveSessions_ReturnsMachineReadableJson()
     {
         // Arrange
         var userId = "test-user";
@@ -186,19 +188,6 @@ public class SessionToolsTests : IDisposable
         var result = _tools.ListSessions(userId);
 
         // Assert
-        Assert.Contains("Active sessions for user", result);
-        Assert.Contains("SessionId:", result);
-    }
-
-    [Fact]
-    public void ListSessionsJson_WithActiveSessions_ReturnsMachineReadableJson()
-    {
-        var userId = "test-user";
-        _tools.CreateSession(userId);
-        _tools.CreateSession(userId);
-
-        var result = _tools.ListSessionsJson(userId);
-
         using var doc = JsonDocument.Parse(result);
         Assert.Equal(userId, doc.RootElement.GetProperty("userId").GetString());
         Assert.True(doc.RootElement.GetProperty("total").GetInt32() >= 2);
