@@ -38,6 +38,18 @@ public class ProgramPrivateMethodCoverageTests
         Assert.Equal(expected, result);
     }
 
+    [Theory]
+    [InlineData("Session ID not found", true)]
+    [InlineData("session expired", true)]
+    [InlineData("Session does not exist", true)]
+    [InlineData("boom", false)]
+    public void IsSessionNotFoundError_RecognizesCommonMessages(string message, bool expected)
+    {
+        var ex = new Exception(message);
+        var result = InvokePrivate<bool>("IsSessionNotFoundError", ex);
+        Assert.Equal(expected, result);
+    }
+
     [Fact]
     public void HandleSet_WithVerbose_UpdatesStateAndOutput()
     {

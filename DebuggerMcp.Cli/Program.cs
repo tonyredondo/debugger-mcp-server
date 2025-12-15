@@ -4404,19 +4404,33 @@ public class Program
                         return;
                     }
 
-                    var closeResult = await output.WithSpinnerAsync(
-                        "Closing session...",
-                        () => mcpClient.CloseSessionAsync(sessionToClose, state.Settings.UserId));
-
-                    if (IsErrorResult(closeResult))
+                    string closeResult;
+                    try
                     {
-                        output.Error(closeResult);
+                        closeResult = await output.WithSpinnerAsync(
+                            "Closing session...",
+                            () => mcpClient.CloseSessionAsync(sessionToClose, state.Settings.UserId));
+
+                        if (IsErrorResult(closeResult))
+                        {
+                            output.Error(closeResult);
+                        }
+                        else
+                        {
+                            output.Success(closeResult);
+
+                            // Clear session from state if it matches
+                            if (state.SessionId == sessionToClose)
+                            {
+                                state.ClearSession();
+                            }
+                        }
                     }
-                    else
+                    catch (McpClientException ex) when (SessionExpiryHandler.IsSessionExpired(ex))
                     {
-                        output.Success(closeResult);
-
-                        // Clear session from state if it matches
+                        // If the server no longer knows about this session, treat it as already closed and
+                        // clear the local state if it was the active one.
+                        output.Warning("Session no longer exists (expired/evicted).");
                         if (state.SessionId == sessionToClose)
                         {
                             state.ClearSession();
@@ -4613,7 +4627,8 @@ public class Program
         ConsoleOutput output,
         ShellState state,
         McpClient mcpClient,
-        HttpApiClient httpClient)
+        HttpApiClient httpClient,
+        bool retryOnExpiredSession = true)
     {
         if (!state.IsConnected)
         {
@@ -4752,6 +4767,13 @@ public class Program
                 output.WriteLine();
                 output.Dim("Tip: For .NET dumps, SOS is auto-loaded. Try 'analyze dotnet' or 'exec !threads'");
             }
+        }
+        catch (McpClientException ex) when (retryOnExpiredSession && IsSessionNotFoundError(ex))
+        {
+            output.Error(ex.Message);
+            output.Warning("Your session appears to have expired. Creating a new session and retrying...");
+            SessionExpiryHandler.ClearExpiredSession(state);
+            await HandleOpenDumpAsync(args, output, state, mcpClient, httpClient, retryOnExpiredSession: false);
         }
         catch (McpClientException ex)
         {
@@ -7723,9 +7745,7 @@ public class Program
     /// </summary>
     private static bool IsSessionNotFoundError(Exception ex)
     {
-        var message = ex.Message.ToLowerInvariant();
-        return message.Contains("session") && 
-               (message.Contains("not found") || message.Contains("expired") || message.Contains("does not exist"));
+        return SessionExpiryHandler.IsSessionExpired(ex);
     }
 
     /// <summary>
