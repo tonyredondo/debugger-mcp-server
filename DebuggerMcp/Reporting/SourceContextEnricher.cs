@@ -142,7 +142,12 @@ internal static class SourceContextEnricher
                 try
                 {
                     var entry = await BuildEntryAsync(thread, frame, client, cache, inflight, timeoutCts.Token).ConfigureAwait(false);
-                    summaryEntries.Add(entry);
+                    // The top-level summary should only include actionable context.
+                    // Unavailable entries are omitted to avoid producing mostly-empty summaries for dumps without resolvable sources.
+                    if (!string.Equals(entry.Status, "unavailable", StringComparison.OrdinalIgnoreCase))
+                    {
+                        summaryEntries.Add(entry);
+                    }
                 }
                 catch (Exception ex)
                 {

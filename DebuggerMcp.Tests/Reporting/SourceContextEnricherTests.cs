@@ -237,8 +237,7 @@ public class SourceContextEnricherTests
             using var doc = JsonDocument.Parse(content);
             var sourceContext = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext");
             Assert.Equal(JsonValueKind.Array, sourceContext.ValueKind);
-            Assert.True(sourceContext.GetArrayLength() >= 1);
-            Assert.NotEqual("remote", sourceContext[0].GetProperty("status").GetString());
+            Assert.Equal(0, sourceContext.GetArrayLength());
         }
         finally
         {
@@ -404,8 +403,8 @@ public class SourceContextEnricherTests
                 Assert.Equal(0, handler.CallCount);
 
                 using var doc = JsonDocument.Parse(content);
-                var entry = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext")[0];
-                Assert.Equal("unavailable", entry.GetProperty("status").GetString());
+                var sourceContext = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext");
+                Assert.Equal(0, sourceContext.GetArrayLength());
             }
             finally
             {
@@ -417,6 +416,90 @@ public class SourceContextEnricherTests
         {
             externalRoot.Delete(recursive: true);
             tempRoot.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void GenerateJsonReport_WhenSummaryEntryIsUnavailable_OmitsItFromTopLevelSourceContext()
+    {
+        var file = new StringBuilder();
+        for (var i = 1; i <= 20; i++)
+        {
+            file.AppendLine($"line {i}");
+        }
+
+        var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(file.ToString(), Encoding.UTF8, "text/plain")
+        });
+
+        var originalFactory = SourceContextEnricher.HttpClientFactory;
+        var originalRoots = SourceContextEnricher.LocalSourceRoots;
+        try
+        {
+            SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
+            SourceContextEnricher.LocalSourceRoots = Array.Empty<string>();
+
+            var rawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs";
+
+            var analysis = new CrashAnalysisResult
+            {
+                Summary = new AnalysisSummary { Description = "Found 1 threads (2 total frames, 2 in faulting thread), 0 modules." },
+                Threads = new ThreadsInfo
+                {
+                    All =
+                    [
+                        new ThreadInfo
+                        {
+                            ThreadId = "t1",
+                            IsFaulting = true,
+                            CallStack =
+                            [
+                                new StackFrame
+                                {
+                                    FrameNumber = 0,
+                                    InstructionPointer = "0x1",
+                                    Module = "m",
+                                    Function = "remote",
+                                    IsManaged = true,
+                                    SourceFile = "/_/src/file.cs",
+                                    LineNumber = 10,
+                                    SourceRawUrl = rawUrl
+                                },
+                                new StackFrame
+                                {
+                                    FrameNumber = 1,
+                                    InstructionPointer = "0x2",
+                                    Module = "m",
+                                    Function = "unavailable",
+                                    IsManaged = true,
+                                    SourceFile = "/_/src/file2.cs",
+                                    LineNumber = 10
+                                }
+                            ]
+                        }
+                    ]
+                },
+                Modules = []
+            };
+
+            CrashAnalysisResultFinalizer.Finalize(analysis);
+
+            var service = new ReportService();
+            var content = service.GenerateReport(
+                analysis,
+                new ReportOptions { Format = ReportFormat.Json },
+                new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+            using var doc = JsonDocument.Parse(content);
+            var sourceContext = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext");
+            Assert.Equal(1, sourceContext.GetArrayLength());
+            Assert.Equal("remote", sourceContext[0].GetProperty("status").GetString());
+        }
+        finally
+        {
+            SourceContextEnricher.HttpClientFactory = originalFactory;
+            SourceContextEnricher.LocalSourceRoots = originalRoots;
         }
     }
 
