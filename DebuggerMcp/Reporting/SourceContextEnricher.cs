@@ -70,6 +70,7 @@ internal static class SourceContextEnricher
     private const int MaxEntriesPerThread = 2;
     private const int MaxEntriesFaultingThread = 10;
     private const int MinFaultingManagedEntries = 2;
+    private const int MaxFaultingThreadEmbeddedEntries = 1000;
     private const int ContextWindow = 3; // ±3 lines
     private const int MaxLinesPerEntry = (ContextWindow * 2) + 1;
     private const int MaxLineLength = 400;
@@ -112,13 +113,14 @@ internal static class SourceContextEnricher
         using var timeoutCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         var cache = new Dictionary<string, string>(StringComparer.Ordinal);
-        var entries = new List<SourceContextEntry>();
+        var summaryEntries = new List<SourceContextEntry>();
+        var faultingEntries = new List<SourceContextEntry>();
 
         try
         {
             foreach (var candidate in candidates)
             {
-                if (entries.Count >= MaxEntries)
+                if (summaryEntries.Count >= MaxEntries)
                 {
                     break;
                 }
@@ -129,64 +131,64 @@ internal static class SourceContextEnricher
                     continue;
                 }
 
-                var entry = new SourceContextEntry
-                {
-                    ThreadId = thread.ThreadId ?? string.Empty,
-                    FrameNumber = frame.FrameNumber,
-                    Function = frame.Function ?? string.Empty,
-                    Module = frame.Module ?? string.Empty,
-                    SourceFile = frame.SourceFile,
-                    LineNumber = frame.LineNumber,
-                    SourceUrl = frame.SourceUrl,
-                    SourceRawUrl = frame.SourceRawUrl
-                };
-
                 try
                 {
-                    if (!string.IsNullOrWhiteSpace(frame.SourceFile) &&
-                        TryReadLocalContext(frame.SourceFile!, line, out var localLines, out var start, out var end))
-                    {
-                        entry.Status = "local";
-                        entry.StartLine = start;
-                        entry.EndLine = end;
-                        entry.Lines = localLines;
-                        entries.Add(entry);
-                        continue;
-                    }
-
-                    var rawUrl = GetRawUrl(frame);
-                    if (rawUrl == null)
-                    {
-                        entry.Status = "unavailable";
-                        entries.Add(entry);
-                        continue;
-                    }
-
-                    if (!cache.TryGetValue(rawUrl, out var text))
-                    {
-                        text = await FetchTextAsync(client, rawUrl, timeoutCts.Token).ConfigureAwait(false);
-                        cache[rawUrl] = text;
-                    }
-
-                    if (!TryExtractContext(text, line, out var remoteLines, out var remoteStart, out var remoteEnd))
-                    {
-                        entry.Status = "error";
-                        entry.Error = "Line number outside fetched file content.";
-                        entries.Add(entry);
-                        continue;
-                    }
-
-                    entry.Status = "remote";
-                    entry.StartLine = remoteStart;
-                    entry.EndLine = remoteEnd;
-                    entry.Lines = remoteLines;
-                    entries.Add(entry);
+                    var entry = await BuildEntryAsync(thread, frame, client, cache, timeoutCts.Token).ConfigureAwait(false);
+                    summaryEntries.Add(entry);
                 }
                 catch (Exception ex)
                 {
-                    entry.Status = "error";
-                    entry.Error = ex.Message;
-                    entries.Add(entry);
+                    summaryEntries.Add(new SourceContextEntry
+                    {
+                        ThreadId = thread.ThreadId ?? string.Empty,
+                        FrameNumber = frame.FrameNumber,
+                        Function = frame.Function ?? string.Empty,
+                        Module = frame.Module ?? string.Empty,
+                        SourceFile = frame.SourceFile,
+                        LineNumber = frame.LineNumber,
+                        SourceUrl = frame.SourceUrl,
+                        SourceRawUrl = frame.SourceRawUrl,
+                        Status = "error",
+                        Error = ex.Message
+                    });
+                }
+            }
+
+            // Embed an expanded list under the faulting thread (not constrained by the summary cap).
+            // This is intended for UIs that want rich context for the most relevant thread while keeping the overall report bounded.
+            if (analysis.Threads?.FaultingThread != null)
+            {
+                var faultingThread = analysis.Threads.FaultingThread;
+                var faultingCandidates = SelectFaultingThreadFramesUnbounded(faultingThread);
+
+                foreach (var frame in faultingCandidates)
+                {
+                    if (faultingEntries.Count >= MaxFaultingThreadEmbeddedEntries)
+                    {
+                        break;
+                    }
+
+                    try
+                    {
+                        var entry = await BuildEntryAsync(faultingThread, frame, client, cache, timeoutCts.Token).ConfigureAwait(false);
+                        faultingEntries.Add(entry);
+                    }
+                    catch (Exception ex)
+                    {
+                        faultingEntries.Add(new SourceContextEntry
+                        {
+                            ThreadId = faultingThread.ThreadId ?? string.Empty,
+                            FrameNumber = frame.FrameNumber,
+                            Function = frame.Function ?? string.Empty,
+                            Module = frame.Module ?? string.Empty,
+                            SourceFile = frame.SourceFile,
+                            LineNumber = frame.LineNumber,
+                            SourceUrl = frame.SourceUrl,
+                            SourceRawUrl = frame.SourceRawUrl,
+                            Status = "error",
+                            Error = ex.Message
+                        });
+                    }
                 }
             }
         }
@@ -195,16 +197,10 @@ internal static class SourceContextEnricher
             ownedClient?.Dispose();
         }
 
-        analysis.SourceContext = entries;
-
-        // Also embed source context under the faulting thread for convenient per-thread consumption.
-        // (Top-level analysis.sourceContext remains as a bounded cross-thread summary.)
-        var faultingThread = analysis.Threads?.FaultingThread;
-        if (faultingThread != null)
+        analysis.SourceContext = summaryEntries;
+        if (analysis.Threads?.FaultingThread != null)
         {
-            faultingThread.SourceContext = entries
-                .Where(e => string.Equals(e.ThreadId, faultingThread.ThreadId, StringComparison.Ordinal))
-                .ToList();
+            analysis.Threads.FaultingThread.SourceContext = faultingEntries.Count > 0 ? faultingEntries : null;
         }
     }
 
@@ -343,6 +339,13 @@ internal static class SourceContextEnricher
         return selected;
     }
 
+    private static List<StackFrame> SelectFaultingThreadFramesUnbounded(ThreadInfo thread)
+    {
+        return thread.CallStack
+            .Where(IsContextCandidate)
+            .ToList();
+    }
+
     private static bool IsContextCandidate(StackFrame frame)
     {
         if (!StackFrameUtilities.IsMeaningfulTopFrameCandidate(frame))
@@ -363,6 +366,79 @@ internal static class SourceContextEnricher
         }
 
         return true;
+    }
+
+    private static async Task<SourceContextEntry> BuildEntryAsync(
+        ThreadInfo thread,
+        StackFrame frame,
+        HttpClient client,
+        Dictionary<string, string> cache,
+        CancellationToken cancellationToken)
+    {
+        if (frame.LineNumber is not int line || line <= 0)
+        {
+            return new SourceContextEntry
+            {
+                ThreadId = thread.ThreadId ?? string.Empty,
+                FrameNumber = frame.FrameNumber,
+                Function = frame.Function ?? string.Empty,
+                Module = frame.Module ?? string.Empty,
+                SourceFile = frame.SourceFile,
+                LineNumber = frame.LineNumber,
+                SourceUrl = frame.SourceUrl,
+                SourceRawUrl = frame.SourceRawUrl,
+                Status = "unavailable",
+                Error = "Frame does not have a valid line number."
+            };
+        }
+
+        var entry = new SourceContextEntry
+        {
+            ThreadId = thread.ThreadId ?? string.Empty,
+            FrameNumber = frame.FrameNumber,
+            Function = frame.Function ?? string.Empty,
+            Module = frame.Module ?? string.Empty,
+            SourceFile = frame.SourceFile,
+            LineNumber = frame.LineNumber,
+            SourceUrl = frame.SourceUrl,
+            SourceRawUrl = frame.SourceRawUrl
+        };
+
+        if (!string.IsNullOrWhiteSpace(frame.SourceFile) &&
+            TryReadLocalContext(frame.SourceFile!, line, out var localLines, out var start, out var end))
+        {
+            entry.Status = "local";
+            entry.StartLine = start;
+            entry.EndLine = end;
+            entry.Lines = localLines;
+            return entry;
+        }
+
+        var rawUrl = GetRawUrl(frame);
+        if (rawUrl == null)
+        {
+            entry.Status = "unavailable";
+            return entry;
+        }
+
+        if (!cache.TryGetValue(rawUrl, out var text))
+        {
+            text = await FetchTextAsync(client, rawUrl, cancellationToken).ConfigureAwait(false);
+            cache[rawUrl] = text;
+        }
+
+        if (!TryExtractContext(text, line, out var remoteLines, out var remoteStart, out var remoteEnd))
+        {
+            entry.Status = "error";
+            entry.Error = "Line number outside fetched file content.";
+            return entry;
+        }
+
+        entry.Status = "remote";
+        entry.StartLine = remoteStart;
+        entry.EndLine = remoteEnd;
+        entry.Lines = remoteLines;
+        return entry;
     }
 
     private static bool TryReadLocalContext(string sourceFile, int lineNumber, out List<string> lines, out int startLine, out int endLine)

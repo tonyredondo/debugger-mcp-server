@@ -503,4 +503,74 @@ public class SourceContextEnricherTests
             SourceContextEnricher.LocalSourceRoots = originalRoots;
         }
     }
+
+    [Fact]
+    public void GenerateJsonReport_WhenFaultingThreadHasMoreThanTenEligibleFrames_EmbedsAllFaultingFramesButKeepsSummaryBounded()
+    {
+        var file = new StringBuilder();
+        for (var i = 1; i <= 200; i++)
+        {
+            file.AppendLine($"line {i}");
+        }
+
+        var handler = new CountingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(file.ToString(), Encoding.UTF8, "text/plain")
+        });
+
+        var originalFactory = SourceContextEnricher.HttpClientFactory;
+        var originalRoots = SourceContextEnricher.LocalSourceRoots;
+        try
+        {
+            SourceContextEnricher.HttpClientFactory = () => new HttpClient(handler);
+            SourceContextEnricher.LocalSourceRoots = Array.Empty<string>();
+
+            var rawUrl = "https://raw.githubusercontent.com/dotnet/dotnet/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/src/file.cs";
+
+            var callStack = new List<StackFrame>();
+            for (var i = 0; i < 12; i++)
+            {
+                callStack.Add(new StackFrame
+                {
+                    FrameNumber = i,
+                    InstructionPointer = $"0x{i + 1:x}",
+                    Module = i < 10 ? "libcoreclr.so" : "System.Private.CoreLib",
+                    Function = $"f{i}",
+                    IsManaged = i >= 10,
+                    SourceFile = "/_/src/file.cs",
+                    LineNumber = 10 + i,
+                    SourceRawUrl = rawUrl
+                });
+            }
+
+            var faulting = new ThreadInfo { ThreadId = "t1", IsFaulting = true, CallStack = callStack };
+
+            var analysis = new CrashAnalysisResult
+            {
+                Summary = new AnalysisSummary { Description = "Found 1 threads (12 total frames, 12 in faulting thread), 0 modules." },
+                Threads = new ThreadsInfo { All = [ faulting ] },
+                Modules = []
+            };
+
+            CrashAnalysisResultFinalizer.Finalize(analysis);
+
+            var service = new ReportService();
+            var content = service.GenerateReport(
+                analysis,
+                new ReportOptions { Format = ReportFormat.Json },
+                new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+            using var doc = JsonDocument.Parse(content);
+            var summary = doc.RootElement.GetProperty("analysis").GetProperty("sourceContext");
+            Assert.Equal(10, summary.GetArrayLength());
+
+            var embedded = doc.RootElement.GetProperty("analysis").GetProperty("threads").GetProperty("faultingThread").GetProperty("sourceContext");
+            Assert.Equal(12, embedded.GetArrayLength());
+        }
+        finally
+        {
+            SourceContextEnricher.HttpClientFactory = originalFactory;
+            SourceContextEnricher.LocalSourceRoots = originalRoots;
+        }
+    }
 }
