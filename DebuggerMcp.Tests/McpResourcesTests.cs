@@ -6,6 +6,28 @@ namespace DebuggerMcp.Tests;
 /// </summary>
 public class McpResourcesTests
 {
+    // ========== GetMcpTools Tests ==========
+
+    [Fact]
+    public void GetMcpTools_ReturnsNonEmptyContent()
+    {
+        var content = DebuggerResources.GetMcpTools();
+
+        Assert.NotNull(content);
+        Assert.NotEmpty(content);
+    }
+
+    [Fact]
+    public void GetMcpTools_ContainsExpectedToolNames()
+    {
+        var content = DebuggerResources.GetMcpTools();
+
+        Assert.Contains("session", content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dump", content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("analyze", content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("compare", content, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ========== GetWorkflowGuide Tests ==========
 
     [Fact]
@@ -245,15 +267,16 @@ public class McpResourcesTests
         // Act
         var workflow = DebuggerResources.GetWorkflowGuide();
         var analysis = DebuggerResources.GetAnalysisGuide();
+        var mcpTools = DebuggerResources.GetMcpTools();
         var windbg = DebuggerResources.GetWinDbgCommands();
         var lldb = DebuggerResources.GetLldbCommands();
         var sos = DebuggerResources.GetSosCommands();
         var troubleshooting = DebuggerResources.GetTroubleshooting();
 
         // Assert - each resource should be different
-        var resources = new[] { workflow, analysis, windbg, lldb, sos, troubleshooting };
+        var resources = new[] { workflow, analysis, mcpTools, windbg, lldb, sos, troubleshooting };
         var distinctCount = resources.Distinct().Count();
-        Assert.Equal(6, distinctCount);
+        Assert.Equal(7, distinctCount);
     }
 
     [Fact]
@@ -262,13 +285,14 @@ public class McpResourcesTests
         // Act
         var workflow = DebuggerResources.GetWorkflowGuide();
         var analysis = DebuggerResources.GetAnalysisGuide();
+        var mcpTools = DebuggerResources.GetMcpTools();
         var windbg = DebuggerResources.GetWinDbgCommands();
         var lldb = DebuggerResources.GetLldbCommands();
         var sos = DebuggerResources.GetSosCommands();
         var troubleshooting = DebuggerResources.GetTroubleshooting();
 
         // Assert - none should contain error loading messages
-        var resources = new[] { workflow, analysis, windbg, lldb, sos, troubleshooting };
+        var resources = new[] { workflow, analysis, mcpTools, windbg, lldb, sos, troubleshooting };
         foreach (var resource in resources)
         {
             Assert.DoesNotContain("Error Loading Resource", resource);
@@ -282,6 +306,7 @@ public class McpResourcesTests
         // Act
         var workflow = DebuggerResources.GetWorkflowGuide();
         var analysis = DebuggerResources.GetAnalysisGuide();
+        var mcpTools = DebuggerResources.GetMcpTools();
         var windbg = DebuggerResources.GetWinDbgCommands();
         var lldb = DebuggerResources.GetLldbCommands();
         var sos = DebuggerResources.GetSosCommands();
@@ -290,6 +315,7 @@ public class McpResourcesTests
         // Assert - each resource should have meaningful content (at least 100 chars)
         Assert.True(workflow.Length >= 100, "Workflow guide should have substantial content");
         Assert.True(analysis.Length >= 100, "Analysis guide should have substantial content");
+        Assert.True(mcpTools.Length >= 100, "MCP tools guide should have substantial content");
         Assert.True(windbg.Length >= 100, "WinDbg commands should have substantial content");
         Assert.True(lldb.Length >= 100, "LLDB commands should have substantial content");
         Assert.True(sos.Length >= 100, "SOS commands should have substantial content");
@@ -447,4 +473,3 @@ public class McpResourcesTests
             "Should not allow path traversal");
     }
 }
-

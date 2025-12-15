@@ -5,7 +5,6 @@ using DebuggerMcp.Serialization;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -20,7 +19,6 @@ namespace DebuggerMcp.McpTools;
 /// <item><description>Loading symbols into the debugger for better stack traces</description></item>
 /// </list>
 /// </remarks>
-[McpServerToolType]
 public class DatadogSymbolsTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -58,7 +56,6 @@ public class DatadogSymbolsTools(
     /// 
     /// After download, symbols are automatically loaded into LLDB for improved stack traces.
     /// </remarks>
-    [McpServerTool, Description("Download Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit SHA. Use forceVersion=true to enable version/tag fallback, or buildId to download directly from a specific Azure Pipelines build.")]
     public async Task<string> DownloadDatadogSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -259,7 +256,6 @@ public class DatadogSymbolsTools(
     /// This is the recommended way to download Datadog symbols when you have a dump open,
     /// as it handles all the detection automatically.
     /// </remarks>
-    [McpServerTool, Description("Auto-detect and download Datadog.Trace symbols from the opened dump. Use forceVersion=true to enable version/tag fallback.")]
     public async Task<string> PrepareDatadogSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -392,7 +388,6 @@ public class DatadogSymbolsTools(
     /// and lists all available artifacts. This is useful for understanding what
     /// artifacts are available before downloading.
     /// </remarks>
-    [McpServerTool, Description("List available Datadog.Trace artifacts from Azure Pipelines for a commit SHA")]
     public async Task<string> ListDatadogArtifacts(
         [Description("Commit SHA from the Datadog.Trace assembly")] string commitSha)
     {
@@ -493,7 +488,6 @@ public class DatadogSymbolsTools(
     /// Gets information about Datadog symbol download configuration and status.
     /// </summary>
     /// <returns>JSON with configuration information.</returns>
-    [McpServerTool, Description("Get Datadog symbol download configuration and status")]
     public string GetDatadogSymbolsConfig()
     {
         var response = new
@@ -537,7 +531,6 @@ public class DatadogSymbolsTools(
     /// <item><description>Clear stale/corrupted symbol files</description></item>
     /// </list>
     /// </remarks>
-    [McpServerTool, Description("Clear downloaded Datadog symbols for the current dump. Use to force re-download or reclaim disk space.")]
     public string ClearDatadogSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,

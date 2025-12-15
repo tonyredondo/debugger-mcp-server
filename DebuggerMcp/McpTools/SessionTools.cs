@@ -3,7 +3,6 @@ using System.Text.Json;
 using DebuggerMcp.Security;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -19,7 +18,6 @@ namespace DebuggerMcp.McpTools;
 /// <item><description>Closing sessions</description></item>
 /// </list>
 /// </remarks>
-[McpServerToolType]
 public class SessionTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -38,7 +36,6 @@ public class SessionTools(
     /// Sessions are automatically cleaned up after 24 hours of inactivity by default.
     /// This can be configured via the SESSION_INACTIVITY_THRESHOLD_MINUTES environment variable.
     /// </remarks>
-    [McpServerTool, Description("Create a new debugging session. Returns a sessionId that must be used in all subsequent operations.")]
     public string CreateSession(
         [Description("Unique identifier for the user (e.g., email, username)")] string userId)
     {
@@ -87,7 +84,6 @@ public class SessionTools(
     /// 
     /// After closing a session, the sessionId cannot be reused.
     /// </remarks>
-    [McpServerTool, Description("Close a debugging session and release all resources. The sessionId cannot be reused after closing.")]
     public string CloseSession(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -132,7 +128,6 @@ public class SessionTools(
     /// </summary>
     /// <param name="userId">The user ID.</param>
     /// <returns>JSON session list (timestamps are UTC).</returns>
-    [McpServerTool, Description("List all active debugging sessions for a user as JSON (machine-readable).")]
     public string ListSessions(
         [Description("User ID to list sessions for")] string userId)
     {
@@ -187,7 +182,6 @@ public class SessionTools(
     /// - Operating system
     /// - Whether the session has an open dump file
     /// </remarks>
-    [McpServerTool, Description("Get information about the debugger being used in a session (WinDbg or LLDB).")]
     public string GetDebuggerInfo(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -249,7 +243,6 @@ public class SessionTools(
     /// 
     /// The session will be restored with its previously open dump (if any).
     /// </remarks>
-    [McpServerTool, Description("Restore/attach to an existing persisted session. Use this to reconnect to a session after server restart or when switching servers.")]
     public string RestoreSession(
         [Description("Session ID to restore")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -321,7 +314,6 @@ public class SessionTools(
     /// The modules must have been previously downloaded by dotnet-symbol.
     /// After loading, run /clearcache to see updated results.
     /// </remarks>
-    [McpServerTool, Description("Load modules from verifycore at their correct memory addresses. Use this for standalone apps where LLDB doesn't auto-load modules. Example module names: libcoreclr.so, libclrjit.so")]
     public string LoadVerifyCoreModules(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,

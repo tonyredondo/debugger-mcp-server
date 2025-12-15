@@ -1,7 +1,6 @@
 using System.ComponentModel;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -18,7 +17,6 @@ namespace DebuggerMcp.McpTools;
 /// Note: Symbol configuration is done automatically when you call OpenDump.
 /// These tools are for advanced scenarios where additional symbol servers are needed.
 /// </remarks>
-[McpServerToolType]
 public class SymbolTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -49,7 +47,6 @@ public class SymbolTools(
     /// <para>Multiple paths should be separated by commas.</para>
     /// <para>Call this BEFORE OpenDump if you want the additional paths configured from the start.</para>
     /// </remarks>
-    [McpServerTool, Description("Add additional symbol paths to a session. NOTE: OpenDump automatically configures Microsoft symbols + dump-specific symbols, so this is optional.")]
     public string ConfigureAdditionalSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -103,7 +100,6 @@ public class SymbolTools(
     /// - Microsoft Symbol Server (automatically configured by OpenDump)
     /// - NuGet Symbol Server
     /// </remarks>
-    [McpServerTool, Description("Get a list of common symbol servers (Microsoft, NuGet).")]
     public string GetSymbolServers()
     {
         return $"Common Symbol Servers:\n\n" +
@@ -136,7 +132,6 @@ public class SymbolTools(
     /// </list>
     /// <para>After clearing, the next OpenDump call will re-download symbols from the server.</para>
     /// </remarks>
-    [McpServerTool, Description("Clear the downloaded symbol cache for a dump. Use this after a timed-out download to force re-download on next open.")]
     public string ClearSymbolCache(
         [Description("User ID that owns the dump")] string userId,
         [Description("Dump ID whose symbol cache should be cleared")] string dumpId)
@@ -203,7 +198,6 @@ public class SymbolTools(
     /// <item><description>For WinDbg: Reload symbols using '.reload /f'</description></item>
     /// </list>
     /// </remarks>
-    [McpServerTool, Description("Reload symbols into a running debugger session after uploading new symbol files. Use after 'symbols upload' when a dump is already open.")]
     public string ReloadSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)

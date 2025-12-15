@@ -371,22 +371,22 @@ Response (batch upload):
 #### 3. Use MCP Tools to Analyze
 
 ```
-1. create_session(userId="user123") → Get sessionId
-2. open_dump(sessionId, userId, dumpId="abc123") → Open dump
+1. session(action="create", userId="user123") → Get sessionId
+2. dump(action="open", sessionId, userId, dumpId="abc123") → Open dump
    ✅ Symbols configured automatically:
       - Microsoft Symbol Server
       - Dump-specific symbols (if uploaded)
    ✅ SOS auto-loaded for .NET dumps
-3. execute_command(sessionId, userId, command="!threads") → List .NET threads
-4. execute_command(sessionId, userId, command="k") → Show call stack (with symbols!)
-5. execute_command(sessionId, userId, command="!analyze -v") → Analyze crash
-6. close_session(sessionId, userId) → Close and cleanup
+3. exec(sessionId, userId, command="!threads") → List .NET threads
+4. exec(sessionId, userId, command="k") → Show call stack (with symbols!)
+5. analyze(kind="crash", sessionId, userId) → Analyze crash
+6. session(action="close", sessionId, userId) → Close and cleanup
 ```
 
 **Automated Analysis:**
 ```
 # General crash analysis with memory leak and deadlock detection
-analyze_crash(sessionId, userId) → Returns JSON with:
+analyze(kind="crash", sessionId, userId) → Returns JSON with:
   - Crash type and exception info
   - Call stack analysis
   - Thread information
@@ -397,7 +397,7 @@ analyze_crash(sessionId, userId) → Returns JSON with:
   - Recommendations
 
 # .NET specific analysis (SOS auto-loaded by open_dump)
-analyze_dot_net_crash(sessionId, userId) → Returns JSON with:
+analyze(kind="dotnet_crash", sessionId, userId) → Returns JSON with:
   - CLR version and runtime info
   - Managed exceptions with stack traces
   - Heap statistics and large object allocations
@@ -410,7 +410,7 @@ analyze_dot_net_crash(sessionId, userId) → Returns JSON with:
 
 **Optional - Add additional symbol servers:**
 ```
-configure_additional_symbols(sessionId, userId, additionalPaths="https://symbols.nuget.org/download/symbols")
+symbols(action="configure_additional", sessionId, userId, additionalPaths="https://symbols.nuget.org/download/symbols")
 ```
 
 **Note**: Symbol configuration is automatic! Just upload symbols (step 2 above) and open the dump.
@@ -568,6 +568,9 @@ xdg-open ./TestResults/coverage-report/index.html  # Linux
 
 ## 📚 MCP Tools Available
 
+> Tool surface note: the server exports a compact 11-tool MCP surface. The canonical reference is `DebuggerMcp/Resources/mcp_tools.md` (also served as `debugger://mcp-tools`).
+> The detailed legacy tool tables below are being phased out; prefer the compact tools for any MCP client integration.
+
 ### Session & Dump Management
 
 | Tool | Description | Parameters |
@@ -617,11 +620,11 @@ The dump comparison tools help identify:
 
 **Example Comparison Workflow:**
 ```
-1. create_session(userId="user1") → Get baselineSessionId
-2. create_session(userId="user1") → Get comparisonSessionId
-3. open_dump(baselineSessionId, "user1", "baseline-dump-id")
-4. open_dump(comparisonSessionId, "user1", "comparison-dump-id")
-5. compare_dumps(baselineSessionId, "user1", comparisonSessionId, "user1") → Returns:
+1. session(action="create", userId="user1") → Get baselineSessionId
+2. session(action="create", userId="user1") → Get comparisonSessionId
+3. dump(action="open", baselineSessionId, "user1", "baseline-dump-id")
+4. dump(action="open", comparisonSessionId, "user1", "comparison-dump-id")
+5. compare(kind="dumps", baselineSessionId, "user1", comparisonSessionId, "user1") → Returns:
    - Memory growth analysis
    - New/terminated threads
    - Loaded/unloaded modules

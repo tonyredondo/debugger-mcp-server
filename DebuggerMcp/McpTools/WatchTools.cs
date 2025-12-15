@@ -4,7 +4,6 @@ using DebuggerMcp.Security;
 using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -23,7 +22,6 @@ namespace DebuggerMcp.McpTools;
 /// Watch expressions are persisted across sessions, allowing you to track specific
 /// values in a dump over multiple analysis sessions.
 /// </remarks>
-[McpServerToolType]
 public class WatchTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -53,7 +51,6 @@ public class WatchTools(
     /// Watches are persisted and can be evaluated across different sessions
     /// when the same dump is opened.
     /// </remarks>
-    [McpServerTool, Description("Add a watch expression to track a memory address, variable, or expression across sessions.")]
     public async Task<string> AddWatch(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -113,7 +110,6 @@ public class WatchTools(
     /// Returns all watches associated with the currently open dump,
     /// including their IDs, expressions, descriptions, and types.
     /// </remarks>
-    [McpServerTool, Description("List all watch expressions for the currently open dump.")]
     public async Task<string> ListWatches(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -156,7 +152,6 @@ public class WatchTools(
     /// - Any errors encountered during evaluation
     /// - Insights about suspicious values (null pointers, freed memory, etc.)
     /// </remarks>
-    [McpServerTool, Description("Evaluate all watch expressions and return their current values with insights.")]
     public async Task<string> EvaluateWatches(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -193,7 +188,6 @@ public class WatchTools(
     /// Evaluates a single watch expression and returns its current value.
     /// Use ListWatches to find watch IDs.
     /// </remarks>
-    [McpServerTool, Description("Evaluate a specific watch expression by its ID.")]
     public async Task<string> EvaluateWatch(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -243,7 +237,6 @@ public class WatchTools(
     /// <remarks>
     /// Permanently removes the watch expression from the persistent store.
     /// </remarks>
-    [McpServerTool, Description("Remove a watch expression by its ID.")]
     public async Task<string> RemoveWatch(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -290,7 +283,6 @@ public class WatchTools(
     /// Permanently removes all watch expressions for the current dump.
     /// This action cannot be undone.
     /// </remarks>
-    [McpServerTool, Description("Clear all watch expressions for the currently open dump.")]
     public async Task<string> ClearWatches(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)

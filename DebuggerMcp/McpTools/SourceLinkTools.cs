@@ -4,7 +4,6 @@ using DebuggerMcp.SourceLink;
 using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -21,7 +20,6 @@ namespace DebuggerMcp.McpTools;
 /// Source Link allows linking crash locations to the exact source code version
 /// in version control systems.
 /// </remarks>
-[McpServerToolType]
 public class SourceLinkTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -55,7 +53,6 @@ public class SourceLinkTools(
     /// - Azure DevOps (dev.azure.com)
     /// - Bitbucket (bitbucket.org)
     /// </remarks>
-    [McpServerTool, Description("Resolve a source file to a browsable Source Link URL (GitHub, GitLab, etc.)")]
     public string ResolveSourceLink(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -115,7 +112,6 @@ public class SourceLinkTools(
     /// Returns information about Source Link capabilities and configured symbol paths.
     /// This is useful for debugging Source Link resolution issues.
     /// </remarks>
-    [McpServerTool, Description("Get Source Link configuration and capabilities")]
     public string GetSourceLinkInfo(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)

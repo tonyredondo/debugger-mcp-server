@@ -4,27 +4,30 @@
 
 This guide covers all automated analysis features available in the Debugger MCP Server, including crash analysis, .NET-specific analysis, and dump comparison capabilities.
 
+> MCP tool names note: the server exposes a compact 11-tool MCP surface. The canonical list is in `debugger://mcp-tools`.
+> This guide may reference legacy tool names in headings/examples; translate them using that reference.
+
 ---
 
 ## 📊 Analysis Features Overview
 
-| Feature | Tool | Description |
-|---------|------|-------------|
-| **Crash Analysis** | `analyze_crash` | General crash analysis with memory leak and deadlock detection |
-| **.NET Analysis** | `analyze_dot_net_crash` | .NET-specific analysis including managed exceptions, heap stats |
-| **Dump Comparison** | `compare_dumps` | Compare two dumps for memory, threads, and modules |
-| **Heap Comparison** | `compare_heaps` | Memory allocation comparison for leak detection |
-| **Thread Comparison** | `compare_threads` | Thread state comparison for deadlock detection |
-| **Module Comparison** | `compare_modules` | Loaded module comparison for version tracking |
-| **Performance Analysis** | `analyze_performance` | Comprehensive CPU, memory, GC, and contention analysis |
-| **CPU Analysis** | `analyze_cpu_usage` | CPU hotspot identification and runaway thread detection |
-| **Allocation Analysis** | `analyze_allocations` | Memory allocation patterns and leak detection |
-| **GC Analysis** | `analyze_gc` | Garbage collection behavior and heap fragmentation |
-| **Contention Analysis** | `analyze_contention` | Thread contention, lock usage, and deadlock detection |
-| **Watch Expressions** | `add_watch`, `evaluate_watches` | Track memory/variables across sessions |
-| **Report Generation** | `generate_report` | Generate shareable reports in Markdown, HTML, JSON |
-| **Source Link** | `resolve_source_link` | Link stack frames to source code (GitHub, GitLab, etc.) |
-| **Security Analysis** | `analyze_security` | Detect security vulnerabilities (buffer overflows, UAF, etc.) |
+| Feature | Tool (Compact) | Description |
+|---------|-----------------|-------------|
+| **Crash Analysis** | `analyze(kind="crash")` | General crash analysis with memory leak and deadlock detection |
+| **.NET Analysis** | `analyze(kind="dotnet_crash")` | .NET-specific analysis including managed exceptions, heap stats |
+| **Dump Comparison** | `compare(kind="dumps")` | Compare two dumps for memory, threads, and modules |
+| **Heap Comparison** | `compare(kind="heaps")` | Memory allocation comparison for leak detection |
+| **Thread Comparison** | `compare(kind="threads")` | Thread state comparison for deadlock detection |
+| **Module Comparison** | `compare(kind="modules")` | Loaded module comparison for version tracking |
+| **Performance Analysis** | `analyze(kind="performance")` | Comprehensive CPU, memory, GC, and contention analysis |
+| **CPU Analysis** | `analyze(kind="cpu")` | CPU hotspot identification and runaway thread detection |
+| **Allocation Analysis** | `analyze(kind="allocations")` | Memory allocation patterns and leak detection |
+| **GC Analysis** | `analyze(kind="gc")` | Garbage collection behavior and heap fragmentation |
+| **Contention Analysis** | `analyze(kind="contention")` | Thread contention, lock usage, and deadlock detection |
+| **Watch Expressions** | `watch(action="add")`, `watch(action="evaluate_all")` | Track memory/variables across sessions |
+| **Report Generation** | `report(action="full")` | Generate shareable reports in Markdown, HTML, JSON |
+| **Source Link** | `source_link(action="resolve")` | Link stack frames to source code (GitHub, GitLab, etc.) |
+| **Security Analysis** | `analyze(kind="security")` | Detect security vulnerabilities (buffer overflows, UAF, etc.) |
 
 ---
 
@@ -36,8 +39,8 @@ The `analyze_crash` tool performs automated crash analysis on an open dump file.
 
 ### Prerequisites
 
-1. Session created with `create_session`
-2. Dump file opened with `open_dump`
+1. Session created with `session(action="create")`
+2. Dump file opened with `dump(action="open")`
 
 ### Usage
 

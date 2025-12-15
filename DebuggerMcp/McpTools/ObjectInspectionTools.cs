@@ -5,14 +5,12 @@ using DebuggerMcp.ObjectInspection;
 using DebuggerMcp.Security;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
 /// <summary>
 /// MCP tools for inspecting .NET objects in memory dumps.
 /// </summary>
-[McpServerToolType]
 public class ObjectInspectionTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -64,7 +62,6 @@ public class ObjectInspectionTools(
     ///   ]
     /// }
     /// </remarks>
-    [McpServerTool]
     [Description("Inspects a .NET object or value type. Uses ClrMD (safe, won't crash). For value types, provide methodTable.")]
     public string InspectObject(
         [Description("Session ID from CreateSession")] string sessionId,
@@ -187,7 +184,6 @@ public class ObjectInspectionTools(
     /// - Type count
     /// - Version information
     /// </remarks>
-    [McpServerTool]
     [Description("Dumps a .NET module using ClrMD. Safe alternative to SOS !dumpmodule.")]
     public string DumpModule(
         [Description("Session ID from CreateSession")] string sessionId,
@@ -265,7 +261,6 @@ public class ObjectInspectionTools(
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID that owns the session.</param>
     /// <returns>JSON array of module information.</returns>
-    [McpServerTool]
     [Description("Lists all .NET modules using ClrMD. Safe alternative to enumerating modules via SOS.")]
     public string ListModules(
         [Description("Session ID from CreateSession")] string sessionId,
@@ -333,7 +328,6 @@ public class ObjectInspectionTools(
     /// - totalModulesSearched: How many modules were searched
     /// - modulesWithMatch: How many modules contained the type
     /// </remarks>
-    [McpServerTool]
     [Description("Searches for a type by name across modules. Safe ClrMD alternative to SOS !name2ee.")]
     public string Name2EE(
         [Description("Session ID from CreateSession")] string sessionId,
@@ -398,7 +392,6 @@ public class ObjectInspectionTools(
     /// <param name="typeName">The fully qualified type name.</param>
     /// <param name="methodName">The method name to search for.</param>
     /// <returns>JSON with method information including MethodDesc, NativeCode, Token, Signature.</returns>
-    [McpServerTool]
     [Description("Searches for a method by name within a type. Returns MethodDesc, native code address, and signature.")]
     public string Name2EEMethod(
         [Description("Session ID from CreateSession")] string sessionId,
@@ -458,7 +451,6 @@ public class ObjectInspectionTools(
     /// Gets managed call stacks for all threads using ClrMD.
     /// This is a fast alternative to SOS clrstack command.
     /// </summary>
-    [McpServerTool]
     [Description("Gets managed call stacks for all threads using ClrMD. Fast alternative to SOS clrstack (~500ms vs 12s). Returns JSON with frames, arguments, locals, and optional registers.")]
     public string ClrStack(
         [Description("Session ID from CreateSession")] string sessionId,

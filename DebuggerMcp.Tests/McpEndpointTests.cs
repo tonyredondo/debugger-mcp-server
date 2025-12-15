@@ -68,50 +68,24 @@ public class McpEndpointTests
         var watchStore = new WatchStore(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
 
         // Act
-        var sessionTools = new SessionTools(sessionManager, symbolManager, watchStore, NullLogger<SessionTools>.Instance);
-        var dumpTools = new DumpTools(sessionManager, symbolManager, watchStore, NullLogger<DumpTools>.Instance);
-        var symbolTools = new SymbolTools(sessionManager, symbolManager, watchStore, NullLogger<SymbolTools>.Instance);
-        var analysisTools = new AnalysisTools(sessionManager, symbolManager, watchStore, NullLogger<AnalysisTools>.Instance);
+        var compactTools = new CompactTools(sessionManager, symbolManager, watchStore, NullLoggerFactory.Instance);
 
         // Assert
-        Assert.NotNull(sessionTools);
-        Assert.NotNull(dumpTools);
-        Assert.NotNull(symbolTools);
-        Assert.NotNull(analysisTools);
+        Assert.NotNull(compactTools);
     }
 
     /// <summary>
-    /// Verifies that the MCP tool classes have public methods.
+    /// Verifies that the compact tool surface exists and is discoverable by the MCP server.
     /// </summary>
     [Fact]
     public void McpToolClasses_HavePublicMethods()
     {
-        // Arrange
-        var toolClasses = new[]
-        {
-            typeof(SessionTools),
-            typeof(DumpTools),
-            typeof(SymbolTools),
-            typeof(AnalysisTools),
-            typeof(ComparisonTools),
-            typeof(PerformanceTools),
-            typeof(WatchTools),
-            typeof(ReportTools),
-            typeof(SourceLinkTools),
-            typeof(SecurityTools)
-        };
+        var methods = typeof(CompactTools).GetMethods(
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.DeclaredOnly);
 
-        // Act
-        var totalMethods = 0;
-        foreach (var toolsType in toolClasses)
-        {
-            var publicMethods = toolsType.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
-            totalMethods += publicMethods.Length;
-            Assert.NotEmpty(publicMethods);
-        }
-
-        // Assert - all tool classes combined should have at least 30 methods
-        Assert.True(totalMethods >= 30, $"MCP tool classes should have at least 30 public methods combined (found {totalMethods})");
+        Assert.NotEmpty(methods);
     }
 
 

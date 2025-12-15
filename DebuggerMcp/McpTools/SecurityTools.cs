@@ -5,7 +5,6 @@ using DebuggerMcp.Security;
 using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -22,7 +21,6 @@ namespace DebuggerMcp.McpTools;
 /// Security analysis can detect buffer overflows, use-after-free, heap corruption,
 /// and other memory safety issues.
 /// </remarks>
-[McpServerToolType]
 public class SecurityTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -54,7 +52,6 @@ public class SecurityTools(
     /// 
     /// IMPORTANT: A dump file must be open before calling this tool (use OpenDump first).
     /// </remarks>
-    [McpServerTool, Description("Analyze dump for security vulnerabilities (buffer overflows, use-after-free, heap corruption, etc.)")]
     public async Task<string> AnalyzeSecurity(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -91,7 +88,6 @@ public class SecurityTools(
     /// 
     /// This is informational and doesn't require an open dump.
     /// </remarks>
-    [McpServerTool, Description("Get list of security vulnerability types that can be detected")]
     public string GetSecurityCheckCapabilities()
     {
         // Return static information about capabilities - no session needed

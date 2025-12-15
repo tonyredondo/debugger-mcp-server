@@ -7,7 +7,6 @@ using DebuggerMcp.Serialization;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -23,7 +22,6 @@ namespace DebuggerMcp.McpTools;
 /// 
 /// Reports include crash analysis, security findings, watch evaluations, and recommendations.
 /// </remarks>
-[McpServerToolType]
 public class ReportTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -56,7 +54,6 @@ public class ReportTools(
     /// The HTML format is styled and printable.
     /// The JSON format is machine-readable.
     /// </remarks>
-    [McpServerTool, Description("Generate a comprehensive crash analysis report. Formats: markdown (ASCII charts), html (styled, printable), json.")]
     public async Task<string> GenerateReport(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -181,7 +178,6 @@ public class ReportTools(
     /// 
     /// Useful for quick triage of crash dumps.
     /// </remarks>
-    [McpServerTool, Description("Generate a brief summary report with key findings only.")]
     public async Task<string> GenerateSummaryReport(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,

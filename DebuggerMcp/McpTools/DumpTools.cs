@@ -6,7 +6,6 @@ using DebuggerMcp.Security;
 using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -22,7 +21,6 @@ namespace DebuggerMcp.McpTools;
 /// <item><description>Loading SOS extension for .NET debugging</description></item>
 /// </list>
 /// </remarks>
-[McpServerToolType]
 public class DumpTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -45,7 +43,6 @@ public class DumpTools(
     /// - Windows: Uses WinDbg with DbgEng COM API
     /// - Linux/macOS: Uses LLDB with process communication
     /// </remarks>
-    [McpServerTool, Description("Open a memory dump file for analysis. IMPORTANT: The dump must first be uploaded via HTTP API (POST /api/dumps/upload) to get the dumpId.")]
     public async Task<string> OpenDump(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -285,7 +282,6 @@ public class DumpTools(
     /// This releases the dump file and associated resources but keeps the session active.
     /// You can open another dump file in the same session after closing.
     /// </remarks>
-    [McpServerTool, Description("Close the currently open dump file in the session.")]
     public string CloseDump(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -338,7 +334,6 @@ public class DumpTools(
     /// - plugin load libsosplugin.so: Load SOS plugin for .NET
     /// - And all other LLDB commands
     /// </remarks>
-    [McpServerTool, Description("Execute a debugger command (WinDbg or LLDB syntax depending on platform) and return the output.")]
     public string ExecuteCommand(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -404,7 +399,6 @@ public class DumpTools(
     /// - !clrstack: Display managed call stack
     /// - !eeheap: Display GC heap information
     /// </remarks>
-    [McpServerTool, Description("Load the SOS extension for .NET debugging (usually auto-loaded). Enables commands like !threads, !dumpheap, !clrstack, etc.")]
     public string LoadSos(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)

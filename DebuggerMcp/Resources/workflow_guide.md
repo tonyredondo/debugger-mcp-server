@@ -4,6 +4,9 @@
 
 This guide explains the complete workflow for using the Debugger MCP Server to analyze memory dumps. The server supports WinDbg on Windows and LLDB on macOS/Linux.
 
+> MCP tool names note: the server exposes a compact 11-tool MCP surface. The canonical list is in `debugger://mcp-tools`.
+> If you see older examples referencing tools like `create_session` or `open_dump`, translate them using that reference.
+
 ### Prerequisites
 
 - **HTTP API Server**: Must be running on the configured port (default: 5000)

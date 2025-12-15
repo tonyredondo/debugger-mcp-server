@@ -535,9 +535,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> CreateSessionAsync(string userId, CancellationToken cancellationToken = default)
     {
-        // MCP library converts PascalCase to snake_case
-        return await CallToolAsync("create_session", new Dictionary<string, object?>
+        return await CallToolAsync("session", new Dictionary<string, object?>
         {
+            ["action"] = "create",
             ["userId"] = userId
         }, cancellationToken);
     }
@@ -545,8 +545,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> ListSessionsAsync(string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("list_sessions", new Dictionary<string, object?>
+        return await CallToolAsync("session", new Dictionary<string, object?>
         {
+            ["action"] = "list",
             ["userId"] = userId
         }, cancellationToken);
     }
@@ -554,8 +555,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> CloseSessionAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("close_session", new Dictionary<string, object?>
+        return await CallToolAsync("session", new Dictionary<string, object?>
         {
+            ["action"] = "close",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -564,8 +566,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> GetDebuggerInfoAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("get_debugger_info", new Dictionary<string, object?>
+        return await CallToolAsync("session", new Dictionary<string, object?>
         {
+            ["action"] = "debugger_info",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -574,8 +577,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> RestoreSessionAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("restore_session", new Dictionary<string, object?>
+        return await CallToolAsync("session", new Dictionary<string, object?>
         {
+            ["action"] = "restore",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -586,6 +590,7 @@ public class McpClient : IMcpClient
     {
         var parameters = new Dictionary<string, object?>
         {
+            ["action"] = "verify_core_modules",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         };
@@ -593,14 +598,15 @@ public class McpClient : IMcpClient
         {
             parameters["moduleNames"] = moduleNames;
         }
-        return await CallToolAsync("load_verify_core_modules", parameters, cancellationToken);
+        return await CallToolAsync("symbols", parameters, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<string> OpenDumpAsync(string sessionId, string userId, string dumpId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("open_dump", new Dictionary<string, object?>
+        return await CallToolAsync("dump", new Dictionary<string, object?>
         {
+            ["action"] = "open",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["dumpId"] = dumpId
@@ -610,8 +616,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> CloseDumpAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("close_dump", new Dictionary<string, object?>
+        return await CallToolAsync("dump", new Dictionary<string, object?>
         {
+            ["action"] = "close",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -620,7 +627,7 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> ExecuteCommandAsync(string sessionId, string userId, string command, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("execute_command", new Dictionary<string, object?>
+        return await CallToolAsync("exec", new Dictionary<string, object?>
         {
             ["sessionId"] = sessionId,
             ["userId"] = userId,
@@ -631,10 +638,11 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> LoadSosAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("load_sos", new Dictionary<string, object?>
+        return await CallToolAsync("inspect", new Dictionary<string, object?>
         {
             ["sessionId"] = sessionId,
-            ["userId"] = userId
+            ["userId"] = userId,
+            ["kind"] = "load_sos"
         }, cancellationToken);
     }
 
@@ -643,8 +651,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> AnalyzeCrashAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze_crash", new Dictionary<string, object?>
+        return await CallToolAsync("analyze", new Dictionary<string, object?>
         {
+            ["kind"] = "crash",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -653,8 +662,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> AnalyzeDotNetAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze_dot_net_crash", new Dictionary<string, object?>
+        return await CallToolAsync("analyze", new Dictionary<string, object?>
         {
+            ["kind"] = "dotnet_crash",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -679,6 +689,7 @@ public class McpClient : IMcpClient
         {
             ["sessionId"] = sessionId,
             ["userId"] = userId,
+            ["kind"] = "object",
             ["address"] = address,
             ["maxDepth"] = maxDepth,
             ["maxArrayElements"] = maxArrayElements,
@@ -690,7 +701,7 @@ public class McpClient : IMcpClient
             args["methodTable"] = methodTable;
         }
 
-        return await CallToolAsync("inspect_object", args, cancellationToken);
+        return await CallToolAsync("inspect", args, cancellationToken);
     }
 
     // NOTE: DumpObjectAsync removed - merged into InspectObjectAsync
@@ -708,10 +719,11 @@ public class McpClient : IMcpClient
         {
             ["sessionId"] = sessionId,
             ["userId"] = userId,
+            ["kind"] = "module",
             ["address"] = address
         };
 
-        return await CallToolAsync("dump_module", args, cancellationToken);
+        return await CallToolAsync("inspect", args, cancellationToken);
     }
 
     /// <summary>
@@ -725,10 +737,11 @@ public class McpClient : IMcpClient
         var args = new Dictionary<string, object?>
         {
             ["sessionId"] = sessionId,
-            ["userId"] = userId
+            ["userId"] = userId,
+            ["kind"] = "modules"
         };
 
-        return await CallToolAsync("list_modules", args, cancellationToken);
+        return await CallToolAsync("inspect", args, cancellationToken);
     }
 
     /// <summary>
@@ -746,12 +759,13 @@ public class McpClient : IMcpClient
         {
             ["sessionId"] = sessionId,
             ["userId"] = userId,
+            ["kind"] = "lookup_type",
             ["typeName"] = typeName,
             ["moduleName"] = moduleName,
             ["includeAllModules"] = includeAllModules
         };
 
-        return await CallToolAsync("name2_e_e", args, cancellationToken);
+        return await CallToolAsync("inspect", args, cancellationToken);
     }
 
     /// <summary>
@@ -768,11 +782,12 @@ public class McpClient : IMcpClient
         {
             ["sessionId"] = sessionId,
             ["userId"] = userId,
+            ["kind"] = "lookup_method",
             ["typeName"] = typeName,
             ["methodName"] = methodName
         };
 
-        return await CallToolAsync("name2_e_e_method", args, cancellationToken);
+        return await CallToolAsync("inspect", args, cancellationToken);
     }
 
     /// <summary>
@@ -792,20 +807,22 @@ public class McpClient : IMcpClient
         {
             ["sessionId"] = sessionId,
             ["userId"] = userId,
+            ["kind"] = "clr_stack",
             ["includeArguments"] = includeArguments,
             ["includeLocals"] = includeLocals,
             ["includeRegisters"] = includeRegisters,
             ["threadId"] = threadId
         };
 
-        return await CallToolAsync("clr_stack", args, cancellationToken);
+        return await CallToolAsync("inspect", args, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<string> AnalyzePerformanceAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze_performance", new Dictionary<string, object?>
+        return await CallToolAsync("analyze", new Dictionary<string, object?>
         {
+            ["kind"] = "performance",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -814,8 +831,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> AnalyzeCpuUsageAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze_cpu_usage", new Dictionary<string, object?>
+        return await CallToolAsync("analyze", new Dictionary<string, object?>
         {
+            ["kind"] = "cpu",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -824,8 +842,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> AnalyzeAllocationsAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze_allocations", new Dictionary<string, object?>
+        return await CallToolAsync("analyze", new Dictionary<string, object?>
         {
+            ["kind"] = "allocations",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -834,8 +853,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> AnalyzeGcAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze_gc", new Dictionary<string, object?>
+        return await CallToolAsync("analyze", new Dictionary<string, object?>
         {
+            ["kind"] = "gc",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -844,8 +864,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> AnalyzeContentionAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze_contention", new Dictionary<string, object?>
+        return await CallToolAsync("analyze", new Dictionary<string, object?>
         {
+            ["kind"] = "contention",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -856,8 +877,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> AnalyzeSecurityAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze_security", new Dictionary<string, object?>
+        return await CallToolAsync("analyze", new Dictionary<string, object?>
         {
+            ["kind"] = "security",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -873,8 +895,9 @@ public class McpClient : IMcpClient
         string targetUserId,
         CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("compare_dumps", new Dictionary<string, object?>
+        return await CallToolAsync("compare", new Dictionary<string, object?>
         {
+            ["kind"] = "dumps",
             ["baselineSessionId"] = baselineSessionId,
             ["baselineUserId"] = baselineUserId,
             ["targetSessionId"] = targetSessionId,
@@ -890,8 +913,9 @@ public class McpClient : IMcpClient
         string targetUserId,
         CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("compare_heaps", new Dictionary<string, object?>
+        return await CallToolAsync("compare", new Dictionary<string, object?>
         {
+            ["kind"] = "heaps",
             ["baselineSessionId"] = baselineSessionId,
             ["baselineUserId"] = baselineUserId,
             ["targetSessionId"] = targetSessionId,
@@ -907,8 +931,9 @@ public class McpClient : IMcpClient
         string targetUserId,
         CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("compare_threads", new Dictionary<string, object?>
+        return await CallToolAsync("compare", new Dictionary<string, object?>
         {
+            ["kind"] = "threads",
             ["baselineSessionId"] = baselineSessionId,
             ["baselineUserId"] = baselineUserId,
             ["targetSessionId"] = targetSessionId,
@@ -924,8 +949,9 @@ public class McpClient : IMcpClient
         string targetUserId,
         CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("compare_modules", new Dictionary<string, object?>
+        return await CallToolAsync("compare", new Dictionary<string, object?>
         {
+            ["kind"] = "modules",
             ["baselineSessionId"] = baselineSessionId,
             ["baselineUserId"] = baselineUserId,
             ["targetSessionId"] = targetSessionId,
@@ -940,22 +966,24 @@ public class McpClient : IMcpClient
     {
         var args = new Dictionary<string, object?>
         {
+            ["action"] = "add",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["expression"] = expression
         };
         if (!string.IsNullOrEmpty(name))
         {
-            args["name"] = name;
+            args["description"] = name;
         }
-        return await CallToolAsync("add_watch", args, cancellationToken);
+        return await CallToolAsync("watch", args, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<string> ListWatchesAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("list_watches", new Dictionary<string, object?>
+        return await CallToolAsync("watch", new Dictionary<string, object?>
         {
+            ["action"] = "list",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -964,8 +992,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> EvaluateWatchesAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("evaluate_watches", new Dictionary<string, object?>
+        return await CallToolAsync("watch", new Dictionary<string, object?>
         {
+            ["action"] = "evaluate_all",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -974,8 +1003,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> EvaluateWatchAsync(string sessionId, string userId, string watchId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("evaluate_watch", new Dictionary<string, object?>
+        return await CallToolAsync("watch", new Dictionary<string, object?>
         {
+            ["action"] = "evaluate",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["watchId"] = watchId
@@ -985,8 +1015,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> RemoveWatchAsync(string sessionId, string userId, string watchId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("remove_watch", new Dictionary<string, object?>
+        return await CallToolAsync("watch", new Dictionary<string, object?>
         {
+            ["action"] = "remove",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["watchId"] = watchId
@@ -996,8 +1027,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> ClearWatchesAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("clear_watches", new Dictionary<string, object?>
+        return await CallToolAsync("watch", new Dictionary<string, object?>
         {
+            ["action"] = "clear",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -1008,21 +1040,22 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> GenerateReportAsync(string sessionId, string userId, string format = "markdown", bool includeWatches = true, bool includeComparison = false, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("generate_report", new Dictionary<string, object?>
+        return await CallToolAsync("report", new Dictionary<string, object?>
         {
+            ["action"] = "full",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["format"] = format,
-            ["includeWatches"] = includeWatches,
-            ["includeComparison"] = includeComparison
+            ["includeWatches"] = includeWatches
         }, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<string> GenerateSummaryReportAsync(string sessionId, string userId, string format = "markdown", CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("generate_summary_report", new Dictionary<string, object?>
+        return await CallToolAsync("report", new Dictionary<string, object?>
         {
+            ["action"] = "summary",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["format"] = format
@@ -1036,6 +1069,7 @@ public class McpClient : IMcpClient
     {
         var args = new Dictionary<string, object?>
         {
+            ["action"] = "resolve",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["sourceFile"] = sourceFile
@@ -1044,14 +1078,15 @@ public class McpClient : IMcpClient
         {
             args["lineNumber"] = lineNumber.Value;
         }
-        return await CallToolAsync("resolve_source_link", args, cancellationToken);
+        return await CallToolAsync("source_link", args, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<string> GetSourceLinkInfoAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("get_source_link_info", new Dictionary<string, object?>
+        return await CallToolAsync("source_link", new Dictionary<string, object?>
         {
+            ["action"] = "info",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -1062,25 +1097,30 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> ConfigureAdditionalSymbolsAsync(string sessionId, string userId, string symbolPath, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("configure_additional_symbols", new Dictionary<string, object?>
+        return await CallToolAsync("symbols", new Dictionary<string, object?>
         {
+            ["action"] = "configure_additional",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
-            ["symbolPath"] = symbolPath
+            ["additionalPaths"] = symbolPath
         }, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<string> GetSymbolServersAsync(CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("get_symbol_servers", new Dictionary<string, object?>(), cancellationToken);
+        return await CallToolAsync("symbols", new Dictionary<string, object?>
+        {
+            ["action"] = "get_servers"
+        }, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<string> ClearSymbolCacheAsync(string userId, string dumpId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("clear_symbol_cache", new Dictionary<string, object?>
+        return await CallToolAsync("symbols", new Dictionary<string, object?>
         {
+            ["action"] = "clear_cache",
             ["userId"] = userId,
             ["dumpId"] = dumpId
         }, cancellationToken);
@@ -1089,8 +1129,9 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> ReloadSymbolsAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("reload_symbols", new Dictionary<string, object?>
+        return await CallToolAsync("symbols", new Dictionary<string, object?>
         {
+            ["action"] = "reload",
             ["sessionId"] = sessionId,
             ["userId"] = userId
         }, cancellationToken);
@@ -1134,14 +1175,16 @@ public class McpClient : IMcpClient
             args["buildId"] = buildId.Value;
         }
 
-        return await CallToolAsync("download_datadog_symbols", args, cancellationToken);
+        args["action"] = "download";
+        return await CallToolAsync("datadog_symbols", args, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<string> ListDatadogArtifactsAsync(string commitSha, CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("list_datadog_artifacts", new Dictionary<string, object?>
+        return await CallToolAsync("datadog_symbols", new Dictionary<string, object?>
         {
+            ["action"] = "list_artifacts",
             ["commitSha"] = commitSha
         }, cancellationToken);
     }
@@ -1149,7 +1192,10 @@ public class McpClient : IMcpClient
     /// <inheritdoc/>
     public async Task<string> GetDatadogSymbolsConfigAsync(CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("get_datadog_symbols_config", new Dictionary<string, object?>(), cancellationToken);
+        return await CallToolAsync("datadog_symbols", new Dictionary<string, object?>
+        {
+            ["action"] = "get_config"
+        }, cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -1160,8 +1206,9 @@ public class McpClient : IMcpClient
         bool forceVersion = false,
         CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("prepare_datadog_symbols", new Dictionary<string, object?>
+        return await CallToolAsync("datadog_symbols", new Dictionary<string, object?>
         {
+            ["action"] = "prepare",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["loadIntoDebugger"] = loadIntoDebugger,
@@ -1176,8 +1223,9 @@ public class McpClient : IMcpClient
         bool clearApiCache = false,
         CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("clear_datadog_symbols", new Dictionary<string, object?>
+        return await CallToolAsync("datadog_symbols", new Dictionary<string, object?>
         {
+            ["action"] = "clear",
             ["sessionId"] = sessionId,
             ["userId"] = userId,
             ["clearApiCache"] = clearApiCache

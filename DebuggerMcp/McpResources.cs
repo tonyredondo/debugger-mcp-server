@@ -16,6 +16,7 @@ namespace DebuggerMcp;
 /// Available resources:
 /// - debugger://workflow-guide - Complete workflow for analyzing memory dumps
 /// - debugger://analysis-guide - Guide to automated analysis features and dump comparison
+/// - debugger://mcp-tools - Canonical compact MCP tool list
 /// - debugger://windbg-commands - WinDbg commands reference
 /// - debugger://lldb-commands - LLDB commands reference
 /// - debugger://sos-commands - .NET SOS commands reference
@@ -27,6 +28,7 @@ public class DebuggerResources
 {
     private static readonly string WorkflowGuideContent;
     private static readonly string AnalysisGuideContent;
+    private static readonly string McpToolsContent;
     private static readonly string WinDbgCommandsContent;
     private static readonly string LldbCommandsContent;
     private static readonly string SosCommandsContent;
@@ -38,6 +40,7 @@ public class DebuggerResources
         // Load resources from files at startup
         WorkflowGuideContent = LoadResourceFile("workflow_guide.md");
         AnalysisGuideContent = LoadResourceFile("analysis_guide.md");
+        McpToolsContent = LoadResourceFile("mcp_tools.md");
         WinDbgCommandsContent = LoadResourceFile("windbg_commands.md");
         LldbCommandsContent = LoadResourceFile("lldb_commands.md");
         SosCommandsContent = LoadResourceFile("sos_commands.md");
@@ -61,6 +64,15 @@ public class DebuggerResources
     public static string GetAnalysisGuide()
     {
         return AnalysisGuideContent;
+    }
+
+    /// <summary>
+    /// Gets the canonical compact MCP tool list and usage patterns.
+    /// </summary>
+    [McpServerResource, Description("Canonical compact MCP tool list (11 tools) and usage patterns")]
+    public static string GetMcpTools()
+    {
+        return McpToolsContent;
     }
 
     /// <summary>

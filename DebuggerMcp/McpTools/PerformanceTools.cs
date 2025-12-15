@@ -5,7 +5,6 @@ using DebuggerMcp.Security;
 using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -22,7 +21,6 @@ namespace DebuggerMcp.McpTools;
 /// <item><description>Comprehensive performance analysis combining all above</description></item>
 /// </list>
 /// </remarks>
-[McpServerToolType]
 public class PerformanceTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -52,7 +50,6 @@ public class PerformanceTools(
     /// IMPORTANT: A dump file must be open before calling this tool (use OpenDump first).
     /// SOS is auto-loaded for .NET dumps, enabling .NET specific analysis automatically.
     /// </remarks>
-    [McpServerTool, Description("Run comprehensive performance analysis covering CPU usage, memory allocations, GC behavior, thread contention, and watch expressions.")]
     public async Task<string> AnalyzePerformance(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -104,7 +101,6 @@ public class PerformanceTools(
     /// 
     /// For static dumps, this uses thread states and call stacks to estimate CPU activity.
     /// </remarks>
-    [McpServerTool, Description("Analyze CPU usage to identify hot functions, runaway threads, and potential spin loops.")]
     public async Task<string> AnalyzeCpuUsage(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -143,7 +139,6 @@ public class PerformanceTools(
     /// 
     /// For .NET dumps, this uses !dumpheap -stat for detailed managed heap analysis.
     /// </remarks>
-    [McpServerTool, Description("Analyze memory allocations to find top allocators, large objects, and potential memory leaks.")]
     public async Task<string> AnalyzeAllocations(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -183,7 +178,6 @@ public class PerformanceTools(
     /// 
     /// Requires .NET dump and SOS extension loaded.
     /// </remarks>
-    [McpServerTool, Description("Analyze garbage collection behavior, heap generations, fragmentation, and finalizer queue.")]
     public async Task<string> AnalyzeGc(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)
@@ -222,7 +216,6 @@ public class PerformanceTools(
     /// 
     /// For .NET dumps, this uses !syncblk for managed lock analysis.
     /// </remarks>
-    [McpServerTool, Description("Analyze thread contention, lock usage, waiting threads, and detect potential deadlocks.")]
     public async Task<string> AnalyzeContention(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId)

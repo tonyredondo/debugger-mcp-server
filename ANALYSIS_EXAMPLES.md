@@ -2,6 +2,9 @@
 
 This document provides examples of the automated crash analysis functionality in the Debugger MCP Server.
 
+> MCP tool names note: the server now exposes a compact 11-tool MCP surface. The canonical list is `DebuggerMcp/Resources/mcp_tools.md`.
+> This document includes legacy tool names in examples; translate them using that reference (e.g., `analyze_crash` → `analyze(kind="crash")`).
+
 ## Overview
 
 The Debugger MCP Server includes automated analysis tools that execute relevant debugger commands, parse the output, and return structured JSON results. This makes it easier for LLMs and other tools to understand crash dumps without manually executing and parsing individual commands.

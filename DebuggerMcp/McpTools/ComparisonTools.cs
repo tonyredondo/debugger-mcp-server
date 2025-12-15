@@ -5,7 +5,6 @@ using DebuggerMcp.Security;
 using DebuggerMcp.Serialization;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -23,7 +22,6 @@ namespace DebuggerMcp.McpTools;
 /// 
 /// These tools require two sessions with open dumps: a baseline (before) and comparison (after).
 /// </remarks>
-[McpServerToolType]
 public class ComparisonTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -58,7 +56,6 @@ public class ComparisonTools(
     /// 3. Open comparison dump: OpenDump(sessionB, "user1", "comparison-dump-id")
     /// 4. Compare: CompareDumps(sessionA, "user1", sessionB, "user1")
     /// </remarks>
-    [McpServerTool, Description("Compare two memory dumps to identify differences in memory usage, thread states, and loaded modules. Useful for detecting memory leaks and state changes.")]
     public async Task<string> CompareDumps(
         [Description("Session ID for the baseline (older/before) dump")] string baselineSessionId,
         [Description("User ID that owns the baseline session")] string baselineUserId,
@@ -110,7 +107,6 @@ public class ComparisonTools(
     /// For .NET dumps, this will show managed heap growth by type.
     /// For native dumps, this shows overall memory growth.
     /// </remarks>
-    [McpServerTool, Description("Compare heap/memory allocations between two dumps to detect memory leaks and growth patterns.")]
     public async Task<string> CompareHeaps(
         [Description("Session ID for the baseline (older/before) dump")] string baselineSessionId,
         [Description("User ID that owns the baseline session")] string baselineUserId,
@@ -156,7 +152,6 @@ public class ComparisonTools(
     /// - Thread state changes (e.g., new waiting threads)
     /// - Potential deadlock situations
     /// </remarks>
-    [McpServerTool, Description("Compare thread states between two dumps to detect new threads, terminated threads, and potential deadlocks.")]
     public async Task<string> CompareThreads(
         [Description("Session ID for the baseline (older/before) dump")] string baselineSessionId,
         [Description("User ID that owns the baseline session")] string baselineUserId,
@@ -202,7 +197,6 @@ public class ComparisonTools(
     /// - Module version changes
     /// - Module base address changes (ASLR)
     /// </remarks>
-    [McpServerTool, Description("Compare loaded modules between two dumps to detect newly loaded/unloaded modules and version changes.")]
     public async Task<string> CompareModules(
         [Description("Session ID for the baseline (older/before) dump")] string baselineSessionId,
         [Description("User ID that owns the baseline session")] string baselineUserId,

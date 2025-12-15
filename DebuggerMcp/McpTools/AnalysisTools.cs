@@ -7,7 +7,6 @@ using DebuggerMcp.Security;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
-using ModelContextProtocol.Server;
 
 namespace DebuggerMcp.McpTools;
 
@@ -24,7 +23,6 @@ namespace DebuggerMcp.McpTools;
 /// These tools provide AI-friendly structured output with crash type, exception details,
 /// call stacks, memory analysis, and recommendations.
 /// </remarks>
-[McpServerToolType]
 public class AnalysisTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
@@ -59,7 +57,6 @@ public class AnalysisTools(
     /// 
     /// IMPORTANT: A dump file must be open before calling this tool (use OpenDump first).
     /// </remarks>
-    [McpServerTool, Description("Perform automated crash analysis on the open dump. Returns structured JSON with crash type, exception info, watch results, and recommendations.")]
     public async Task<string> AnalyzeCrash(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
@@ -131,7 +128,6 @@ public class AnalysisTools(
     /// - A dump file must be open (use OpenDump first - SOS is auto-loaded for .NET dumps)
     /// - The dump must be from a .NET application
     /// </remarks>
-    [McpServerTool, Description("Perform .NET specific crash analysis. Returns structured JSON with CLR info, managed exceptions, heap stats, watch results, and async deadlock detection. SOS is auto-loaded by OpenDump.")]
     public async Task<string> AnalyzeDotNetCrash(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
