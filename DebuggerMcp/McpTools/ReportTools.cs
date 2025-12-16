@@ -1,9 +1,7 @@
 using System.ComponentModel;
-using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Reporting;
 using DebuggerMcp.Security;
-using DebuggerMcp.Serialization;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
@@ -150,15 +148,8 @@ public class ReportTools(
             DebuggerType = manager.DebuggerType
         };
 
-        // Generate report based on format
-        IReportGenerator generator = reportFormat switch
-        {
-            ReportFormat.Html => new HtmlReportGenerator(),
-            ReportFormat.Json => new JsonReportGenerator(),
-            _ => new MarkdownReportGenerator()
-        };
-
-        return generator.Generate(result, options, metadata);
+        var reportService = new ReportService();
+        return reportService.GenerateReport(result, options, metadata);
     }
 
     /// <summary>
@@ -239,35 +230,7 @@ public class ReportTools(
             DebuggerType = manager.DebuggerType
         };
 
-        // Generate report based on format
-        IReportGenerator generator = reportFormat switch
-        {
-            ReportFormat.Html => new HtmlReportGenerator(),
-            ReportFormat.Json => new JsonReportGenerator(),
-            _ => new MarkdownReportGenerator()
-        };
-
-        return generator.Generate(result, options, metadata);
-    }
-}
-
-/// <summary>
-/// Simple JSON report generator that serializes the analysis result directly.
-/// </summary>
-internal class JsonReportGenerator : IReportGenerator
-{
-    /// <inheritdoc />
-    public string Generate(CrashAnalysisResult analysis, ReportOptions options, ReportMetadata metadata)
-    {
-        // Default-on: include bounded source context snippets and normalize timeline timestamps.
-        SourceContextEnricher.Apply(analysis, metadata.GeneratedAt);
-
-        var report = new
-        {
-            metadata,
-            analysis
-        };
-
-        return JsonSerializer.Serialize(report, JsonSerializationDefaults.IndentedIgnoreNull);
+        var reportService = new ReportService();
+        return reportService.GenerateReport(result, options, metadata);
     }
 }

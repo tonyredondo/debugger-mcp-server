@@ -14,6 +14,7 @@ public class ReportService
 {
     private readonly MarkdownReportGenerator _markdownGenerator;
     private readonly HtmlReportGenerator _htmlGenerator;
+    private readonly JsonReportGenerator _jsonGenerator;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ReportService"/> class.
@@ -22,6 +23,7 @@ public class ReportService
     {
         _markdownGenerator = new MarkdownReportGenerator();
         _htmlGenerator = new HtmlReportGenerator();
+        _jsonGenerator = new JsonReportGenerator();
     }
 
     /// <summary>
@@ -41,11 +43,24 @@ public class ReportService
         options ??= ReportOptions.FullReport;
         metadata ??= new ReportMetadata();
 
+        // Ensure metadata matches the requested format so the JSON document remains canonical.
+        metadata.Format = options.Format;
+
+        // Canonical source-of-truth: build the JSON report document first (includes enrichment),
+        // then render Markdown/HTML from the JSON-deserialized document to avoid divergence.
+        var json = _jsonGenerator.Generate(analysis, options, metadata);
+
+        if (options.Format == ReportFormat.Json)
+        {
+            return json;
+        }
+
+        var document = DeserializeDocument(json);
+
         return options.Format switch
         {
-            ReportFormat.Markdown => _markdownGenerator.Generate(analysis, options, metadata),
-            ReportFormat.Html => _htmlGenerator.Generate(analysis, options, metadata),
-            ReportFormat.Json => GenerateJsonReport(analysis, metadata),
+            ReportFormat.Markdown => _markdownGenerator.Generate(document.Analysis, options, document.Metadata),
+            ReportFormat.Html => _htmlGenerator.Generate(document.Analysis, options, document.Metadata),
             _ => throw new ArgumentOutOfRangeException(nameof(options.Format), $"Unsupported format: {options.Format}")
         };
     }
@@ -144,25 +159,13 @@ public class ReportService
         return Encoding.UTF8.GetBytes(content);
     }
 
-    private static string GenerateJsonReport(CrashAnalysisResult analysis, ReportMetadata metadata)
+    private static ReportDocument DeserializeDocument(string json)
     {
-        // Default-on: include bounded source context snippets and normalize timeline timestamps.
-        SourceContextEnricher.Apply(analysis, metadata.GeneratedAt);
-
-        var report = new
+        var document = JsonSerializer.Deserialize<ReportDocument>(json);
+        if (document == null)
         {
-            metadata = new
-            {
-                metadata.DumpId,
-                metadata.UserId,
-                metadata.GeneratedAt,
-                metadata.DebuggerType,
-                metadata.ServerVersion,
-                format = "json"
-            },
-            analysis
-        };
-
-        return JsonSerializer.Serialize(report, JsonSerializationDefaults.IndentedCamelCaseIgnoreNull);
+            throw new InvalidOperationException("Failed to deserialize report document.");
+        }
+        return document;
     }
 }

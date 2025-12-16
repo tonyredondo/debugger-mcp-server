@@ -12,7 +12,7 @@ namespace DebuggerMcp.Tests.Reporting;
 public class ReportServiceJsonSerializationTests
 {
     [Fact]
-    public void GenerateReport_WhenFormatIsJson_UsesCamelCaseMetadataAndLowercaseFormat()
+    public void GenerateReport_WhenFormatIsJson_SerializesCanonicalDocument()
     {
         // Arrange
         var service = new ReportService();
@@ -46,7 +46,7 @@ public class ReportServiceJsonSerializationTests
         Assert.Equal("user-1", metadataElement.GetProperty("userId").GetString());
         Assert.Equal("LLDB", metadataElement.GetProperty("debuggerType").GetString());
         Assert.Equal("1.2.3", metadataElement.GetProperty("serverVersion").GetString());
-        Assert.Equal("json", metadataElement.GetProperty("format").GetString());
+        Assert.Equal("Json", metadataElement.GetProperty("format").GetString());
 
         var analysisElement = root.GetProperty("analysis");
         Assert.False(analysisElement.TryGetProperty("summary", out _));
@@ -54,4 +54,3 @@ public class ReportServiceJsonSerializationTests
         Assert.False(analysisElement.TryGetProperty("environment", out _));
     }
 }
-

@@ -1,6 +1,5 @@
 using System.Text.Json;
 using DebuggerMcp.Analysis;
-using DebuggerMcp.McpTools;
 using DebuggerMcp.Reporting;
 using Xunit;
 
@@ -85,4 +84,3 @@ public class JsonReportGeneratorTests
         Assert.False(analysisElement.TryGetProperty("environment", out _));
     }
 }
-
