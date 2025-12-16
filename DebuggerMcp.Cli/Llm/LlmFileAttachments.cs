@@ -9,6 +9,8 @@ namespace DebuggerMcp.Cli.Llm;
 /// </summary>
 internal static class LlmFileAttachments
 {
+    private const int MaxAttachmentReadBytes = 1_048_576;
+
     // Accept explicit file reference prefixes to avoid accidentally treating hashtags as attachments.
     // Examples:
     // - #./file.json
@@ -191,9 +193,15 @@ internal static class LlmFileAttachments
 
     private static (string Text, bool Truncated, int BytesRead) ReadTextCapped(string path, int maxBytes)
     {
+        maxBytes = Math.Min(Math.Max(0, maxBytes), MaxAttachmentReadBytes);
+        if (maxBytes <= 0)
+        {
+            return (string.Empty, false, 0);
+        }
+
         // Read as bytes (for accurate caps), then decode as UTF-8 with replacement.
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        var buffer = new byte[Math.Min(maxBytes + 1, 1_048_576)]; // avoid huge allocations
+        var buffer = new byte[Math.Min(maxBytes + 1, MaxAttachmentReadBytes + 1)];
         var read = stream.Read(buffer, 0, Math.Min(buffer.Length, maxBytes + 1));
         var truncated = read > maxBytes;
         var effective = Math.Min(read, maxBytes);
