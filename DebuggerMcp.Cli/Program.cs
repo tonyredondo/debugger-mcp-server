@@ -4487,6 +4487,7 @@ public class Program
             output.WriteLine();
             output.Dim("Usage:");
             output.Dim("  llm <prompt>");
+            output.Dim("    Tip: Attach local files with #./path (e.g., llm Analyze #./report.json)");
             output.Dim("  llm model <openrouter-model-id>");
             output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json)");
             output.Dim("  llm set-agent <true|false>       (toggles tool-using agent mode)");
@@ -4564,12 +4565,18 @@ public class Program
                 return;
         }
 
-        var prompt = string.Join(" ", args).Trim();
-        if (string.IsNullOrWhiteSpace(prompt))
+        var rawPrompt = string.Join(" ", args).Trim();
+        if (string.IsNullOrWhiteSpace(rawPrompt))
         {
             output.Error("Prompt cannot be empty.");
             return;
         }
+
+        var (prompt, attachments) = LlmFileAttachments.ExtractAndLoad(
+            rawPrompt,
+            baseDirectory: Environment.CurrentDirectory,
+            maxBytesPerFile: 200_000,
+            maxTotalBytes: 400_000);
 
         transcript.Append(new CliTranscriptEntry
         {
@@ -4597,6 +4604,20 @@ public class Program
                 agentModeEnabled: llmSettings.AgentModeEnabled,
                 agentConfirmationEnabled: llmSettings.AgentModeConfirmToolCalls);
 
+            if (attachments.Count > 0)
+            {
+                var list = messages.ToList();
+                var insertIndex = list.TakeWhile(m => m.Role == "system").Count();
+                foreach (var a in attachments)
+                {
+                    var label = a.DisplayPath;
+                    var codeFence = GuessFenceLanguage(a.DisplayPath);
+                    var content = $"Attached file: {label}{Environment.NewLine}```{codeFence}{Environment.NewLine}{a.Content}{Environment.NewLine}```";
+                    list.Insert(insertIndex++, new ChatMessage("system", content));
+                }
+                messages = list;
+            }
+
             var response = llmSettings.AgentModeEnabled
                 ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, cancellationToken: default)
                 : await output.WithSpinnerAsync(
@@ -4620,6 +4641,21 @@ public class Program
         {
             output.Error(ex.Message);
         }
+    }
+
+    private static string GuessFenceLanguage(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".json" => "json",
+            ".md" => "markdown",
+            ".yml" or ".yaml" => "yaml",
+            ".xml" => "xml",
+            ".cs" => "csharp",
+            ".txt" or "" => "",
+            _ => ""
+        };
     }
 
     private static async Task<string> RunLlmAgentLoopAsync(
