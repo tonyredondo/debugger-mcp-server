@@ -18,6 +18,7 @@ internal static class TranscriptRedactor
 
         // Common CLI patterns that can include secrets.
         text = ReplaceArgumentValue(text, "llm set-key");
+        text = ReplaceLlmPrompt(text);
         text = ReplaceFlagValue(text, "--api-key");
         text = ReplaceFlagValue(text, "-k");
 
@@ -54,6 +55,38 @@ internal static class TranscriptRedactor
             $"({Regex.Escape(flag)})\\s+([^\\s]+)",
             "$1 ***",
             RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+    }
+
+    private static string ReplaceLlmPrompt(string text)
+    {
+        var trimmed = text.TrimStart();
+        if (!trimmed.StartsWith("llm", StringComparison.OrdinalIgnoreCase))
+        {
+            return text;
+        }
+
+        if (string.Equals(trimmed, "llm", StringComparison.OrdinalIgnoreCase))
+        {
+            return "llm";
+        }
+
+        if (!trimmed.StartsWith("llm ", StringComparison.OrdinalIgnoreCase))
+        {
+            return text;
+        }
+
+        var after = trimmed[4..].TrimStart();
+        var firstToken = after.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+        var sub = firstToken.Trim().ToLowerInvariant();
+
+        // Keep subcommands as-is (these are already covered by other redaction rules if needed).
+        if (sub is "set-key" or "model" or "reset" or "set-agent" or "agent" or "set-agent-confirm" or "agent-confirm")
+        {
+            return text;
+        }
+
+        // For free-form prompts, avoid persisting potentially sensitive content (the llm_user entry is stored separately).
+        return "llm ***";
     }
 
     private static string RedactKeyValuePairs(string text)

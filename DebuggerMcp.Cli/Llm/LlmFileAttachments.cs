@@ -136,8 +136,8 @@ internal static class LlmFileAttachments
                 LlmReportCache.LooksLikeDebuggerMcpReport(absolute))
             {
                 var cached = LlmReportCache.BuildOrLoadCachedReport(absolute, cacheRootDirectory, maxSectionBytes: maxBytesPerFile);
-                var idToFile = cached.Sections.ToDictionary(s => s.SectionId, s => s.FilePath, StringComparer.OrdinalIgnoreCase);
-                var ptrToFile = cached.Sections.ToDictionary(s => s.JsonPointer, s => s.FilePath, StringComparer.OrdinalIgnoreCase);
+                var idToFile = BuildFirstWinsMap(cached.Sections, s => s.SectionId, s => s.FilePath);
+                var ptrToFile = BuildFirstWinsMap(cached.Sections, s => s.JsonPointer, s => s.FilePath);
 
                 // Respect the remaining total budget, including the wrapper message overhead.
                 var wrapperOverhead = LlmReportCache.BuildModelAttachmentMessage(displayPath, summaryJson: string.Empty, manifestJson: string.Empty);
@@ -183,6 +183,27 @@ internal static class LlmFileAttachments
         {
             return (null, null, 0);
         }
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildFirstWinsMap(
+        IEnumerable<LlmReportCache.ReportSection> sections,
+        Func<LlmReportCache.ReportSection, string> keySelector,
+        Func<LlmReportCache.ReportSection, string> valueSelector)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var section in sections)
+        {
+            var key = keySelector(section);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+            if (!map.ContainsKey(key))
+            {
+                map[key] = valueSelector(section);
+            }
+        }
+        return map;
     }
 
     private static string ExpandHome(string path)

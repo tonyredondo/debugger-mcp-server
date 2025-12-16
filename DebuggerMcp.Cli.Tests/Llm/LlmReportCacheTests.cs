@@ -94,6 +94,49 @@ public class LlmReportCacheTests
     }
 
     [Fact]
+    public void ExtractAndLoad_LargeReport_WithDuplicateStableKeys_DoesNotThrow()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        Directory.CreateDirectory(tempRoot);
+
+        var reportPath = Path.Combine(tempRoot, "dupe-report.json");
+        var large = new string('x', 8_000);
+        var report = new
+        {
+            metadata = new { dumpId = "d1" },
+            analysis = new
+            {
+                environment = new { os = "linux" },
+                threads = new
+                {
+                    all = new[]
+                    {
+                        new { threadId = "7", note = "first", payload = large },
+                        new { threadId = "7", note = "second", payload = large }
+                    }
+                },
+                pad = new string('p', 40_000)
+            }
+        };
+        File.WriteAllText(reportPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
+
+        var (_, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            $"Analyze #./{Path.GetFileName(reportPath)} please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 10_000,
+            maxTotalBytes: 10_000,
+            cacheRootDirectory: cacheRoot);
+
+        Assert.Empty(attachments);
+        var ctx = Assert.Single(reports);
+        Assert.NotEmpty(ctx.PointerToFile);
+        Assert.Contains(ctx.PointerToFile.Keys, p => p.StartsWith("/analysis/threads/all/0", StringComparison.Ordinal));
+        Assert.Contains(ctx.PointerToFile.Keys, p => p.StartsWith("/analysis/threads/all/1", StringComparison.Ordinal));
+        Assert.True(ctx.CachedReport.Sections.Count > ctx.SectionIdToFile.Count);
+    }
+
+    [Fact]
     public async Task ReportTools_FindAndGet_ReturnExpectedSections()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));

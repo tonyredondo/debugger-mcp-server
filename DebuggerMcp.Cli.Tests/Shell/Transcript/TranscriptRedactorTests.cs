@@ -6,6 +6,12 @@ public class TranscriptRedactorTests
 {
     [Theory]
     [InlineData("llm set-key sk-123", "llm set-key ***")]
+    [InlineData("llm my key is sk-123", "llm ***")]
+    [InlineData("llm Analyze #./report.json", "llm ***")]
+    [InlineData("llm model openai/gpt-4o-mini", "llm model openai/gpt-4o-mini")]
+    [InlineData("llm set-agent true", "llm set-agent true")]
+    [InlineData("llm set-agent-confirm false", "llm set-agent-confirm false")]
+    [InlineData("llm reset", "llm reset")]
     [InlineData("connect http://localhost:5000 -k abc", "connect http://localhost:5000 -k ***")]
     [InlineData("connect http://localhost:5000 --api-key abc", "connect http://localhost:5000 --api-key ***")]
     public void RedactCommand_RedactsCommonSecretArguments(string input, string expected)
