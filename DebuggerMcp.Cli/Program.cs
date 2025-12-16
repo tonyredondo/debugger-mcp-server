@@ -583,6 +583,7 @@ public class Program
             {
                 state.SetConnected(normalizedUrl);
                 settings.ServerUrl = normalizedUrl;
+                settings.Save();
                 output.Success($"Connected to {normalizedUrl}");
 
                 // Get and display server host information
@@ -622,6 +623,12 @@ public class Program
                 {
                     await mcpClient.ConnectAsync(normalizedUrl, settings.ApiKey);
                     output.Success($"MCP client connected ({mcpClient.AvailableTools.Count} tools available)");
+
+                    var autoRestore = await DebuggerMcp.Cli.Shell.LastSessionAutoRestore.TryRestoreAsync(output, state, mcpClient);
+                    if (autoRestore.ClearedSavedSession)
+                    {
+                        settings.Save();
+                    }
                 }
                 catch (Exception mcpEx)
                 {
@@ -1862,6 +1869,7 @@ public class Program
                 state.SetConnected(normalizedUrl);
                 state.Settings.ServerUrl = normalizedUrl;
                 state.Settings.ApiKey = apiKey;
+                state.Settings.Save();
 
                 output.Success($"Connected to {normalizedUrl}");
                 output.KeyValue("Status", health.Status);
@@ -1911,6 +1919,12 @@ public class Program
                         });
 
                     output.Success($"MCP client connected ({mcpClient.AvailableTools.Count} tools available)");
+
+                    var autoRestore = await DebuggerMcp.Cli.Shell.LastSessionAutoRestore.TryRestoreAsync(output, state, mcpClient);
+                    if (autoRestore.ClearedSavedSession)
+                    {
+                        state.Settings.Save();
+                    }
                 }
                 catch (Exception mcpEx)
                 {
@@ -4372,11 +4386,13 @@ public class Program
                         // Extract session ID from result and store in state
                         var sessionIdMatch = System.Text.RegularExpressions.Regex.Match(
                             createResult, @"SessionId:\s*([a-zA-Z0-9\-]+)");
-                        if (sessionIdMatch.Success)
-                        {
-                            state.SessionId = sessionIdMatch.Groups[1].Value;
-                            output.Dim($"Session ID saved: {state.SessionId}");
-                        }
+	                        if (sessionIdMatch.Success)
+	                        {
+	                            state.SessionId = sessionIdMatch.Groups[1].Value;
+	                            state.Settings.SetLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, state.SessionId);
+	                            state.Settings.Save();
+	                            output.Dim($"Session ID saved: {state.SessionId}");
+	                        }
                     }
                     break;
 
@@ -4413,27 +4429,37 @@ public class Program
                         {
                             output.Error(closeResult);
                         }
-                        else
-                        {
-                            output.Success(closeResult);
+	                        else
+	                        {
+	                            output.Success(closeResult);
 
-                            // Clear session from state if it matches
-                            if (state.SessionId == sessionToClose)
-                            {
-                                state.ClearSession();
-                            }
-                        }
+	                            // Clear session from state if it matches
+	                            if (state.SessionId == sessionToClose)
+	                            {
+	                                state.ClearSession();
+	                            }
+
+	                            if (state.Settings.ClearLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, sessionToClose))
+	                            {
+	                                state.Settings.Save();
+	                            }
+	                        }
                     }
                     catch (McpClientException ex) when (SessionExpiryHandler.IsSessionExpired(ex))
                     {
                         // If the server no longer knows about this session, treat it as already closed and
                         // clear the local state if it was the active one.
                         output.Warning("Session no longer exists (expired/evicted).");
-                        if (state.SessionId == sessionToClose)
-                        {
-                            state.ClearSession();
-                        }
-                    }
+	                        if (state.SessionId == sessionToClose)
+	                        {
+	                            state.ClearSession();
+	                        }
+	                        
+	                        if (state.Settings.ClearLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, sessionToClose))
+	                        {
+	                            state.Settings.Save();
+	                        }
+	                    }
                     break;
 
                 case "info":
@@ -4492,8 +4518,10 @@ public class Program
                             return;
                         }
 
-                        state.SessionId = resolvedSessionId;
-                        state.DumpId = null;
+	                        state.SessionId = resolvedSessionId;
+	                        state.Settings.SetLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, resolvedSessionId);
+	                        state.Settings.Save();
+	                        state.DumpId = null;
                         
                         // Extract debugger type from response
                         var debuggerTypeMatch = System.Text.RegularExpressions.Regex.Match(
@@ -4556,18 +4584,20 @@ public class Program
                             "Restoring session...",
                             () => mcpClient.RestoreSessionAsync(resolvedRestoreId, state.Settings.UserId));
 
-                        if (IsErrorResult(restoreResult))
-                        {
-                            output.Error(restoreResult);
-                            output.Dim("Use 'session list' to see available sessions or 'session create' to create a new one.");
-                            return;
-                        }
+	                        if (IsErrorResult(restoreResult))
+	                        {
+	                            output.Error(restoreResult);
+	                            output.Dim("Use 'session list' to see available sessions or 'session create' to create a new one.");
+	                            return;
+	                        }
 
-                        state.SessionId = resolvedRestoreId;
-                        
-                        // Check if dump is mentioned in result
-                        if (restoreResult.Contains("CurrentDump:") && !restoreResult.Contains("None"))
-                        {
+	                        state.SessionId = resolvedRestoreId;
+	                        state.Settings.SetLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, resolvedRestoreId);
+	                        state.Settings.Save();
+	                        
+	                        // Check if dump is mentioned in result
+	                        if (restoreResult.Contains("CurrentDump:") && !restoreResult.Contains("None"))
+	                        {
                             var dumpMatch = System.Text.RegularExpressions.Regex.Match(
                                 restoreResult, @"CurrentDump:\s*(\S+)");
                             if (dumpMatch.Success)
@@ -4689,18 +4719,20 @@ public class Program
                     return;
                 }
 
-                var sessionIdMatch = System.Text.RegularExpressions.Regex.Match(
-                    createResult, @"SessionId:\s*([a-zA-Z0-9\-]+)");
-                if (sessionIdMatch.Success)
-                {
-                    state.SessionId = sessionIdMatch.Groups[1].Value;
-                    output.Success($"Session created: {state.SessionId}");
-                }
-                else
-                {
-                    output.Error("Failed to create session - unexpected response format");
-                    output.Dim(createResult);
-                    return;
+	                var sessionIdMatch = System.Text.RegularExpressions.Regex.Match(
+	                    createResult, @"SessionId:\s*([a-zA-Z0-9\-]+)");
+	                if (sessionIdMatch.Success)
+	                {
+	                    state.SessionId = sessionIdMatch.Groups[1].Value;
+	                    state.Settings.SetLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, state.SessionId);
+	                    state.Settings.Save();
+	                    output.Success($"Session created: {state.SessionId}");
+	                }
+	                else
+	                {
+	                    output.Error("Failed to create session - unexpected response format");
+	                    output.Dim(createResult);
+	                    return;
                 }
             }
             catch (Exception ex)
@@ -4740,13 +4772,15 @@ public class Program
             }
             else
             {
-                output.Success("Dump opened successfully!");
-                output.Markup(result);
-                state.SetDumpLoaded(dumpId);
-                
-                // Get debugger type for proper command mapping
-                try
-                {
+	                output.Success("Dump opened successfully!");
+	                output.Markup(result);
+	                state.SetDumpLoaded(dumpId);
+	                state.Settings.SetLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, state.SessionId!);
+	                state.Settings.Save();
+	                
+	                // Get debugger type for proper command mapping
+	                try
+	                {
                     var debuggerInfo = await mcpClient.GetDebuggerInfoAsync(state.SessionId!, state.Settings.UserId);
                     // Extract debugger type from response (e.g., "Debugger Type: LLDB" or "Debugger Type: WinDbg")
                     var debuggerTypeMatch = System.Text.RegularExpressions.Regex.Match(

@@ -105,6 +105,82 @@ public class ConnectionSettings
     public Dictionary<string, ServerProfile> Profiles { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets the last-used session ID per server/user.
+    /// </summary>
+    /// <remarks>
+    /// The key is a normalized "<c>{serverUrl}::{userId}</c>" identifier.
+    /// </remarks>
+    public Dictionary<string, string> LastSessions { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Gets the last-used session ID for a given server/user pair.
+    /// </summary>
+    public string? GetLastSessionId(string? serverUrl, string? userId)
+    {
+        if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(userId))
+        {
+            return null;
+        }
+
+        var key = BuildLastSessionKey(serverUrl, userId);
+        return LastSessions.TryGetValue(key, out var sessionId) && !string.IsNullOrWhiteSpace(sessionId)
+            ? sessionId
+            : null;
+    }
+
+    /// <summary>
+    /// Sets the last-used session ID for a given server/user pair.
+    /// </summary>
+    public void SetLastSessionId(string? serverUrl, string? userId, string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(userId))
+        {
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            throw new ArgumentException("sessionId cannot be null or empty.", nameof(sessionId));
+        }
+
+        LastSessions[BuildLastSessionKey(serverUrl, userId)] = sessionId;
+    }
+
+    /// <summary>
+    /// Clears the last-used session ID for a given server/user pair when it matches the provided session ID.
+    /// </summary>
+    public bool ClearLastSessionId(string? serverUrl, string? userId, string? sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(serverUrl) || string.IsNullOrWhiteSpace(userId) || string.IsNullOrWhiteSpace(sessionId))
+        {
+            return false;
+        }
+
+        var key = BuildLastSessionKey(serverUrl, userId);
+        if (!LastSessions.TryGetValue(key, out var stored) || !string.Equals(stored, sessionId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return LastSessions.Remove(key);
+    }
+
+    private static string BuildLastSessionKey(string serverUrl, string userId)
+        => $"{NormalizeServerUrl(serverUrl)}::{userId.Trim()}";
+
+    private static string NormalizeServerUrl(string url)
+    {
+        url = url.Trim().TrimEnd('/');
+
+        if (!url.Contains("://", StringComparison.Ordinal))
+        {
+            url = "http://" + url;
+        }
+
+        return url;
+    }
+
+    /// <summary>
     /// Creates settings from environment variables and defaults.
     /// </summary>
     /// <returns>A new ConnectionSettings instance.</returns>
@@ -225,7 +301,10 @@ public class ConnectionSettings
             Verbose = false,
             HistoryFile = config.HistoryFile ?? DefaultHistoryFile,
             HistorySize = config.HistorySize ?? 1000,
-            Profiles = config.Profiles ?? new Dictionary<string, ServerProfile>()
+            Profiles = config.Profiles ?? new Dictionary<string, ServerProfile>(),
+            LastSessions = config.LastSessions != null
+                ? new Dictionary<string, string>(config.LastSessions, StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         };
     }
 
@@ -259,7 +338,8 @@ public class ConnectionSettings
             OutputFormat = OutputFormat != OutputFormat.Text ? OutputFormat.ToString().ToLowerInvariant() : null,
             HistoryFile = HistoryFile != DefaultHistoryFile ? HistoryFile : null,
             HistorySize = HistorySize != 1000 ? HistorySize : null,
-            Profiles = Profiles.Count > 0 ? Profiles : null
+            Profiles = Profiles.Count > 0 ? Profiles : null,
+            LastSessions = LastSessions.Count > 0 ? LastSessions : null
         };
 
         var json = JsonSerializer.Serialize(config, JsonOptions);
@@ -464,4 +544,10 @@ internal class ConfigFile
     /// </summary>
     [JsonPropertyName("profiles")]
     public Dictionary<string, ServerProfile>? Profiles { get; set; }
+
+    /// <summary>
+    /// Last-used session IDs per server/user.
+    /// </summary>
+    [JsonPropertyName("lastSessions")]
+    public Dictionary<string, string>? LastSessions { get; set; }
 }
