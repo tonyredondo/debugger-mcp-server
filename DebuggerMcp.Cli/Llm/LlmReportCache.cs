@@ -258,9 +258,16 @@ internal static class LlmReportCache
             return dumpId.GetString();
         }
 
-        if (item.TryGetProperty("threadId", out var threadId) && threadId.ValueKind == JsonValueKind.String)
+        if (item.TryGetProperty("threadId", out var threadId))
         {
-            return threadId.GetString();
+            if (threadId.ValueKind == JsonValueKind.String)
+            {
+                return threadId.GetString();
+            }
+            if (threadId.ValueKind == JsonValueKind.Number && threadId.TryGetInt32(out var threadInt))
+            {
+                return threadInt.ToString();
+            }
         }
 
         if (item.TryGetProperty("name", out var name) && name.ValueKind == JsonValueKind.String)
@@ -436,7 +443,10 @@ internal static class LlmReportCache
                 continue;
             }
 
-            var path = Path.Combine(cacheDir, file);
+            if (!TryResolveCacheFile(cacheDir, file!, out var path))
+            {
+                continue;
+            }
             if (!File.Exists(path))
             {
                 continue;
@@ -446,6 +456,59 @@ internal static class LlmReportCache
         }
 
         return result;
+    }
+
+    private static bool TryResolveCacheFile(string cacheDir, string fileName, out string fullPath)
+    {
+        fullPath = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        // Only allow plain file names (no directory separators, no rooted paths).
+        var name = fileName.Trim();
+        if (name.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar]) >= 0)
+        {
+            return false;
+        }
+
+        if (Path.IsPathRooted(name))
+        {
+            return false;
+        }
+
+        if (!string.Equals(Path.GetFileName(name), name, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            var fullDir = Path.GetFullPath(cacheDir);
+            var combined = Path.GetFullPath(Path.Combine(fullDir, name));
+            var rel = Path.GetRelativePath(fullDir, combined);
+
+            if (Path.IsPathRooted(rel))
+            {
+                return false;
+            }
+
+            if (rel.Equals("..", StringComparison.Ordinal) ||
+                rel.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                rel.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            fullPath = combined;
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static string ComputeStableId(string input)

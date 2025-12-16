@@ -1,5 +1,6 @@
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using DebuggerMcp.Cli.Llm;
 using Xunit;
 
@@ -170,6 +171,93 @@ public class LlmReportCacheTests
             Assert.Equal(JsonValueKind.Object, content.ValueKind);
             Assert.True(content.TryGetProperty("threadId", out var threadId));
             Assert.Equal("7", threadId.GetString());
+        }
+    }
+
+    [Fact]
+    public async Task ReportTools_Get_RefusesOutsideCacheDirectory()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        var cacheDir = Path.Combine(tempRoot, "cache");
+        Directory.CreateDirectory(cacheDir);
+
+        var outsidePath = Path.Combine(tempRoot, "outside.json");
+        File.WriteAllText(outsidePath, "{\"pwn\":true}");
+
+        var cached = new LlmReportCache.CachedReport(
+            CacheDirectory: cacheDir,
+            Sections: [],
+            SummaryJson: "{}",
+            ManifestJson: "{}");
+
+        var reportCtx = new LlmFileAttachments.ReportAttachmentContext(
+            DisplayPath: "./report.json",
+            AbsolutePath: Path.Combine(tempRoot, "report.json"),
+            CachedReport: cached,
+            MessageForModel: string.Empty,
+            SectionIdToFile: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) { ["evil"] = outsidePath },
+            PointerToFile: new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
+
+        var call = new ChatToolCall("1", "get_report_section", "{\"sectionId\":\"evil\"}");
+        var result = await LlmReportAgentTools.ExecuteAsync(call, [reportCtx], CancellationToken.None);
+
+        Assert.Contains("Refusing to read section outside report cache directory", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildOrLoadCachedReport_IgnoresManifestEntriesWithPathTraversal()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache-root");
+        Directory.CreateDirectory(tempRoot);
+
+        var reportPath = Path.Combine(tempRoot, "report.json");
+        File.WriteAllText(reportPath, """
+        {
+          "metadata": { "dumpId": "d1" },
+          "analysis": {
+            "environment": { "os": "linux" },
+            "threads": { "faultingThread": { "threadId": "7", "callStack": [ { "function": "f" } ] } },
+            "pad": "PAD_PLACEHOLDER"
+          }
+        }
+        """.Replace("PAD_PLACEHOLDER", new string('p', 50_000)));
+
+        var cached1 = LlmReportCache.BuildOrLoadCachedReport(reportPath, cacheRoot, maxSectionBytes: 10_000);
+        Assert.True(Directory.Exists(cached1.CacheDirectory));
+
+        var manifestPath = Path.Combine(cached1.CacheDirectory, "manifest.json");
+        var summaryPath = Path.Combine(cached1.CacheDirectory, "summary.json");
+        Assert.True(File.Exists(manifestPath));
+        Assert.True(File.Exists(summaryPath));
+
+        var outsideFile = Path.Combine(cached1.CacheDirectory, "..", "outside.json");
+        File.WriteAllText(outsideFile, "{\"pwn\":true}");
+
+        var manifestNode = JsonNode.Parse(File.ReadAllText(manifestPath))!.AsObject();
+        var sections = manifestNode["sections"]!.AsArray();
+        sections.Add(new JsonObject
+        {
+            ["id"] = "evil",
+            ["pointer"] = "/analysis/evil",
+            ["file"] = "../outside.json",
+            ["sizeBytes"] = 13
+        });
+        File.WriteAllText(manifestPath, manifestNode.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+
+        var cached2 = LlmReportCache.BuildOrLoadCachedReport(reportPath, cacheRoot, maxSectionBytes: 10_000);
+
+        Assert.DoesNotContain(cached2.Sections, s => string.Equals(Path.GetFileName(s.FilePath), "outside.json", StringComparison.OrdinalIgnoreCase));
+
+        var cacheDirFull = Path.GetFullPath(cached2.CacheDirectory);
+        foreach (var section in cached2.Sections)
+        {
+            var sectionPath = Path.GetFullPath(section.FilePath);
+            var rel = Path.GetRelativePath(cacheDirFull, sectionPath);
+            Assert.False(Path.IsPathRooted(rel));
+            Assert.False(rel.Equals("..", StringComparison.Ordinal));
+            Assert.False(rel.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal));
+            Assert.False(rel.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal));
         }
     }
 }

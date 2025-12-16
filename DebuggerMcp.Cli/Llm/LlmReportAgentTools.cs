@@ -148,7 +148,7 @@ internal static class LlmReportAgentTools
         // Safety: ensure resolved file is inside the report cache directory.
         var cacheDir = Path.GetFullPath(report.CachedReport.CacheDirectory);
         var full = Path.GetFullPath(filePath);
-        if (!full.StartsWith(cacheDir, StringComparison.OrdinalIgnoreCase))
+        if (!IsPathWithinDirectory(full, cacheDir))
         {
             return "ERROR: Refusing to read section outside report cache directory.";
         }
@@ -199,6 +199,34 @@ internal static class LlmReportAgentTools
         };
 
         return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static bool IsPathWithinDirectory(string fullPath, string directoryPath)
+    {
+        try
+        {
+            var fullDir = Path.GetFullPath(directoryPath);
+            var full = Path.GetFullPath(fullPath);
+            var relative = Path.GetRelativePath(fullDir, full);
+
+            if (string.IsNullOrEmpty(relative))
+            {
+                return false;
+            }
+
+            if (Path.IsPathRooted(relative))
+            {
+                return false;
+            }
+
+            return !relative.Equals("..", StringComparison.Ordinal) &&
+                   !relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) &&
+                   !relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool TrySelectReport(
