@@ -45,7 +45,7 @@ public sealed class LlmSettings
     /// <summary>
     /// Gets or sets a value indicating whether agent tool calls require confirmation.
     /// </summary>
-    public bool AgentModeConfirmToolCalls { get; set; }
+    public bool AgentModeConfirmToolCalls { get; set; } = true;
 
     /// <summary>
     /// Applies environment variable overrides (if set).
