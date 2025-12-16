@@ -54,4 +54,29 @@ public class TranscriptContextBuilderTests
         Assert.Contains("confirm", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Tooling:", messages[0].Content);
     }
+
+    [Fact]
+    public void BuildMessages_DedupesLastUserMessageAfterRedaction()
+    {
+        // Simulate the CLI storing a redacted llm_user message before building messages.
+        var tail = new List<CliTranscriptEntry>
+        {
+            new() { Kind = "llm_user", Text = "apiKey=***" }
+        };
+
+        var messages = TranscriptContextBuilder.BuildMessages(
+            userPrompt: "apiKey=secret",
+            serverUrl: "http://localhost:5000",
+            sessionId: "s1",
+            dumpId: "d1",
+            transcriptTail: tail,
+            maxContextChars: 10_000,
+            agentModeEnabled: false,
+            agentConfirmationEnabled: true);
+
+        // Should not include the prior llm_user entry; only the new user prompt.
+        Assert.Equal("user", messages[^1].Role);
+        Assert.Equal("apiKey=secret", messages[^1].Content);
+        Assert.DoesNotContain(messages, m => m.Role == "user" && m.Content == "apiKey=***");
+    }
 }

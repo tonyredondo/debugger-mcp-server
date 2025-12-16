@@ -52,6 +52,9 @@ public sealed class LlmSettings
     /// </summary>
     public void ApplyEnvironmentOverrides()
     {
+        // Reset ephemeral env-derived fields each time this runs.
+        OpenRouterApiKeyFromEnvironment = null;
+
         // Support both OpenRouter-standard and DebuggerMcp-prefixed env vars.
         var apiKey =
             Environment.GetEnvironmentVariable("OPENROUTER_API_KEY") ??

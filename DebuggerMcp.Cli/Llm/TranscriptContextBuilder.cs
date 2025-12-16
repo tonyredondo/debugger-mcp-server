@@ -59,7 +59,10 @@ internal static class TranscriptContextBuilder
         {
             var last = llmEntries[^1];
             if (last.Kind == "llm_user" &&
-                string.Equals(last.Text?.Trim(), userPrompt.Trim(), StringComparison.OrdinalIgnoreCase))
+                string.Equals(
+                    NormalizeForComparison(last.Text),
+                    NormalizeForComparison(userPrompt),
+                    StringComparison.OrdinalIgnoreCase))
             {
                 llmEntries.RemoveAt(llmEntries.Count - 1);
             }
@@ -77,6 +80,9 @@ internal static class TranscriptContextBuilder
         messages.Add(new ChatMessage("user", userPrompt));
         return messages;
     }
+
+    private static string NormalizeForComparison(string? text)
+        => TranscriptRedactor.RedactText(text ?? string.Empty).Trim();
 
     private static string BuildCliTranscriptContext(IReadOnlyList<CliTranscriptEntry> transcriptTail, int maxContextChars)
     {

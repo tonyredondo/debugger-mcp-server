@@ -20,7 +20,7 @@ internal static class LlmFileAttachments
     // - #C:\path\file.txt
     // Also supports paths with spaces using parentheses: #(./path with spaces.json)
     private static readonly Regex AttachmentRegex = new(
-        @"(?<!\w)#(?:(?<path>(?:\./|\.\./|/|~\/)[^\s]+|[A-Za-z]:\\[^\s]+)|\((?<path>(?:\./|\.\./|/|~\/)[^)]+|[A-Za-z]:\\[^)]+)\))",
+        @"(?<!\w)#(?:(?<path>(?:\./|\.\./|/|~\/)[^\s,;:\)\]\}\""']+|[A-Za-z]:\\[^\s,;:\)\]\}\""']+)|\((?<path>(?:\./|\.\./|/|~\/)[^)]+|[A-Za-z]:\\[^)]+)\))(?<trail>[,.;:\)\]\}\""']*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     internal sealed record Attachment(string DisplayPath, string AbsolutePath, string Content, bool Truncated);
@@ -64,14 +64,23 @@ internal static class LlmFileAttachments
                 continue;
             }
 
-            var path = match.Groups["path"].Value;
+            var rawPath = match.Groups["path"].Value;
+            if (string.IsNullOrWhiteSpace(rawPath))
+            {
+                continue;
+            }
+            var path = TrimTrailingPathPunctuation(rawPath);
             if (string.IsNullOrWhiteSpace(path))
             {
                 continue;
             }
 
+            var pathTrail = rawPath.Length > path.Length ? rawPath[path.Length..] : string.Empty;
+            var trail = pathTrail + (match.Groups["trail"].Value ?? string.Empty);
+
             sb.Append(prompt.AsSpan(lastIndex, match.Index - lastIndex));
             sb.Append($"(<attached: {path}>)");
+            sb.Append(trail);
             lastIndex = match.Index + match.Length;
 
             if (remainingTotal <= 0)
@@ -106,7 +115,6 @@ internal static class LlmFileAttachments
     {
         try
         {
-            displayPath = TrimTrailingPathPunctuation(displayPath);
             var expanded = ExpandHome(displayPath);
             var absolute = Path.GetFullPath(expanded, baseDirectory);
             if (!File.Exists(absolute))
@@ -217,6 +225,29 @@ internal static class LlmFileAttachments
         return (text, truncated, effective);
     }
 
+    private static string TrimTrailingPathPunctuation(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return path;
+        }
+
+        var end = path.Length;
+        while (end > 0)
+        {
+            var ch = path[end - 1];
+            if (ch is ',' or '.' or ';' or ':' or ')' or ']' or '}' or '"' or '\'')
+            {
+                end--;
+                continue;
+            }
+
+            break;
+        }
+
+        return end == path.Length ? path : path[..end];
+    }
+
     private static string TruncateUtf8ToBytes(string text, int maxBytes, string suffix)
     {
         if (string.IsNullOrEmpty(text) || maxBytes <= 0)
@@ -234,16 +265,5 @@ internal static class LlmFileAttachments
         var limit = Math.Max(0, maxBytes - suffixBytes);
         var prefix = Encoding.UTF8.GetString(bytes, 0, limit);
         return prefix + Environment.NewLine + suffix;
-    }
-
-    private static string TrimTrailingPathPunctuation(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return path;
-        }
-
-        // Common punctuation users might place immediately after an attachment reference in prose.
-        return path.TrimEnd(',', '.', ';', ':', ')', ']', '}', '"', '\'');
     }
 }

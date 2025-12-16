@@ -49,5 +49,25 @@ public class LlmSettingsTests
             Environment.SetEnvironmentVariable("DEBUGGER_MCP_LLM_AGENT_MODE", old);
         }
     }
-}
 
+    [Fact]
+    public void ApplyEnvironmentOverrides_ClearsEnvApiKeyWhenUnset()
+    {
+        var old = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        try
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", "k1");
+            var settings = new LlmSettings();
+            settings.ApplyEnvironmentOverrides();
+            Assert.Equal("k1", settings.GetEffectiveOpenRouterApiKey());
+
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", null);
+            settings.ApplyEnvironmentOverrides();
+            Assert.Null(settings.OpenRouterApiKeyFromEnvironment);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENROUTER_API_KEY", old);
+        }
+    }
+}
