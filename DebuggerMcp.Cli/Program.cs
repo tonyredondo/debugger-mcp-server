@@ -4536,7 +4536,7 @@ public class Program
                     output.Error("Usage: llm set-agent <true|false>");
                     return;
                 }
-                if (!TryParseBool(args[1], out var enabled))
+                if (!BoolParsing.TryParse(args[1], out var enabled))
                 {
                     output.Error("Invalid value. Use true/false, on/off, 1/0.");
                     return;
@@ -4553,7 +4553,7 @@ public class Program
                     output.Error("Usage: llm set-agent-confirm <true|false>");
                     return;
                 }
-                if (!TryParseBool(args[1], out var confirmEnabled))
+                if (!BoolParsing.TryParse(args[1], out var confirmEnabled))
                 {
                     output.Error("Invalid value. Use true/false, on/off, 1/0.");
                     return;
@@ -4618,30 +4618,6 @@ public class Program
         {
             output.Error(ex.Message);
         }
-    }
-
-    private static bool TryParseBool(string value, out bool result)
-    {
-        if (bool.TryParse(value, out result))
-        {
-            return true;
-        }
-
-        var v = value.Trim().ToLowerInvariant();
-        if (v is "1" or "on" or "yes" or "y" or "enabled" or "enable")
-        {
-            result = true;
-            return true;
-        }
-
-        if (v is "0" or "off" or "no" or "n" or "disabled" or "disable")
-        {
-            result = false;
-            return true;
-        }
-
-        result = false;
-        return false;
     }
 
     private static async Task<string> RunLlmAgentLoopAsync(

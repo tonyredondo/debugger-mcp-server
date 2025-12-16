@@ -45,7 +45,7 @@ public sealed class LlmSettings
     /// <summary>
     /// Gets or sets a value indicating whether agent tool calls require confirmation.
     /// </summary>
-    public bool AgentModeConfirmToolCalls { get; set; } = true;
+    public bool AgentModeConfirmToolCalls { get; set; }
 
     /// <summary>
     /// Applies environment variable overrides (if set).
@@ -88,7 +88,7 @@ public sealed class LlmSettings
         var agentMode =
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_AGENT_MODE") ??
             Environment.GetEnvironmentVariable("LLM_AGENT_MODE");
-        if (!string.IsNullOrWhiteSpace(agentMode) && bool.TryParse(agentMode, out var enabled))
+        if (BoolParsing.TryParse(agentMode, out var enabled))
         {
             AgentModeEnabled = enabled;
         }
@@ -96,7 +96,7 @@ public sealed class LlmSettings
         var confirm =
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_AGENT_CONFIRM") ??
             Environment.GetEnvironmentVariable("LLM_AGENT_CONFIRM");
-        if (!string.IsNullOrWhiteSpace(confirm) && bool.TryParse(confirm, out var confirmEnabled))
+        if (BoolParsing.TryParse(confirm, out var confirmEnabled))
         {
             AgentModeConfirmToolCalls = confirmEnabled;
         }
