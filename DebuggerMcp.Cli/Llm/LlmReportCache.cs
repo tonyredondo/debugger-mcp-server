@@ -128,7 +128,7 @@ internal static class LlmReportCache
     {
         if (TrySerializeElementCapped(element, maxSectionBytes, out var bytes, out var sizeBytes))
         {
-            var fileName = $"{SanitizeFileName(sectionId)}.json";
+            var fileName = GetSectionFileName(sectionId, pointer);
             var filePath = Path.Combine(cacheDir, fileName);
             var text = Encoding.UTF8.GetString(bytes);
             text = TranscriptRedactor.RedactText(text);
@@ -175,7 +175,7 @@ internal static class LlmReportCache
             note = $"Value exceeded {maxSectionBytes} bytes; split not possible for primitive JSON value."
         }, new JsonSerializerOptions { WriteIndented = true });
         placeholder = TranscriptRedactor.RedactText(placeholder);
-        var cappedFile = $"{SanitizeFileName(sectionId)}.json";
+        var cappedFile = GetSectionFileName(sectionId, pointer);
         var cappedPath = Path.Combine(cacheDir, cappedFile);
         File.WriteAllText(cappedPath, placeholder);
         sections.Add(new ReportSection(sectionId, pointer, cappedPath, Encoding.UTF8.GetByteCount(placeholder)));
@@ -240,7 +240,7 @@ internal static class LlmReportCache
         var json = JsonSerializer.Serialize(container, new JsonSerializerOptions { WriteIndented = true });
         json = TranscriptRedactor.RedactText(json);
 
-        var fileName = $"{SanitizeFileName(sectionId)}.json";
+        var fileName = GetSectionFileName(sectionId, pointer);
         var filePath = Path.Combine(cacheDir, fileName);
         File.WriteAllText(filePath, json);
         sections.Add(new ReportSection(sectionId, pointer, filePath, Encoding.UTF8.GetByteCount(json)));
@@ -468,6 +468,15 @@ internal static class LlmReportCache
         return s;
     }
 
+    private static string GetSectionFileName(string sectionId, string jsonPointer)
+    {
+        // Ensure uniqueness even when sanitized names collide (e.g., long ids truncated to 120 chars).
+        // Keep names stable across runs for the same report content.
+        var baseName = SanitizeFileName(sectionId);
+        var hash = ComputeStableId($"{sectionId}|{jsonPointer}")[..12];
+        return $"{baseName}-{hash}.json";
+    }
+
     private static string EscapeJsonPointer(string segment)
         => segment.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
 
@@ -628,6 +637,17 @@ internal static class LlmReportCache
                                     // Next token is the value; we don't need to validate its shape here.
                                     hasKnownAnalysisSection = true;
                                 }
+                            }
+                            break;
+                        case JsonTokenType.String:
+                        case JsonTokenType.Number:
+                        case JsonTokenType.True:
+                        case JsonTokenType.False:
+                        case JsonTokenType.Null:
+                            // If metadata/analysis isn't an object/array, clear the pending marker to avoid mis-attribution.
+                            if (pendingSection != Section.None && depth == 1)
+                            {
+                                pendingSection = Section.None;
                             }
                             break;
                     }

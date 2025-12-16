@@ -153,6 +153,19 @@ internal static class LlmReportAgentTools
             return "ERROR: Refusing to read section outside report cache directory.";
         }
 
+        try
+        {
+            // Defense-in-depth: avoid following symlinks/reparse points out of the cache directory.
+            if ((File.GetAttributes(full) & FileAttributes.ReparsePoint) != 0)
+            {
+                return "ERROR: Refusing to read a symlinked section file.";
+            }
+        }
+        catch
+        {
+            // If we can't read attributes, proceed with the normal read (best-effort).
+        }
+
         var text = File.ReadAllText(full);
         var truncated = false;
         if (text.Length > maxChars)
