@@ -561,6 +561,7 @@ public class Program
 
         // Create MCP client for debugging operations
         var mcpClient = new McpClient();
+        mcpClient.ToolResponseTimeout = settings.Timeout;
 
         // Default server URL for auto-connect
         const string DefaultServerUrl = "http://localhost:5000";
@@ -961,12 +962,25 @@ public class Program
                 break;
 
             case "set":
+                var previousTimeoutSeconds = state.Settings.TimeoutSeconds;
                 HandleSet(args, output, state);
+
+                if (args.Length >= 2 &&
+                    string.Equals(args[0], "timeout", StringComparison.OrdinalIgnoreCase) &&
+                    state.Settings.TimeoutSeconds != previousTimeoutSeconds)
+                {
+                    // Apply timeout change immediately to clients.
+                    if (state.IsConnected && !string.IsNullOrWhiteSpace(state.Settings.ServerUrl))
+                    {
+                        httpClient.Configure(state.Settings.ServerUrl!, state.Settings.ApiKey, state.Settings.Timeout);
+                    }
+                    mcpClient.ToolResponseTimeout = state.Settings.Timeout;
+                }
                 break;
 
             // File operations
             case "dumps":
-                await HandleDumpsAsync(args, console, output, state, httpClient);
+                await HandleDumpsAsync(args, console, output, state, httpClient, mcpClient);
                 break;
 
             case "symbols":
@@ -2062,7 +2076,8 @@ public class Program
         IAnsiConsole console,
         ConsoleOutput output,
         ShellState state,
-        HttpApiClient httpClient)
+        HttpApiClient httpClient,
+        McpClient mcpClient)
     {
         // Require connection
         if (!state.IsConnected)
@@ -2156,22 +2171,32 @@ public class Program
                 {
                     output.KeyValue("Host Type", "glibc (Debian/Ubuntu/etc.)");
                 }
-                
-                // Check for host mismatch with server
-                CheckDumpServerCompatibility(result.IsAlpineDump, result.Architecture, state, output);
             }
-            else if (!string.IsNullOrEmpty(result.Architecture))
+
+            var likelyIncompatible = IsLikelyIncompatibleWithCurrentServer(result.IsAlpineDump, result.Architecture, state);
+            if (!likelyIncompatible || !mcpClient.IsConnected)
             {
-                // Even if we don't know Alpine status, check architecture
-                CheckDumpServerCompatibility(null, result.Architecture, state, output);
+                // Best-effort: show compatibility warnings inline when we can determine the server characteristics.
+                CheckDumpServerCompatibility(result.IsAlpineDump, result.Architecture, state, output);
             }
 
             output.KeyValue("Uploaded At", result.UploadedAt.ToString("yyyy-MM-dd HH:mm:ss"));
 
-            // Set the dump ID in state for convenience
-            state.DumpId = result.DumpId;
+            // Select the dump for convenience (does not imply it's open/loaded).
+            state.SetSelectedDump(result.DumpId);
             output.WriteLine();
-            output.Dim($"Dump ID set in session. Use 'open' to start debugging.");
+            output.Dim("Dump selected. Use 'open' to start debugging.");
+
+            // If the dump is incompatible with the current server, offer to switch now (so the next 'open' works).
+            if (likelyIncompatible && mcpClient.IsConnected)
+            {
+                var switchResult = await CheckDumpServerMatchAndSwitchAsync(result.DumpId, output, state, httpClient, mcpClient);
+                if (switchResult == ServerSwitchResult.NoSwitchNeeded)
+                {
+                    // Fall back to the simple compatibility warning when capabilities discovery fails.
+                    CheckDumpServerCompatibility(result.IsAlpineDump, result.Architecture, state, output);
+                }
+            }
         }
         catch (HttpApiException ex)
         {
@@ -2199,7 +2224,8 @@ public class Program
         IAnsiConsole console,
         ConsoleOutput output,
         ShellState state,
-        HttpApiClient httpClient)
+        HttpApiClient httpClient,
+        McpClient mcpClient)
     {
         // Require connection
         if (!state.IsConnected)
@@ -2221,7 +2247,7 @@ public class Program
         {
             case "upload":
             case "up":
-                await HandleUploadAsync(subArgs, console, output, state, httpClient);
+                await HandleUploadAsync(subArgs, console, output, state, httpClient, mcpClient);
                 break;
 
             case "list":
@@ -2447,7 +2473,7 @@ public class Program
         ShellState state,
         HttpApiClient httpClient)
     {
-        var partialDumpId = args.Length > 0 ? args[0] : state.DumpId;
+        var partialDumpId = args.Length > 0 ? args[0] : (state.SelectedDumpId ?? state.DumpId);
 
         if (string.IsNullOrEmpty(partialDumpId))
         {
@@ -2585,7 +2611,12 @@ public class Program
             // Clear dump ID from state if it matches
             if (state.DumpId == dumpId)
             {
-                state.DumpId = null;
+                state.ClearDump();
+            }
+
+            if (state.SelectedDumpId == dumpId)
+            {
+                state.ClearSelectedDump();
             }
         }
         catch (HttpApiException ex)
@@ -2761,7 +2792,7 @@ public class Program
         HttpApiClient httpClient)
     {
         var filePatterns = new List<string>();
-        string? dumpId = state.DumpId;
+        string? dumpId = state.SelectedDumpId ?? state.DumpId;
 
         // Parse arguments
         for (var i = 0; i < args.Length; i++)
@@ -3046,7 +3077,7 @@ public class Program
         ShellState state,
         HttpApiClient httpClient)
     {
-        string? dumpId = state.DumpId;
+        string? dumpId = state.SelectedDumpId ?? state.DumpId;
 
         // Parse arguments
         for (var i = 0; i < args.Length; i++)
@@ -3325,7 +3356,7 @@ public class Program
         }
 
         // Get dump ID from args or current state
-        string? dumpId = args.Length > 0 ? args[0] : state.DumpId;
+        string? dumpId = args.Length > 0 ? args[0] : (state.SelectedDumpId ?? state.DumpId);
 
         if (string.IsNullOrEmpty(dumpId))
         {
@@ -4502,7 +4533,7 @@ public class Program
 	                        state.SessionId = resolvedSessionId;
 	                        state.Settings.SetLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, resolvedSessionId);
 	                        state.Settings.Save();
-	                        state.DumpId = null;
+	                        state.ClearDump();
                         
                         // Extract debugger type from response
                         var debuggerTypeMatch = System.Text.RegularExpressions.Regex.Match(
@@ -4652,7 +4683,7 @@ public class Program
         }
 
         // Determine dump ID (supports partial IDs)
-        var partialDumpId = args.Length > 0 ? args[0] : state.DumpId;
+        var partialDumpId = args.Length > 0 ? args[0] : (state.SelectedDumpId ?? state.DumpId);
         if (string.IsNullOrEmpty(partialDumpId))
         {
             output.Error("Dump ID required. Usage: open <dumpId>");
@@ -4787,6 +4818,50 @@ public class Program
             output.Warning("Your session appears to have expired. Creating a new session and retrying...");
             SessionExpiryHandler.ClearExpiredSession(state);
             await HandleOpenDumpAsync(args, output, state, mcpClient, httpClient, retryOnExpiredSession: false);
+        }
+        catch (McpClientException ex) when (IsToolResponseTimeoutError(ex))
+        {
+            output.Error(ex.Message);
+            output.Dim("The server may still be processing the request. Syncing session state...");
+
+            try
+            {
+                await DumpStateRecovery.TrySyncOpenedDumpFromServerAsync(state, mcpClient);
+            }
+            catch
+            {
+                // Best-effort only; keep the CLI usable even if sync fails.
+            }
+
+            if (!string.IsNullOrWhiteSpace(state.DumpId))
+            {
+                output.Info($"Server reports a dump is open: {state.DumpId}");
+                output.Dim("If this is the dump you wanted, you can proceed; otherwise run 'close' and try again.");
+            }
+            else
+            {
+                output.Dim("No open dump detected yet. Try again in a moment (symbols may still be downloading).");
+            }
+        }
+        catch (McpClientException ex) when (IsDumpAlreadyOpenError(ex))
+        {
+            output.Error(ex.Message);
+            output.Dim("Syncing session state...");
+
+            try
+            {
+                await DumpStateRecovery.TrySyncOpenedDumpFromServerAsync(state, mcpClient);
+            }
+            catch
+            {
+                // Best-effort only.
+            }
+
+            if (!string.IsNullOrWhiteSpace(state.DumpId))
+            {
+                output.Info($"Current open dump: {state.DumpId}");
+                output.Dim("Run 'close' before opening a different dump.");
+            }
         }
         catch (McpClientException ex)
         {
@@ -5349,8 +5424,21 @@ public class Program
 
         if (string.IsNullOrEmpty(state.DumpId))
         {
-            output.Warning("No dump is currently open.");
-            return;
+            // Best-effort recovery: the CLI may have timed out while the server kept opening the dump.
+            try
+            {
+                await DumpStateRecovery.TrySyncOpenedDumpFromServerAsync(state, mcpClient);
+            }
+            catch
+            {
+                // Ignore sync failures.
+            }
+
+            if (string.IsNullOrEmpty(state.DumpId))
+            {
+                output.Warning("No dump is currently open.");
+                return;
+            }
         }
 
         try
@@ -5368,6 +5456,11 @@ public class Program
                 output.Success(result);
                 state.ClearDump();
             }
+        }
+        catch (McpClientException ex) when (IsNoDumpOpenError(ex))
+        {
+            output.Warning(ex.Message);
+            state.ClearDump();
         }
         catch (McpClientException ex)
         {
@@ -7656,6 +7749,35 @@ public class Program
         }
     }
 
+    private static bool IsLikelyIncompatibleWithCurrentServer(bool? isAlpineDump, string? dumpArchitecture, ShellState state)
+    {
+        var serverInfo = state.ServerInfo;
+        if (serverInfo == null)
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(dumpArchitecture) && !string.IsNullOrWhiteSpace(serverInfo.Architecture))
+        {
+            var normalizedDumpArch = NormalizeArchitecture(dumpArchitecture);
+            var normalizedServerArch = NormalizeArchitecture(serverInfo.Architecture);
+            if (!string.Equals(normalizedDumpArch, normalizedServerArch, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        if (isAlpineDump.HasValue)
+        {
+            if (serverInfo.IsAlpine != isAlpineDump.Value)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Normalizes architecture names for comparison.
     /// </summary>
@@ -7696,6 +7818,28 @@ public class Program
     private static bool IsSessionNotFoundError(Exception ex)
     {
         return SessionExpiryHandler.IsSessionExpired(ex);
+    }
+
+    private static bool IsToolResponseTimeoutError(Exception ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        return message.Contains("timed out", StringComparison.OrdinalIgnoreCase) &&
+               message.Contains("waiting for response", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsDumpAlreadyOpenError(Exception ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        return message.Contains("dump file is already open", StringComparison.OrdinalIgnoreCase) ||
+               (message.Contains("already open", StringComparison.OrdinalIgnoreCase) &&
+                message.Contains("close", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsNoDumpOpenError(Exception ex)
+    {
+        var message = ex.Message ?? string.Empty;
+        return message.Contains("no dump", StringComparison.OrdinalIgnoreCase) &&
+               message.Contains("open", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

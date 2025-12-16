@@ -31,6 +31,7 @@ public class SessionStateSynchronizerTests
 
         Assert.True(found);
         Assert.Equal("dump-123", state.DumpId);
+        Assert.Equal("dump-123", state.SelectedDumpId);
     }
 
     [Fact]
@@ -89,4 +90,3 @@ public class SessionStateSynchronizerTests
         Assert.Null(state.DumpId);
     }
 }
-

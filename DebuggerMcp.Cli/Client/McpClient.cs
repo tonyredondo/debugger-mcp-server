@@ -36,6 +36,16 @@ public class McpClient : IMcpClient
 
     private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CaseInsensitiveCamelCaseIgnoreNull;
 
+    /// <summary>
+    /// Gets or sets the maximum time to wait for a tool response to arrive over SSE.
+    /// </summary>
+    /// <remarks>
+    /// Some operations (like opening large dumps and downloading symbols) can take a long time server-side.
+    /// This timeout only governs how long the client waits for the asynchronous SSE response after the
+    /// request is accepted.
+    /// </remarks>
+    public TimeSpan ToolResponseTimeout { get; set; } = TimeSpan.FromMinutes(10);
+
     /// <inheritdoc/>
     public bool IsConnected => _httpClient != null && !string.IsNullOrEmpty(_messageEndpoint);
 
@@ -495,7 +505,7 @@ public class McpClient : IMcpClient
 
             // Wait for response via SSE with timeout
             using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            timeoutCts.CancelAfter(TimeSpan.FromMinutes(5)); // 5 minute timeout for long operations
+            timeoutCts.CancelAfter(NormalizeToolResponseTimeout(ToolResponseTimeout));
 
             var responseJson = await tcs.Task.WaitAsync(timeoutCts.Token);
 
@@ -517,6 +527,21 @@ public class McpClient : IMcpClient
         {
             _pendingRequests.TryRemove(request.Id, out _);
         }
+    }
+
+    internal static TimeSpan NormalizeToolResponseTimeout(TimeSpan configured)
+    {
+        if (configured == Timeout.InfiniteTimeSpan)
+        {
+            return Timeout.InfiniteTimeSpan;
+        }
+
+        if (configured <= TimeSpan.Zero)
+        {
+            return TimeSpan.FromMinutes(10);
+        }
+
+        return configured;
     }
 
     /// <summary>

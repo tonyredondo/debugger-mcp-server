@@ -1,8 +1,6 @@
 using System;
 using System.Text;
-using System.Text.Json;
 using DebuggerMcp.Analysis;
-using DebuggerMcp.Serialization;
 
 namespace DebuggerMcp.Reporting;
 
@@ -12,8 +10,6 @@ namespace DebuggerMcp.Reporting;
 /// </summary>
 public class ReportService
 {
-    private readonly MarkdownReportGenerator _markdownGenerator;
-    private readonly HtmlReportGenerator _htmlGenerator;
     private readonly JsonReportGenerator _jsonGenerator;
 
     /// <summary>
@@ -21,8 +17,6 @@ public class ReportService
     /// </summary>
     public ReportService()
     {
-        _markdownGenerator = new MarkdownReportGenerator();
-        _htmlGenerator = new HtmlReportGenerator();
         _jsonGenerator = new JsonReportGenerator();
     }
 
@@ -43,24 +37,34 @@ public class ReportService
         options ??= ReportOptions.FullReport;
         metadata ??= new ReportMetadata();
 
-        // Ensure metadata matches the requested format so the JSON document remains canonical.
-        metadata.Format = options.Format;
+        // Treat JSON as the source of truth for all formats.
+        // Always generate the canonical JSON report document first, then render other formats from it.
+        var canonicalOptions = new ReportOptions
+        {
+            Format = ReportFormat.Json
+        };
 
-        // Canonical source-of-truth: build the JSON report document first (includes enrichment),
-        // then render Markdown/HTML from the JSON-deserialized document to avoid divergence.
-        var json = _jsonGenerator.Generate(analysis, options, metadata);
+        var canonicalMetadata = new ReportMetadata
+        {
+            DumpId = metadata.DumpId,
+            UserId = metadata.UserId,
+            GeneratedAt = metadata.GeneratedAt,
+            DebuggerType = metadata.DebuggerType,
+            ServerVersion = metadata.ServerVersion,
+            Format = ReportFormat.Json
+        };
+
+        var json = _jsonGenerator.Generate(analysis, canonicalOptions, canonicalMetadata);
 
         if (options.Format == ReportFormat.Json)
         {
             return json;
         }
 
-        var document = DeserializeDocument(json);
-
         return options.Format switch
         {
-            ReportFormat.Markdown => _markdownGenerator.Generate(document.Analysis, options, document.Metadata),
-            ReportFormat.Html => _htmlGenerator.Generate(document.Analysis, options, document.Metadata),
+            ReportFormat.Markdown => JsonMarkdownReportRenderer.Render(json, options.Format),
+            ReportFormat.Html => JsonHtmlReportRenderer.Render(json, options.Format),
             _ => throw new ArgumentOutOfRangeException(nameof(options.Format), $"Unsupported format: {options.Format}")
         };
     }
@@ -157,15 +161,5 @@ public class ReportService
     {
         var content = GenerateReport(analysis, options, metadata);
         return Encoding.UTF8.GetBytes(content);
-    }
-
-    private static ReportDocument DeserializeDocument(string json)
-    {
-        var document = JsonSerializer.Deserialize<ReportDocument>(json);
-        if (document == null)
-        {
-            throw new InvalidOperationException("Failed to deserialize report document.");
-        }
-        return document;
     }
 }

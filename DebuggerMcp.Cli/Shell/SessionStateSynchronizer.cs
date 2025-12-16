@@ -41,7 +41,10 @@ internal static class SessionStateSynchronizer
         }
 
         state.DumpId = string.IsNullOrWhiteSpace(match.CurrentDumpId) ? null : match.CurrentDumpId;
+        if (!string.IsNullOrWhiteSpace(state.DumpId))
+        {
+            state.SelectedDumpId = state.DumpId;
+        }
         return true;
     }
 }
-

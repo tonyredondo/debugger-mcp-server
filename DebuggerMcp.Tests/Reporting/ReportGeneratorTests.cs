@@ -341,7 +341,7 @@ public class ReportGeneratorTests
         var report = service.GenerateReport(analysis, options, metadata);
 
         // Assert
-        Assert.Contains("# Crash Analysis Report", report);
+        Assert.Contains("# Debugger MCP Report", report);
         Assert.DoesNotContain("<!DOCTYPE html>", report);
     }
 
@@ -359,6 +359,7 @@ public class ReportGeneratorTests
 
         // Assert
         Assert.Contains("<!DOCTYPE html>", report);
+        Assert.Contains("Debugger MCP Report", report);
     }
 
     [Fact]
@@ -454,7 +455,7 @@ public class ReportGeneratorTests
         Assert.NotNull(bytes);
         Assert.True(bytes.Length > 0);
         var text = System.Text.Encoding.UTF8.GetString(bytes);
-        Assert.Contains("Crash Analysis Report", text);
+        Assert.Contains("Debugger MCP Report", text);
     }
 
     // ============================================================

@@ -12,6 +12,7 @@ using Xunit;
 
 namespace DebuggerMcp.Tests.Reporting;
 
+[Collection("SourceContextEnricher")]
 public class SourceContextEnricherTests
 {
     private sealed class CountingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler

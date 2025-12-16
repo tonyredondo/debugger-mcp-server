@@ -38,9 +38,15 @@ public class ShellState
     public string? SessionId { get; set; }
 
     /// <summary>
-    /// Gets or sets the current dump ID.
+    /// Gets or sets the currently opened dump ID (set after a successful <c>open</c>).
     /// </summary>
     public string? DumpId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the currently selected dump ID (e.g., last uploaded or last referenced).
+    /// This does not imply the dump is open in the debugger.
+    /// </summary>
+    public string? SelectedDumpId { get; set; }
 
     /// <summary>
     /// Gets or sets the debugger type (WinDbg or LLDB).
@@ -78,6 +84,11 @@ public class ShellState
     public bool HasDumpLoaded => !string.IsNullOrEmpty(DumpId);
 
     /// <summary>
+    /// Gets whether a dump is selected (but not necessarily loaded).
+    /// </summary>
+    public bool HasDumpSelected => !string.IsNullOrEmpty(SelectedDumpId);
+
+    /// <summary>
     /// Gets the current shell state level.
     /// </summary>
     public ShellStateLevel Level
@@ -112,6 +123,7 @@ public class ShellState
         ServerDisplay = null;
         SessionId = null;
         DumpId = null;
+        SelectedDumpId = null;
         DebuggerType = null;
         ServerInfo = null;
     }
@@ -165,6 +177,15 @@ public class ShellState
     public void SetDumpLoaded(string dumpId)
     {
         DumpId = dumpId;
+        SelectedDumpId = dumpId;
+    }
+
+    /// <summary>
+    /// Sets the selected dump ID (without opening it).
+    /// </summary>
+    public void SetSelectedDump(string dumpId)
+    {
+        SelectedDumpId = dumpId;
     }
 
     /// <summary>
@@ -173,6 +194,14 @@ public class ShellState
     public void ClearDump()
     {
         DumpId = null;
+    }
+
+    /// <summary>
+    /// Clears the selected dump ID.
+    /// </summary>
+    public void ClearSelectedDump()
+    {
+        SelectedDumpId = null;
     }
 
     /// <summary>
@@ -221,4 +250,3 @@ public enum ShellStateLevel
     /// </summary>
     DumpLoaded
 }
-
