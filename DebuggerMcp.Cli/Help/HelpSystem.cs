@@ -79,7 +79,7 @@ public static class HelpSystem
         ],
         ["advanced"] = [
             new("watch", "<subcommand>", "Manage watch expressions (add, list, eval, remove, clear)", ["watch add @rsp", "watch list", "watch eval", "watch remove w1", "watch clear"]),
-            new("report", "[[options]]", "Generate analysis reports (markdown, html, json)", ["report", "report -f html", "report -o ./report.md"]),
+            new("report", "-o <file> [[options]]", "Generate analysis reports (requires -o output)", ["report -o ./report.md", "report -o ./report.html -f html", "report -o ./summary.json --summary -f json"]),
             new("sourcelink", "<subcommand>", "Source Link integration (resolve, info)", ["sourcelink /src/Program.cs", "sourcelink resolve /src/Program.cs", "sl info"])
         ],
         ["general"] = [
@@ -257,7 +257,7 @@ public static class HelpSystem
                 output.Markup("  [yellow]exec !threads[/]           List all threads (.NET)");
                 output.Markup("  [yellow]exec k[/]                  Show call stack");
                 output.Markup("  [yellow]watch add <expr>[/]        Add watch expression");
-                output.Markup("  [yellow]report[/]                  Generate analysis report");
+                output.Markup("  [yellow]report -o <file>[/]        Generate analysis report (writes to file)");
                 output.Markup("  [yellow]close[/]                   Close current dump");
                 break;
         }
@@ -289,4 +289,3 @@ public static class HelpSystem
 /// Information about a command.
 /// </summary>
 public record CommandInfo(string Name, string Syntax, string Description, string[] Examples);
-

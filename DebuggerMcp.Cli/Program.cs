@@ -1463,11 +1463,11 @@ public class Program
                     output.Markup("Generate comprehensive crash analysis reports.");
                     output.WriteLine();
                     output.Markup("[bold]USAGE[/]");
-                    output.Markup("  report [[options]]");
+                    output.Markup("  report -o <file> [[options]]");
                     output.WriteLine();
                     output.Markup("[bold]OPTIONS[/]");
                     output.Markup("  [cyan]--format, -f[/]    Report format (see formats below)");
-                    output.Markup("  [cyan]--output, -o[/]    Save to file instead of displaying");
+                    output.Markup("  [cyan]--output, -o[/]    Output file path (required)");
                     output.Markup("  [cyan]--summary, -s[/]   Summary report only");
                     output.Markup("  [cyan]--no-watches[/]    Exclude watch expressions");
                     output.WriteLine();
@@ -1485,11 +1485,9 @@ public class Program
                     output.Markup("  [green]json[/]      Structured data for automation");
                     output.WriteLine();
                     output.Markup("[bold]EXAMPLES[/]");
-                    output.Markup("  [yellow]report[/]                     Display report");
-                    output.Markup("  [yellow]report -f html[/]             HTML format");
                     output.Markup("  [yellow]report -o ./report.md[/]      Save to file");
                     output.Markup("  [yellow]report -o ./r.html -f html[/] Save HTML");
-                    output.Markup("  [yellow]report --summary -f json[/]   JSON summary");
+                    output.Markup("  [yellow]report -o ./summary.json --summary -f json[/]   JSON summary");
                     break;
 
                 case "sourcelink":
@@ -7054,6 +7052,14 @@ public class Program
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(outputFile))
+        {
+            output.Error("Output file is required. Reports are too large to display in the terminal.");
+            output.Dim("Usage: report -o <file> [-f markdown|html|json] [--summary] [--no-watches]");
+            output.Dim("Examples: report -o ./report.md | report -o ./report.json -f json | report -o ./summary.json --summary -f json");
+            return;
+        }
+
         try
         {
             string result;
@@ -7075,20 +7081,10 @@ public class Program
             // Store result for copy command
             state.SetLastResult(summary ? "report --summary" : "report", result);
 
-            if (!string.IsNullOrEmpty(outputFile))
-            {
-                // Save to file
-                var fullPath = Path.GetFullPath(outputFile);
-                await File.WriteAllTextAsync(fullPath, result);
-                output.Success($"Report saved to: {fullPath}");
-            }
-            else
-            {
-                // Display to console
-                output.Header($"Report ({format})");
-                output.WriteLine();
-                Console.WriteLine(result);
-            }
+            // Save to file
+            var fullPath = Path.GetFullPath(outputFile);
+            await File.WriteAllTextAsync(fullPath, result);
+            output.Success($"Report saved to: {fullPath}");
         }
         catch (McpClientException ex)
         {

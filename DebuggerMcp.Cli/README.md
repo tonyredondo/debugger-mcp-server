@@ -295,18 +295,17 @@ watch remove w1
 
 | Command | Description |
 |---------|-------------|
-| `report` | Generate markdown report |
-| `report --format html` | Generate HTML report |
-| `report --format json` | Generate JSON report |
-| `report -o <file>` | Save report to file |
+| `report -o <file>` | Generate report (required) |
+| `report -o <file> --format html` | Generate HTML report |
+| `report -o <file> --format json` | Generate JSON report |
 | `report --summary` | Generate summary only |
 
 **Examples:**
 ```bash
-report
-report --format html
 report -o ./crash-report.md
-report --summary --format json
+report -o ./crash-report.html --format html
+report -o ./crash-report.json --format json
+report -o ./summary.json --summary --format json
 ```
 
 ### Source Link Commands

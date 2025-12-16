@@ -69,7 +69,7 @@ dbg-mcp> report -o ./report.md
 
 ### Advanced (`help advanced`)
 - `watch add/list/eval/remove/clear` - Watch expressions
-- `report [--format html|json] [-o file]` - Generate reports
+- `report -o <file> [--format html|json]` - Generate reports (output file required)
 - `sourcelink <path>` - Resolve to source URL
 
 ## Interactive Features
@@ -155,7 +155,7 @@ compare heap <session1> <session2>
 watch add @rsp --name "stack pointer"
 watch add !dumpheap -stat
 watch eval                        # Evaluate all
-report --format html              # Include in report
+report -o ./report.html --format html   # Include in report
 ```
 
 ## Troubleshooting
@@ -171,4 +171,3 @@ set verbose true    # Enable verbose output
 ```
 
 For more details, see `help <command>` in the CLI.
-
