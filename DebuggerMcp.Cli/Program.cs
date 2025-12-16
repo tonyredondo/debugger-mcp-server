@@ -629,6 +629,7 @@ public class Program
                 {
                     await mcpClient.ConnectAsync(normalizedUrl, settings.ApiKey);
                     output.Success($"MCP client connected ({mcpClient.AvailableTools.Count} tools available)");
+                    RegisterMcpSamplingHandlers(output, state, mcpClient);
 
                     var autoRestore = await DebuggerMcp.Cli.Shell.LastSessionAutoRestore.TryRestoreAsync(output, state, mcpClient);
                     if (autoRestore.ClearedSavedSession)
@@ -2010,6 +2011,8 @@ public class Program
 
                     output.Success($"MCP client connected ({mcpClient.AvailableTools.Count} tools available)");
 
+                    RegisterMcpSamplingHandlers(output, state, mcpClient);
+
                     var autoRestore = await DebuggerMcp.Cli.Shell.LastSessionAutoRestore.TryRestoreAsync(output, state, mcpClient);
                     if (autoRestore.ClearedSavedSession)
                     {
@@ -2030,6 +2033,33 @@ public class Program
         catch (Exception ex)
         {
             output.Error($"Failed to connect: {ex.Message}");
+        }
+    }
+
+    private static void RegisterMcpSamplingHandlers(ConsoleOutput output, ShellState state, McpClient mcpClient)
+    {
+        try
+        {
+            var llmSettings = state.Settings.Llm;
+            llmSettings.ApplyEnvironmentOverrides();
+
+            var handler = new McpSamplingCreateMessageHandler(
+                llmSettings,
+                async (messages, ct) =>
+                {
+                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
+                    var client = new OpenRouterClient(http, llmSettings);
+                    return await client.ChatAsync(messages, ct).ConfigureAwait(false);
+                });
+
+            mcpClient.RegisterServerRequestHandler(
+                "sampling/createMessage",
+                async (p, ct) => await handler.HandleAsync(p, ct).ConfigureAwait(false));
+        }
+        catch (Exception ex)
+        {
+            output.Warning($"Failed to enable MCP sampling handler: {ex.Message}");
+            output.Dim("AI sampling requests (server-initiated) will not work from this CLI.");
         }
     }
 

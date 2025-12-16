@@ -33,6 +33,8 @@ public class McpClient : IMcpClient
     private StreamReader? _sseReader;
     private readonly SemaphoreSlim _sseReconnectLock = new(1, 1);
     private readonly ConcurrentDictionary<int, TaskCompletionSource<string>> _pendingRequests = new();
+    private readonly ConcurrentDictionary<string, Func<JsonElement?, CancellationToken, Task<object?>>> _serverRequestHandlers =
+        new(StringComparer.OrdinalIgnoreCase);
 
     private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CaseInsensitiveCamelCaseIgnoreNull;
 
@@ -51,6 +53,32 @@ public class McpClient : IMcpClient
 
     /// <inheritdoc/>
     public IReadOnlyList<string> AvailableTools => _availableTools.AsReadOnly();
+
+    /// <summary>
+    /// Registers a JSON-RPC request handler for server-initiated requests delivered over SSE.
+    /// </summary>
+    public void RegisterServerRequestHandler(
+        string method,
+        Func<JsonElement?, CancellationToken, Task<object?>> handler)
+    {
+        if (string.IsNullOrWhiteSpace(method))
+        {
+            throw new ArgumentException("Method cannot be empty.", nameof(method));
+        }
+        _serverRequestHandlers[method] = handler ?? throw new ArgumentNullException(nameof(handler));
+    }
+
+    /// <summary>
+    /// Unregisters a previously registered server request handler.
+    /// </summary>
+    public bool UnregisterServerRequestHandler(string method)
+    {
+        if (string.IsNullOrWhiteSpace(method))
+        {
+            return false;
+        }
+        return _serverRequestHandlers.TryRemove(method, out _);
+    }
 
     /// <inheritdoc/>
     public async Task ConnectAsync(string serverUrl, string? apiKey = null, CancellationToken cancellationToken = default)
@@ -333,6 +361,23 @@ public class McpClient : IMcpClient
     /// </summary>
     private void ProcessSseData(string data)
     {
+        // Handle server-initiated JSON-RPC requests (e.g., sampling/createMessage).
+        if (LooksLikeJsonRpcRequest(data))
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await TryHandleServerRequestAsync(data, _sseListenerCts?.Token ?? CancellationToken.None).ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Avoid crashing the SSE listener for a best-effort request handler.
+                }
+            });
+            return;
+        }
+
         if (!TryProcessSseEventPayload(data, (id, payload) =>
             {
                 if (_pendingRequests.TryRemove(id, out var tcs))
@@ -342,6 +387,174 @@ public class McpClient : IMcpClient
             }))
         {
             return;
+        }
+    }
+
+    private static bool LooksLikeJsonRpcRequest(string payloadJson)
+    {
+        if (string.IsNullOrWhiteSpace(payloadJson) || !payloadJson.TrimStart().StartsWith("{", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            var root = doc.RootElement;
+            return root.TryGetProperty("method", out var methodProp) &&
+                   methodProp.ValueKind == JsonValueKind.String &&
+                   root.TryGetProperty("id", out _);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    internal async Task<bool> TryHandleServerRequestAsync(string payloadJson, CancellationToken cancellationToken)
+    {
+        if (_httpClient == null || string.IsNullOrWhiteSpace(_messageEndpoint))
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(payloadJson) || !payloadJson.TrimStart().StartsWith("{", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        JsonElement idElement;
+        string method;
+        JsonElement? paramsElement;
+        try
+        {
+            using var doc = JsonDocument.Parse(payloadJson);
+            var root = doc.RootElement;
+
+            if (!root.TryGetProperty("method", out var methodProp) || methodProp.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            if (!root.TryGetProperty("id", out var idProp))
+            {
+                return false;
+            }
+
+            method = methodProp.GetString() ?? string.Empty;
+            idElement = idProp.Clone();
+
+            paramsElement = root.TryGetProperty("params", out var p) ? p.Clone() : null;
+        }
+        catch
+        {
+            return false;
+        }
+
+        if (string.IsNullOrWhiteSpace(method))
+        {
+            return false;
+        }
+
+        if (!_serverRequestHandlers.TryGetValue(method, out var handler))
+        {
+            await SendJsonRpcErrorAsync(
+                idElement,
+                code: -32601,
+                message: $"Method not found: {method}",
+                cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+
+        try
+        {
+            var result = await handler(paramsElement, cancellationToken).ConfigureAwait(false);
+            await SendJsonRpcResultAsync(idElement, result, cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            await SendJsonRpcErrorAsync(
+                idElement,
+                code: -32000,
+                message: "Request canceled.",
+                cancellationToken: CancellationToken.None).ConfigureAwait(false);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await SendJsonRpcErrorAsync(
+                idElement,
+                code: -32000,
+                message: ex.Message,
+                cancellationToken).ConfigureAwait(false);
+            return true;
+        }
+    }
+
+    private async Task SendJsonRpcResultAsync(JsonElement idElement, object? result, CancellationToken cancellationToken)
+    {
+        var json = BuildJsonRpcResponseJson(idElement, isError: false, result, error: null);
+        await PostJsonRpcAsync(json, cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SendJsonRpcErrorAsync(JsonElement idElement, int code, string message, CancellationToken cancellationToken)
+    {
+        var errorObj = new { code, message };
+        var json = BuildJsonRpcResponseJson(idElement, isError: true, result: null, error: errorObj);
+        await PostJsonRpcAsync(json, cancellationToken).ConfigureAwait(false);
+    }
+
+    private string BuildJsonRpcResponseJson(JsonElement idElement, bool isError, object? result, object? error)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("jsonrpc", "2.0");
+            writer.WritePropertyName("id");
+            idElement.WriteTo(writer);
+
+            if (isError)
+            {
+                writer.WritePropertyName("error");
+                JsonSerializer.Serialize(writer, error, JsonOptions);
+            }
+            else
+            {
+                writer.WritePropertyName("result");
+                if (result is JsonElement elem)
+                {
+                    elem.WriteTo(writer);
+                }
+                else
+                {
+                    JsonSerializer.Serialize(writer, result, JsonOptions);
+                }
+            }
+
+            writer.WriteEndObject();
+        }
+
+        return Encoding.UTF8.GetString(stream.ToArray());
+    }
+
+    private async Task PostJsonRpcAsync(string json, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+        if (_httpClient == null || string.IsNullOrWhiteSpace(_messageEndpoint))
+        {
+            throw new McpClientException("MCP message endpoint is not available.");
+        }
+
+        using var request = new HttpRequestMessage(HttpMethod.Post, _messageEndpoint);
+        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            throw new McpClientException($"Failed to send JSON-RPC response ({(int)response.StatusCode}): {body}");
         }
     }
 
