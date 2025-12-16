@@ -37,6 +37,12 @@ public sealed class LlmSettings
     public int TimeoutSeconds { get; set; } = 120;
 
     /// <summary>
+    /// Gets or sets a value indicating whether the CLI LLM runs in agent mode.
+    /// When enabled, the model can request tool calls and the CLI will execute them and continue iterating.
+    /// </summary>
+    public bool AgentModeEnabled { get; set; }
+
+    /// <summary>
     /// Applies environment variable overrides (if set).
     /// </summary>
     public void ApplyEnvironmentOverrides()
@@ -72,6 +78,14 @@ public sealed class LlmSettings
         if (!string.IsNullOrWhiteSpace(timeoutSeconds) && int.TryParse(timeoutSeconds, out var seconds) && seconds > 0)
         {
             TimeoutSeconds = seconds;
+        }
+
+        var agentMode =
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_AGENT_MODE") ??
+            Environment.GetEnvironmentVariable("LLM_AGENT_MODE");
+        if (!string.IsNullOrWhiteSpace(agentMode) && bool.TryParse(agentMode, out var enabled))
+        {
+            AgentModeEnabled = enabled;
         }
     }
 

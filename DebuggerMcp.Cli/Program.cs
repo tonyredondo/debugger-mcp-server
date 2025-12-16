@@ -3,6 +3,7 @@ using System.CommandLine.Builder;
 using System.CommandLine.Parsing;
 using System.Globalization;
 using System.Net.Http.Json;
+using System.Text.Json;
 using Spectre.Console;
 using DebuggerMcp.Cli.Client;
 using DebuggerMcp.Cli.Configuration;
@@ -1084,7 +1085,7 @@ public class Program
                 break;
 
             case "llm":
-                await HandleLlmAsync(args, output, state);
+                await HandleLlmAsync(args, output, state, mcpClient);
                 break;
 
             // Session operations (via MCP)
@@ -4465,7 +4466,8 @@ public class Program
     private static async Task HandleLlmAsync(
         string[] args,
         ConsoleOutput output,
-        ShellState state)
+        ShellState state,
+        McpClient mcpClient)
     {
         var llmSettings = state.Settings.Llm;
         llmSettings.ApplyEnvironmentOverrides();
@@ -4480,11 +4482,13 @@ public class Program
             output.KeyValue("Provider", "OpenRouter");
             output.KeyValue("Model", llmSettings.OpenRouterModel);
             output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveOpenRouterApiKey()) ? "(not set)" : "(configured)");
+            output.KeyValue("Agent Mode", llmSettings.AgentModeEnabled ? "enabled" : "disabled");
             output.WriteLine();
             output.Dim("Usage:");
             output.Dim("  llm <prompt>");
             output.Dim("  llm model <openrouter-model-id>");
             output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json)");
+            output.Dim("  llm set-agent <true|false>       (toggles tool-using agent mode)");
             output.Dim("  llm reset                        (clears only LLM conversation)");
             output.Dim("Tip: Prefer env var OPENROUTER_API_KEY to avoid persisting keys.");
             return;
@@ -4522,6 +4526,23 @@ public class Program
                     !TranscriptScope.Matches(e, state.Settings.ServerUrl, state.SessionId, state.DumpId));
                 output.Success("Cleared LLM conversation history for the current session/dump (kept other sessions and CLI transcript).");
                 return;
+
+            case "set-agent":
+            case "agent":
+                if (args.Length < 2)
+                {
+                    output.Error("Usage: llm set-agent <true|false>");
+                    return;
+                }
+                if (!TryParseBool(args[1], out var enabled))
+                {
+                    output.Error("Invalid value. Use true/false, on/off, 1/0.");
+                    return;
+                }
+                llmSettings.AgentModeEnabled = enabled;
+                state.Settings.Save();
+                output.Success($"LLM agent mode {(enabled ? "enabled" : "disabled")}.");
+                return;
         }
 
         var prompt = string.Join(" ", args).Trim();
@@ -4555,9 +4576,11 @@ public class Program
                 transcriptTail: history,
                 maxContextChars: 30_000);
 
-            var response = await output.WithSpinnerAsync(
-                "Calling LLM...",
-                () => client.ChatAsync(messages, cancellationToken: default));
+            var response = llmSettings.AgentModeEnabled
+                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, cancellationToken: default)
+                : await output.WithSpinnerAsync(
+                    "Calling LLM...",
+                    () => client.ChatAsync(messages, cancellationToken: default));
 
             transcript.Append(new CliTranscriptEntry
             {
@@ -4576,6 +4599,184 @@ public class Program
         {
             output.Error(ex.Message);
         }
+    }
+
+    private static bool TryParseBool(string value, out bool result)
+    {
+        if (bool.TryParse(value, out result))
+        {
+            return true;
+        }
+
+        var v = value.Trim().ToLowerInvariant();
+        if (v is "1" or "on" or "yes" or "y" or "enabled" or "enable")
+        {
+            result = true;
+            return true;
+        }
+
+        if (v is "0" or "off" or "no" or "n" or "disabled" or "disable")
+        {
+            result = false;
+            return true;
+        }
+
+        result = false;
+        return false;
+    }
+
+    private static async Task<string> RunLlmAgentLoopAsync(
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient,
+        LlmSettings llmSettings,
+        OpenRouterClient client,
+        IReadOnlyList<ChatMessage> seedMessages,
+        CancellationToken cancellationToken)
+    {
+        var tools = LlmAgentTools.GetDefaultTools();
+
+        var runner = new LlmAgentRunner(
+            async (messages, ct) =>
+            {
+                return await output.WithSpinnerAsync(
+                    "LLM agent thinking...",
+                    () => client.ChatCompletionAsync(new ChatCompletionRequest
+                    {
+                        Messages = messages,
+                        Tools = tools,
+                        ToolChoice = new ChatToolChoice { Mode = "auto" },
+                        MaxTokens = null
+                    }, ct));
+            },
+            async (toolCall, ct) => await ExecuteAgentToolCallAsync(output, state, mcpClient, toolCall, ct).ConfigureAwait(false),
+            maxIterations: 10);
+
+        var run = await runner.RunAsync(seedMessages, cancellationToken).ConfigureAwait(false);
+        return run.FinalText;
+    }
+
+    private static async Task<string> ExecuteAgentToolCallAsync(
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient,
+        ChatToolCall call,
+        CancellationToken cancellationToken)
+    {
+        if (!state.IsConnected || !mcpClient.IsConnected)
+        {
+            return "ERROR: Not connected to the debugger server.";
+        }
+
+        if (string.IsNullOrWhiteSpace(state.SessionId))
+        {
+            return "ERROR: No active session. Create or restore a session first.";
+        }
+
+        var name = call.Name.Trim();
+
+        JsonElement args;
+        try
+        {
+            using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(call.ArgumentsJson) ? "{}" : call.ArgumentsJson);
+            args = doc.RootElement.Clone();
+        }
+        catch
+        {
+            return $"ERROR: Invalid tool arguments JSON for {name}.";
+        }
+
+        try
+        {
+            switch (name)
+            {
+                case "exec":
+                {
+                    var command = args.TryGetProperty("command", out var cmdProp) ? cmdProp.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(command))
+                    {
+                        return "ERROR: exec requires {\"command\":\"...\"}.";
+                    }
+
+                    output.WriteLine();
+                    output.Dim($"(agent) exec {command}");
+                    var result = await mcpClient.ExecuteCommandAsync(state.SessionId!, state.Settings.UserId, command!, cancellationToken);
+                    return TruncateForTranscript(result, maxChars: 50_000);
+                }
+
+                case "analyze":
+                {
+                    var kind = args.TryGetProperty("kind", out var kindProp) ? kindProp.GetString() : null;
+                    if (string.IsNullOrWhiteSpace(kind))
+                    {
+                        return "ERROR: analyze requires {\"kind\":\"crash|dotnet_crash|performance|cpu|allocations|gc|contention|security\"}.";
+                    }
+
+                    output.WriteLine();
+                    output.Dim($"(agent) analyze {kind}");
+                    var result = await ExecuteAnalyzeAsync(mcpClient, state.SessionId!, state.Settings.UserId, kind!, cancellationToken);
+                    return TruncateForTranscript(result, maxChars: 50_000);
+                }
+
+                case "inspect_object":
+                {
+                    var address = args.TryGetProperty("address", out var addrProp) ? addrProp.GetString() : null;
+                    var maxDepth = args.TryGetProperty("maxDepth", out var mdProp) && mdProp.TryGetInt32(out var md) ? md : 5;
+                    if (string.IsNullOrWhiteSpace(address))
+                    {
+                        return "ERROR: inspect_object requires {\"address\":\"0x...\"}.";
+                    }
+
+                    output.WriteLine();
+                    output.Dim($"(agent) inspect_object {address}");
+                    var result = await mcpClient.InspectObjectAsync(state.SessionId!, state.Settings.UserId, address!, maxDepth: maxDepth, cancellationToken: cancellationToken);
+                    return TruncateForTranscript(result, maxChars: 50_000);
+                }
+
+                case "clr_stack":
+                {
+                    var threadId = args.TryGetProperty("threadId", out var tProp) && tProp.TryGetUInt32(out var t) ? t : 0;
+                    var includeArguments = !args.TryGetProperty("includeArguments", out var ia) || ia.ValueKind != JsonValueKind.False;
+                    var includeLocals = !args.TryGetProperty("includeLocals", out var il) || il.ValueKind != JsonValueKind.False;
+                    var includeRegisters = !args.TryGetProperty("includeRegisters", out var ir) || ir.ValueKind != JsonValueKind.False;
+
+                    output.WriteLine();
+                    output.Dim($"(agent) clr_stack threadId={threadId}");
+                    var result = await mcpClient.ClrStackAsync(
+                        state.SessionId!,
+                        state.Settings.UserId,
+                        includeArguments: includeArguments,
+                        includeLocals: includeLocals,
+                        includeRegisters: includeRegisters,
+                        threadId: threadId,
+                        cancellationToken: cancellationToken);
+                    return TruncateForTranscript(result, maxChars: 50_000);
+                }
+
+                default:
+                    return $"ERROR: Unsupported tool '{name}'.";
+            }
+        }
+        catch (Exception ex)
+        {
+            return $"ERROR: Tool '{name}' failed: {ex.Message}";
+        }
+    }
+
+    private static Task<string> ExecuteAnalyzeAsync(McpClient mcpClient, string sessionId, string userId, string kind, CancellationToken cancellationToken)
+    {
+        return kind.Trim().ToLowerInvariant() switch
+        {
+            "crash" => mcpClient.AnalyzeCrashAsync(sessionId, userId, cancellationToken),
+            "dotnet_crash" or "dotnet" => mcpClient.AnalyzeDotNetAsync(sessionId, userId, cancellationToken),
+            "performance" or "perf" => mcpClient.AnalyzePerformanceAsync(sessionId, userId, cancellationToken),
+            "cpu" => mcpClient.AnalyzeCpuUsageAsync(sessionId, userId, cancellationToken),
+            "allocations" or "memory" => mcpClient.AnalyzeAllocationsAsync(sessionId, userId, cancellationToken),
+            "gc" => mcpClient.AnalyzeGcAsync(sessionId, userId, cancellationToken),
+            "contention" or "threads" => mcpClient.AnalyzeContentionAsync(sessionId, userId, cancellationToken),
+            "security" => mcpClient.AnalyzeSecurityAsync(sessionId, userId, cancellationToken),
+            _ => Task.FromResult($"ERROR: Unknown analyze kind '{kind}'.")
+        };
     }
 
 
