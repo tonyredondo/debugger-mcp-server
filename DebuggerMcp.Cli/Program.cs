@@ -4593,7 +4593,9 @@ public class Program
                 sessionId: state.SessionId,
                 dumpId: state.DumpId,
                 transcriptTail: history,
-                maxContextChars: 30_000);
+                maxContextChars: 30_000,
+                agentModeEnabled: llmSettings.AgentModeEnabled,
+                agentConfirmationEnabled: llmSettings.AgentModeConfirmToolCalls);
 
             var response = llmSettings.AgentModeEnabled
                 ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, cancellationToken: default)

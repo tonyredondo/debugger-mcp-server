@@ -21,7 +21,9 @@ public class TranscriptContextBuilderTests
             sessionId: "s1",
             dumpId: null,
             transcriptTail: tail,
-            maxContextChars: 10_000);
+            maxContextChars: 10_000,
+            agentModeEnabled: false,
+            agentConfirmationEnabled: true);
 
         Assert.True(messages.Count >= 4);
         Assert.Equal("system", messages[0].Role);
@@ -30,5 +32,23 @@ public class TranscriptContextBuilderTests
         Assert.Equal("assistant", messages[3].Role);
         Assert.Equal("Next question", messages[^1].Content);
     }
-}
 
+    [Fact]
+    public void BuildMessages_WhenAgentModeEnabled_IncludesAgentPrompting()
+    {
+        var messages = TranscriptContextBuilder.BuildMessages(
+            userPrompt: "x",
+            serverUrl: "http://localhost:5000",
+            sessionId: "s1",
+            dumpId: "d1",
+            transcriptTail: [],
+            maxContextChars: 10_000,
+            agentModeEnabled: true,
+            agentConfirmationEnabled: true);
+
+        Assert.Equal("system", messages[0].Role);
+        Assert.Contains("Agent mode is enabled", messages[0].Content);
+        Assert.Contains("confirm", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Tooling:", messages[0].Content);
+    }
+}

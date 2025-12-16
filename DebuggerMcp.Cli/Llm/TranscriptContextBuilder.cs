@@ -14,7 +14,9 @@ internal static class TranscriptContextBuilder
         string? sessionId,
         string? dumpId,
         IReadOnlyList<CliTranscriptEntry> transcriptTail,
-        int maxContextChars)
+        int maxContextChars,
+        bool agentModeEnabled = false,
+        bool agentConfirmationEnabled = true)
     {
         if (string.IsNullOrWhiteSpace(userPrompt))
         {
@@ -29,8 +31,9 @@ internal static class TranscriptContextBuilder
         var messages = new List<ChatMessage>();
 
         var contextHeader = new StringBuilder();
-        contextHeader.AppendLine("You are an assistant inside DebuggerMcp.Cli.");
-        contextHeader.AppendLine("Be concise, correct, and practical.");
+        contextHeader.AppendLine(LlmSystemPrompts.BuildSystemPrompt(agentModeEnabled, agentConfirmationEnabled));
+        contextHeader.AppendLine();
+        contextHeader.AppendLine("Context:");
         if (!string.IsNullOrWhiteSpace(serverUrl))
         {
             contextHeader.AppendLine($"Connected server: {serverUrl}");
