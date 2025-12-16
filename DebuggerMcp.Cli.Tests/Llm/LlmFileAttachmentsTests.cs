@@ -1,4 +1,5 @@
 using DebuggerMcp.Cli.Llm;
+using System.Text;
 using Xunit;
 
 namespace DebuggerMcp.Cli.Tests.Llm;
@@ -115,5 +116,34 @@ public class LlmFileAttachmentsTests
 
         Assert.Single(attachments);
         Assert.Contains("\"hello\"", attachments[0].Content);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_RespectsMaxTotalBytesAcrossMultipleAttachments()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        var fileA = Path.Combine(tempRoot, "a.txt");
+        var fileB = Path.Combine(tempRoot, "b.txt");
+
+        File.WriteAllText(fileA, new string('a', 800));
+        File.WriteAllText(fileB, new string('b', 800));
+
+        var (cleaned, attachments, _) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze #./a.txt and #./b.txt please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 2000,
+            maxTotalBytes: 900);
+
+        Assert.Contains("(<attached:", cleaned);
+        Assert.Equal(2, attachments.Count);
+        Assert.Equal("./a.txt", attachments[0].DisplayPath);
+        Assert.Equal("./b.txt", attachments[1].DisplayPath);
+        Assert.False(attachments[0].Truncated);
+        Assert.True(attachments[1].Truncated);
+
+        var total = Encoding.UTF8.GetByteCount(attachments[0].Content) + Encoding.UTF8.GetByteCount(attachments[1].Content);
+        Assert.True(total <= 900);
     }
 }

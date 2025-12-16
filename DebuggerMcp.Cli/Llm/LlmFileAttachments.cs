@@ -177,7 +177,10 @@ internal static class LlmFileAttachments
             // Redact any secrets before sending to the model.
             text = TranscriptRedactor.RedactText(text);
 
-            return (new Attachment(displayPath, absolute, text, truncated), null, bytesRead);
+            // Budget accounting should reflect the bytes we will actually send to the model,
+            // not merely the bytes read from disk (which ignores redaction and encoding).
+            var bytesUsed = Encoding.UTF8.GetByteCount(text);
+            return (new Attachment(displayPath, absolute, text, truncated), null, bytesUsed);
         }
         catch
         {
@@ -237,13 +240,20 @@ internal static class LlmFileAttachments
         var truncated = read > maxBytes;
         var effective = Math.Min(read, maxBytes);
 
-        var text = Encoding.UTF8.GetString(buffer, 0, effective);
-        if (truncated)
+        if (!truncated)
         {
-            text += $"{Environment.NewLine}[...file truncated to {maxBytes} bytes...]";
+            var text = Encoding.UTF8.GetString(buffer, 0, effective);
+            return (text, false, effective);
         }
 
-        return (text, truncated, effective);
+        // Ensure the truncation marker fits *within* maxBytes (so total attachment budgets remain accurate).
+        var marker = $"[...file truncated to {maxBytes} bytes...]";
+        var markerBytes = Encoding.UTF8.GetByteCount(Environment.NewLine + marker);
+        var allowedPrefixBytes = Math.Max(0, maxBytes - markerBytes);
+        var prefixBytes = Math.Min(effective, allowedPrefixBytes);
+        var prefix = Encoding.UTF8.GetString(buffer, 0, prefixBytes);
+        var combined = prefix + Environment.NewLine + marker;
+        return (combined, true, prefixBytes);
     }
 
     private static string TrimTrailingPathPunctuation(string path)
