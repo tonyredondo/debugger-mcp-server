@@ -60,4 +60,22 @@ public class LlmFileAttachmentsTests
         Assert.True(a.Truncated);
         Assert.Contains("truncated to 1048576 bytes", a.Content, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void ExtractAndLoad_AllowsTrailingPunctuationAfterAttachment()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var filePath = Path.Combine(tempRoot, "report.json");
+        File.WriteAllText(filePath, "{\"hello\":\"world\"}");
+
+        var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze #./report.json, please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1000,
+            maxTotalBytes: 2000);
+
+        Assert.Single(attachments);
+        Assert.Contains("\"hello\"", attachments[0].Content);
+    }
 }

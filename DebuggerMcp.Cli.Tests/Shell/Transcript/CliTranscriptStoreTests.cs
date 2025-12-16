@@ -36,8 +36,9 @@ public class CliTranscriptStoreTests
         store.Append(new CliTranscriptEntry { Kind = "cli_command", Text = "status", Output = "ok" });
         store.Append(new CliTranscriptEntry { Kind = "llm_user", Text = "hello" });
         store.Append(new CliTranscriptEntry { Kind = "llm_assistant", Text = "hi" });
+        store.Append(new CliTranscriptEntry { Kind = "llm_tool", Text = "exec bt", Output = "bt-output" });
 
-        store.FilterInPlace(e => e.Kind is not ("llm_user" or "llm_assistant"));
+        store.FilterInPlace(e => e.Kind is not ("llm_user" or "llm_assistant" or "llm_tool"));
 
         var tail = store.ReadTail(10);
         Assert.Single(tail);

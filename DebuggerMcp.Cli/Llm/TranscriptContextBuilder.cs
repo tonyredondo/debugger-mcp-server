@@ -86,7 +86,9 @@ internal static class TranscriptContextBuilder
 
         var remaining = maxContextChars;
         var entries = transcriptTail
-            .Where(e => e.Kind == "cli_command" && !StartsWithCommand(e.Text, "llm"))
+            .Where(e =>
+                (e.Kind == "cli_command" || e.Kind == "llm_tool") &&
+                !StartsWithCommand(e.Text, "llm"))
             .TakeLast(20)
             .ToList();
 

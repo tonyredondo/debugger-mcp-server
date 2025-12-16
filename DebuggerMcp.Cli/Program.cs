@@ -4525,7 +4525,7 @@ public class Program
 
             case "reset":
                 transcript.FilterInPlace(e =>
-                    e.Kind is not ("llm_user" or "llm_assistant") ||
+                    e.Kind is not ("llm_user" or "llm_assistant" or "llm_tool") ||
                     !TranscriptScope.Matches(e, state.Settings.ServerUrl, state.SessionId, state.DumpId));
                 output.Success("Cleared LLM conversation history for the current session/dump (kept other sessions and CLI transcript).");
                 return;
@@ -4632,7 +4632,7 @@ public class Program
             }
 
             var response = llmSettings.AgentModeEnabled
-                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, reports, cancellationToken: default)
+                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, reports, transcript, cancellationToken: default)
                 : await output.WithSpinnerAsync(
                     "Calling LLM...",
                     () => client.ChatAsync(messages, cancellationToken: default));
@@ -4679,6 +4679,7 @@ public class Program
         OpenRouterClient client,
         IReadOnlyList<ChatMessage> seedMessages,
         IReadOnlyList<LlmFileAttachments.ReportAttachmentContext> reports,
+        CliTranscriptStore transcript,
         CancellationToken cancellationToken)
     {
         var tools = LlmAgentTools.GetDefaultTools().ToList();
@@ -4720,10 +4721,14 @@ public class Program
 
                 if (reports.Count > 0 && LlmReportAgentTools.IsReportTool(toolCall.Name))
                 {
-                    return await LlmReportAgentTools.ExecuteAsync(toolCall, reports, ct).ConfigureAwait(false);
+                    var result = await LlmReportAgentTools.ExecuteAsync(toolCall, reports, ct).ConfigureAwait(false);
+                    AppendLlmToolTranscript(transcript, state, toolCall, result);
+                    return result;
                 }
 
-                return await ExecuteAgentToolCallAsync(output, state, mcpClient, toolCall, ct).ConfigureAwait(false);
+                var toolResult = await ExecuteAgentToolCallAsync(output, state, mcpClient, toolCall, ct).ConfigureAwait(false);
+                AppendLlmToolTranscript(transcript, state, toolCall, toolResult);
+                return toolResult;
             },
             maxIterations: 10);
 
@@ -4735,6 +4740,34 @@ public class Program
         catch (OperationCanceledException)
         {
             return "(LLM agent canceled)";
+        }
+    }
+
+    private static void AppendLlmToolTranscript(CliTranscriptStore transcript, ShellState state, ChatToolCall toolCall, string toolResult)
+    {
+        try
+        {
+            var preview = BuildAgentToolArgsPreview(toolCall);
+            var text = $"{toolCall.Name} {preview}".Trim();
+            if (text.Length > 400)
+            {
+                text = text[..400] + "...";
+            }
+
+            transcript.Append(new CliTranscriptEntry
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Kind = "llm_tool",
+                Text = TranscriptRedactor.RedactCommand(text),
+                Output = TranscriptRedactor.RedactText(TruncateForTranscript(toolResult, maxChars: 50_000)),
+                ServerUrl = state.Settings.ServerUrl,
+                SessionId = state.SessionId,
+                DumpId = state.DumpId
+            });
+        }
+        catch
+        {
+            // Transcript capture should never break the CLI.
         }
     }
 

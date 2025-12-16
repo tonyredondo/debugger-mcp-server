@@ -105,6 +105,7 @@ internal static class LlmFileAttachments
     {
         try
         {
+            displayPath = TrimTrailingPathPunctuation(displayPath);
             var expanded = ExpandHome(displayPath);
             var absolute = Path.GetFullPath(expanded, baseDirectory);
             if (!File.Exists(absolute))
@@ -232,5 +233,16 @@ internal static class LlmFileAttachments
         var limit = Math.Max(0, maxBytes - suffixBytes);
         var prefix = Encoding.UTF8.GetString(bytes, 0, limit);
         return prefix + Environment.NewLine + suffix;
+    }
+
+    private static string TrimTrailingPathPunctuation(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return path;
+        }
+
+        // Common punctuation users might place immediately after an attachment reference in prose.
+        return path.TrimEnd(',', '.', ';', ':', ')', ']', '}', '"', '\'');
     }
 }

@@ -11,6 +11,7 @@ public class TranscriptContextBuilderTests
         var tail = new List<CliTranscriptEntry>
         {
             new() { Kind = "cli_command", Text = "status", Output = "Connected" },
+            new() { Kind = "llm_tool", Text = "exec bt", Output = "bt-output" },
             new() { Kind = "llm_user", Text = "What is this?" },
             new() { Kind = "llm_assistant", Text = "An answer." }
         };
@@ -28,6 +29,8 @@ public class TranscriptContextBuilderTests
         Assert.True(messages.Count >= 4);
         Assert.Equal("system", messages[0].Role);
         Assert.Equal("system", messages[1].Role);
+        Assert.Contains("exec bt", messages[1].Content);
+        Assert.Contains("bt-output", messages[1].Content);
         Assert.Equal("user", messages[2].Role);
         Assert.Equal("assistant", messages[3].Role);
         Assert.Equal("Next question", messages[^1].Content);
