@@ -5,7 +5,6 @@
 This guide explains the complete workflow for using the Debugger MCP Server to analyze memory dumps. The server supports WinDbg on Windows and LLDB on macOS/Linux.
 
 > MCP tool names note: the server exposes a compact 11-tool MCP surface. The canonical list is in `debugger://mcp-tools`.
-> If you see older examples referencing tools like `create_session` or `open_dump`, translate them using that reference.
 
 ### Prerequisites
 
@@ -110,23 +109,22 @@ Symbols are automatically configured when you open the dump.
 
 ### Step 3: Create a Debugging Session (MCP)
 
-Use the MCP tool `create_session` to create a new debugging session.
+Use the MCP tool `session` with `action: "create"` to create a new debugging session.
 
-**Tool**: `create_session`
+**Tool**: `session`
 
 **Parameters**:
 - `userId`: Your user identifier (same as used in Step 1)
+- `action`: `"create"`
 
 **Example**:
 ```
-create_session(userId: "your-user-id")
+session(action: "create", userId: "your-user-id")
 ```
 
 **Response**:
 ```
-Session created successfully. Session ID: session-xyz-789
-
-IMPORTANT: Save this session ID for subsequent operations.
+Session created successfully. SessionId: session-xyz-789. Use this sessionId in all subsequent operations.
 ```
 
 **SAVE THE `sessionId`** - You will need it for all subsequent operations!
@@ -137,16 +135,18 @@ IMPORTANT: Save this session ID for subsequent operations.
 
 Open the dump file using the `dumpId` from Step 1. The debugging engine is automatically initialized when opening the first dump.
 
-**Tool**: `open_dump`
+**Tool**: `dump`
 
 **Parameters**:
 - `sessionId`: The session ID from Step 3
 - `userId`: Your user identifier
 - `dumpId`: The dump ID from Step 1
+- `action`: `"open"`
 
 **Example**:
 ```
-open_dump(
+dump(
+    action: "open",
     sessionId: "session-xyz-789",
     userId: "your-user-id",
     dumpId: "abc123-456def-789ghi"
@@ -165,7 +165,7 @@ open_dump(
 
 Now you can execute debugger commands on the open dump.
 
-**Tool**: `execute_command`
+**Tool**: `exec`
 
 **Parameters**:
 - `sessionId`: The session ID from Step 3
@@ -175,28 +175,28 @@ Now you can execute debugger commands on the open dump.
 **Common Commands (Windows - WinDbg)**:
 ```
 # Display call stack
-execute_command(sessionId, userId, command: "k")
+exec(sessionId, userId, command: "k")
 
 # Verbose crash analysis
-execute_command(sessionId, userId, command: "!analyze -v")
+exec(sessionId, userId, command: "!analyze -v")
 
 # List all threads
-execute_command(sessionId, userId, command: "~*k")
+exec(sessionId, userId, command: "~*k")
 
 # List loaded modules
-execute_command(sessionId, userId, command: "lm")
+exec(sessionId, userId, command: "lm")
 ```
 
 **Common Commands (Linux/macOS - LLDB)**:
 ```
 # Display backtrace
-execute_command(sessionId, userId, command: "bt")
+exec(sessionId, userId, command: "bt")
 
 # List all threads
-execute_command(sessionId, userId, command: "thread list")
+exec(sessionId, userId, command: "thread list")
 
 # List loaded images
-execute_command(sessionId, userId, command: "image list")
+exec(sessionId, userId, command: "image list")
 ```
 
 ---
@@ -205,7 +205,7 @@ execute_command(sessionId, userId, command: "image list")
 
 Use the automated analysis tools for structured output.
 
-**Tool**: `analyze_crash`
+**Tool**: `analyze` (`kind: "crash"`)
 
 Returns JSON with:
 - Crash type and exception information
@@ -216,21 +216,19 @@ Returns JSON with:
 - Recommendations
 
 ```
-analyze_crash(sessionId: "session-xyz-789", userId: "your-user-id")
+analyze(kind: "crash", sessionId: "session-xyz-789", userId: "your-user-id")
 ```
 
 ---
 
 ### Step 7: .NET-Specific Analysis (MCP)
 
-For .NET dumps, SOS is **automatically loaded** when `open_dump` detects a .NET runtime.
-You can verify this by checking the `open_dump` response which will say ".NET dump detected, SOS auto-loaded."
-
-> **Note**: The `load_sos` command is still available for backwards compatibility or if auto-detection fails.
+For .NET dumps, SOS is **automatically loaded** when `dump(action: "open")` detects a .NET runtime.
+If detection fails, you can load SOS manually with `inspect(kind: "load_sos", ...)`.
 
 Use .NET-specific analysis tools:
 
-**Tool**: `analyze_dot_net_crash`
+**Tool**: `analyze` (`kind: "dotnet_crash"`)
 
 Returns JSON with:
 - CLR version and runtime info
@@ -241,22 +239,22 @@ Returns JSON with:
 - GC and finalization queue analysis
 
 ```
-analyze_dot_net_crash(sessionId: "session-xyz-789", userId: "your-user-id")
+analyze(kind: "dotnet_crash", sessionId: "session-xyz-789", userId: "your-user-id")
 ```
 
 **Common SOS Commands**:
 ```
 # List managed threads
-execute_command(sessionId, userId, command: "!threads")
+exec(sessionId, userId, command: "!threads")
 
 # Show heap statistics
-execute_command(sessionId, userId, command: "!dumpheap -stat")
+exec(sessionId, userId, command: "!dumpheap -stat")
 
 # Display current exception
-execute_command(sessionId, userId, command: "!pe")
+exec(sessionId, userId, command: "!pe")
 
 # Analyze async state machines
-execute_command(sessionId, userId, command: "!dumpasync")
+exec(sessionId, userId, command: "!dumpasync")
 ```
 
 ---
@@ -265,10 +263,10 @@ execute_command(sessionId, userId, command: "!dumpasync")
 
 When done analyzing the current dump, close it.
 
-**Tool**: `close_dump`
+**Tool**: `dump` (`action: "close"`)
 
 ```
-close_dump(sessionId: "session-xyz-789", userId: "your-user-id")
+dump(action: "close", sessionId: "session-xyz-789", userId: "your-user-id")
 ```
 
 **Note**: You can open another dump in the same session after closing.
@@ -279,10 +277,10 @@ close_dump(sessionId: "session-xyz-789", userId: "your-user-id")
 
 When completely done with debugging, close the session to release resources.
 
-**Tool**: `close_session`
+**Tool**: `session` (`action: "close"`)
 
 ```
-close_session(sessionId: "session-xyz-789", userId: "your-user-id")
+session(action: "close", sessionId: "session-xyz-789", userId: "your-user-id")
 ```
 
 ---
@@ -292,85 +290,85 @@ close_session(sessionId: "session-xyz-789", userId: "your-user-id")
 ### Analyzing Multiple Dumps in One Session
 
 ```
-1. create_session
-2. open_dump (dump1) - auto-initializes debugger
-3. analyze_crash or execute_command (analyze dump1)
-4. close_dump
-5. open_dump (dump2)
-6. analyze_crash or execute_command (analyze dump2)
-7. close_dump
-8. close_session
+1. session(action="create")
+2. dump(action="open", dump1) - auto-initializes debugger
+3. analyze(kind="crash") or exec (analyze dump1)
+4. dump(action="close")
+5. dump(action="open", dump2)
+6. analyze(kind="crash") or exec (analyze dump2)
+7. dump(action="close")
+8. session(action="close")
 ```
 
 ### Comparing .NET Memory Leaks
 
 ```
-1. create_session
-2. open_dump (baseline dump)  # SOS auto-loaded
-3. analyze_dot_net_crash → Save heap statistics
-4. close_dump
-5. open_dump (leak dump)  # SOS auto-loaded
-6. analyze_dot_net_crash → Compare heap statistics
-7. close_session
+1. session(action="create")
+2. dump(action="open", baseline dump)  # SOS auto-loaded for .NET dumps
+3. analyze(kind="dotnet_crash") → Save heap statistics
+4. dump(action="close")
+5. dump(action="open", leak dump)  # SOS auto-loaded
+6. analyze(kind="dotnet_crash") → Compare heap statistics
+7. session(action="close")
 ```
 
 ### Managing Multiple Concurrent Sessions
 
 ```
-User can have up to 5 concurrent sessions:
+User can have up to 10 concurrent sessions:
 
 Session 1: Analyzing production crash
 Session 2: Analyzing memory leak
 Session 3: Comparing two dumps
 ...
 
-Use list_sessions(userId) to see all active sessions (JSON).
+Use session(action="list", userId) to see all active sessions (JSON).
 ```
 
 ### Comparing Two Dumps (Memory Leak Detection)
 
 ```
-1. create_session → session1
-2. create_session → session2
-3. open_dump(session1, userId, baseline-dumpId)
-4. open_dump(session2, userId, comparison-dumpId)
-5. compare_dumps(session1, userId, session2, userId)
+1. session(action="create", userId) → session1
+2. session(action="create", userId) → session2
+3. dump(action="open", session1, userId, baseline-dumpId)
+4. dump(action="open", session2, userId, comparison-dumpId)
+5. compare(kind="dumps", baselineSessionId=session1, baselineUserId=userId, targetSessionId=session2, targetUserId=userId)
    → Returns heap changes, thread changes, module changes
-6. compare_heaps(session1, userId, session2, userId)
+6. compare(kind="heaps", baselineSessionId=session1, baselineUserId=userId, targetSessionId=session2, targetUserId=userId)
    → Detailed memory growth analysis
-7. close_session(session1, userId)
-8. close_session(session2, userId)
+7. session(action="close", sessionId=session1, userId)
+8. session(action="close", sessionId=session2, userId)
 ```
 
 ### Using Watch Expressions
 
 ```
-1. open_dump
-2. add_watch(sessionId, userId, "0x12345678", "Suspicious pointer")
-3. add_watch(sessionId, userId, "g_AppState", "Global state variable")
-4. evaluate_watches(sessionId, userId)
+1. dump(action="open", ...)
+2. watch(action="add", sessionId, userId, expression="0x12345678", description="Suspicious pointer")
+3. watch(action="add", sessionId, userId, expression="g_AppState", description="Global state variable")
+4. watch(action="evaluate_all", sessionId, userId)
    → Returns current values with insights (null pointers, freed memory, etc.)
-5. analyze_crash(sessionId, userId)
+5. analyze(kind="crash", sessionId, userId)
    → Watch results included in analysis
 ```
 
 ### Generating Reports
 
 ```
-1. open_dump  # SOS auto-loaded for .NET dumps
-2. generate_report(sessionId, userId, format="html", includeWatches=true)
+1. dump(action="open", ...)  # SOS auto-loaded for .NET dumps
+2. report(action="full", sessionId, userId, format="html", includeWatches=true)
    → Returns comprehensive HTML report
-3. generate_summary_report(sessionId, userId)
+3. report(action="summary", sessionId, userId, format="markdown")
    → Quick summary with key findings
 ```
 
 ### Security Analysis
 
 ```
-1. open_dump
-2. analyze_security(sessionId, userId)
+1. dump(action="open", ...)
+2. analyze(kind="security", sessionId, userId)
    → Returns vulnerabilities, memory protections, exploit patterns
-3. get_security_check_capabilities()
+3. analyze(kind="security", action="capabilities")
    → Lists detectable vulnerability types
 ```
 

@@ -2,23 +2,20 @@
 
 This document provides examples of the automated crash analysis functionality in the Debugger MCP Server.
 
-> MCP tool names note: the server now exposes a compact 11-tool MCP surface. The canonical list is `DebuggerMcp/Resources/mcp_tools.md`.
-> This document includes legacy tool names in examples; translate them using that reference (e.g., `analyze_crash` → `analyze(kind="crash")`).
+> MCP tools note: the server exposes a compact 11-tool MCP surface. The canonical list is `DebuggerMcp/Resources/mcp_tools.md` (also served as `debugger://mcp-tools`).
 
 ## Overview
 
 The Debugger MCP Server includes automated analysis tools that execute relevant debugger commands, parse the output, and return structured JSON results. This makes it easier for LLMs and other tools to understand crash dumps without manually executing and parsing individual commands.
 
-## Available Analysis Tools
+## Tools Used In This Document
 
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `analyze_crash` | General crash analysis with security and watch integration | `sessionId`, `userId`, `includeWatches` (default: true) |
-| `analyze_dot_net_crash` | .NET specific analysis with CLR info, heap stats, deep analysis | `sessionId`, `userId`, `includeWatches` (default: true), `deepAnalysis` (default: false) |
-| `analyze_performance` | Comprehensive CPU, memory, GC, contention analysis | `sessionId`, `userId`, `includeWatches` (default: true) |
-| `analyze_security` | Security vulnerability detection | `sessionId`, `userId` |
-| `compare_dumps` | Compare two dumps for memory/thread/module changes | See dump comparison docs |
-| `inspect_object` | Deep .NET object inspection with recursive expansion | `sessionId`, `userId`, `address`, `maxDepth` |
+| Tool | Description | Key parameters |
+|------|-------------|----------------|
+| `analyze` | Automated analysis (crash/.NET/perf/security) | `kind`, `sessionId`, `userId`, `includeWatches?`, `deepAnalysis?` |
+| `compare` | Compare two sessions/dumps | `kind`, `sessionId`, `userId`, `targetSessionId`, `targetUserId` |
+| `inspect` | Object/module/SOS helpers | `kind`, `sessionId`, `userId` (+ kind-specific args) |
+| `dump` | Open/close a dump in a session | `action`, `sessionId`, `userId`, `dumpId` |
 
 ---
 
@@ -45,13 +42,13 @@ All analysis tools return a hierarchical JSON structure with these top-level sec
 
 ---
 
-## 1. analyze_crash
+## 1. analyze(kind="crash")
 
 **Purpose**: General crash analysis for any type of crash dump (native or managed). Includes security analysis and watch expression evaluations.
 
 **Usage**:
 ```
-analyze_crash(sessionId="session-123", userId="user1", includeWatches=true)
+analyze(kind="crash", sessionId="session-123", userId="user1", includeWatches=true)
 ```
 
 **What it does**:
@@ -247,27 +244,27 @@ analyze_crash(sessionId="session-123", userId="user1", includeWatches=true)
 
 ---
 
-## 2. analyze_dot_net_crash
+## 2. analyze(kind="dotnet_crash")
 
 **Purpose**: .NET specific crash analysis with managed code insights, including deep analysis with ClrMD.
 
 **Prerequisites**:
-- Dump must be opened with `open_dump` (SOS is **auto-loaded** for .NET dumps)
+- Dump must be opened with `dump(action="open", ...)` (SOS is **auto-loaded** for .NET dumps)
 - The dump must be from a .NET application
 
 **Usage**:
 ```
-# Basic analysis (SOS auto-loaded by open_dump)
-analyze_dot_net_crash(sessionId="session-123", userId="user1")
+# Basic analysis (SOS auto-loaded by dump(action="open"))
+analyze(kind="dotnet_crash", sessionId="session-123", userId="user1")
 
 # Deep analysis with ClrMD heap inspection (slower but more detailed)
-analyze_dot_net_crash(sessionId="session-123", userId="user1", deepAnalysis=true)
+analyze(kind="dotnet_crash", sessionId="session-123", userId="user1", deepAnalysis=true)
 ```
 
-> **Note**: If SOS auto-detection failed, you can manually call `load_sos` first.
+> **Note**: If SOS auto-detection failed, you can manually call `inspect(kind=\"load_sos\", ...)` first.
 
 **What it does**:
-- Performs all general crash analysis (from analyze_crash)
+- Performs all general crash analysis (from `analyze(kind=\"crash\")`)
 - Extracts CLR version information
 - Analyzes managed exceptions with inner exception chain
 - Collects heap statistics
@@ -544,13 +541,13 @@ analyze_dot_net_crash(sessionId="session-123", userId="user1", deepAnalysis=true
 
 ---
 
-## 3. analyze_performance
+## 3. analyze(kind="performance")
 
 **Purpose**: Comprehensive performance analysis focusing on CPU usage, memory allocation patterns, GC behavior, and thread contention.
 
 **Usage**:
 ```
-analyze_performance(sessionId="session-123", userId="user1", includeWatches=true)
+analyze(kind="performance", sessionId="session-123", userId="user1", includeWatches=true)
 ```
 
 **What it does**:
@@ -563,13 +560,13 @@ analyze_performance(sessionId="session-123", userId="user1", includeWatches=true
 
 ---
 
-## 4. analyze_security
+## 4. analyze(kind="security")
 
 **Purpose**: Security-focused analysis to detect potential vulnerabilities and security issues.
 
 **Usage**:
 ```
-analyze_security(sessionId="session-123", userId="user1")
+analyze(kind="security", sessionId="session-123", userId="user1")
 ```
 
 **What it detects**:
@@ -602,7 +599,7 @@ Properties that have no value are omitted from the JSON output (using `JsonIgnor
 
 ### Deep Analysis
 
-The `deepAnalysis` parameter in `analyze_dot_net_crash` enables ClrMD-based heap walking, which provides:
+The `deepAnalysis` parameter in `analyze(kind=\"dotnet_crash\")` enables ClrMD-based heap walking, which provides:
 - Detailed type memory statistics
 - String duplicate detection
 - Async state machine analysis

@@ -4,8 +4,7 @@
 
 This guide covers all automated analysis features available in the Debugger MCP Server, including crash analysis, .NET-specific analysis, and dump comparison capabilities.
 
-> MCP tool names note: the server exposes a compact 11-tool MCP surface. The canonical list is in `debugger://mcp-tools`.
-> This guide may reference legacy tool names in headings/examples; translate them using that reference.
+Tool reference: the canonical MCP tool list is `debugger://mcp-tools`.
 
 ---
 
@@ -31,11 +30,11 @@ This guide covers all automated analysis features available in the Debugger MCP 
 
 ---
 
-## 🔴 Crash Analysis (analyze_crash)
+## 🔴 Crash Analysis (`analyze` / kind=`crash`)
 
 ### Overview
 
-The `analyze_crash` tool performs automated crash analysis on an open dump file. It works with both WinDbg (Windows) and LLDB (macOS/Linux) and returns structured JSON output.
+Use `analyze(kind: "crash")` to perform automated crash analysis on an open dump file. It works with both WinDbg (Windows) and LLDB (macOS/Linux) and returns structured JSON output.
 
 ### Prerequisites
 
@@ -45,7 +44,7 @@ The `analyze_crash` tool performs automated crash analysis on an open dump file.
 ### Usage
 
 ```
-analyze_crash(sessionId: "your-session-id", userId: "your-user-id")
+analyze(kind: "crash", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
 ### What It Detects
@@ -135,26 +134,25 @@ analyze_crash(sessionId: "your-session-id", userId: "your-user-id")
 
 ---
 
-## 🟣 .NET Crash Analysis (analyze_dot_net_crash)
+## 🟣 .NET Crash Analysis (`analyze` / kind=`dotnet_crash`)
 
 ### Overview
 
-The `analyze_dot_net_crash` tool provides .NET-specific analysis using SOS debugging extension. It includes managed exception analysis, heap statistics, and async deadlock detection.
+Use `analyze(kind: "dotnet_crash")` for .NET-specific analysis using the SOS debugging extension. It includes managed exception analysis, heap statistics, and async deadlock detection.
 
 ### Prerequisites
 
-1. Session created with `create_session`
-2. Dump file opened with `open_dump` (SOS is **auto-loaded** for .NET dumps)
+1. Session created with `session(action="create")`
+2. Dump file opened with `dump(action="open")` (SOS is **auto-loaded** for .NET dumps)
 
 ### Usage
 
 ```
-# SOS is automatically loaded when open_dump detects a .NET dump
-# Just call analyze directly:
-analyze_dot_net_crash(sessionId: "your-session-id", userId: "your-user-id")
+# SOS is automatically loaded when dump(action="open") detects a .NET dump
+analyze(kind: "dotnet_crash", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
-> **Note**: If auto-detection fails, you can manually call `load_sos` before analysis.
+> If auto-detection fails, you can load SOS manually: `inspect(kind: "load_sos", sessionId: "...", userId: "...")`.
 
 ### What It Detects
 
@@ -232,12 +230,12 @@ analyze_dot_net_crash(sessionId: "your-session-id", userId: "your-user-id")
 
 The performance profiling tools analyze CPU usage, memory allocations, garbage collection behavior, and thread contention to identify performance bottlenecks in your application.
 
-### Comprehensive Performance Analysis (analyze_performance)
+### Comprehensive Performance Analysis (`analyze` / kind=`performance`)
 
 Performs all four analyses (CPU, Allocations, GC, Contention) in one call.
 
 ```
-analyze_performance(sessionId: "your-session-id", userId: "your-user-id")
+analyze(kind: "performance", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
 #### Example Output
@@ -300,12 +298,12 @@ analyze_performance(sessionId: "your-session-id", userId: "your-user-id")
 
 ---
 
-### CPU Usage Analysis (analyze_cpu_usage)
+### CPU Usage Analysis (`analyze` / kind=`cpu`)
 
 Identifies CPU hotspots, runaway threads, and potential spin loops.
 
 ```
-analyze_cpu_usage(sessionId: "your-session-id", userId: "your-user-id")
+analyze(kind: "cpu", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
 #### What It Detects
@@ -342,12 +340,12 @@ analyze_cpu_usage(sessionId: "your-session-id", userId: "your-user-id")
 
 ---
 
-### Memory Allocation Analysis (analyze_allocations)
+### Memory Allocation Analysis (`analyze` / kind=`allocations`)
 
 Analyzes memory allocation patterns to find top allocators and potential leaks.
 
 ```
-analyze_allocations(sessionId: "your-session-id", userId: "your-user-id")
+analyze(kind: "allocations", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
 #### What It Detects
@@ -397,12 +395,12 @@ analyze_allocations(sessionId: "your-session-id", userId: "your-user-id")
 
 ---
 
-### Garbage Collection Analysis (analyze_gc)
+### Garbage Collection Analysis (`analyze` / kind=`gc`)
 
 Analyzes GC behavior, heap generations, and finalization queue.
 
 ```
-analyze_gc(sessionId: "your-session-id", userId: "your-user-id")
+analyze(kind: "gc", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
 #### What It Detects
@@ -443,12 +441,12 @@ analyze_gc(sessionId: "your-session-id", userId: "your-user-id")
 
 ---
 
-### Thread Contention Analysis (analyze_contention)
+### Thread Contention Analysis (`analyze` / kind=`contention`)
 
 Analyzes lock usage, waiting threads, and potential deadlocks.
 
 ```
-analyze_contention(sessionId: "your-session-id", userId: "your-user-id")
+analyze(kind: "contention", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
 #### What It Detects
@@ -500,14 +498,14 @@ analyze_contention(sessionId: "your-session-id", userId: "your-user-id")
 
 ```
 # Full performance profiling workflow
-1. create_session → session1
-2. open_dump(session1, "user1", "perf-dump")  # SOS auto-loaded for .NET dumps
-3. analyze_performance(session1, "user1")
+1. session(action="create", userId="user1") → session1
+2. dump(action="open", sessionId=session1, userId="user1", dumpId="perf-dump")  # SOS auto-loaded for .NET dumps
+3. analyze(kind="performance", sessionId=session1, userId="user1")
 4. Review recommendations and drill into specific areas:
-   - High CPU? → analyze_cpu_usage for details
-   - Memory issues? → analyze_allocations for types
-   - GC problems? → analyze_gc for generations
-   - Threading issues? → analyze_contention for locks
+   - High CPU? → analyze(kind="cpu") for details
+   - Memory issues? → analyze(kind="allocations") for types
+   - GC problems? → analyze(kind="gc") for generations
+   - Threading issues? → analyze(kind="contention") for locks
 ```
 
 ---
@@ -535,11 +533,11 @@ Performs a comprehensive comparison including heap, threads, and modules.
 
 ```
 # Create two sessions
-create_session(userId: "user1") → baselineSessionId
-create_session(userId: "user1") → comparisonSessionId
+session(action: "create", userId: "user1") → baselineSessionId
+session(action: "create", userId: "user1") → comparisonSessionId
 
 # Open baseline dump (e.g., from yesterday)
-OpenDump(baselineSessionId, "user1", "dump-before-leak")
+dump(action: "open", sessionId: baselineSessionId, userId: "user1", dumpId: "dump-before-leak")
 
 # Open comparison dump (e.g., from today)
 OpenDump(comparisonSessionId, "user1", "dump-after-leak")
@@ -624,7 +622,7 @@ CompareDumps(
 
 ---
 
-## 📈 Heap Comparison (compare_heaps)
+## 📈 Heap Comparison (`compare` / kind=`heaps`)
 
 ### Overview
 
@@ -633,11 +631,11 @@ Specifically compares memory/heap allocations to detect memory leaks and growth 
 ### Usage
 
 ```
-compare_heaps(
+compare(kind: "heaps",
     baselineSessionId: "baseline-session",
     baselineUserId: "user1",
-    comparisonSessionId: "comparison-session",
-    comparisonUserId: "user1"
+    targetSessionId: "comparison-session",
+    targetUserId: "user1"
 )
 ```
 
@@ -678,7 +676,7 @@ compare_heaps(
 
 ---
 
-## 🧵 Thread Comparison (compare_threads)
+## 🧵 Thread Comparison (`compare` / kind=`threads`)
 
 ### Overview
 
@@ -687,11 +685,11 @@ Compares thread states to detect new threads, terminated threads, state changes,
 ### Usage
 
 ```
-compare_threads(
+compare(kind: "threads",
     baselineSessionId: "baseline-session",
     baselineUserId: "user1",
-    comparisonSessionId: "comparison-session",
-    comparisonUserId: "user1"
+    targetSessionId: "comparison-session",
+    targetUserId: "user1"
 )
 ```
 
@@ -730,7 +728,7 @@ The tool flags potential deadlocks when:
 
 ---
 
-## 📦 Module Comparison (compare_modules)
+## 📦 Module Comparison (`compare` / kind=`modules`)
 
 ### Overview
 
@@ -739,11 +737,11 @@ Compares loaded modules to track DLL/library loading, version changes, and rebas
 ### Usage
 
 ```
-compare_modules(
+compare(kind: "modules",
     baselineSessionId: "baseline-session",
     baselineUserId: "user1",
-    comparisonSessionId: "comparison-session",
-    comparisonUserId: "user1"
+    targetSessionId: "comparison-session",
+    targetUserId: "user1"
 )
 ```
 
@@ -784,7 +782,7 @@ curl -X POST http://localhost:5000/api/dumps/compare \
   }'
 ```
 
-**Response**: Same as `CompareDumps` MCP tool
+**Response**: Same as `compare(kind="dumps")` MCP tool
 
 ---
 
@@ -795,15 +793,15 @@ curl -X POST http://localhost:5000/api/dumps/compare \
 ```
 Day 1: Capture baseline
 1. Upload dump-day1 via HTTP API
-2. create_session → session1
-3. open_dump(session1, "user1", "dump-day1")
-4. analyze_crash → Get baseline heap stats
+2. session(action="create", userId="user1") → session1
+3. dump(action="open", sessionId=session1, userId="user1", dumpId="dump-day1")
+4. analyze(kind="crash", sessionId=session1, userId="user1") → Get baseline heap stats
 
 Day 2: After leak observed
 5. Upload dump-day2 via HTTP API
-6. create_session → session2  
-7. open_dump(session2, "user1", "dump-day2")
-8. compare_dumps(session1, "user1", session2, "user1")
+6. session(action="create", userId="user1") → session2  
+7. dump(action="open", sessionId=session2, userId="user1", dumpId="dump-day2")
+8. compare(kind="dumps", baselineSessionId=session1, baselineUserId="user1", targetSessionId=session2, targetUserId="user1")
 9. Review memory growth and top growing types
 ```
 
@@ -811,22 +809,22 @@ Day 2: After leak observed
 
 ```
 1. Upload dump with suspected deadlock
-2. create_session → session1
-3. open_dump(session1, "user1", "deadlock-dump")
-4. analyze_crash → Check deadlockInfo
+2. session(action="create", userId="user1") → session1
+3. dump(action="open", sessionId=session1, userId="user1", dumpId="deadlock-dump")
+4. analyze(kind="crash", sessionId=session1, userId="user1") → Check deadlockInfo
 5. If deadlock detected, examine:
    - involvedThreads: Which threads are stuck
    - locks: What resources they're waiting for
-   - Use execute_command("~*k") for full thread stacks
+   - Use exec(sessionId, userId, command="~*k") for full thread stacks
 ```
 
 ### .NET Memory Analysis
 
 ```
 1. Upload .NET dump
-2. create_session → session1
-3. open_dump(session1, "user1", "dotnet-dump")  # SOS auto-loaded
-4. analyze_dot_net_crash → Get .NET-specific analysis
+2. session(action="create", userId="user1") → session1
+3. dump(action="open", sessionId=session1, userId="user1", dumpId="dotnet-dump")  # SOS auto-loaded
+4. analyze(kind="dotnet_crash", sessionId=session1, userId="user1") → Get .NET-specific analysis
 5. Review:
    - heapStats for GC generations
    - topConsumers for memory hogs
@@ -839,11 +837,11 @@ Day 2: After leak observed
 # Useful for testing fixes
 1. Upload dump-before-fix
 2. Upload dump-after-fix
-3. create_session → sessionBefore
-4. create_session → sessionAfter
-5. open_dump(sessionBefore, "user1", "dump-before-fix")
-6. open_dump(sessionAfter, "user1", "dump-after-fix")
-7. compare_dumps(sessionBefore, "user1", sessionAfter, "user1")
+3. session(action="create", userId="user1") → sessionBefore
+4. session(action="create", userId="user1") → sessionAfter
+5. dump(action="open", sessionId=sessionBefore, userId="user1", dumpId="dump-before-fix")
+6. dump(action="open", sessionId=sessionAfter, userId="user1", dumpId="dump-after-fix")
+7. compare(kind="dumps", baselineSessionId=sessionBefore, baselineUserId="user1", targetSessionId=sessionAfter, targetUserId="user1")
 8. Verify issue is resolved in comparison
 ```
 
@@ -876,14 +874,16 @@ Watch expressions allow you to bookmark and track specific memory locations, var
 
 ### MCP Tools
 
+Use the `watch` tool with an `action`:
+
 | Tool | Description |
 |------|-------------|
-| `add_watch` | Add a new watch expression |
-| `list_watches` | List all watches for current dump |
-| `evaluate_watches` | Evaluate all watches with insights |
-| `evaluate_watch` | Evaluate a specific watch by ID |
-| `remove_watch` | Remove a watch by ID |
-| `clear_watches` | Clear all watches for current dump |
+| `watch(action="add")` | Add a new watch expression |
+| `watch(action="list")` | List all watches for the currently open dump |
+| `watch(action="evaluate_all")` | Evaluate all watches with insights |
+| `watch(action="evaluate")` | Evaluate a specific watch by ID |
+| `watch(action="remove")` | Remove a watch by ID |
+| `watch(action="clear")` | Clear all watches for the currently open dump |
 
 ### Usage Examples
 
@@ -891,23 +891,23 @@ Watch expressions allow you to bookmark and track specific memory locations, var
 
 ```
 # Track a suspicious memory address
-AddWatch(sessionId, userId, "0x12345678", "Suspicious allocation")
+watch(action: "add", sessionId: "session-123", userId: "user1", expression: "0x12345678", description: "Suspicious allocation")
 
 # Track a global variable
-AddWatch(sessionId, userId, "g_DataManager", "Global data manager")
+watch(action: "add", sessionId: "session-123", userId: "user1", expression: "g_DataManager", description: "Global data manager")
 
 # Track a .NET object
-AddWatch(sessionId, userId, "0x00007ff812345678", "Exception object", "Object")
+watch(action: "add", sessionId: "session-123", userId: "user1", expression: "0x00007ff812345678", description: "Exception object")
 
 # Track a complex expression
-AddWatch(sessionId, userId, "poi(esp+8)", "Return address")
+watch(action: "add", sessionId: "session-123", userId: "user1", expression: "poi(esp+8)", description: "Return address")
 ```
 
 #### Evaluating Watches
 
 ```
 # Evaluate all watches
-EvaluateWatches(sessionId, userId)
+watch(action: "evaluate_all", sessionId: "session-123", userId: "user1")
 ```
 
 **Example Output:**
@@ -941,7 +941,7 @@ EvaluateWatches(sessionId, userId)
 
 ### Integration with Analysis
 
-When you run `analyze_crash`, `analyze_dot_net_crash`, or `analyze_performance`, watches are automatically evaluated and included in the report:
+When you run `analyze(kind="crash")`, `analyze(kind="dotnet_crash")`, or `analyze(kind="performance")`, watches are automatically evaluated and included in the report:
 
 ```json
 {
@@ -1072,8 +1072,8 @@ Security analysis scans crash dumps for potential security vulnerabilities, expl
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `analyze_security` | Comprehensive security vulnerability analysis | `sessionId`, `userId` |
-| `get_security_check_capabilities` | List detectable vulnerability types | (no parameters) |
+| `analyze(kind="security")` | Comprehensive security vulnerability analysis | `sessionId`, `userId` |
+| `analyze(kind="security", action="capabilities")` | List detectable vulnerability types | (no parameters) |
 
 ### Detectable Vulnerabilities
 
@@ -1092,7 +1092,7 @@ Security analysis scans crash dumps for potential security vulnerabilities, expl
 
 ```
 // Run comprehensive security analysis
-analyze_security(sessionId: "abc", userId: "user1")
+analyze(kind: "security", sessionId: "abc", userId: "user1")
 
 // Output:
 {
@@ -1173,10 +1173,10 @@ Security findings are automatically included in generated reports:
 ### Workflow Integration
 
 ```
-1. Open dump: open_dump(...)
-2. Run crash analysis: analyze_crash(...)  
-3. Check security: analyze_security(...)
-4. Generate report: generate_report(format: "html")
+1. Open dump: dump(action="open", ...)
+2. Run crash analysis: analyze(kind="crash", ...)  
+3. Check security: analyze(kind="security", ...)
+4. Generate report: report(action="full", format="html", ...)
    → Security findings included automatically!
 ```
 
@@ -1192,8 +1192,8 @@ Generate comprehensive, shareable reports from your crash analysis in multiple f
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `generate_report` | Generate full analysis report | `sessionId`, `userId`, `format`, `includeRawOutput`, `title` |
-| `generate_summary_report` | Generate brief summary report | `sessionId`, `userId`, `format` |
+| `report(action="full")` | Generate full analysis report | `sessionId`, `userId`, `format`, `includeWatches`, `includeSecurity`, `maxStackFrames` |
+| `report(action="summary")` | Generate brief summary report | `sessionId`, `userId`, `format` |
 
 ### Supported Formats
 
@@ -1207,13 +1207,13 @@ Generate comprehensive, shareable reports from your crash analysis in multiple f
 
 ```
 // Generate Markdown report (default)
-generate_report(sessionId: "abc", userId: "user1")
+report(action: "full", sessionId: "abc", userId: "user1", format: "markdown")
 
 // Generate HTML report with custom title
-generate_report(sessionId: "abc", userId: "user1", format: "html", title: "Production Crash Analysis")
+report(action: "full", sessionId: "abc", userId: "user1", format: "html")
 
 // Generate brief summary in JSON
-generate_summary_report(sessionId: "abc", userId: "user1", format: "json")
+report(action: "summary", sessionId: "abc", userId: "user1", format: "json")
 ```
 
 ### HTTP Endpoint
@@ -1261,11 +1261,11 @@ For PDF output:
 ## 🆘 Troubleshooting
 
 ### "Session does not have a dump file open"
-- Ensure `open_dump` was called successfully before analysis
+- Ensure `dump(action="open")` was called successfully before analysis
 
 ### "SOS extension not loaded"
-- SOS is auto-loaded for .NET dumps. If detection failed, call `load_sos` manually
-- Check `open_dump` response to verify .NET detection status
+- SOS is auto-loaded for .NET dumps. If detection failed, call `inspect(kind="load_sos")` manually
+- Check the `dump(action="open")` response to verify .NET detection status
 
 ### Memory comparison shows no types
 - SOS may not be loaded (for .NET type stats)

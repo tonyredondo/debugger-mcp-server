@@ -2,7 +2,7 @@
 
 This server intentionally exposes a **small** MCP tool surface to fit within common MCP client limits.
 
-If you see older documentation referencing tools like `create_session` or `open_dump`, those legacy tool names have been removed. Use the compact tools below.
+This document is the canonical reference for the MCP tool surface exposed by the server.
 
 ## Tool Set (11 total)
 
@@ -97,4 +97,3 @@ Datadog symbol workflows.
 - **list_artifacts**: `datadog_symbols(action: "list_artifacts", commitSha: "...")`
 - **get_config**: `datadog_symbols(action: "get_config")`
 - **clear**: `datadog_symbols(action: "clear", sessionId: "...", userId: "...", clearApiCache: false)`
-

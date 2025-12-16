@@ -55,7 +55,7 @@ public class SessionTools(
             // Return the actual error message (e.g., "max sessions reached")
             // so the client can take appropriate action
             Logger.LogWarning(ex, "[CreateSession] Session creation failed");
-            return $"Error: {ex.Message}. Use 'list_sessions' to see active sessions and 'close_session' to close unused ones.";
+            return $"Error: {ex.Message}. Use session(action=\"list\") to see active sessions and session(action=\"close\") to close unused ones.";
         }
         catch (ArgumentException ex)
         {
@@ -275,7 +275,7 @@ public class SessionTools(
             else
             {
                 // nudge clients toward next action when no dump is loaded
-                result += "  CurrentDump: None (use open_dump to load a dump)\n";
+                result += "  CurrentDump: None (use dump(action=\"open\") to load a dump)\n";
             }
 
             return result;
@@ -293,7 +293,7 @@ public class SessionTools(
         catch (InvalidOperationException ex)
         {
             Logger.LogWarning(ex, "[RestoreSession] Session not found or expired");
-            return $"Error: {ex.Message}. Use 'list_sessions' to see available sessions or 'create_session' to create a new one.";
+            return $"Error: {ex.Message}. Use session(action=\"list\") to see available sessions or session(action=\"create\") to create a new one.";
         }
         catch (Exception ex)
         {

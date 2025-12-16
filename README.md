@@ -396,7 +396,7 @@ analyze(kind="crash", sessionId, userId) → Returns JSON with:
   - Watch expression results
   - Recommendations
 
-# .NET specific analysis (SOS auto-loaded by open_dump)
+# .NET specific analysis (SOS auto-loaded when opening .NET dumps)
 analyze(kind="dotnet_crash", sessionId, userId) → Returns JSON with:
   - CLR version and runtime info
   - Managed exceptions with stack traces
@@ -568,282 +568,29 @@ xdg-open ./TestResults/coverage-report/index.html  # Linux
 
 ## 📚 MCP Tools Available
 
-> Tool surface note: the server exports a compact 11-tool MCP surface. The canonical reference is `DebuggerMcp/Resources/mcp_tools.md` (also served as `debugger://mcp-tools`).
-> The detailed legacy tool tables below are being phased out; prefer the compact tools for any MCP client integration.
+The server intentionally exposes a compact MCP tool surface (11 tools). The canonical reference is `DebuggerMcp/Resources/mcp_tools.md` (also served as `debugger://mcp-tools`).
 
-### Session & Dump Management
+| Tool | Purpose |
+|------|---------|
+| `session` | Create/list/restore/close sessions |
+| `dump` | Open/close dumps in a session |
+| `analyze` | Crash/.NET/perf/security analysis |
+| `compare` | Compare two sessions/dumps |
+| `report` | Full/summary reports (json/markdown/html) |
+| `watch` | Add/list/evaluate/remove watches |
+| `inspect` | ClrMD/SOS helpers (object/module/clr_stack/load_sos) |
+| `symbols` | Symbol servers/config/cache/reload |
+| `source_link` | Resolve Source Link URLs/info |
+| `datadog_symbols` | Datadog symbol workflows |
+| `exec` | Raw debugger command (last resort) |
 
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `create_session` | Create a new debugging session | `userId` |
-| `open_dump` | Open a dump file (auto-configures symbols, auto-loads SOS for .NET) | `sessionId`, `userId`, `dumpId` |
-| `close_dump` | Close the currently open dump | `sessionId`, `userId` |
-| `execute_command` | Execute a debugger command (WinDbg/LLDB syntax) | `sessionId`, `userId`, `command` |
-| `load_sos` | Load SOS extension for .NET (usually auto-loaded) | `sessionId`, `userId` |
-| `close_session` | Close and release all session resources | `sessionId`, `userId` |
-| `list_sessions` | List all active sessions for a user | `userId` |
-| `get_debugger_info` | Get debugger type, OS, and status | `sessionId`, `userId` |
-| `restore_session` | Restore/attach to a persisted session (after server restart) | `sessionId`, `userId` |
-
-### Symbol Management
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `configure_additional_symbols` | Add additional symbol paths (optional) | `sessionId`, `userId`, `additionalPaths` |
-| `get_symbol_servers` | List common symbol servers | - |
-| `clear_symbol_cache` | Clear downloaded symbols for a dump | `userId`, `dumpId` |
-| `reload_symbols` | Reload symbols after uploading new files | `sessionId`, `userId` |
-
-### Crash Analysis
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `analyze_crash` | Comprehensive crash analysis with security, watches, and recommendations | `sessionId`, `userId`, `includeWatches` (default: true) |
-| `analyze_dot_net_crash` | .NET specific analysis with CLR info, managed exceptions, heap stats | `sessionId`, `userId`, `includeWatches` (default: true) |
-
-### Dump Comparison
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `compare_dumps` | Full comparison (heap, threads, modules) | `baselineSessionId`, `baselineUserId`, `comparisonSessionId`, `comparisonUserId` |
-| `compare_heaps` | Compare heap/memory allocations for leak detection | `baselineSessionId`, `baselineUserId`, `comparisonSessionId`, `comparisonUserId` |
-| `compare_threads` | Compare thread states for deadlock detection | `baselineSessionId`, `baselineUserId`, `comparisonSessionId`, `comparisonUserId` |
-| `compare_modules` | Compare loaded modules for version changes | `baselineSessionId`, `baselineUserId`, `comparisonSessionId`, `comparisonUserId` |
-
-#### Dump Comparison Use Cases
-
-The dump comparison tools help identify:
-- **Memory Leaks**: Compare dumps taken at different times to identify growing allocations
-- **State Changes**: Find what changed between a working and broken state
-- **Regression Analysis**: Compare dumps from different versions
-- **Deadlock Detection**: Identify threads that started waiting on locks
-
-**Example Comparison Workflow:**
+Quick workflow:
 ```
-1. session(action="create", userId="user1") → Get baselineSessionId
-2. session(action="create", userId="user1") → Get comparisonSessionId
-3. dump(action="open", baselineSessionId, "user1", "baseline-dump-id")
-4. dump(action="open", comparisonSessionId, "user1", "comparison-dump-id")
-5. compare(kind="dumps", baselineSessionId, "user1", comparisonSessionId, "user1") → Returns:
-   - Memory growth analysis
-   - New/terminated threads
-   - Loaded/unloaded modules
-   - Recommendations
-```
-
-**HTTP API Alternative:**
-```bash
-# Compare dumps via HTTP API
-curl -X POST http://localhost:5000/api/dumps/compare \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-api-key" \
-  -d '{
-    "baselineUserId": "user1",
-    "baselineDumpId": "dump-before",
-    "comparisonUserId": "user1",
-    "comparisonDumpId": "dump-after"
-  }'
-```
-
-### Performance Profiling
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `analyze_performance` | Comprehensive analysis (CPU, memory, GC, contention) with watches | `sessionId`, `userId`, `includeWatches` (default: true) |
-| `analyze_cpu_usage` | Identify hot functions, runaway threads, spin loops | `sessionId`, `userId` |
-| `analyze_allocations` | Top allocators, large objects, potential memory leaks | `sessionId`, `userId` |
-| `analyze_gc` | GC behavior, heap generations, fragmentation, finalizer queue | `sessionId`, `userId` |
-| `analyze_contention` | Lock contention, waiting threads, deadlock detection | `sessionId`, `userId` |
-
-### Watch Expressions / Bookmarks
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `add_watch` | Add a watch expression (type auto-detected) | `sessionId`, `userId`, `expression`, `description` (optional) |
-| `list_watches` | List all watch expressions for the current dump | `sessionId`, `userId` |
-| `evaluate_watches` | Evaluate all watches and return values with insights | `sessionId`, `userId` |
-| `evaluate_watch` | Evaluate a specific watch expression by ID | `sessionId`, `userId`, `watchId` |
-| `remove_watch` | Remove a watch expression by ID | `sessionId`, `userId`, `watchId` |
-| `clear_watches` | Clear all watches for the current dump | `sessionId`, `userId` |
-
-### Report Generation
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `generate_report` | Generate comprehensive crash analysis report | `sessionId`, `userId`, `format` (markdown/html/json), `includeWatches`, `includeSecurity`, `maxStackFrames` |
-| `generate_summary_report` | Generate brief summary with key findings | `sessionId`, `userId`, `format` (markdown/html/json) |
-
-#### Report Features
-
-Generate shareable reports from crash analysis in multiple formats:
-
-- **Markdown** (default): ASCII charts, works in any text viewer, GitHub-friendly
-- **HTML**: Beautiful styled reports with CSS charts, opens in browser
-- **JSON**: Structured data for programmatic consumption
-
-Reports include:
-- Executive summary and crash information
-- Call stack with source references
-- Memory/heap analysis with visual charts
-- Thread state distribution
-- .NET-specific information (CLR version, managed exceptions)
-- Watch expression results and insights
-- Recommendations for fixing issues
-
-**TIP**: For PDF output, generate HTML and print from browser (File > Print > Save as PDF)
-
-### Source Link
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `resolve_source_link` | Resolve source file to browsable URL (GitHub, etc.) | `sessionId`, `userId`, `sourceFile`, `lineNumber` (optional) |
-| `get_source_link_info` | Get Source Link configuration and symbol paths | `sessionId`, `userId` |
-
-#### Source Link Features
-
-Automatically link stack frames to source code using Source Link metadata from Portable PDBs:
-
-- **Automatic Resolution**: Extracts Source Link JSON from PDB files
-- **Provider Support**: GitHub, GitLab, Azure DevOps, Bitbucket
-- **Clickable Links**: Stack frames in reports link directly to source lines
-- **Version Accurate**: Links point to the exact commit that was compiled
-
-**Example:** A stack frame like `MyApp.dll!ProcessData` with source at `Controllers/HomeController.cs:42` becomes:
-```
-https://github.com/myorg/myapp/blob/v1.2.3/Controllers/HomeController.cs#L42
-```
-
-**Prerequisites:**
-- PDB files must be Portable PDBs (not Windows PDBs)
-- PDBs must have embedded Source Link JSON
-- Symbol files should be uploaded via the symbol API
-
-### Security Analysis
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `analyze_security` | Comprehensive security vulnerability analysis | `sessionId`, `userId` |
-| `get_security_check_capabilities` | List detectable vulnerability types and capabilities | - |
-
-### Object Inspection
-
-| Tool | Description | Parameters |
-|------|-------------|------------|
-| `inspect_object` | Inspect a .NET object with recursive field expansion | `sessionId`, `userId`, `address`, `methodTable` (optional), `maxDepth`, `maxArrayElements`, `maxStringLength` |
-
-#### Object Inspection Features
-
-Deep inspection of .NET objects in memory dumps with:
-
-- **Recursive field enumeration**: Expand nested objects up to configurable depth (default: 5)
-- **Circular reference detection**: Marks self-references with [this] and previously seen objects with [seen]
-- **Array support**: Shows first N elements (configurable) with type information
-- **Value type handling**: Falls back to `dumpvc` when `dumpobj` fails with method table
-- **String truncation**: Long strings truncated to configurable length (default: 1024)
-
-**Example output:**
-```json
-{
-  "address": "f7158ec79b48",
-  "type": "MyNamespace.MyClass",
-  "mt": "0000f755890ba770",
-  "isValueType": false,
-  "fields": [
-    { "name": "_count", "type": "System.Int32", "isStatic": false, "value": 42 },
-    { "name": "_name", "type": "System.String", "isStatic": false, "value": "Hello" }
-  ]
-}
-```
-
-#### Security Vulnerability Detection
-
-Identify potential security vulnerabilities in crash dumps:
-
-| Vulnerability Type | Detection Method | CWE |
-|-------------------|------------------|-----|
-| **Stack Buffer Overflow** | Stack canary/cookie corruption | CWE-121 |
-| **Heap Buffer Overflow** | Heap metadata corruption | CWE-122 |
-| **Use-After-Free** | Access to freed memory regions | CWE-416 |
-| **Double-Free** | Heap state analysis | CWE-415 |
-| **Null Dereference** | Access violation at low addresses | CWE-476 |
-| **Integer Overflow** | Suspicious allocation sizes | CWE-190 |
-| **Code Execution** | Execution in non-executable regions | CWE-94 |
-
-#### Memory Protection Analysis
-
-- **ASLR**: Address Space Layout Randomization status
-- **DEP/NX**: Data Execution Prevention status
-- **Stack Canaries**: /GS (Windows) or __stack_chk (Unix) protection
-- **SafeSEH**: Structured Exception Handling protection (Windows)
-- **Modules Analysis**: Identify modules without security features
-
-#### Exploit Pattern Detection
-
-Searches memory for common exploitation indicators:
-- NOP sleds (0x90909090)
-- Common overflow patterns (0x41414141, 0x42424242)
-- Windows heap markers (0xFEEEFEEE, 0xBAADF00D)
-- Return address overwrite patterns
-
-#### Watch Expression Features
-
-Watch expressions allow you to bookmark and track specific memory locations, variables, or debugger expressions across sessions:
-
-- **Persistence**: Watches are stored per-dump and survive session restarts
-- **Auto-detection**: Watch types are automatically detected from expression patterns
-- **Analysis Integration**: Watch results are included in crash/performance analysis reports
-- **Insights**: Automatic insights for null pointers, uninitialized memory, etc.
-
-**Watch Types:**
-- `MemoryAddress`: Display memory at an address (e.g., "0x12345678")
-- `Variable`: Display a variable (e.g., "g_DataManager", "myModule!myVar")
-- `Object`: Display a .NET object (uses `!do` command)
-- `Expression`: Evaluate a debugger expression (e.g., "poi(esp+8)")
-
-**Example Workflow:**
-```
-1. CreateSession(userId="user1") → sessionId
-2. OpenDump(sessionId, "user1", "crash-dump")
-3. AddWatch(sessionId, "user1", "0x12345678", "Suspicious pointer")
-4. AddWatch(sessionId, "user1", "g_AppState", "Global state variable")
-5. EvaluateWatches(sessionId, "user1") → All watch values + insights
-6. AnalyzeCrash(sessionId, "user1") → Includes watch results!
-```
-
-#### Performance Profiling Use Cases
-
-The performance profiling tools help identify:
-- **CPU Hotspots**: Functions consuming excessive CPU time
-- **Memory Issues**: Large allocations, potential leaks, LOH fragmentation
-- **GC Pressure**: High Gen2/LOH usage, finalizer queue issues
-- **Lock Contention**: Threads blocked on locks, deadlock detection
-- **Spin Loops**: Threads spinning on locks or conditions
-
-**Example Performance Analysis Workflow:**
-```
-1. CreateSession(userId="user1") → Get sessionId
-2. OpenDump(sessionId, "user1", "perf-dump-id")  # SOS auto-loaded for .NET
-3. AnalyzePerformance(sessionId, "user1") → Returns:
-   - CPU analysis with hot functions
-   - Memory allocation statistics
-   - GC generation sizes and fragmentation
-   - Lock contention and waiting threads
-   - Recommendations for each category
-```
-
-**Drill-down Analysis:**
-```
-# If CPU issues detected:
-AnalyzeCpuUsage(sessionId, "user1") → Detailed CPU breakdown
-
-# If memory issues detected:
-AnalyzeAllocations(sessionId, "user1") → Type-by-type allocations
-
-# If GC issues detected:
-AnalyzeGc(sessionId, "user1") → Detailed GC statistics
-
-# If contention issues detected:
-AnalyzeContention(sessionId, "user1") → Lock and wait analysis
+1. session(action="create", userId="user1") → sessionId
+2. dump(action="open", sessionId, userId="user1", dumpId="abc123")
+3. analyze(kind="crash", sessionId, userId="user1")
+4. report(action="full", sessionId, userId="user1", format="html")
+5. session(action="close", sessionId, userId="user1")
 ```
 
 ## 📚 MCP Resources Available

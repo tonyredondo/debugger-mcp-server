@@ -9,7 +9,7 @@ Replace the slow SOS `clrstack -a -r -all` command (12.8s) with a fast ClrMD-bas
 1. **Replace all internal `clrstack` usage** - No more SOS `clrstack` calls anywhere in the codebase
 2. **JSON output format** - Structured data like our other ClrMD commands (`dumpobj`, `dumpmodule`, `name2ee`)
 3. **CLI command** - New `/clrstack` command in `cmd` mode
-4. **MCP tool** - New `clr_stack` tool for API access
+4. **MCP tool** - Use `inspect(kind="clr_stack")` for API access
 5. **24x faster** - ~630ms vs 12,880ms
 
 ### Scope Clarification
@@ -88,7 +88,7 @@ We already use a fallback that:
 ┌───────────────┐    ┌───────────────────┐    ┌──────────────────┐
 │ Internal Use  │    │    MCP Tool       │    │   CLI Command    │
 │               │    │                   │    │                  │
-│ DotNetCrash   │    │ clr_stack tool    │    │ /clrstack        │
+│ DotNetCrash   │    │ inspect(kind="clr_stack") │    │ /clrstack        │
 │ Analyzer      │    │ Returns JSON      │    │ /cs              │
 │               │    │                   │    │                  │
 │ (replaces all │    │ ObjectInspection  │    │ Pretty-prints    │
@@ -1346,7 +1346,8 @@ public async Task<string> ClrStackAsync(
         ["threadId"] = threadId
     };
 
-    return await CallToolAsync("clr_stack", args, cancellationToken);
+    args["kind"] = "clr_stack";
+    return await CallToolAsync("inspect", args, cancellationToken);
 }
 ```
 
@@ -1387,7 +1388,7 @@ public async Task<string> ClrStackAsync(
 3. **Phase 5**: JSON output format
 4. **Phase 6**: Full integration
    - Replace ALL internal `clrstack` calls in `DotNetCrashAnalyzer`
-   - Add MCP tool `clr_stack`
+   - Use `inspect(kind="clr_stack")`
    - Add CLI commands `/clrstack`, `/cs`
    - Add `McpClient.ClrStackAsync()`
 5. **Testing**: Verify output matches SOS for accuracy
@@ -1593,4 +1594,3 @@ This is an accepted limitation. The alternative (using nearest-frame heuristic) 
 - Compiler-generated code (async state machines, closures)
 - Optimized code with stripped debug info
 - Dynamic methods or lightweight code generation
-
