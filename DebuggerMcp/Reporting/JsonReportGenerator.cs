@@ -20,8 +20,12 @@ public sealed class JsonReportGenerator : IReportGenerator
         options ??= ReportOptions.FullReport;
         metadata ??= new ReportMetadata();
 
-        // Default-on: include bounded source context snippets and normalize timeline timestamps.
-        SourceContextEnricher.Apply(analysis, metadata.GeneratedAt);
+        // JSON-only enrichment: bounded source context snippets and normalized timeline timestamps.
+        // Avoid doing remote source fetching work when other formats reuse JSON as an intermediate representation.
+        if (options.Format == ReportFormat.Json)
+        {
+            SourceContextEnricher.Apply(analysis, metadata.GeneratedAt);
+        }
 
         var document = new ReportDocument
         {
@@ -32,4 +36,3 @@ public sealed class JsonReportGenerator : IReportGenerator
         return JsonSerializer.Serialize(document, JsonSerializationDefaults.IndentedIgnoreNull);
     }
 }
-
