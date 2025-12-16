@@ -78,4 +78,42 @@ public class LlmFileAttachmentsTests
         Assert.Single(attachments);
         Assert.Contains("\"hello\"", attachments[0].Content);
     }
+
+    [Fact]
+    public void ExtractAndLoad_AllowsLeadingParenthesisBeforeAttachment()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var filePath = Path.Combine(tempRoot, "report.json");
+        File.WriteAllText(filePath, "{\"hello\":\"world\"}");
+
+        var (cleaned, attachments, _) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze (#./report.json) please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1000,
+            maxTotalBytes: 2000);
+
+        Assert.Contains("(<attached:", cleaned);
+        Assert.Single(attachments);
+        Assert.Contains("\"hello\"", attachments[0].Content);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_SupportsPathsWithSpacesUsingParentheses()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var fileName = "my report.json";
+        var filePath = Path.Combine(tempRoot, fileName);
+        File.WriteAllText(filePath, "{\"hello\":\"world\"}");
+
+        var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze #(./my report.json) please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1000,
+            maxTotalBytes: 2000);
+
+        Assert.Single(attachments);
+        Assert.Contains("\"hello\"", attachments[0].Content);
+    }
 }

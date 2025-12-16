@@ -18,8 +18,9 @@ internal static class LlmFileAttachments
     // - #/absolute/path
     // - #~/path
     // - #C:\path\file.txt
+    // Also supports paths with spaces using parentheses: #(./path with spaces.json)
     private static readonly Regex AttachmentRegex = new(
-        @"(?<!\S)#(?<path>(?:\./|\.\./|/|~\/)[^\s]+|[A-Za-z]:\\[^\s]+)",
+        @"(?<!\w)#(?:(?<path>(?:\./|\.\./|/|~\/)[^\s]+|[A-Za-z]:\\[^\s]+)|\((?<path>(?:\./|\.\./|/|~\/)[^)]+|[A-Za-z]:\\[^)]+)\))",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     internal sealed record Attachment(string DisplayPath, string AbsolutePath, string Content, bool Truncated);
