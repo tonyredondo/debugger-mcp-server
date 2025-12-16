@@ -105,6 +105,11 @@ public class ConnectionSettings
     public Dictionary<string, ServerProfile> Profiles { get; set; } = new();
 
     /// <summary>
+    /// Gets or sets settings for the CLI-integrated LLM client.
+    /// </summary>
+    public LlmSettings Llm { get; set; } = new();
+
+    /// <summary>
     /// Gets or sets the last-used session ID per server/user.
     /// </summary>
     /// <remarks>
@@ -186,7 +191,7 @@ public class ConnectionSettings
     /// <returns>A new ConnectionSettings instance.</returns>
     public static ConnectionSettings FromEnvironment()
     {
-        return new ConnectionSettings
+        var settings = new ConnectionSettings
         {
             ServerUrl = CliEnvironment.Get(CliEnvironment.ServerUrl),
             ApiKey = CliEnvironment.Get(CliEnvironment.ApiKey),
@@ -196,6 +201,9 @@ public class ConnectionSettings
             Verbose = CliEnvironment.GetBoolOrDefault(CliEnvironment.Verbose, false),
             HistoryFile = CliEnvironment.GetOrDefault(CliEnvironment.HistoryFile, DefaultHistoryFile)
         };
+
+        settings.Llm.ApplyEnvironmentOverrides();
+        return settings;
     }
 
     /// <summary>
@@ -268,6 +276,7 @@ public class ConnectionSettings
             settings.HistoryFile = envHistoryFile;
         }
 
+        settings.Llm.ApplyEnvironmentOverrides();
         return settings;
     }
 
@@ -304,7 +313,8 @@ public class ConnectionSettings
             Profiles = config.Profiles ?? new Dictionary<string, ServerProfile>(),
             LastSessions = config.LastSessions != null
                 ? new Dictionary<string, string>(config.LastSessions, StringComparer.OrdinalIgnoreCase)
-                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+                : new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase),
+            Llm = config.Llm ?? new LlmSettings()
         };
     }
 
@@ -339,7 +349,8 @@ public class ConnectionSettings
             HistoryFile = HistoryFile != DefaultHistoryFile ? HistoryFile : null,
             HistorySize = HistorySize != 1000 ? HistorySize : null,
             Profiles = Profiles.Count > 0 ? Profiles : null,
-            LastSessions = LastSessions.Count > 0 ? LastSessions : null
+            LastSessions = LastSessions.Count > 0 ? LastSessions : null,
+            Llm = Llm
         };
 
         var json = JsonSerializer.Serialize(config, JsonOptions);
@@ -550,4 +561,10 @@ internal class ConfigFile
     /// </summary>
     [JsonPropertyName("lastSessions")]
     public Dictionary<string, string>? LastSessions { get; set; }
+
+    /// <summary>
+    /// LLM settings for the CLI (OpenRouter).
+    /// </summary>
+    [JsonPropertyName("llm")]
+    public LlmSettings? Llm { get; set; }
 }

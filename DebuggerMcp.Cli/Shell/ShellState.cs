@@ -1,5 +1,6 @@
 using DebuggerMcp.Cli.Configuration;
 using DebuggerMcp.Cli.Models;
+using DebuggerMcp.Cli.Shell.Transcript;
 
 namespace DebuggerMcp.Cli.Shell;
 
@@ -21,6 +22,11 @@ public class ShellState
     /// Gets or sets the connection settings.
     /// </summary>
     public ConnectionSettings Settings { get; set; } = ConnectionSettings.FromEnvironment();
+
+    /// <summary>
+    /// Gets or sets the transcript store for capturing commands and outputs (optional).
+    /// </summary>
+    public CliTranscriptStore? Transcript { get; set; }
 
     /// <summary>
     /// Gets or sets whether connected to a server.

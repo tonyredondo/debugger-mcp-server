@@ -26,6 +26,7 @@ public static class HelpSystem
         ["session"] = "Debugging session management",
         ["debugging"] = "Debugger commands and operations",
         ["analysis"] = "Crash and performance analysis",
+        ["llm"] = "LLM queries and conversation",
         ["advanced"] = "Watch expressions, reports, and source link",
         ["general"] = "Help, history, and configuration"
     };
@@ -75,6 +76,13 @@ public static class HelpSystem
         ["analysis"] = [
             new("analyze", "<type>", "Run automated analysis (crash, dotnet, perf, cpu, memory, gc, threads, security)", ["analyze crash", "analyze dotnet", "analyze perf", "analyze security"]),
             new("compare", "<type>", "Compare two dumps (all, heap, threads, modules)", ["compare <dumpId>", "compare heap <dumpId>", "compare threads <dumpId>"])
+        ],
+        ["llm"] = [
+            new("llm", "[[prompt]]", "Ask an OpenRouter-backed LLM using your CLI history as context", [
+                "llm Explain the faulting thread in the last report",
+                "llm model openai/gpt-4o-mini",
+                "llm reset"
+            ])
         ],
         ["advanced"] = [
             new("watch", "<subcommand>", "Manage watch expressions (add, list, eval, remove, clear)", ["watch add @rsp", "watch list", "watch eval", "watch remove w1", "watch clear"]),

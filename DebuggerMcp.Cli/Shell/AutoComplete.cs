@@ -21,6 +21,7 @@ public class AutoComplete
     [
         "connect", "disconnect", "status", "health", "server",
         "dumps", "symbols", "stats",
+        "llm",
         "session", "open", "close", "exec", "cmd", "showobj", "so",
         "analyze", "compare", "watch", "report", "sourcelink",
         "help", "history", "clear", "set", "version", "exit", "quit", "tools"
@@ -39,6 +40,7 @@ public class AutoComplete
         ["watch"] = ["add", "list", "eval", "remove", "clear"],
         ["report"] = ["--format", "--output", "--summary", "markdown", "html", "json"],
         ["sourcelink"] = ["resolve", "info"],
+        ["llm"] = ["model", "set-key", "reset"],
         ["set"] = ["verbose", "output", "timeout", "user"],
         ["history"] = ["clear", "search"]
     };
@@ -198,7 +200,7 @@ public class AutoComplete
         {
             case ShellStateLevel.Initial:
                 // Only connection-related commands
-                commands.AddRange(["connect", "help", "set", "version", "exit"]);
+                commands.AddRange(["connect", "llm", "help", "set", "version", "exit"]);
                 break;
 
             case ShellStateLevel.Connected:
@@ -206,6 +208,7 @@ public class AutoComplete
                 commands.AddRange([
                     "disconnect", "status", "health",
                     "dumps", "symbols", "stats",
+                    "llm",
                     "session", "open",
                     "help", "clear", "set", "version", "exit", "tools"
                 ]);
@@ -216,6 +219,7 @@ public class AutoComplete
                 commands.AddRange([
                     "disconnect", "status", "health",
                     "dumps", "symbols", "stats",
+                    "llm",
                     "session", "open", "close",
                     "help", "clear", "set", "version", "exit", "tools"
                 ]);

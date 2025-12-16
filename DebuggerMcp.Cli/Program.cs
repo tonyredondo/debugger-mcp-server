@@ -8,8 +8,10 @@ using DebuggerMcp.Cli.Client;
 using DebuggerMcp.Cli.Configuration;
 using DebuggerMcp.Cli.Display;
 using DebuggerMcp.Cli.Help;
+using DebuggerMcp.Cli.Llm;
 using DebuggerMcp.Cli.Models;
 using DebuggerMcp.Cli.Shell;
+using DebuggerMcp.Cli.Shell.Transcript;
 
 namespace DebuggerMcp.Cli;
 
@@ -549,6 +551,9 @@ public class Program
         state.Settings.Verbose = verbose;
         state.Settings.OutputFormat = outputFormat;
 
+        // Initialize transcript store (commands + outputs) for LLM conversations.
+        state.Transcript = new CliTranscriptStore(Path.Combine(ConnectionSettings.DefaultConfigDirectory, "cli_transcript.jsonl"));
+
         // Create command history with persistence
         var history = new CommandHistory(settings.HistoryFile, settings.HistorySize);
         output.Dim($"Command history: {history.Count} entries loaded");
@@ -785,11 +790,37 @@ public class Program
                     var args = parts.Skip(1).ToArray();
 
                     // Handle commands
-                    var shouldExit = await HandleCommandAsync(command, args, console, output, state, httpClient, mcpClient, history);
-                    if (shouldExit)
+                    var transcriptStore = state.Transcript;
+                    var capture = transcriptStore == null ? null : new CommandOutputCapture();
+                    var commandStartUtc = DateTimeOffset.UtcNow;
+                    try
                     {
-                        output.Dim("Goodbye!");
-                        return 0;
+                        var shouldExit = await HandleCommandAsync(command, args, console, output, state, httpClient, mcpClient, history);
+
+                        if (transcriptStore != null && capture != null)
+                        {
+                            var outputText = capture.GetCapturedText();
+                            transcriptStore.Append(new CliTranscriptEntry
+                            {
+                                TimestampUtc = commandStartUtc,
+                                Kind = "cli_command",
+                                Text = input,
+                                Output = TruncateForTranscript(outputText, maxChars: 50_000),
+                                ServerUrl = state.Settings.ServerUrl,
+                                SessionId = state.SessionId,
+                                DumpId = state.DumpId
+                            });
+                        }
+
+                        if (shouldExit)
+                        {
+                            output.Dim("Goodbye!");
+                            return 0;
+                        }
+                    }
+                    finally
+                    {
+                        capture?.Dispose();
                     }
                 }
                 catch (OperationCanceledException)
@@ -818,6 +849,21 @@ public class Program
         }
 
         return 0;
+    }
+
+    private static string TruncateForTranscript(string text, int maxChars)
+    {
+        if (maxChars <= 0)
+        {
+            return string.Empty;
+        }
+
+        if (string.IsNullOrEmpty(text) || text.Length <= maxChars)
+        {
+            return text;
+        }
+
+        return text[..maxChars] + $"{Environment.NewLine}[...truncated {text.Length - maxChars} chars...]";
     }
 
     /// <summary>
@@ -989,6 +1035,10 @@ public class Program
 
             case "stats":
                 await HandleStatsAsync(output, state, httpClient);
+                break;
+
+            case "llm":
+                await HandleLlmAsync(args, output, state);
                 break;
 
             // Session operations (via MCP)
@@ -4306,6 +4356,123 @@ public class Program
         catch (Exception ex)
         {
             output.Error($"Failed to get statistics: {ex.Message}");
+        }
+    }
+
+    /// <summary>
+    /// Handles the llm command (OpenRouter chat queries).
+    /// </summary>
+    private static async Task HandleLlmAsync(
+        string[] args,
+        ConsoleOutput output,
+        ShellState state)
+    {
+        var llmSettings = state.Settings.Llm;
+        llmSettings.ApplyEnvironmentOverrides();
+
+        state.Transcript ??= new CliTranscriptStore(Path.Combine(ConnectionSettings.DefaultConfigDirectory, "cli_transcript.jsonl"));
+        var transcript = state.Transcript;
+
+        if (args.Length == 0)
+        {
+            output.Header("LLM");
+            output.WriteLine();
+            output.KeyValue("Provider", "OpenRouter");
+            output.KeyValue("Model", llmSettings.OpenRouterModel);
+            output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveOpenRouterApiKey()) ? "(not set)" : "(configured)");
+            output.WriteLine();
+            output.Dim("Usage:");
+            output.Dim("  llm <prompt>");
+            output.Dim("  llm model <openrouter-model-id>");
+            output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json)");
+            output.Dim("  llm reset                        (clears only LLM conversation)");
+            output.Dim("Tip: Prefer env var OPENROUTER_API_KEY to avoid persisting keys.");
+            return;
+        }
+
+        var sub = args[0].ToLowerInvariant();
+        switch (sub)
+        {
+            case "model":
+                if (args.Length < 2)
+                {
+                    output.Error("Usage: llm model <openrouter-model-id>");
+                    return;
+                }
+                llmSettings.OpenRouterModel = args[1].Trim();
+                state.Settings.Save();
+                output.Success($"LLM model set: {llmSettings.OpenRouterModel}");
+                return;
+
+            case "set-key":
+                if (args.Length < 2)
+                {
+                    output.Error("Usage: llm set-key <api-key>");
+                    return;
+                }
+                llmSettings.OpenRouterApiKey = args[1].Trim();
+                state.Settings.Save();
+                output.Success("OpenRouter API key saved to config.");
+                output.Dim("Tip: Prefer env var OPENROUTER_API_KEY to avoid persisting keys.");
+                return;
+
+            case "reset":
+                transcript.FilterInPlace(e => e.Kind is not ("llm_user" or "llm_assistant"));
+                output.Success("Cleared LLM conversation history (kept CLI command transcript).");
+                return;
+        }
+
+        var prompt = string.Join(" ", args).Trim();
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            output.Error("Prompt cannot be empty.");
+            return;
+        }
+
+        transcript.Append(new CliTranscriptEntry
+        {
+            TimestampUtc = DateTimeOffset.UtcNow,
+            Kind = "llm_user",
+            Text = prompt,
+            ServerUrl = state.Settings.ServerUrl,
+            SessionId = state.SessionId,
+            DumpId = state.DumpId
+        });
+
+        try
+        {
+            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
+            var client = new OpenRouterClient(http, llmSettings);
+
+            var history = transcript.ReadTail(80);
+            var messages = TranscriptContextBuilder.BuildMessages(
+                userPrompt: prompt,
+                serverUrl: state.Settings.ServerUrl,
+                sessionId: state.SessionId,
+                dumpId: state.DumpId,
+                transcriptTail: history,
+                maxContextChars: 30_000);
+
+            var response = await output.WithSpinnerAsync(
+                "Calling LLM...",
+                () => client.ChatAsync(messages, cancellationToken: default));
+
+            transcript.Append(new CliTranscriptEntry
+            {
+                TimestampUtc = DateTimeOffset.UtcNow,
+                Kind = "llm_assistant",
+                Text = response,
+                ServerUrl = state.Settings.ServerUrl,
+                SessionId = state.SessionId,
+                DumpId = state.DumpId
+            });
+
+            output.WriteLine();
+            Console.WriteLine(response);
+        }
+        catch (Exception ex)
+        {
+            output.Error(ex.Message);
         }
     }
 

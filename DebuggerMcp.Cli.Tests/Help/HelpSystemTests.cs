@@ -16,6 +16,7 @@ public class HelpSystemTests
         Assert.Contains("session", HelpSystem.Categories.Keys);
         Assert.Contains("debugging", HelpSystem.Categories.Keys);
         Assert.Contains("analysis", HelpSystem.Categories.Keys);
+        Assert.Contains("llm", HelpSystem.Categories.Keys);
         Assert.Contains("advanced", HelpSystem.Categories.Keys);
         Assert.Contains("general", HelpSystem.Categories.Keys);
     }
@@ -47,6 +48,7 @@ public class HelpSystemTests
     [InlineData("debugging", "showobj")]
     [InlineData("analysis", "analyze")]
     [InlineData("analysis", "compare")]
+    [InlineData("llm", "llm")]
     [InlineData("advanced", "watch")]
     [InlineData("advanced", "report")]
     [InlineData("advanced", "sourcelink")]
