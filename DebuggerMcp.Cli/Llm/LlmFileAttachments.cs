@@ -22,20 +22,35 @@ internal static class LlmFileAttachments
 
     internal sealed record Attachment(string DisplayPath, string AbsolutePath, string Content, bool Truncated);
 
-    internal static (string CleanedPrompt, IReadOnlyList<Attachment> Attachments) ExtractAndLoad(
+    internal sealed record ReportAttachmentContext(
+        string DisplayPath,
+        string AbsolutePath,
+        LlmReportCache.CachedReport CachedReport,
+        string SummaryForModel,
+        string ManifestForModel,
+        IReadOnlyDictionary<string, string> SectionIdToFile,
+        IReadOnlyDictionary<string, string> PointerToFile);
+
+    internal static (string CleanedPrompt, IReadOnlyList<Attachment> Attachments, IReadOnlyList<ReportAttachmentContext> Reports) ExtractAndLoad(
         string prompt,
         string baseDirectory,
         int maxBytesPerFile = 200_000,
-        int maxTotalBytes = 400_000)
+        int maxTotalBytes = 400_000,
+        string? cacheRootDirectory = null)
     {
         if (string.IsNullOrWhiteSpace(prompt))
         {
-            return (prompt, []);
+            return (prompt, [], []);
         }
 
         baseDirectory = string.IsNullOrWhiteSpace(baseDirectory) ? Environment.CurrentDirectory : baseDirectory;
+        cacheRootDirectory ??= Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            ".dbg-mcp",
+            "llm-cache");
 
         var attachments = new List<Attachment>();
+        var reports = new List<ReportAttachmentContext>();
         var sb = new StringBuilder();
         var lastIndex = 0;
         var remainingTotal = Math.Max(0, maxTotalBytes);
@@ -62,25 +77,30 @@ internal static class LlmFileAttachments
                 continue;
             }
 
-            var (attachment, bytesUsed) = TryLoad(path, baseDirectory, maxBytesPerFile, remainingTotal);
+            var (attachment, report, bytesUsed) = TryLoad(path, baseDirectory, maxBytesPerFile, remainingTotal, cacheRootDirectory);
             remainingTotal -= bytesUsed;
             if (attachment != null)
             {
                 attachments.Add(attachment);
+            }
+            if (report != null)
+            {
+                reports.Add(report);
             }
         }
 
         sb.Append(prompt.AsSpan(lastIndex));
         var cleaned = sb.ToString().Trim();
 
-        return (cleaned, attachments);
+        return (cleaned, attachments, reports);
     }
 
-    private static (Attachment? Attachment, int BytesUsed) TryLoad(
+    private static (Attachment? Attachment, ReportAttachmentContext? Report, int BytesUsed) TryLoad(
         string displayPath,
         string baseDirectory,
         int maxBytesPerFile,
-        int remainingTotalBytes)
+        int remainingTotalBytes,
+        string cacheRootDirectory)
     {
         try
         {
@@ -88,29 +108,62 @@ internal static class LlmFileAttachments
             var absolute = Path.GetFullPath(expanded, baseDirectory);
             if (!File.Exists(absolute))
             {
-                return (null, 0);
+                return (null, null, 0);
             }
 
             var limit = Math.Min(Math.Max(0, maxBytesPerFile), Math.Max(0, remainingTotalBytes));
             if (limit <= 0)
             {
-                return (null, 0);
+                return (null, null, 0);
+            }
+
+            // If this is a DebuggerMcp JSON report and it exceeds the attachment cap,
+            // generate a cached per-section representation and attach only summary + manifest.
+            var fileInfo = new FileInfo(absolute);
+            if (fileInfo.Length > maxBytesPerFile &&
+                absolute.EndsWith(".json", StringComparison.OrdinalIgnoreCase) &&
+                LlmReportCache.LooksLikeDebuggerMcpReport(absolute))
+            {
+                var cached = LlmReportCache.BuildOrLoadCachedReport(absolute, cacheRootDirectory, maxSectionBytes: maxBytesPerFile);
+                var idToFile = cached.Sections.ToDictionary(s => s.SectionId, s => s.FilePath, StringComparer.OrdinalIgnoreCase);
+                var ptrToFile = cached.Sections.ToDictionary(s => s.JsonPointer, s => s.FilePath, StringComparer.OrdinalIgnoreCase);
+
+                // Respect the remaining total budget by truncating what we send to the model (manifest first, then summary).
+                var manifestForModel = cached.ManifestJson;
+                var summaryForModel = cached.SummaryJson;
+
+                var manifestBytes = Encoding.UTF8.GetByteCount(manifestForModel);
+                if (manifestBytes >= remainingTotalBytes)
+                {
+                    manifestForModel = TruncateUtf8ToBytes(manifestForModel, remainingTotalBytes, "... (truncated report index) ...");
+                    summaryForModel = string.Empty;
+                }
+                else
+                {
+                    var remainingForSummary = Math.Max(0, remainingTotalBytes - manifestBytes);
+                    summaryForModel = TruncateUtf8ToBytes(summaryForModel, remainingForSummary, "... (truncated report summary) ...");
+                }
+
+                var used = Encoding.UTF8.GetByteCount(manifestForModel) + Encoding.UTF8.GetByteCount(summaryForModel);
+
+                var report = new ReportAttachmentContext(displayPath, absolute, cached, summaryForModel, manifestForModel, idToFile, ptrToFile);
+                return (null, report, used);
             }
 
             var (text, truncated, bytesRead) = ReadTextCapped(absolute, limit);
             if (string.IsNullOrWhiteSpace(text))
             {
-                return (null, 0);
+                return (null, null, 0);
             }
 
             // Redact any secrets before sending to the model.
             text = TranscriptRedactor.RedactText(text);
 
-            return (new Attachment(displayPath, absolute, text, truncated), bytesRead);
+            return (new Attachment(displayPath, absolute, text, truncated), null, bytesRead);
         }
         catch
         {
-            return (null, 0);
+            return (null, null, 0);
         }
     }
 
@@ -147,5 +200,23 @@ internal static class LlmFileAttachments
 
         return (text, truncated, effective);
     }
-}
 
+    private static string TruncateUtf8ToBytes(string text, int maxBytes, string suffix)
+    {
+        if (string.IsNullOrEmpty(text) || maxBytes <= 0)
+        {
+            return string.Empty;
+        }
+
+        var bytes = Encoding.UTF8.GetBytes(text);
+        if (bytes.Length <= maxBytes)
+        {
+            return text;
+        }
+
+        var suffixBytes = Encoding.UTF8.GetByteCount(Environment.NewLine + suffix);
+        var limit = Math.Max(0, maxBytes - suffixBytes);
+        var prefix = Encoding.UTF8.GetString(bytes, 0, limit);
+        return prefix + Environment.NewLine + suffix;
+    }
+}

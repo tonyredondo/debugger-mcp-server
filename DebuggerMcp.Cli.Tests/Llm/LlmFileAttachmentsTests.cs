@@ -14,7 +14,7 @@ public class LlmFileAttachmentsTests
         var filePath = Path.Combine(tempRoot, "report.json");
         File.WriteAllText(filePath, "{\"hello\":\"world\"}");
 
-        var (cleaned, attachments) = LlmFileAttachments.ExtractAndLoad(
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
             $"Analyze #./{Path.GetFileName(filePath)} please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 1000,
@@ -22,6 +22,7 @@ public class LlmFileAttachmentsTests
 
         Assert.Contains("(<attached:", cleaned);
         Assert.Single(attachments);
+        Assert.Empty(reports);
         Assert.Equal($"./{Path.GetFileName(filePath)}", attachments[0].DisplayPath);
         Assert.EndsWith("report.json", attachments[0].AbsolutePath, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"hello\"", attachments[0].Content);
@@ -30,12 +31,12 @@ public class LlmFileAttachmentsTests
     [Fact]
     public void ExtractAndLoad_DoesNotTreatHashtagsAsAttachments()
     {
-        var (cleaned, attachments) = LlmFileAttachments.ExtractAndLoad(
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
             "This is #not_a_file reference",
             baseDirectory: Environment.CurrentDirectory);
 
         Assert.Equal("This is #not_a_file reference", cleaned);
         Assert.Empty(attachments);
+        Assert.Empty(reports);
     }
 }
-

@@ -4572,7 +4572,7 @@ public class Program
             return;
         }
 
-        var (prompt, attachments) = LlmFileAttachments.ExtractAndLoad(
+        var (prompt, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
             rawPrompt,
             baseDirectory: Environment.CurrentDirectory,
             maxBytesPerFile: 200_000,
@@ -4618,8 +4618,22 @@ public class Program
                 messages = list;
             }
 
+            if (reports.Count > 0)
+            {
+                var list = messages.ToList();
+                var insertIndex = list.TakeWhile(m => m.Role == "system").Count();
+
+                foreach (var report in reports)
+                {
+                    var content = LlmReportCache.BuildModelAttachmentMessage(report.DisplayPath, report.SummaryForModel, report.ManifestForModel);
+                    list.Insert(insertIndex++, new ChatMessage("system", content));
+                }
+
+                messages = list;
+            }
+
             var response = llmSettings.AgentModeEnabled
-                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, cancellationToken: default)
+                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, reports, cancellationToken: default)
                 : await output.WithSpinnerAsync(
                     "Calling LLM...",
                     () => client.ChatAsync(messages, cancellationToken: default));
@@ -4665,9 +4679,14 @@ public class Program
         LlmSettings llmSettings,
         OpenRouterClient client,
         IReadOnlyList<ChatMessage> seedMessages,
+        IReadOnlyList<LlmFileAttachments.ReportAttachmentContext> reports,
         CancellationToken cancellationToken)
     {
-        var tools = LlmAgentTools.GetDefaultTools();
+        var tools = LlmAgentTools.GetDefaultTools().ToList();
+        if (reports.Count > 0)
+        {
+            tools.AddRange(LlmReportAgentTools.GetTools());
+        }
         var approvalState = new LlmAgentApprovalState(confirmationsEnabled: llmSettings.AgentModeConfirmToolCalls);
 
         var runner = new LlmAgentRunner(
@@ -4698,6 +4717,11 @@ public class Program
                         case LlmAgentToolApprovalDecision.DenyOnce:
                             return "ERROR: Tool call denied by user.";
                     }
+                }
+
+                if (reports.Count > 0 && LlmReportAgentTools.IsReportTool(toolCall.Name))
+                {
+                    return await LlmReportAgentTools.ExecuteAsync(toolCall, reports, ct).ConfigureAwait(false);
                 }
 
                 return await ExecuteAgentToolCallAsync(output, state, mcpClient, toolCall, ct).ConfigureAwait(false);
