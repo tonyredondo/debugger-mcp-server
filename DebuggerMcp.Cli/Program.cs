@@ -2045,11 +2045,11 @@ public class Program
 
             var handler = new McpSamplingCreateMessageHandler(
                 llmSettings,
-                async (messages, ct) =>
+                async (request, ct) =>
                 {
                     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
                     var client = new OpenRouterClient(http, llmSettings);
-                    return await client.ChatAsync(messages, ct).ConfigureAwait(false);
+                    return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
                 });
 
             mcpClient.RegisterServerRequestHandler(

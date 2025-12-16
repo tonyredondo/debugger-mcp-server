@@ -19,9 +19,24 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
     public async Task<string> ChatAsync(IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken = default)
     {
-        if (messages == null)
+        var result = await ChatCompletionAsync(new ChatCompletionRequest { Messages = messages }, cancellationToken).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(result.Text))
         {
-            throw new ArgumentNullException(nameof(messages));
+            throw new InvalidOperationException("OpenRouter response did not contain any message content.");
+        }
+        return result.Text.Trim();
+    }
+
+    internal async Task<ChatCompletionResult> ChatCompletionAsync(ChatCompletionRequest completionRequest, CancellationToken cancellationToken = default)
+    {
+        if (completionRequest == null)
+        {
+            throw new ArgumentNullException(nameof(completionRequest));
+        }
+
+        if (completionRequest.Messages == null)
+        {
+            throw new ArgumentNullException(nameof(completionRequest.Messages));
         }
 
         var apiKey = _settings.GetEffectiveOpenRouterApiKey();
@@ -38,25 +53,28 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
         var url = $"{baseUrl}/chat/completions";
 
-        using var request = new HttpRequestMessage(HttpMethod.Post, url);
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        request.Headers.UserAgent.ParseAdd("DebuggerMcp.Cli/1.0");
-        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
+        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        httpRequest.Headers.UserAgent.ParseAdd("DebuggerMcp.Cli/1.0");
+        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         // OpenRouter recommends these for attribution; keep defaults stable.
-        request.Headers.TryAddWithoutValidation("X-Title", "DebuggerMcp.Cli");
-        request.Headers.TryAddWithoutValidation("HTTP-Referer", "https://github.com/tonyredondo/debugger-mcp-server");
+        httpRequest.Headers.TryAddWithoutValidation("X-Title", "DebuggerMcp.Cli");
+        httpRequest.Headers.TryAddWithoutValidation("HTTP-Referer", "https://github.com/tonyredondo/debugger-mcp-server");
 
         var payload = new OpenRouterChatRequest
         {
             Model = _settings.OpenRouterModel,
-            Messages = messages.Select(m => new OpenRouterChatMessage { Role = m.Role, Content = m.Content }).ToList()
+            Messages = completionRequest.Messages.Select(ToOpenRouterMessage).ToList(),
+            Tools = completionRequest.Tools?.Select(ToOpenRouterTool).ToList(),
+            ToolChoice = ToOpenRouterToolChoice(completionRequest.ToolChoice),
+            MaxTokens = completionRequest.MaxTokens
         };
 
         var json = JsonSerializer.Serialize(payload, JsonOptions);
-        request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+        httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
@@ -74,13 +92,101 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             throw new InvalidOperationException("Failed to parse OpenRouter response JSON.", ex);
         }
 
-        var content = parsed?.Choices?.FirstOrDefault()?.Message?.Content;
-        if (string.IsNullOrWhiteSpace(content))
+        var message = parsed?.Choices?.FirstOrDefault()?.Message;
+        var content = message?.Content;
+
+        var toolCalls = new List<ChatToolCall>();
+        if (message?.ToolCalls != null)
         {
-            throw new InvalidOperationException("OpenRouter response did not contain any message content.");
+            foreach (var call in message.ToolCalls)
+            {
+                var id = call.Id ?? string.Empty;
+                var name = call.Function?.Name ?? string.Empty;
+                var args = call.Function?.Arguments ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                {
+                    toolCalls.Add(new ChatToolCall(id, name, args));
+                }
+            }
         }
 
-        return content.Trim();
+        return new ChatCompletionResult
+        {
+            Model = parsed?.Model ?? _settings.OpenRouterModel,
+            Text = content,
+            ToolCalls = toolCalls
+        };
+    }
+
+    private static OpenRouterChatMessage ToOpenRouterMessage(ChatMessage message)
+    {
+        var msg = new OpenRouterChatMessage
+        {
+            Role = message.Role,
+            Content = message.Content
+        };
+
+        if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(message.ToolCallId))
+        {
+            msg.ToolCallId = message.ToolCallId;
+        }
+
+        if (string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase) &&
+            message.ToolCalls is { Count: > 0 })
+        {
+            msg.ToolCalls = message.ToolCalls
+                .Select(tc => new OpenRouterToolCall
+                {
+                    Id = tc.Id,
+                    Type = "function",
+                    Function = new OpenRouterToolCallFunction
+                    {
+                        Name = tc.Name,
+                        Arguments = tc.ArgumentsJson
+                    }
+                })
+                .ToList();
+        }
+
+        return msg;
+    }
+
+    private static OpenRouterTool ToOpenRouterTool(ChatTool tool)
+        => new()
+        {
+            Type = "function",
+            Function = new OpenRouterToolFunction
+            {
+                Name = tool.Name,
+                Description = tool.Description,
+                Parameters = tool.Parameters
+            }
+        };
+
+    private static object? ToOpenRouterToolChoice(ChatToolChoice? choice)
+    {
+        if (choice == null)
+        {
+            return null;
+        }
+
+        var mode = (choice.Mode ?? "auto").Trim().ToLowerInvariant();
+        if (mode is "auto" or "none" or "required")
+        {
+            return mode;
+        }
+
+        if (!string.IsNullOrWhiteSpace(choice.FunctionName))
+        {
+            return new
+            {
+                type = "function",
+                function = new { name = choice.FunctionName }
+            };
+        }
+
+        return "auto";
     }
 
     private sealed class OpenRouterChatRequest
@@ -90,6 +196,15 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
         [JsonPropertyName("messages")]
         public List<OpenRouterChatMessage> Messages { get; set; } = [];
+
+        [JsonPropertyName("tools")]
+        public List<OpenRouterTool>? Tools { get; set; }
+
+        [JsonPropertyName("tool_choice")]
+        public object? ToolChoice { get; set; }
+
+        [JsonPropertyName("max_tokens")]
+        public int? MaxTokens { get; set; }
     }
 
     private sealed class OpenRouterChatMessage
@@ -99,10 +214,61 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
         [JsonPropertyName("content")]
         public string Content { get; set; } = string.Empty;
+
+        [JsonPropertyName("tool_call_id")]
+        public string? ToolCallId { get; set; }
+
+        [JsonPropertyName("tool_calls")]
+        public List<OpenRouterToolCall>? ToolCalls { get; set; }
+    }
+
+    private sealed class OpenRouterTool
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "function";
+
+        [JsonPropertyName("function")]
+        public OpenRouterToolFunction Function { get; set; } = new();
+    }
+
+    private sealed class OpenRouterToolFunction
+    {
+        [JsonPropertyName("name")]
+        public string Name { get; set; } = string.Empty;
+
+        [JsonPropertyName("description")]
+        public string? Description { get; set; }
+
+        [JsonPropertyName("parameters")]
+        public JsonElement Parameters { get; set; }
+    }
+
+    private sealed class OpenRouterToolCall
+    {
+        [JsonPropertyName("id")]
+        public string? Id { get; set; }
+
+        [JsonPropertyName("type")]
+        public string? Type { get; set; }
+
+        [JsonPropertyName("function")]
+        public OpenRouterToolCallFunction? Function { get; set; }
+    }
+
+    private sealed class OpenRouterToolCallFunction
+    {
+        [JsonPropertyName("name")]
+        public string? Name { get; set; }
+
+        [JsonPropertyName("arguments")]
+        public string? Arguments { get; set; }
     }
 
     private sealed class OpenRouterChatResponse
     {
+        [JsonPropertyName("model")]
+        public string? Model { get; set; }
+
         [JsonPropertyName("choices")]
         public List<OpenRouterChoice>? Choices { get; set; }
     }
@@ -117,6 +283,8 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
     {
         [JsonPropertyName("content")]
         public string? Content { get; set; }
+
+        [JsonPropertyName("tool_calls")]
+        public List<OpenRouterToolCall>? ToolCalls { get; set; }
     }
 }
-

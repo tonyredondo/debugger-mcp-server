@@ -9,10 +9,11 @@ namespace DebuggerMcp.Cli.Llm;
 /// </summary>
 internal sealed class McpSamplingCreateMessageHandler(
     LlmSettings settings,
-    Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<string>> chat)
+    Func<ChatCompletionRequest, CancellationToken, Task<ChatCompletionResult>> complete)
 {
     private readonly LlmSettings _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-    private readonly Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<string>> _chat = chat ?? throw new ArgumentNullException(nameof(chat));
+    private readonly Func<ChatCompletionRequest, CancellationToken, Task<ChatCompletionResult>> _complete =
+        complete ?? throw new ArgumentNullException(nameof(complete));
 
     public async Task<SamplingCreateMessageResult> HandleAsync(JsonElement? parameters, CancellationToken cancellationToken)
     {
@@ -24,23 +25,179 @@ internal sealed class McpSamplingCreateMessageHandler(
         _settings.ApplyEnvironmentOverrides();
 
         var systemPrompt = TryGetString(parameters.Value, "systemPrompt") ?? TryGetString(parameters.Value, "SystemPrompt");
-        var messages = BuildChatMessages(systemPrompt, parameters.Value);
+        var request = BuildChatCompletionRequest(systemPrompt, parameters.Value);
 
-        var responseText = await _chat(messages, cancellationToken).ConfigureAwait(false);
+        var response = await _complete(request, cancellationToken).ConfigureAwait(false);
 
         return new SamplingCreateMessageResult
         {
             Role = "assistant",
-            Model = _settings.OpenRouterModel,
-            Content =
-            [
-                new SamplingContentItem
-                {
-                    Type = "text",
-                    Text = responseText
-                }
-            ]
+            Model = response.Model ?? _settings.OpenRouterModel,
+            Content = BuildSamplingContentBlocks(response)
         };
+    }
+
+    private static List<SamplingContentItem> BuildSamplingContentBlocks(ChatCompletionResult response)
+    {
+        var blocks = new List<SamplingContentItem>();
+        if (!string.IsNullOrWhiteSpace(response.Text))
+        {
+            blocks.Add(new SamplingContentItem
+            {
+                Type = "text",
+                Text = response.Text!.TrimEnd()
+            });
+        }
+
+        foreach (var call in response.ToolCalls)
+        {
+            blocks.Add(new SamplingContentItem
+            {
+                Type = "tool_use",
+                Id = call.Id,
+                Name = call.Name,
+                Input = ParseToolArguments(call.ArgumentsJson)
+            });
+        }
+
+        return blocks;
+    }
+
+    private static JsonElement ParseToolArguments(string? argumentsJson)
+    {
+        if (string.IsNullOrWhiteSpace(argumentsJson))
+        {
+            using var emptyDoc = JsonDocument.Parse("{}");
+            return emptyDoc.RootElement.Clone();
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(argumentsJson);
+            return doc.RootElement.Clone();
+        }
+        catch
+        {
+            // Preserve the raw string in a stable shape.
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string> { ["__raw"] = argumentsJson }));
+            return doc.RootElement.Clone();
+        }
+    }
+
+    private static ChatCompletionRequest BuildChatCompletionRequest(string? systemPrompt, JsonElement parameters)
+    {
+        var messages = BuildChatMessages(systemPrompt, parameters);
+        var tools = ParseTools(parameters);
+        var toolChoice = ParseToolChoice(parameters);
+        var maxTokens = ParseMaxTokens(parameters);
+
+        return new ChatCompletionRequest
+        {
+            Messages = messages,
+            Tools = tools,
+            ToolChoice = toolChoice,
+            MaxTokens = maxTokens
+        };
+    }
+
+    private static int? ParseMaxTokens(JsonElement parameters)
+    {
+        if (TryGetProperty(parameters, "maxTokens", out var v) || TryGetProperty(parameters, "max_tokens", out v))
+        {
+            if (v.ValueKind == JsonValueKind.Number && v.TryGetInt32(out var n) && n > 0)
+            {
+                return n;
+            }
+        }
+        return null;
+    }
+
+    private static ChatToolChoice? ParseToolChoice(JsonElement parameters)
+    {
+        if (!TryGetProperty(parameters, "toolChoice", out var choiceProp) &&
+            !TryGetProperty(parameters, "tool_choice", out choiceProp))
+        {
+            return null;
+        }
+
+        if (choiceProp.ValueKind == JsonValueKind.String)
+        {
+            return new ChatToolChoice { Mode = choiceProp.GetString() ?? "auto" };
+        }
+
+        if (choiceProp.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        // MCP plan-style: { "mode": "auto" } or { "mode":"tool", "name":"exec" }
+        var mode = TryGetString(choiceProp, "mode") ?? TryGetString(choiceProp, "type") ?? "auto";
+        var name = TryGetString(choiceProp, "name");
+
+        // OpenAI-style: { "type":"function", "function": { "name":"exec" } }
+        if (string.IsNullOrWhiteSpace(name) &&
+            TryGetProperty(choiceProp, "function", out var fn) &&
+            fn.ValueKind == JsonValueKind.Object)
+        {
+            name = TryGetString(fn, "name");
+        }
+
+        return new ChatToolChoice
+        {
+            Mode = mode,
+            FunctionName = name
+        };
+    }
+
+    private static List<ChatTool>? ParseTools(JsonElement parameters)
+    {
+        if (!TryGetProperty(parameters, "tools", out var toolsProp) || toolsProp.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var result = new List<ChatTool>();
+        foreach (var tool in toolsProp.EnumerateArray())
+        {
+            if (tool.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var name = TryGetString(tool, "name") ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(name))
+            {
+                continue;
+            }
+
+            var description = TryGetString(tool, "description");
+            var schema = GetToolSchema(tool);
+
+            result.Add(new ChatTool
+            {
+                Name = name,
+                Description = description,
+                Parameters = schema
+            });
+        }
+
+        return result.Count == 0 ? null : result;
+    }
+
+    private static JsonElement GetToolSchema(JsonElement tool)
+    {
+        if (TryGetProperty(tool, "inputSchema", out var schema) ||
+            TryGetProperty(tool, "input_schema", out schema) ||
+            TryGetProperty(tool, "parameters", out schema))
+        {
+            if (schema.ValueKind == JsonValueKind.Object || schema.ValueKind == JsonValueKind.Array)
+            {
+                return schema.Clone();
+            }
+        }
+
+        using var emptyDoc = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{}}");
+        return emptyDoc.RootElement.Clone();
     }
 
     private static List<ChatMessage> BuildChatMessages(string? systemPrompt, JsonElement parameters)
@@ -64,14 +221,26 @@ internal sealed class McpSamplingCreateMessageHandler(
                 continue;
             }
 
-            var role = TryGetString(msg, "role") ?? "user";
-            var contentText = ExtractContentText(msg);
-            if (string.IsNullOrWhiteSpace(contentText))
+            var role = NormalizeRole(TryGetString(msg, "role") ?? "user");
+            var messageBlocks = ExtractContentBlocks(msg);
+            if (messageBlocks.Text.Length == 0 && messageBlocks.ToolCalls.Count == 0 && messageBlocks.ToolResults.Count == 0)
             {
                 continue;
             }
 
-            result.Add(new ChatMessage(NormalizeRole(role), contentText));
+            if (messageBlocks.ToolCalls.Count > 0 && role == "assistant")
+            {
+                result.Add(new ChatMessage("assistant", messageBlocks.Text, toolCallId: null, toolCalls: messageBlocks.ToolCalls));
+            }
+            else if (!string.IsNullOrWhiteSpace(messageBlocks.Text))
+            {
+                result.Add(new ChatMessage(role, messageBlocks.Text));
+            }
+
+            foreach (var toolResult in messageBlocks.ToolResults)
+            {
+                result.Add(new ChatMessage("tool", toolResult.Content, toolResult.ToolCallId, toolCalls: null));
+            }
         }
 
         return result;
@@ -84,69 +253,93 @@ internal sealed class McpSamplingCreateMessageHandler(
         {
             "system" => "system",
             "assistant" => "assistant",
+            "tool" => "tool",
             _ => "user"
         };
     }
 
-    private static string ExtractContentText(JsonElement messageObject)
+    private sealed record ParsedBlocks(string Text, List<ChatToolCall> ToolCalls, List<ToolResult> ToolResults);
+    private sealed record ToolResult(string ToolCallId, string Content);
+
+    private static ParsedBlocks ExtractContentBlocks(JsonElement messageObject)
     {
         if (!TryGetProperty(messageObject, "content", out var contentProp))
         {
-            return string.Empty;
+            return new ParsedBlocks(string.Empty, [], []);
         }
 
-        return ExtractContentTextFromElement(contentProp);
-    }
-
-    private static string ExtractContentTextFromElement(JsonElement content)
-    {
-        switch (content.ValueKind)
+        if (contentProp.ValueKind == JsonValueKind.String)
         {
-            case JsonValueKind.String:
-                return content.GetString() ?? string.Empty;
+            var s = contentProp.GetString();
+            return new ParsedBlocks(string.IsNullOrWhiteSpace(s) ? string.Empty : s!, [], []);
+        }
 
-            case JsonValueKind.Array:
+        if (contentProp.ValueKind != JsonValueKind.Array)
+        {
+            // Preserve unknown shapes as text so the model sees it.
+            return new ParsedBlocks(contentProp.GetRawText(), [], []);
+        }
+
+        var sb = new StringBuilder();
+        var toolCalls = new List<ChatToolCall>();
+        var toolResults = new List<ToolResult>();
+
+        foreach (var item in contentProp.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
             {
-                var sb = new StringBuilder();
-                foreach (var item in content.EnumerateArray())
-                {
-                    if (item.ValueKind == JsonValueKind.String)
-                    {
-                        AppendBlock(sb, item.GetString());
-                        continue;
-                    }
-
-                    if (item.ValueKind != JsonValueKind.Object)
-                    {
-                        continue;
-                    }
-
-                    var type = TryGetString(item, "type") ?? string.Empty;
-                    var text = TryGetString(item, "text");
-
-                    if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
-                    {
-                        AppendBlock(sb, text);
-                        continue;
-                    }
-
-                    // Unknown content item: preserve as compact JSON so the model still sees it.
-                    AppendBlock(sb, item.GetRawText());
-                }
-                return sb.ToString().Trim();
+                AppendBlock(sb, item.GetString());
+                continue;
             }
 
-            case JsonValueKind.Object:
-                // Some callers may send a single content object instead of an array.
-                if (TryGetString(content, "text") is { Length: > 0 } t)
-                {
-                    return t;
-                }
-                return content.GetRawText();
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
 
-            default:
-                return string.Empty;
+            var type = TryGetString(item, "type") ?? string.Empty;
+            if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
+            {
+                AppendBlock(sb, TryGetString(item, "text"));
+                continue;
+            }
+
+            if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+            {
+                var id = TryGetString(item, "id") ?? string.Empty;
+                var name = TryGetString(item, "name") ?? string.Empty;
+                var input = TryGetProperty(item, "input", out var inputProp) ? inputProp.GetRawText() : "{}";
+                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                {
+                    toolCalls.Add(new ChatToolCall(id, name, input));
+                }
+                continue;
+            }
+
+            if (string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase))
+            {
+                var toolUseId =
+                    TryGetString(item, "tool_use_id") ??
+                    TryGetString(item, "toolUseId") ??
+                    TryGetString(item, "toolCallId") ??
+                    string.Empty;
+
+                var content = TryGetProperty(item, "content", out var trContent)
+                    ? ExtractTextFromContentElement(trContent)
+                    : (TryGetString(item, "text") ?? string.Empty);
+
+                if (!string.IsNullOrWhiteSpace(toolUseId))
+                {
+                    toolResults.Add(new ToolResult(toolUseId, content));
+                }
+                continue;
+            }
+
+            // Unknown content item: preserve as compact JSON so the model still sees it.
+            AppendBlock(sb, item.GetRawText());
         }
+
+        return new ParsedBlocks(sb.ToString().Trim(), toolCalls, toolResults);
     }
 
     private static void AppendBlock(StringBuilder sb, string? text)
@@ -162,6 +355,41 @@ internal sealed class McpSamplingCreateMessageHandler(
         }
 
         sb.Append(text.TrimEnd());
+    }
+
+    private static string ExtractTextFromContentElement(JsonElement content)
+    {
+        switch (content.ValueKind)
+        {
+            case JsonValueKind.String:
+                return content.GetString() ?? string.Empty;
+            case JsonValueKind.Array:
+            {
+                var sb = new StringBuilder();
+                foreach (var item in content.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String)
+                    {
+                        AppendBlock(sb, item.GetString());
+                        continue;
+                    }
+
+                    if (item.ValueKind == JsonValueKind.Object)
+                    {
+                        var type = TryGetString(item, "type") ?? string.Empty;
+                        if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
+                        {
+                            AppendBlock(sb, TryGetString(item, "text"));
+                            continue;
+                        }
+                        AppendBlock(sb, item.GetRawText());
+                    }
+                }
+                return sb.ToString().Trim();
+            }
+            default:
+                return content.GetRawText();
+        }
     }
 
     private static string? TryGetString(JsonElement obj, string name)
@@ -205,5 +433,10 @@ internal sealed class SamplingContentItem
     public string Type { get; set; } = "text";
 
     public string? Text { get; set; }
-}
 
+    public string? Id { get; set; }
+
+    public string? Name { get; set; }
+
+    public JsonElement? Input { get; set; }
+}
