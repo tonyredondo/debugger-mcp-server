@@ -4625,8 +4625,7 @@ public class Program
 
                 foreach (var report in reports)
                 {
-                    var content = LlmReportCache.BuildModelAttachmentMessage(report.DisplayPath, report.SummaryForModel, report.ManifestForModel);
-                    list.Insert(insertIndex++, new ChatMessage("system", content));
+                    list.Insert(insertIndex++, new ChatMessage("system", report.MessageForModel));
                 }
 
                 messages = list;

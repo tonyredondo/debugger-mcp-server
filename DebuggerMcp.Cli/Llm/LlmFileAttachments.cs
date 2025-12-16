@@ -26,8 +26,7 @@ internal static class LlmFileAttachments
         string DisplayPath,
         string AbsolutePath,
         LlmReportCache.CachedReport CachedReport,
-        string SummaryForModel,
-        string ManifestForModel,
+        string MessageForModel,
         IReadOnlyDictionary<string, string> SectionIdToFile,
         IReadOnlyDictionary<string, string> PointerToFile);
 
@@ -128,25 +127,32 @@ internal static class LlmFileAttachments
                 var idToFile = cached.Sections.ToDictionary(s => s.SectionId, s => s.FilePath, StringComparer.OrdinalIgnoreCase);
                 var ptrToFile = cached.Sections.ToDictionary(s => s.JsonPointer, s => s.FilePath, StringComparer.OrdinalIgnoreCase);
 
-                // Respect the remaining total budget by truncating what we send to the model (manifest first, then summary).
+                // Respect the remaining total budget, including the wrapper message overhead.
+                var wrapperOverhead = LlmReportCache.BuildModelAttachmentMessage(displayPath, summaryJson: string.Empty, manifestJson: string.Empty);
+                var wrapperBytes = Encoding.UTF8.GetByteCount(wrapperOverhead);
+                var budgetForPayload = Math.Max(0, remainingTotalBytes - wrapperBytes);
+
+                // Allocate remaining budget: manifest first, then summary.
                 var manifestForModel = cached.ManifestJson;
                 var summaryForModel = cached.SummaryJson;
 
                 var manifestBytes = Encoding.UTF8.GetByteCount(manifestForModel);
-                if (manifestBytes >= remainingTotalBytes)
+                if (manifestBytes >= budgetForPayload)
                 {
-                    manifestForModel = TruncateUtf8ToBytes(manifestForModel, remainingTotalBytes, "... (truncated report index) ...");
+                    manifestForModel = TruncateUtf8ToBytes(manifestForModel, budgetForPayload, "... (truncated report index) ...");
                     summaryForModel = string.Empty;
                 }
                 else
                 {
-                    var remainingForSummary = Math.Max(0, remainingTotalBytes - manifestBytes);
+                    var remainingForSummary = Math.Max(0, budgetForPayload - manifestBytes);
                     summaryForModel = TruncateUtf8ToBytes(summaryForModel, remainingForSummary, "... (truncated report summary) ...");
                 }
 
-                var used = Encoding.UTF8.GetByteCount(manifestForModel) + Encoding.UTF8.GetByteCount(summaryForModel);
+                var message = LlmReportCache.BuildModelAttachmentMessage(displayPath, summaryForModel, manifestForModel);
+                message = TruncateUtf8ToBytes(message, remainingTotalBytes, "... (truncated attachment) ...");
+                var used = Encoding.UTF8.GetByteCount(message);
 
-                var report = new ReportAttachmentContext(displayPath, absolute, cached, summaryForModel, manifestForModel, idToFile, ptrToFile);
+                var report = new ReportAttachmentContext(displayPath, absolute, cached, message, idToFile, ptrToFile);
                 return (null, report, used);
             }
 

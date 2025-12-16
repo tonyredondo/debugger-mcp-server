@@ -556,14 +556,18 @@ internal static class LlmReportCache
 
         try
         {
-            if (utf8JsonStream.CanSeek)
+            // Parse a single buffer to avoid token-splitting issues with streaming Utf8JsonReader usage.
+            // DebuggerMcp reports always include metadata+analysis near the start of the file.
+            var data = ReadFirstBytes(utf8JsonStream, 512 * 1024);
+            var reader = new Utf8JsonReader(data, isFinalBlock: true, state: default);
+
+            if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
             {
-                utf8JsonStream.Seek(0, SeekOrigin.Begin);
+                return false;
             }
 
-            var state = new JsonReaderState(new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
-            var buffer = new byte[64 * 1024];
-            var depth = 0;
+            // We already consumed the root StartObject token.
+            var depth = 1;
             var pendingSection = Section.None;
             var activeSection = Section.None;
             var sectionDepth = -1;
@@ -575,93 +579,77 @@ internal static class LlmReportCache
                     ["environment", "threads", "modules", "assemblies", "signature", "symbols", "stackSelection", "timeline", "memory", "async", "synchronization"],
                     StringComparer.OrdinalIgnoreCase);
 
-            while (true)
+            while (reader.Read())
             {
-                var read = utf8JsonStream.Read(buffer, 0, buffer.Length);
-                var isFinal = read == 0;
-                var span = new ReadOnlySpan<byte>(buffer, 0, read);
-                var reader = new Utf8JsonReader(span, isFinal, state);
-
-                while (reader.Read())
+                switch (reader.TokenType)
                 {
-                    switch (reader.TokenType)
-                    {
-                        case JsonTokenType.StartObject:
-                        case JsonTokenType.StartArray:
-                            depth++;
-                            if (pendingSection != Section.None && depth == 2)
+                    case JsonTokenType.StartObject:
+                    case JsonTokenType.StartArray:
+                        depth++;
+                        if (pendingSection != Section.None && depth == 2)
+                        {
+                            activeSection = pendingSection;
+                            sectionDepth = depth;
+                            pendingSection = Section.None;
+                        }
+                        break;
+                    case JsonTokenType.EndObject:
+                    case JsonTokenType.EndArray:
+                        if (activeSection != Section.None && depth == sectionDepth)
+                        {
+                            activeSection = Section.None;
+                            sectionDepth = -1;
+                        }
+                        depth--;
+                        break;
+                    case JsonTokenType.PropertyName:
+                        if (depth == 1)
+                        {
+                            var name = reader.GetString() ?? string.Empty;
+                            if (string.Equals(name, "metadata", StringComparison.OrdinalIgnoreCase))
                             {
-                                activeSection = pendingSection;
-                                sectionDepth = depth;
-                                pendingSection = Section.None;
+                                pendingSection = Section.Metadata;
                             }
-                            break;
-                        case JsonTokenType.EndObject:
-                        case JsonTokenType.EndArray:
-                            if (activeSection != Section.None && depth == sectionDepth)
+                            else if (string.Equals(name, "analysis", StringComparison.OrdinalIgnoreCase))
                             {
-                                activeSection = Section.None;
-                                sectionDepth = -1;
+                                pendingSection = Section.Analysis;
                             }
-                            depth--;
-                            break;
-                        case JsonTokenType.PropertyName:
-                            if (depth == 1)
+                        }
+                        else if (activeSection == Section.Metadata && depth == 2)
+                        {
+                            var name = reader.GetString() ?? string.Empty;
+                            if (string.Equals(name, "dumpId", StringComparison.OrdinalIgnoreCase))
                             {
-                                var name = reader.GetString() ?? string.Empty;
-                                if (string.Equals(name, "metadata", StringComparison.OrdinalIgnoreCase))
+                                if (reader.Read() && reader.TokenType == JsonTokenType.String)
                                 {
-                                    pendingSection = Section.Metadata;
-                                }
-                                else if (string.Equals(name, "analysis", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    pendingSection = Section.Analysis;
-                                }
-                            }
-                            else if (activeSection == Section.Metadata && depth == 2)
-                            {
-                                var name = reader.GetString() ?? string.Empty;
-                                if (string.Equals(name, "dumpId", StringComparison.OrdinalIgnoreCase))
-                                {
-                                    if (reader.Read() && reader.TokenType == JsonTokenType.String)
-                                    {
-                                        hasMetadataDumpId = !string.IsNullOrWhiteSpace(reader.GetString());
-                                    }
+                                    hasMetadataDumpId = !string.IsNullOrWhiteSpace(reader.GetString());
                                 }
                             }
-                            else if (activeSection == Section.Analysis && depth == 2)
+                        }
+                        else if (activeSection == Section.Analysis && depth == 2)
+                        {
+                            var name = reader.GetString() ?? string.Empty;
+                            if (analysisKeys.Contains(name))
                             {
-                                var name = reader.GetString() ?? string.Empty;
-                                if (analysisKeys.Contains(name))
-                                {
-                                    // Next token is the value; we don't need to validate its shape here.
-                                    hasKnownAnalysisSection = true;
-                                }
+                                hasKnownAnalysisSection = true;
                             }
-                            break;
-                        case JsonTokenType.String:
-                        case JsonTokenType.Number:
-                        case JsonTokenType.True:
-                        case JsonTokenType.False:
-                        case JsonTokenType.Null:
-                            // If metadata/analysis isn't an object/array, clear the pending marker to avoid mis-attribution.
-                            if (pendingSection != Section.None && depth == 1)
-                            {
-                                pendingSection = Section.None;
-                            }
-                            break;
-                    }
-
-                    if (hasMetadataDumpId && hasKnownAnalysisSection)
-                    {
-                        return true;
-                    }
+                        }
+                        break;
+                    case JsonTokenType.String:
+                    case JsonTokenType.Number:
+                    case JsonTokenType.True:
+                    case JsonTokenType.False:
+                    case JsonTokenType.Null:
+                        // If metadata/analysis isn't an object/array, clear the pending marker to avoid mis-attribution.
+                        if (pendingSection != Section.None && depth == 1)
+                        {
+                            pendingSection = Section.None;
+                        }
+                        break;
                 }
-
-                state = reader.CurrentState;
-                if (isFinal)
+                if (hasMetadataDumpId && hasKnownAnalysisSection)
                 {
-                    break;
+                    return true;
                 }
             }
 
@@ -671,6 +659,18 @@ internal static class LlmReportCache
         {
             return false;
         }
+    }
+
+    private static byte[] ReadFirstBytes(Stream stream, int maxBytes)
+    {
+        if (stream.CanSeek)
+        {
+            stream.Seek(0, SeekOrigin.Begin);
+        }
+
+        var buffer = new byte[maxBytes];
+        var read = stream.Read(buffer, 0, buffer.Length);
+        return buffer.AsSpan(0, read).ToArray();
     }
 
     private sealed class BufferLimitExceededException : Exception;
