@@ -58,6 +58,13 @@ internal static class TranscriptRedactor
 
     private static string RedactKeyValuePairs(string text)
     {
+        // JSON-style pairs: "apiKey": "..."
+        text = Regex.Replace(
+            text,
+            @"(?i)""(openrouter_api_key|api[_-]?key|token|password|secret)""\s*:\s*""[^""]*""",
+            "\"$1\":\"***\"",
+            RegexOptions.CultureInvariant);
+
         // Replace things like "apiKey=...", "token: ...", "Authorization: Bearer ...".
         text = Regex.Replace(
             text,
@@ -74,4 +81,3 @@ internal static class TranscriptRedactor
         return text;
     }
 }
-

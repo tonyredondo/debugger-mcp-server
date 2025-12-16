@@ -18,10 +18,10 @@ public class TranscriptRedactorTests
     [InlineData("Authorization: Bearer abc.def", "Authorization: Bearer ***")]
     [InlineData("OPENROUTER_API_KEY=sk-123", "OPENROUTER_API_KEY=***")]
     [InlineData("apiKey: abc", "apiKey=***")]
+    [InlineData("{\"apiKey\":\"abc\"}", "{\"apiKey\":\"***\"}")]
     public void RedactText_RedactsKeyValueSecrets(string input, string expected)
     {
         var redacted = TranscriptRedactor.RedactText(input);
         Assert.Equal(expected, redacted);
     }
 }
-

@@ -797,10 +797,7 @@ public class Program
                         ? null
                         : output.BeginTranscriptCapture(line =>
                         {
-                            if (transcriptBuffer.Length < 250_000)
-                            {
-                                transcriptBuffer.AppendLine(line);
-                            }
+                            AppendTranscriptCapped(transcriptBuffer, line, maxChars: 250_000);
                         });
                     try
                     {
@@ -877,6 +874,41 @@ public class Program
         }
 
         return text[..maxChars] + $"{Environment.NewLine}[...truncated {text.Length - maxChars} chars...]";
+    }
+
+    private static void AppendTranscriptCapped(System.Text.StringBuilder buffer, string line, int maxChars)
+    {
+        if (maxChars <= 0 || buffer.Length >= maxChars)
+        {
+            return;
+        }
+
+        if (string.IsNullOrEmpty(line))
+        {
+            buffer.AppendLine();
+            return;
+        }
+
+        var remaining = maxChars - buffer.Length;
+        if (remaining <= 0)
+        {
+            return;
+        }
+
+        // Reserve room for newline; append partial line if needed.
+        if (line.Length + Environment.NewLine.Length > remaining)
+        {
+            var sliceLen = Math.Max(0, remaining - Environment.NewLine.Length);
+            if (sliceLen > 0)
+            {
+                buffer.Append(line.AsSpan(0, sliceLen));
+            }
+            buffer.AppendLine();
+            buffer.AppendLine("[...output capture truncated...]");
+            return;
+        }
+
+        buffer.AppendLine(line);
     }
 
     /// <summary>
@@ -4471,7 +4503,7 @@ public class Program
         {
             TimestampUtc = DateTimeOffset.UtcNow,
             Kind = "llm_user",
-            Text = prompt,
+            Text = TranscriptRedactor.RedactText(prompt),
             ServerUrl = state.Settings.ServerUrl,
             SessionId = state.SessionId,
             DumpId = state.DumpId
@@ -4499,7 +4531,7 @@ public class Program
             {
                 TimestampUtc = DateTimeOffset.UtcNow,
                 Kind = "llm_assistant",
-                Text = response,
+                Text = TranscriptRedactor.RedactText(response),
                 ServerUrl = state.Settings.ServerUrl,
                 SessionId = state.SessionId,
                 DumpId = state.DumpId
