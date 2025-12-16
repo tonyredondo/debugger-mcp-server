@@ -53,6 +53,12 @@ public class HtmlReportGenerator : IReportGenerator
             AppendAllThreadCallStacks(sb, analysis, options);
         }
 
+        // Source context snippets (best-effort, bounded) derived from the JSON report model.
+        if (analysis.SourceContext?.Any() == true)
+        {
+            AppendSourceContext(sb, analysis.SourceContext);
+        }
+
         // Memory Section
         if (options.IncludeHeapStats || options.IncludeMemoryLeakInfo)
         {
@@ -194,10 +200,113 @@ public class HtmlReportGenerator : IReportGenerator
         sb.AppendLine("<meta charset=\"UTF-8\">");
         sb.AppendLine("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
         sb.AppendLine($"<title>{title}</title>");
+        sb.AppendLine("<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css\">");
         sb.AppendLine("<style>");
         sb.AppendLine(GetEmbeddedCss());
         sb.AppendLine("</style>");
+        sb.AppendLine("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js\"></script>");
+        sb.AppendLine("<script type=\"text/javascript\">document.addEventListener('DOMContentLoaded', function(){ if (window.hljs && hljs.highlightAll) { hljs.highlightAll(); } });</script>");
         sb.AppendLine("</head>");
+    }
+
+    private static void AppendSourceContext(StringBuilder sb, List<SourceContextEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine("<h2>Source Context (Selected Frames)</h2>");
+        sb.AppendLine("<div class=\"card\">");
+        sb.AppendLine("<p class=\"muted\">Best-effort snippets around selected frames with resolved sources.</p>");
+        sb.AppendLine("</div>");
+
+        foreach (var entry in entries)
+        {
+            sb.AppendLine("<div class=\"card\">");
+            sb.AppendLine($"<h3>Thread #{HttpUtility.HtmlEncode(entry.ThreadId)} — Frame #{entry.FrameNumber}</h3>");
+
+            var frameTitle = $"{entry.Module}!{entry.Function}".Trim('!');
+            if (!string.IsNullOrWhiteSpace(frameTitle))
+            {
+                sb.AppendLine($"<p><strong>Frame:</strong> <code>{HttpUtility.HtmlEncode(frameTitle)}</code></p>");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.SourceFile) || entry.LineNumber is > 0)
+            {
+                var lineNumber = entry.LineNumber is > 0 ? entry.LineNumber.ToString() : "?";
+                sb.AppendLine($"<p><strong>Location:</strong> <code>{HttpUtility.HtmlEncode(entry.SourceFile ?? string.Empty)}:{HttpUtility.HtmlEncode(lineNumber)}</code></p>");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.SourceUrl))
+            {
+                var url = HttpUtility.HtmlEncode(entry.SourceUrl);
+                sb.AppendLine($"<p><strong>Source URL:</strong> <a class=\"source-link\" href=\"{url}\" target=\"_blank\">{url}</a></p>");
+            }
+
+            if (entry.StartLine is > 0 && entry.EndLine is > 0)
+            {
+                var focus = entry.LineNumber is > 0 ? entry.LineNumber.ToString() : "?";
+                sb.AppendLine($"<p><strong>Lines:</strong> {entry.StartLine}-{entry.EndLine} (focus: {HttpUtility.HtmlEncode(focus)})</p>");
+            }
+
+            sb.AppendLine($"<p><strong>Status:</strong> <code>{HttpUtility.HtmlEncode(entry.Status)}</code></p>");
+
+            if (!string.IsNullOrWhiteSpace(entry.Error))
+            {
+                sb.AppendLine($"<div class=\"alert alert-error\"><strong>Error:</strong> {HttpUtility.HtmlEncode(entry.Error)}</div>");
+                sb.AppendLine("</div>");
+                continue;
+            }
+
+            if (entry.Lines == null || entry.Lines.Count == 0)
+            {
+                sb.AppendLine("</div>");
+                continue;
+            }
+
+            var lang = GuessHighlightJsLanguage(entry.SourceFile);
+            var codeClass = string.IsNullOrEmpty(lang) ? "language-plaintext" : $"language-{lang}";
+
+            sb.AppendLine("<pre class=\"code-block\"><code class=\"" + codeClass + "\">");
+            foreach (var line in entry.Lines)
+            {
+                sb.AppendLine(HttpUtility.HtmlEncode(line));
+            }
+            sb.AppendLine("</code></pre>");
+            sb.AppendLine("</div>");
+        }
+    }
+
+    private static string GuessHighlightJsLanguage(string? sourceFile)
+    {
+        var ext = Path.GetExtension(sourceFile ?? string.Empty).ToLowerInvariant();
+        return ext switch
+        {
+            ".cs" => "csharp",
+            ".fs" => "fsharp",
+            ".vb" => "vbnet",
+            ".cpp" or ".cc" or ".cxx" => "cpp",
+            ".c" => "c",
+            ".h" or ".hpp" => "cpp",
+            ".rs" => "rust",
+            ".go" => "go",
+            ".java" => "java",
+            ".kt" or ".kts" => "kotlin",
+            ".js" => "javascript",
+            ".ts" => "typescript",
+            ".py" => "python",
+            ".rb" => "ruby",
+            ".php" => "php",
+            ".swift" => "swift",
+            ".m" or ".mm" => "objectivec",
+            ".sh" => "bash",
+            ".ps1" => "powershell",
+            ".json" => "json",
+            ".yml" or ".yaml" => "yaml",
+            ".xml" => "xml",
+            _ => "plaintext"
+        };
     }
 
     private static string GetEmbeddedCss()

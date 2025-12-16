@@ -20,12 +20,10 @@ public sealed class JsonReportGenerator : IReportGenerator
         options ??= ReportOptions.FullReport;
         metadata ??= new ReportMetadata();
 
-        // JSON-only enrichment: bounded source context snippets and normalized timeline timestamps.
-        // Avoid doing remote source fetching work when other formats reuse JSON as an intermediate representation.
-        if (options.Format == ReportFormat.Json)
-        {
-            SourceContextEnricher.Apply(analysis, metadata.GeneratedAt);
-        }
+        // Canonical enrichment step for the report model.
+        // This populates source context snippets and normalizes derived fields so all formats
+        // (Markdown/HTML/JSON) stay consistent when rendered from the same JSON document.
+        SourceContextEnricher.Apply(analysis, metadata.GeneratedAt);
 
         var document = new ReportDocument
         {

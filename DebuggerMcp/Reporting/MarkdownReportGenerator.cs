@@ -45,6 +45,12 @@ public class MarkdownReportGenerator : IReportGenerator
             AppendAllThreadCallStacks(sb, analysis, options);
         }
 
+        // Source context snippets (best-effort, bounded) derived from the JSON report model.
+        if (analysis.SourceContext?.Any() == true)
+        {
+            AppendSourceContext(sb, analysis.SourceContext);
+        }
+
         // Memory/Heap Stats with Charts
         if (options.IncludeHeapStats || options.IncludeMemoryLeakInfo)
         {
@@ -310,6 +316,103 @@ public class MarkdownReportGenerator : IReportGenerator
             // Show parameters only for faulting thread
             AppendThreadCallStack(sb, thread.CallStack, options, showParameters: thread.IsFaulting);
         }
+    }
+
+    private static void AppendSourceContext(StringBuilder sb, List<SourceContextEntry> entries)
+    {
+        if (entries.Count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine("## 🧩 Source Context (Selected Frames)");
+        sb.AppendLine();
+        sb.AppendLine("_Best-effort snippets around selected frames with resolved sources._");
+        sb.AppendLine();
+
+        foreach (var entry in entries)
+        {
+            sb.AppendLine($"### Thread #{entry.ThreadId} — Frame #{entry.FrameNumber}");
+            sb.AppendLine();
+            if (!string.IsNullOrWhiteSpace(entry.Module) || !string.IsNullOrWhiteSpace(entry.Function))
+            {
+                sb.AppendLine($"- **Frame**: `{entry.Module}!{entry.Function}`");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.SourceFile) || entry.LineNumber is > 0)
+            {
+                var sourceFile = entry.SourceFile ?? string.Empty;
+                var lineNumber = entry.LineNumber is > 0 ? entry.LineNumber.ToString() : "?";
+                sb.AppendLine($"- **Location**: `{sourceFile}:{lineNumber}`");
+            }
+
+            if (!string.IsNullOrWhiteSpace(entry.SourceUrl))
+            {
+                sb.AppendLine($"- **Source URL**: {entry.SourceUrl}");
+            }
+
+            if (entry.StartLine is > 0 && entry.EndLine is > 0)
+            {
+                var focus = entry.LineNumber is > 0 ? entry.LineNumber.ToString() : "?";
+                sb.AppendLine($"- **Lines**: {entry.StartLine}-{entry.EndLine} (focus: {focus})");
+            }
+
+            sb.AppendLine($"- **Status**: `{entry.Status}`");
+
+            if (!string.IsNullOrWhiteSpace(entry.Error))
+            {
+                sb.AppendLine($"- **Error**: {entry.Error}");
+                sb.AppendLine();
+                continue;
+            }
+
+            if (entry.Lines == null || entry.Lines.Count == 0)
+            {
+                sb.AppendLine();
+                continue;
+            }
+
+            sb.AppendLine();
+            var language = GuessMarkdownCodeFenceLanguage(entry.SourceFile);
+            sb.AppendLine(string.IsNullOrEmpty(language) ? "```" : $"```{language}");
+            foreach (var line in entry.Lines)
+            {
+                sb.AppendLine(line);
+            }
+            sb.AppendLine("```");
+            sb.AppendLine();
+        }
+    }
+
+    private static string GuessMarkdownCodeFenceLanguage(string? sourceFile)
+    {
+        var ext = Path.GetExtension(sourceFile ?? string.Empty).ToLowerInvariant();
+        return ext switch
+        {
+            ".cs" => "csharp",
+            ".fs" => "fsharp",
+            ".vb" => "vbnet",
+            ".cpp" or ".cc" or ".cxx" => "cpp",
+            ".c" => "c",
+            ".h" or ".hpp" => "cpp",
+            ".rs" => "rust",
+            ".go" => "go",
+            ".java" => "java",
+            ".kt" or ".kts" => "kotlin",
+            ".js" => "javascript",
+            ".ts" => "typescript",
+            ".py" => "python",
+            ".rb" => "ruby",
+            ".php" => "php",
+            ".swift" => "swift",
+            ".m" or ".mm" => "objectivec",
+            ".sh" => "bash",
+            ".ps1" => "powershell",
+            ".json" => "json",
+            ".yml" or ".yaml" => "yaml",
+            ".xml" => "xml",
+            _ => string.Empty
+        };
     }
 
     private static void AppendThreadCallStack(StringBuilder sb, List<StackFrame> callStack, ReportOptions options, bool showParameters = false)
