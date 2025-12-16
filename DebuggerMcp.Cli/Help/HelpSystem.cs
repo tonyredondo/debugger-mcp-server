@@ -40,7 +40,8 @@ public static class HelpSystem
             new("disconnect", "", "Disconnect from the current server", ["disconnect"]),
             new("status", "", "Show connection and session status", ["status"]),
             new("health", "[[url]]", "Check server health", ["health", "health http://localhost:5000"]),
-            new("server", "<subcommand>", "Manage servers (list, add, remove, switch, init)", ["server list", "server add http://localhost:5001", "server switch alpine-x64", "server init"])
+            new("server", "<subcommand>", "Manage servers (list, add, remove, switch, init)", ["server list", "server add http://localhost:5001", "server switch alpine-x64", "server init"]),
+            new("stats", "", "Show server statistics", ["stats"])
         ],
         ["files"] = [
             new("dumps", "<subcommand>", "Manage dump files (upload, list, info, delete, binary)", [
@@ -59,8 +60,7 @@ public static class HelpSystem
                 "symbols datadog download -f        Download with version fallback",
                 "symbols datadog clear              Clear downloaded Datadog symbols",
                 "symbols datadog config             Show Datadog config"
-            ]),
-            new("stats", "", "Show server statistics", ["stats"])
+            ])
         ],
         ["session"] = [
             new("session", "<subcommand>", "Manage debugging sessions (create, list, use, close, info, restore)", ["session create", "session list", "session use d03", "session close abc123", "session info abc123", "session restore abc123"])

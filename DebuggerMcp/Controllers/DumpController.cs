@@ -8,6 +8,7 @@ using DebuggerMcp.Reporting;
 using DebuggerMcp.Security;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
+using DebuggerMcp;
 
 namespace DebuggerMcp.Controllers;
 
@@ -24,6 +25,11 @@ namespace DebuggerMcp.Controllers;
 [Authorize]
 public class DumpController : ControllerBase
 {
+    /// <summary>
+    /// Server runtime metadata (e.g., stable start time for uptime).
+    /// </summary>
+    private readonly ServerRuntimeInfo _runtimeInfo;
+
     /// <summary>
     /// The session manager for accessing session information and dump storage path.
     /// </summary>
@@ -64,18 +70,21 @@ public class DumpController : ControllerBase
     /// <param name="watchStore">The watch store instance for managing watch expressions.</param>
     /// <param name="logger">The logger instance.</param>
     /// <param name="loggerFactory">The logger factory for creating debugger loggers.</param>
+    /// <param name="runtimeInfo">Server runtime information for consistent uptime calculation.</param>
     public DumpController(
         DebuggerSessionManager sessionManager,
         SymbolManager symbolManager,
         WatchStore watchStore,
         ILogger<DumpController> logger,
-        ILoggerFactory loggerFactory)
+        ILoggerFactory loggerFactory,
+        ServerRuntimeInfo runtimeInfo)
     {
         _sessionManager = sessionManager;
         _symbolManager = symbolManager;
         _watchStore = watchStore;
         _logger = logger;
         _loggerFactory = loggerFactory;
+        _runtimeInfo = runtimeInfo;
 
         _maxDumpFileSize = EnvironmentConfig.GetMaxRequestBodySize();
 
@@ -682,6 +691,7 @@ public class DumpController : ControllerBase
 
         // Calculate uptime
         var uptime = CalculateUptime();
+        var uptimeSeconds = (long)Math.Max(0, (DateTime.UtcNow - _runtimeInfo.StartedAtUtc).TotalSeconds);
 
         var totalSessions = (int)stats["TotalSessions"];
 
@@ -696,14 +706,11 @@ public class DumpController : ControllerBase
             UniqueUsers = (int)stats["UniqueUsers"],
             SessionsPerUser = (Dictionary<string, int>)stats["SessionsPerUser"],
             Uptime = uptime,
+            UptimeSeconds = uptimeSeconds,
+            ServerStartTimeUtc = _runtimeInfo.StartedAtUtc,
             Timestamp = DateTime.UtcNow
         });
     }
-
-    /// <summary>
-    /// The server start time for uptime calculation.
-    /// </summary>
-    private static readonly DateTime ServerStartTime = DateTime.UtcNow;
 
     /// <summary>
     /// Calculates dump statistics (count and storage used).
@@ -734,9 +741,9 @@ public class DumpController : ControllerBase
     /// <summary>
     /// Calculates server uptime as a formatted string.
     /// </summary>
-    private static string CalculateUptime()
+    private string CalculateUptime()
     {
-        var uptime = DateTime.UtcNow - ServerStartTime;
+        var uptime = DateTime.UtcNow - _runtimeInfo.StartedAtUtc;
 
         if (uptime.TotalDays >= 1)
         {
@@ -1413,6 +1420,18 @@ public class SessionStatisticsResponse
     /// </summary>
     /// <example>2d 5h 30m</example>
     public string? Uptime { get; set; }
+
+    /// <summary>
+    /// Gets or sets the server uptime in seconds.
+    /// </summary>
+    /// <example>3600</example>
+    public long UptimeSeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the UTC timestamp when the server started.
+    /// </summary>
+    /// <example>2024-01-15T10:30:00Z</example>
+    public DateTime ServerStartTimeUtc { get; set; }
 
     /// <summary>
     /// Gets or sets the timestamp when statistics were generated.

@@ -34,6 +34,9 @@ public static class ServiceCollectionExtensions
     /// </remarks>
     public static IServiceCollection AddDebuggerServices(this IServiceCollection services, string dumpStoragePath)
     {
+        // Capture server start time at application startup, not at first request.
+        services.AddSingleton(new ServerRuntimeInfo(DateTime.UtcNow));
+
         // Register session manager with the dump storage path and logger factory
         // Use a factory method to inject the ILoggerFactory from the service provider
         services.AddSingleton(sp =>

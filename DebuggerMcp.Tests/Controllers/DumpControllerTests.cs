@@ -336,6 +336,12 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
     [Fact]
     public async Task GetStats_ReturnsOk()
     {
+        // Warm up the app so start time is captured before delaying.
+        var warmup = await _client.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, warmup.StatusCode);
+
+        await Task.Delay(1100);
+
         // Act
         var response = await _client.GetAsync("/api/dumps/stats");
 
@@ -347,6 +353,11 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
         // The stats endpoint returns TotalSessions and MaxSessionsPerUser (camelCase)
         Assert.True(result.TryGetProperty("totalSessions", out _));
         Assert.True(result.TryGetProperty("maxSessionsPerUser", out _));
+
+        // Uptime should be server-sourced and stable from server start, not first stats call.
+        Assert.True(result.TryGetProperty("uptimeSeconds", out var uptimeSeconds));
+        Assert.True(uptimeSeconds.GetInt64() >= 1);
+        Assert.True(result.TryGetProperty("serverStartTimeUtc", out _));
     }
 
     // ========== Health Endpoint Tests ==========

@@ -35,12 +35,14 @@ public class DumpControllerUploadLimitTests : IDisposable
             var sessionManager = new DebuggerSessionManager(tempDir);
             var symbolManager = new SymbolManager(dumpStorageBasePath: tempDir);
             var watchStore = new WatchStore(tempDir);
+            var runtimeInfo = new ServerRuntimeInfo(DateTime.UtcNow);
             var controller = new DebuggerMcp.Controllers.DumpController(
                 sessionManager,
                 symbolManager,
                 watchStore,
                 NullLogger<DebuggerMcp.Controllers.DumpController>.Instance,
-                NullLoggerFactory.Instance);
+                NullLoggerFactory.Instance,
+                runtimeInfo);
 
             var file = new FakeFormFile(
                 new MemoryStream(CreateValidWindowsDumpHeader()),

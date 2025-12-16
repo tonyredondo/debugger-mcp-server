@@ -65,6 +65,9 @@ public class TestWebApplicationFactory : IDisposable
                     // Add session manager with test temp directory
                     services.AddSingleton(new DebuggerSessionManager(_tempDir));
 
+                    // Capture server start time at test server startup
+                    services.AddSingleton(new ServerRuntimeInfo(DateTime.UtcNow));
+
                     // Add symbol manager
                     services.AddSingleton<SymbolManager>();
 

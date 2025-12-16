@@ -37,6 +37,7 @@ public class HelpSystemTests
     [InlineData("connection", "status")]
     [InlineData("connection", "health")]
     [InlineData("connection", "server")]
+    [InlineData("connection", "stats")]
     [InlineData("files", "dumps")]
     [InlineData("files", "symbols")]
     [InlineData("session", "session")]

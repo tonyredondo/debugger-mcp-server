@@ -41,6 +41,7 @@ public class ServiceCollectionExtensionsTests : IDisposable
         services.AddDebuggerServices(_tempPath);
 
         var provider = services.BuildServiceProvider();
+        Assert.NotNull(provider.GetService<ServerRuntimeInfo>());
         var sessionManager = provider.GetService<DebuggerSessionManager>();
 
         Assert.NotNull(sessionManager);
@@ -265,4 +266,3 @@ public class ServiceCollectionExtensionsTests : IDisposable
         Assert.True(services.Count > 4);
     }
 }
-
