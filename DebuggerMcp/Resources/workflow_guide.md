@@ -358,7 +358,7 @@ Use session(action="list", userId) to see all active sessions (JSON).
 1. dump(action="open", ...)  # SOS auto-loaded for .NET dumps
 2. report(action="full", sessionId, userId, format="html", includeWatches=true)
    → Returns comprehensive HTML report
-3. report(action="summary", sessionId, userId, format="markdown")
+3. report(action="summary", sessionId, userId, format="json")
    → Quick summary with key findings
 ```
 

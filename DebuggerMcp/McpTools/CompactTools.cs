@@ -126,7 +126,7 @@ public sealed class CompactTools
         [Description("Action: full | summary")] string action,
         [Description("Session ID")] string sessionId,
         [Description("User ID (session owner)")] string userId,
-        [Description("Format: json | markdown | html")] string format,
+        [Description("Format: json | markdown | html (default: json)")] string format = "json",
         [Description("Include watches (full only, default: true)")] bool includeWatches = true,
         [Description("Include security (full only, default: true)")] bool includeSecurity = true,
         [Description("Maximum stack frames (full only, 0 = all)")] int maxStackFrames = 0)

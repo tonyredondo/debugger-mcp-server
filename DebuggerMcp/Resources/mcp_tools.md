@@ -30,7 +30,9 @@ Execute a raw debugger command (WinDbg/LLDB syntax). Use as a last resort.
 Generate reports (returns report content).
 
 - **full**: `report(action: "full", sessionId: "...", userId: "...", format: "json", includeWatches: true)`
-- **summary**: `report(action: "summary", sessionId: "...", userId: "...", format: "markdown")`
+- **summary**: `report(action: "summary", sessionId: "...", userId: "...", format: "json")`
+
+Tip: For LLM consumption, prefer `format: "json"` (structured). Use `markdown` for human-readable output.
 
 ### 5) `analyze`
 Run analysis on the currently open dump.

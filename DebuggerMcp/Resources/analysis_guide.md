@@ -1206,8 +1206,8 @@ Generate comprehensive, shareable reports from your crash analysis in multiple f
 ### Usage Examples
 
 ```
-// Generate Markdown report (default)
-report(action: "full", sessionId: "abc", userId: "user1", format: "markdown")
+// Generate JSON report (default; best for LLMs)
+report(action: "full", sessionId: "abc", userId: "user1", format: "json")
 
 // Generate HTML report with custom title
 report(action: "full", sessionId: "abc", userId: "user1", format: "html")

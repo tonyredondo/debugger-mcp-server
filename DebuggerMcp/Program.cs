@@ -49,7 +49,10 @@ if (isHttpMode || isMcpHttpMode)
     if (isMcpHttpMode)
     {
         webBuilder.Services
-            .AddMcpServer()
+            .AddMcpServer(options =>
+            {
+                options.ServerInstructions = McpServerInstructions.Text;
+            })
             .WithHttpTransport() // Use HTTP/SSE transport instead of stdio
             .WithToolsFromAssembly()
             .WithResourcesFromAssembly(); // Expose documentation and guides as MCP resources
@@ -170,7 +173,10 @@ else
     // - WithToolsFromAssembly: Automatically discovers and registers tools with [McpServerTool] attribute
     // - WithResourcesFromAssembly: Exposes documentation and guides as MCP resources
     builder.Services
-        .AddMcpServer()
+        .AddMcpServer(options =>
+        {
+            options.ServerInstructions = McpServerInstructions.Text;
+        })
         .WithStdioServerTransport()
         .WithToolsFromAssembly()
         .WithResourcesFromAssembly();
