@@ -17,7 +17,7 @@ internal static class TranscriptRedactor
         var text = commandLine;
 
         // Common CLI patterns that can include secrets.
-        text = ReplaceArgumentValue(text, "llm set-key");
+        text = ReplaceLlmSetKey(text);
         text = ReplaceLlmPrompt(text);
         text = ReplaceFlagValue(text, "--api-key");
         text = ReplaceFlagValue(text, "-k");
@@ -35,16 +35,18 @@ internal static class TranscriptRedactor
         return RedactKeyValuePairs(text);
     }
 
-    private static string ReplaceArgumentValue(string text, string prefix)
+    private static string ReplaceLlmSetKey(string text)
     {
-        var trimmed = text.TrimStart();
-        if (!trimmed.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+        // Replace everything after "llm set-key" (allowing arbitrary whitespace) with a placeholder.
+        // Examples:
+        // - "llm set-key sk-123" -> "llm set-key ***"
+        // - "llm   set-key\t sk-123" -> "llm set-key ***"
+        if (!Regex.IsMatch(text, @"(?i)^\s*llm\s+set-key\b", RegexOptions.CultureInvariant))
         {
             return text;
         }
 
-        // Replace everything after the prefix with a placeholder.
-        return prefix + " ***";
+        return "llm set-key ***";
     }
 
     private static string ReplaceFlagValue(string text, string flag)
@@ -70,13 +72,13 @@ internal static class TranscriptRedactor
             return "llm";
         }
 
-        if (!trimmed.StartsWith("llm ", StringComparison.OrdinalIgnoreCase))
+        if (!Regex.IsMatch(trimmed, @"(?i)^llm\s+", RegexOptions.CultureInvariant))
         {
             return text;
         }
 
-        var after = trimmed[4..].TrimStart();
-        var firstToken = after.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
+        var after = Regex.Replace(trimmed, @"(?i)^llm\s+", string.Empty, RegexOptions.CultureInvariant);
+        var firstToken = after.Split([' ', '\t'], StringSplitOptions.RemoveEmptyEntries).FirstOrDefault() ?? string.Empty;
         var sub = firstToken.Trim().ToLowerInvariant();
 
         // Keep subcommands as-is (these are already covered by other redaction rules if needed).
