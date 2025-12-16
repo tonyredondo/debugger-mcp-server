@@ -23,6 +23,20 @@ public class LlmReportCacheTests
     }
 
     [Fact]
+    public void LooksLikeDebuggerMcpReport_ArbitraryJson_ReturnsFalse()
+    {
+        var json = """
+        {
+          "metadata": { "dumpId": "abc" },
+          "data": { "environment": { "os": "linux" } }
+        }
+        """;
+
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+        Assert.False(LlmReportCache.LooksLikeDebuggerMcpReport(stream));
+    }
+
+    [Fact]
     public void ExtractAndLoad_LargeReport_UsesCacheAndExcludesBiasedFields()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));

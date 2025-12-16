@@ -41,7 +41,12 @@ internal static class LlmReportCache
 
     internal static bool LooksLikeDebuggerMcpReport(Stream utf8JsonStream)
     {
-        return TryFindTopLevelProperties(utf8JsonStream, out var hasMetadata, out var hasAnalysis) && hasMetadata && hasAnalysis;
+        return TryFindDebuggerMcpReportSignature(
+            utf8JsonStream,
+            out var hasMetadataDumpId,
+            out var hasKnownAnalysisSection) &&
+            hasMetadataDumpId &&
+            hasKnownAnalysisSection;
     }
 
     internal static CachedReport BuildOrLoadCachedReport(
@@ -470,10 +475,19 @@ internal static class LlmReportCache
     {
         var sb = new StringBuilder();
         sb.AppendLine($"Attached DebuggerMcp report: {displayPath}");
-        sb.AppendLine("This report was too large to attach inline; a cached per-section representation is available.");
-        sb.AppendLine("If you need more detail, in agent mode use tools:");
-        sb.AppendLine("- find_report_sections(query, report?)");
-        sb.AppendLine("- get_report_section(sectionId|jsonPointer, report?)");
+        sb.AppendLine("This file was detected as a DebuggerMcp JSON report and is too large to attach inline.");
+        sb.AppendLine("The CLI cached it locally as per-section JSON for on-demand retrieval.");
+        sb.AppendLine();
+        sb.AppendLine("To retrieve more context:");
+        sb.AppendLine("1) Enable agent mode: `llm set-agent true`");
+        sb.AppendLine("2) Ask the agent to fetch sections using these local tools:");
+        sb.AppendLine("   - `find_report_sections` (search section ids/pointers)");
+        sb.AppendLine("   - `get_report_section` (fetch a section by id/pointer)");
+        sb.AppendLine();
+        sb.AppendLine("Example (agent mode):");
+        sb.AppendLine("  - find_report_sections {\"query\":\"faultingThread\"}");
+        sb.AppendLine("  - get_report_section {\"jsonPointer\":\"/analysis/threads/faultingThread\"}");
+        sb.AppendLine("If multiple reports are attached, add `{ \"report\": \"<fileName>\" }` to disambiguate.");
         sb.AppendLine();
         sb.AppendLine("Report summary (factual; excludes recommendations/root cause):");
         sb.AppendLine("```json");
@@ -523,10 +537,13 @@ internal static class LlmReportCache
         }
     }
 
-    private static bool TryFindTopLevelProperties(Stream utf8JsonStream, out bool hasMetadata, out bool hasAnalysis)
+    private static bool TryFindDebuggerMcpReportSignature(
+        Stream utf8JsonStream,
+        out bool hasMetadataDumpId,
+        out bool hasKnownAnalysisSection)
     {
-        hasMetadata = false;
-        hasAnalysis = false;
+        hasMetadataDumpId = false;
+        hasKnownAnalysisSection = false;
 
         try
         {
@@ -538,6 +555,16 @@ internal static class LlmReportCache
             var state = new JsonReaderState(new JsonReaderOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
             var buffer = new byte[64 * 1024];
             var depth = 0;
+            var pendingSection = Section.None;
+            var activeSection = Section.None;
+            var sectionDepth = -1;
+
+            // Analysis sections we consider "signature" evidence (low false positive risk).
+            // These are stable across our reports and unlikely to occur together with top-level metadata/dumpId in arbitrary JSON.
+            var analysisKeys =
+                new HashSet<string>(
+                    ["environment", "threads", "modules", "assemblies", "signature", "symbols", "stackSelection", "timeline", "memory", "async", "synchronization"],
+                    StringComparer.OrdinalIgnoreCase);
 
             while (true)
             {
@@ -553,9 +580,20 @@ internal static class LlmReportCache
                         case JsonTokenType.StartObject:
                         case JsonTokenType.StartArray:
                             depth++;
+                            if (pendingSection != Section.None && depth == 2)
+                            {
+                                activeSection = pendingSection;
+                                sectionDepth = depth;
+                                pendingSection = Section.None;
+                            }
                             break;
                         case JsonTokenType.EndObject:
                         case JsonTokenType.EndArray:
+                            if (activeSection != Section.None && depth == sectionDepth)
+                            {
+                                activeSection = Section.None;
+                                sectionDepth = -1;
+                            }
                             depth--;
                             break;
                         case JsonTokenType.PropertyName:
@@ -564,19 +602,39 @@ internal static class LlmReportCache
                                 var name = reader.GetString() ?? string.Empty;
                                 if (string.Equals(name, "metadata", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    hasMetadata = true;
+                                    pendingSection = Section.Metadata;
                                 }
                                 else if (string.Equals(name, "analysis", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    hasAnalysis = true;
+                                    pendingSection = Section.Analysis;
                                 }
-
-                                if (hasMetadata && hasAnalysis)
+                            }
+                            else if (activeSection == Section.Metadata && depth == 2)
+                            {
+                                var name = reader.GetString() ?? string.Empty;
+                                if (string.Equals(name, "dumpId", StringComparison.OrdinalIgnoreCase))
                                 {
-                                    return true;
+                                    if (reader.Read() && reader.TokenType == JsonTokenType.String)
+                                    {
+                                        hasMetadataDumpId = !string.IsNullOrWhiteSpace(reader.GetString());
+                                    }
+                                }
+                            }
+                            else if (activeSection == Section.Analysis && depth == 2)
+                            {
+                                var name = reader.GetString() ?? string.Empty;
+                                if (analysisKeys.Contains(name))
+                                {
+                                    // Next token is the value; we don't need to validate its shape here.
+                                    hasKnownAnalysisSection = true;
                                 }
                             }
                             break;
+                    }
+
+                    if (hasMetadataDumpId && hasKnownAnalysisSection)
+                    {
+                        return true;
                     }
                 }
 
@@ -587,7 +645,7 @@ internal static class LlmReportCache
                 }
             }
 
-            return hasMetadata && hasAnalysis;
+            return hasMetadataDumpId && hasKnownAnalysisSection;
         }
         catch
         {
@@ -679,5 +737,12 @@ internal static class LlmReportCache
         var limit = Math.Max(0, maxBytes - suffixBytes);
         var prefix = Encoding.UTF8.GetString(bytes, 0, limit);
         return prefix + Environment.NewLine + suffix;
+    }
+
+    private enum Section
+    {
+        None = 0,
+        Metadata = 1,
+        Analysis = 2
     }
 }
