@@ -4483,12 +4483,14 @@ public class Program
             output.KeyValue("Model", llmSettings.OpenRouterModel);
             output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveOpenRouterApiKey()) ? "(not set)" : "(configured)");
             output.KeyValue("Agent Mode", llmSettings.AgentModeEnabled ? "enabled" : "disabled");
+            output.KeyValue("Agent Confirm", llmSettings.AgentModeConfirmToolCalls ? "enabled" : "disabled");
             output.WriteLine();
             output.Dim("Usage:");
             output.Dim("  llm <prompt>");
             output.Dim("  llm model <openrouter-model-id>");
             output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json)");
             output.Dim("  llm set-agent <true|false>       (toggles tool-using agent mode)");
+            output.Dim("  llm set-agent-confirm <true|false> (confirm each tool call in agent mode)");
             output.Dim("  llm reset                        (clears only LLM conversation)");
             output.Dim("Tip: Prefer env var OPENROUTER_API_KEY to avoid persisting keys.");
             return;
@@ -4542,6 +4544,23 @@ public class Program
                 llmSettings.AgentModeEnabled = enabled;
                 state.Settings.Save();
                 output.Success($"LLM agent mode {(enabled ? "enabled" : "disabled")}.");
+                return;
+
+            case "set-agent-confirm":
+            case "agent-confirm":
+                if (args.Length < 2)
+                {
+                    output.Error("Usage: llm set-agent-confirm <true|false>");
+                    return;
+                }
+                if (!TryParseBool(args[1], out var confirmEnabled))
+                {
+                    output.Error("Invalid value. Use true/false, on/off, 1/0.");
+                    return;
+                }
+                llmSettings.AgentModeConfirmToolCalls = confirmEnabled;
+                state.Settings.Save();
+                output.Success($"LLM agent confirmation {(confirmEnabled ? "enabled" : "disabled")}.");
                 return;
         }
 
@@ -4635,6 +4654,7 @@ public class Program
         CancellationToken cancellationToken)
     {
         var tools = LlmAgentTools.GetDefaultTools();
+        var approvalState = new LlmAgentApprovalState(confirmationsEnabled: llmSettings.AgentModeConfirmToolCalls);
 
         var runner = new LlmAgentRunner(
             async (messages, ct) =>
@@ -4649,11 +4669,64 @@ public class Program
                         MaxTokens = null
                     }, ct));
             },
-            async (toolCall, ct) => await ExecuteAgentToolCallAsync(output, state, mcpClient, toolCall, ct).ConfigureAwait(false),
+            async (toolCall, ct) =>
+            {
+                if (approvalState.ConfirmationsEnabled && !approvalState.IsAllowed(toolCall.Name))
+                {
+                    var preview = BuildAgentToolArgsPreview(toolCall);
+                    var decision = output.PromptLlmAgentToolApproval(toolCall.Name, preview);
+                    approvalState.ApplyDecision(toolCall.Name, decision);
+
+                    switch (decision)
+                    {
+                        case LlmAgentToolApprovalDecision.CancelRun:
+                            throw new OperationCanceledException("Agent run canceled by user.");
+                        case LlmAgentToolApprovalDecision.DenyOnce:
+                            return "ERROR: Tool call denied by user.";
+                    }
+                }
+
+                return await ExecuteAgentToolCallAsync(output, state, mcpClient, toolCall, ct).ConfigureAwait(false);
+            },
             maxIterations: 10);
 
-        var run = await runner.RunAsync(seedMessages, cancellationToken).ConfigureAwait(false);
-        return run.FinalText;
+        try
+        {
+            var run = await runner.RunAsync(seedMessages, cancellationToken).ConfigureAwait(false);
+            return run.FinalText;
+        }
+        catch (OperationCanceledException)
+        {
+            return "(LLM agent canceled)";
+        }
+    }
+
+    private static string BuildAgentToolArgsPreview(ChatToolCall call)
+    {
+        if (string.IsNullOrWhiteSpace(call.ArgumentsJson))
+        {
+            return string.Empty;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(call.ArgumentsJson);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object &&
+                root.TryGetProperty("command", out var commandProp) &&
+                commandProp.ValueKind == JsonValueKind.String)
+            {
+                return commandProp.GetString() ?? string.Empty;
+            }
+        }
+        catch
+        {
+            // ignore
+        }
+
+        return call.ArgumentsJson.Length > 200
+            ? call.ArgumentsJson[..200] + "..."
+            : call.ArgumentsJson;
     }
 
     private static async Task<string> ExecuteAgentToolCallAsync(

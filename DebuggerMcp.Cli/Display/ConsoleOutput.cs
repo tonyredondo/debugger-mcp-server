@@ -1,5 +1,6 @@
 using Spectre.Console;
 using DebuggerMcp.Cli.Configuration;
+using DebuggerMcp.Cli.Llm;
 using SpectreMarkup = Spectre.Console.Markup;
 
 namespace DebuggerMcp.Cli.Display;
@@ -224,6 +225,30 @@ public class ConsoleOutput
             Padding = new Padding(1, 0)
         };
         _console.Write(panel);
+    }
+
+    internal LlmAgentToolApprovalDecision PromptLlmAgentToolApproval(string toolName, string toolArgsPreview)
+    {
+        EmitToTranscript($"LLM agent requested tool: {toolName} {toolArgsPreview}");
+
+        var prompt = new SelectionPrompt<string>()
+            .Title($"[yellow]LLM agent requests:[/] [cyan]{SpectreMarkup.Escape(toolName)}[/] [dim]{SpectreMarkup.Escape(toolArgsPreview)}[/]")
+            .AddChoices(
+                "Run once",
+                "Always run this tool (this run)",
+                "Always run any tool (this run)",
+                "Skip",
+                "Cancel agent run");
+
+        var choice = _console.Prompt(prompt);
+        return choice switch
+        {
+            "Run once" => LlmAgentToolApprovalDecision.AllowOnce,
+            "Always run this tool (this run)" => LlmAgentToolApprovalDecision.AllowToolAlways,
+            "Always run any tool (this run)" => LlmAgentToolApprovalDecision.AllowAllAlways,
+            "Skip" => LlmAgentToolApprovalDecision.DenyOnce,
+            _ => LlmAgentToolApprovalDecision.CancelRun
+        };
     }
 
     /// <summary>
