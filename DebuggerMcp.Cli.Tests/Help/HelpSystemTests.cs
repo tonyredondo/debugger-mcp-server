@@ -43,7 +43,7 @@ public class HelpSystemTests
     [InlineData("debugging", "open")]
     [InlineData("debugging", "close")]
     [InlineData("debugging", "exec")]
-    [InlineData("debugging", "sos")]
+    [InlineData("debugging", "showobj")]
     [InlineData("analysis", "analyze")]
     [InlineData("analysis", "compare")]
     [InlineData("advanced", "watch")]
@@ -130,4 +130,3 @@ public class HelpSystemTests
         }
     }
 }
-

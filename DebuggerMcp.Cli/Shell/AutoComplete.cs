@@ -21,7 +21,7 @@ public class AutoComplete
     [
         "connect", "disconnect", "status", "health", "server",
         "dumps", "symbols", "stats",
-        "session", "open", "close", "exec", "cmd", "sos", "showobj", "so",
+        "session", "open", "close", "exec", "cmd", "showobj", "so",
         "analyze", "compare", "watch", "report", "sourcelink",
         "help", "history", "clear", "set", "version", "exit", "quit", "tools"
     ];
@@ -422,4 +422,3 @@ public class CompletionResult
         return first[..commonLength];
     }
 }
-

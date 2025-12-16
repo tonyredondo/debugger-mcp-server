@@ -636,19 +636,6 @@ public class McpClient : IMcpClient
     }
 
     /// <inheritdoc/>
-    public async Task<string> LoadSosAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
-    {
-        return await CallToolAsync("inspect", new Dictionary<string, object?>
-        {
-            ["sessionId"] = sessionId,
-            ["userId"] = userId,
-            ["kind"] = "load_sos"
-        }, cancellationToken);
-    }
-
-
-
-    /// <inheritdoc/>
     public async Task<string> AnalyzeCrashAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
         return await CallToolAsync("analyze", new Dictionary<string, object?>

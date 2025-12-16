@@ -55,7 +55,6 @@ public class ProgramHelpTests
     [InlineData("exec", "EXEC Command")]
     [InlineData("x", "EXEC Command")]
     [InlineData("cmd", "CMD Command")]
-    [InlineData("sos", "SOS Command")]
     [InlineData("showobj", "SHOWOBJ Command")]
     [InlineData("so", "SHOWOBJ Command")]
     [InlineData("analyze", "ANALYZE Command")]

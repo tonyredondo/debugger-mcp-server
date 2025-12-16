@@ -216,7 +216,6 @@ session close d0307dc3
 | `open <dumpId>` | Open a dump file in debugger |
 | `close` | Close current dump |
 | `exec <cmd>` | Execute debugger command |
-| `sos` | Load SOS extension for .NET (usually auto-loaded) |
 | `threads` | List all threads (shortcut) |
 | `stack` | Show call stack (shortcut) |
 
@@ -226,7 +225,6 @@ open abc123
 exec !analyze -v
 exec k
 exec !dumpheap -stat
-sos
 threads
 stack
 ```

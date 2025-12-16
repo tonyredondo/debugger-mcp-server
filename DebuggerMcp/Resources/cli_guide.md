@@ -57,7 +57,6 @@ dbg-mcp> report -o ./report.md
 - `open <dumpId>` - Open dump
 - `close` - Close dump
 - `exec <cmd>` - Execute command
-- `sos` - Load .NET SOS
 - `threads` / `stack` - Quick commands
 
 ### Analysis (`help analysis`)

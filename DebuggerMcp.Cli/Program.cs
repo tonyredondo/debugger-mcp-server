@@ -1000,10 +1000,6 @@ public class Program
                 await HandleMultiLineCommandAsync(console, output, state, mcpClient);
                 break;
 
-            case "sos":
-                await HandleLoadSosAsync(output, state, mcpClient);
-                break;
-
             case "showobj":
             case "so":
             case "inspect":
@@ -1288,8 +1284,8 @@ public class Program
                     output.Markup("  [cyan]~*[/]            All threads");
                     output.Markup("  [cyan]!analyze -v[/]   Crash analysis");
                     output.Markup("  [cyan]lm[/]            Loaded modules");
-                    output.Markup("  [cyan]!threads[/]      .NET threads (after sos)");
-                    output.Markup("  [cyan]!clrstack[/]     .NET call stack (after sos)");
+                    output.Markup("  [cyan]!threads[/]      .NET threads (when SOS is loaded)");
+                    output.Markup("  [cyan]!clrstack[/]     .NET call stack (when SOS is loaded)");
                     output.WriteLine();
                     output.Markup("[bold]LLDB COMMANDS[/]");
                     output.Markup("  [cyan]bt[/]            Backtrace");
@@ -1333,20 +1329,6 @@ public class Program
                     output.Markup("  [dim]dbg-mcp>[/]");
                     break;
 
-                case "sos":
-                    output.Header("SOS Command");
-                    output.WriteLine();
-                    output.Markup("Load the SOS extension for .NET debugging.");
-                    output.Markup("[dim](Note: SOS is auto-loaded when opening .NET dumps)[/]");
-                    output.WriteLine();
-                    output.Markup("[bold]USAGE[/]");
-                    output.Markup("  sos");
-                    output.WriteLine();
-                    output.Markup("[bold]SOS COMMANDS[/]");
-                    output.Markup("  [cyan]!threads[/]      List managed threads");
-                    output.Markup("  [cyan]!clrstack[/]     Managed call stack");
-                    break;
-
                 case "showobj":
                 case "so":
                     output.Header("SHOWOBJ Command");
@@ -1384,7 +1366,6 @@ public class Program
                     output.WriteLine();
                     output.Markup("[bold]EXAMPLE[/]");
                     output.Markup("  [yellow]open abc123[/]");
-                    output.Markup("  [yellow]sos[/]");
                     output.Markup("  [yellow]exec !threads[/]");
                     break;
 
@@ -5783,67 +5764,6 @@ public class Program
         systemConsole.CursorLeft = promptLength;
         systemConsole.Write(new string(' ', lineLength + 5));
         systemConsole.CursorLeft = promptLength;
-    }
-
-    /// <summary>
-    /// Handles the sos command (load SOS extension).
-    /// </summary>
-    private static async Task HandleLoadSosAsync(
-        ConsoleOutput output,
-        ShellState state,
-        McpClient mcpClient)
-    {
-        if (!state.IsConnected || !mcpClient.IsConnected)
-        {
-            output.Error("Not connected or MCP not available.");
-            return;
-        }
-
-        if (string.IsNullOrEmpty(state.SessionId))
-        {
-            output.Error("No active session. Use 'session create' or 'open <dumpId>' first.");
-            return;
-        }
-
-        try
-        {
-            output.Dim("Loading SOS (Son of Strike) .NET debugging extension...");
-            output.Dim("This enables commands like: clrthreads, dumpheap, pe, clrstack");
-            output.WriteLine();
-            
-            var result = await output.WithSpinnerAsync(
-                "Searching for SOS plugin and loading...",
-                () => mcpClient.LoadSosAsync(state.SessionId!, state.Settings.UserId));
-
-            // Check if result indicates an error
-            if (IsErrorResult(result))
-            {
-                output.Error(result);
-            }
-            else
-            {
-                output.Success("SOS extension loaded!");
-                output.Markup(result);
-                output.WriteLine();
-                output.Dim("Tip: Try 'analyze dotnet' for .NET-specific crash analysis");
-            }
-        }
-        catch (McpClientException ex) when (IsSessionNotFoundError(ex))
-        {
-            await TryRecoverSessionAsync(output, state, mcpClient);
-        }
-        catch (McpClientException ex)
-        {
-            output.Error($"SOS load failed: {ex.Message}");
-        }
-        catch (Exception ex) when (IsSessionNotFoundError(ex))
-        {
-            await TryRecoverSessionAsync(output, state, mcpClient);
-        }
-        catch (Exception ex)
-        {
-            output.Error($"Failed to load SOS: {ex.Message}");
-        }
     }
 
     /// <summary>

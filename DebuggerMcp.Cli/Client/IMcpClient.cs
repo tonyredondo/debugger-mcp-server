@@ -116,17 +116,6 @@ public interface IMcpClient : IAsyncDisposable
     Task<string> ExecuteCommandAsync(string sessionId, string userId, string command, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Loads the SOS extension for .NET debugging.
-    /// </summary>
-    /// <param name="sessionId">The session ID.</param>
-    /// <param name="userId">The user ID.</param>
-    /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>Confirmation message.</returns>
-    Task<string> LoadSosAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
-
-
-
-    /// <summary>
     /// Runs crash analysis on the current dump.
     /// </summary>
     /// <param name="sessionId">The session ID.</param>
