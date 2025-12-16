@@ -1270,18 +1270,37 @@ public class McpClient : IMcpClient
             // Extract text content from result
             if (result?.Content != null && result.Content.Count > 0)
             {
-                var textContent = result.Content
-                    .Where(c => c.Type == "text")
-                    .Select(c => c.Text)
-                    .FirstOrDefault();
+                var textItems = result.Content
+                    .Where(c => string.Equals(c.Type, "text", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
 
-                if (!string.IsNullOrEmpty(textContent))
+                if (textItems.Count > 0)
                 {
-                    // Check if this is an error result - throw exception with the actual message
+                    var textContent = textItems
+                        .Select(c => c.Text ?? string.Empty)
+                        .FirstOrDefault(t => !string.IsNullOrEmpty(t)) ?? string.Empty;
+
+                    // Check if this is an error result - throw exception with the actual message (even if empty).
                     if (result.IsError == true)
                     {
-                        throw new McpClientException(textContent);
+                        throw new McpClientException(string.IsNullOrEmpty(textContent)
+                            ? "Tool returned an error with no details"
+                            : textContent);
                     }
+
+                    // If the tool returned an empty text payload but also provided non-text content,
+                    // fall back to returning the first non-text content item (as JSON) instead of
+                    // printing a confusing {"type":"text","text":""} placeholder.
+                    if (string.IsNullOrEmpty(textContent))
+                    {
+                        var firstNonText = result.Content.FirstOrDefault(c =>
+                            !string.Equals(c.Type, "text", StringComparison.OrdinalIgnoreCase));
+                        if (firstNonText != null)
+                        {
+                            return JsonSerializer.Serialize(firstNonText, JsonOptions);
+                        }
+                    }
+
                     return textContent;
                 }
 
