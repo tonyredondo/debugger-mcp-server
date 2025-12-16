@@ -4517,8 +4517,10 @@ public class Program
                 return;
 
             case "reset":
-                transcript.FilterInPlace(e => e.Kind is not ("llm_user" or "llm_assistant"));
-                output.Success("Cleared LLM conversation history (kept CLI command transcript).");
+                transcript.FilterInPlace(e =>
+                    e.Kind is not ("llm_user" or "llm_assistant") ||
+                    !TranscriptScope.Matches(e, state.Settings.ServerUrl, state.SessionId, state.DumpId));
+                output.Success("Cleared LLM conversation history for the current session/dump (kept other sessions and CLI transcript).");
                 return;
         }
 
@@ -4544,7 +4546,7 @@ public class Program
             using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
             var client = new OpenRouterClient(http, llmSettings);
 
-            var history = transcript.ReadTail(80);
+            var history = transcript.ReadTailForScope(80, state.Settings.ServerUrl, state.SessionId, state.DumpId);
             var messages = TranscriptContextBuilder.BuildMessages(
                 userPrompt: prompt,
                 serverUrl: state.Settings.ServerUrl,

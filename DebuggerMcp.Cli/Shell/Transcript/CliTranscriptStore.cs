@@ -86,6 +86,64 @@ public sealed class CliTranscriptStore
         return queue.ToList();
     }
 
+    /// <summary>
+    /// Reads the last <paramref name="maxEntries"/> entries that match the given scope.
+    /// </summary>
+    public IReadOnlyList<CliTranscriptEntry> ReadTailForScope(
+        int maxEntries,
+        string? serverUrl,
+        string? sessionId,
+        string? dumpId)
+    {
+        if (maxEntries <= 0)
+        {
+            return [];
+        }
+
+        if (!File.Exists(_filePath))
+        {
+            return [];
+        }
+
+        var queue = new Queue<CliTranscriptEntry>(maxEntries);
+
+        foreach (var line in File.ReadLines(_filePath))
+        {
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            CliTranscriptEntry? entry;
+            try
+            {
+                entry = JsonSerializer.Deserialize<CliTranscriptEntry>(line, JsonOptions);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (entry == null)
+            {
+                continue;
+            }
+
+            if (!TranscriptScope.Matches(entry, serverUrl, sessionId, dumpId))
+            {
+                continue;
+            }
+
+            if (queue.Count == maxEntries)
+            {
+                queue.Dequeue();
+            }
+            queue.Enqueue(entry);
+        }
+
+        return queue.ToList();
+    }
+
     public void Clear()
     {
         if (File.Exists(_filePath))
