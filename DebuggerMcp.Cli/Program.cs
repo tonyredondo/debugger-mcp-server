@@ -791,25 +791,41 @@ public class Program
 
                     // Handle commands
                     var transcriptStore = state.Transcript;
-                    var capture = transcriptStore == null ? null : new CommandOutputCapture();
                     var commandStartUtc = DateTimeOffset.UtcNow;
+                    var transcriptBuffer = new System.Text.StringBuilder(capacity: 4096);
+                    using var captureScope = transcriptStore == null
+                        ? null
+                        : output.BeginTranscriptCapture(line =>
+                        {
+                            if (transcriptBuffer.Length < 250_000)
+                            {
+                                transcriptBuffer.AppendLine(line);
+                            }
+                        });
                     try
                     {
                         var shouldExit = await HandleCommandAsync(command, args, console, output, state, httpClient, mcpClient, history);
 
-                        if (transcriptStore != null && capture != null)
+                        if (transcriptStore != null)
                         {
-                            var outputText = capture.GetCapturedText();
-                            transcriptStore.Append(new CliTranscriptEntry
+                            try
                             {
-                                TimestampUtc = commandStartUtc,
-                                Kind = "cli_command",
-                                Text = input,
-                                Output = TruncateForTranscript(outputText, maxChars: 50_000),
-                                ServerUrl = state.Settings.ServerUrl,
-                                SessionId = state.SessionId,
-                                DumpId = state.DumpId
-                            });
+                                var outputText = transcriptBuffer.ToString();
+                                transcriptStore.Append(new CliTranscriptEntry
+                                {
+                                    TimestampUtc = commandStartUtc,
+                                    Kind = "cli_command",
+                                    Text = TranscriptRedactor.RedactCommand(input),
+                                    Output = TranscriptRedactor.RedactText(TruncateForTranscript(outputText, maxChars: 50_000)),
+                                    ServerUrl = state.Settings.ServerUrl,
+                                    SessionId = state.SessionId,
+                                    DumpId = state.DumpId
+                                });
+                            }
+                            catch
+                            {
+                                // Transcript capture should never break the CLI.
+                            }
                         }
 
                         if (shouldExit)
@@ -818,10 +834,7 @@ public class Program
                             return 0;
                         }
                     }
-                    finally
-                    {
-                        capture?.Dispose();
-                    }
+                    finally { }
                 }
                 catch (OperationCanceledException)
                 {
@@ -2371,6 +2384,8 @@ public class Program
             var hasIncompatibleDumps = false;
             var nowUtc = DateTime.UtcNow;
 
+            output.CaptureOnly("ID\tFile Name\tSize\tRuntime\tArch\tHost\tUploaded");
+
             foreach (var dump in dumps)
             {
                 // Show full ID for easy copying, highlight first 8 chars for partial matching
@@ -2421,6 +2436,29 @@ public class Program
                 {
                     arch = $"[red]{dump.Architecture} ⚠[/]";
                 }
+
+                var transcriptHost = dump.IsAlpineDump switch
+                {
+                    true => "Alpine",
+                    false => "glibc",
+                    null => "-"
+                };
+                if (isHostIncompatible)
+                {
+                    transcriptHost += " (incompatible)";
+                }
+
+                var transcriptArch = dump.Architecture ?? "-";
+                if (isArchIncompatible && !string.IsNullOrEmpty(dump.Architecture))
+                {
+                    transcriptArch += " (incompatible)";
+                }
+
+                var transcriptUploaded = dump.UploadedAt == default
+                    ? "(unknown)"
+                    : FormatUtcDateTimeWithAge(dump.UploadedAt, nowUtc, "yyyy-MM-dd HH:mm");
+
+                output.CaptureOnly($"{dump.DumpId}\t{dump.FileName ?? "(unknown)"}\t{dump.FormattedSize}\t{runtime}\t{transcriptArch}\t{transcriptHost}\t{transcriptUploaded}");
                     
                 table.AddRow(
                     displayId,
@@ -3303,7 +3341,7 @@ public class Program
 
             output.Header("Common Symbol Servers");
             output.WriteLine();
-            Console.WriteLine(result);
+            output.WriteLine(result);
         }
         catch (McpClientException ex)
         {
@@ -3376,7 +3414,7 @@ public class Program
             else
             {
                 output.Success("Symbol path added successfully!");
-                Console.WriteLine(result);
+                output.WriteLine(result);
             }
         }
         catch (McpClientException ex)
@@ -3435,7 +3473,7 @@ public class Program
             else
             {
                 output.Success("Symbol cache cleared!");
-                Console.WriteLine(result);
+                output.WriteLine(result);
             }
         }
         catch (McpClientException ex)
@@ -3490,7 +3528,7 @@ public class Program
             else
             {
                 output.Success("Symbols reloaded!");
-                Console.WriteLine(result);
+                output.WriteLine(result);
             }
         }
         catch (McpClientException ex)
@@ -4118,7 +4156,7 @@ public class Program
                 catch
                 {
                     // Fall back to raw output
-                    Console.WriteLine(result);
+                    output.WriteLine(result);
                 }
             }
         }
@@ -4191,7 +4229,7 @@ public class Program
                 }
                 catch
                 {
-                    Console.WriteLine(result);
+                    output.WriteLine(result);
                 }
             }
         }
@@ -4468,7 +4506,7 @@ public class Program
             });
 
             output.WriteLine();
-            Console.WriteLine(response);
+            output.WriteLine(response);
         }
         catch (Exception ex)
         {
@@ -5344,6 +5382,8 @@ public class Program
             .AddColumn(new TableColumn("[cyan]Last Activity[/]"))
             .AddColumn(new TableColumn("[cyan]Dump[/]"));
 
+        output.CaptureOnly("ID\tCreated\tLast Activity\tDump");
+
         foreach (var session in sessions.OrderByDescending(s => s.LastActivityUtc ?? string.Empty, StringComparer.Ordinal))
         {
             var sessionId = session.SessionId ?? string.Empty;
@@ -5354,6 +5394,7 @@ public class Program
             var displayId = HighlightId(sessionId, state.SessionId);
             var displayDump = string.IsNullOrEmpty(dumpId) ? "(none)" : HighlightId(dumpId, null);
 
+            output.CaptureOnly($"{sessionId}\t{created}\t{last}\t{(string.IsNullOrEmpty(dumpId) ? "(none)" : dumpId)}");
             table.AddRow(displayId, created, last, displayDump);
         }
 
@@ -5681,7 +5722,7 @@ public class Program
 
             // Output result as plain text (debugger output)
             output.WriteLine();
-            Console.WriteLine(result);
+            output.WriteLine(result);
         }
         catch (McpClientException ex) when (IsSessionNotFoundError(ex))
         {
@@ -5862,7 +5903,7 @@ public class Program
                 // Save result for copy command
                 state.SetLastResult($"cmd: {command}", result);
                 
-                Console.WriteLine(result);
+                output.WriteLine(result);
             }
             catch (OperationCanceledException)
             {
@@ -6146,7 +6187,7 @@ public class Program
             {
                 // Pretty print JSON to console
                 output.WriteLine();
-                Console.WriteLine(result);
+                output.WriteLine(result);
             }
 
             // Save result for copy command
@@ -6225,7 +6266,7 @@ public class Program
 
             // Pretty print JSON to console
             output.WriteLine();
-            Console.WriteLine(result);
+            output.WriteLine(result);
 
             // Save result for copy command
             state.SetLastResult($"/dm {address}", result);
@@ -6293,7 +6334,7 @@ public class Program
 
             // Pretty print JSON to console
             output.WriteLine();
-            Console.WriteLine(result);
+            output.WriteLine(result);
 
             // Save result for copy command
             state.SetLastResult("/modules", result);
@@ -6381,7 +6422,7 @@ public class Program
 
             // Pretty print result
             output.WriteLine();
-            Console.WriteLine(result);
+            output.WriteLine(result);
 
             // Save result for copy command
             state.SetLastResult($"/n2e {typeName}", result);
@@ -6592,7 +6633,7 @@ public class Program
             catch
             {
                 // If parsing fails, just show raw JSON
-                Console.WriteLine(result);
+                output.WriteLine(result);
             }
 
             // Save result for copy command
@@ -6837,7 +6878,7 @@ public class Program
         output.Success($"{analysisName} complete!");
         output.Header($"{analysisName} Results");
         output.WriteLine();
-        Console.WriteLine(result);
+        output.WriteLine(result);
     }
 
     /// <summary>
@@ -6980,7 +7021,7 @@ public class Program
 
         output.Header($"{comparisonName} Results");
         output.WriteLine();
-        Console.WriteLine(result);
+        output.WriteLine(result);
     }
 
     /// <summary>
@@ -7110,7 +7151,7 @@ public class Program
             else
             {
                 output.Success("Watch added!");
-                Console.WriteLine(result);
+                output.WriteLine(result);
             }
         }
         catch (McpClientException ex)
@@ -7130,7 +7171,7 @@ public class Program
 
         output.Header("Watches");
         output.WriteLine();
-        Console.WriteLine(result);
+        output.WriteLine(result);
     }
 
     private static async Task HandleWatchEvalAsync(
@@ -7148,7 +7189,7 @@ public class Program
 
             output.Header("Watch Values");
             output.WriteLine();
-            Console.WriteLine(allResult);
+            output.WriteLine(allResult);
         }
         else
         {
@@ -7160,7 +7201,7 @@ public class Program
 
             output.Header($"Watch {watchId} Value");
             output.WriteLine();
-            Console.WriteLine(result);
+            output.WriteLine(result);
         }
     }
 
@@ -7183,7 +7224,7 @@ public class Program
             () => mcpClient.RemoveWatchAsync(state.SessionId!, state.Settings.UserId, watchId));
 
         output.Success($"Watch {watchId} removed.");
-        Console.WriteLine(result);
+        output.WriteLine(result);
     }
 
     private static async Task HandleWatchClearAsync(
@@ -7196,7 +7237,7 @@ public class Program
             () => mcpClient.ClearWatchesAsync(state.SessionId!, state.Settings.UserId));
 
         output.Success("All watches cleared.");
-        Console.WriteLine(result);
+        output.WriteLine(result);
     }
 
     /// <summary>
@@ -7397,7 +7438,7 @@ public class Program
 
         output.Header("Source Link Resolution");
         output.WriteLine();
-        Console.WriteLine(result);
+        output.WriteLine(result);
     }
 
     private static async Task HandleSourceLinkInfoAsync(
@@ -7411,7 +7452,7 @@ public class Program
 
         output.Header("Source Link Configuration");
         output.WriteLine();
-        Console.WriteLine(result);
+        output.WriteLine(result);
     }
 
     /// <summary>
@@ -7454,7 +7495,7 @@ public class Program
 
             output.Header(commandType.ToUpperInvariant());
             output.WriteLine();
-            Console.WriteLine(result);
+            output.WriteLine(result);
         }
         catch (McpClientException ex) when (IsSessionNotFoundError(ex))
         {

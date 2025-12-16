@@ -16,6 +16,7 @@ public class ConsoleOutput
     private readonly IAnsiConsole _console;
     private OutputFormat _format;
     private bool _verbose;
+    private static readonly AsyncLocal<Action<string>?> TranscriptSink = new();
 
     /// <summary>
     /// Gets or sets the output format.
@@ -47,11 +48,57 @@ public class ConsoleOutput
     }
 
     /// <summary>
+    /// Begins capturing output to a transcript sink for the current async flow.
+    /// </summary>
+    internal IDisposable BeginTranscriptCapture(Action<string> sink)
+    {
+        if (sink == null)
+        {
+            throw new ArgumentNullException(nameof(sink));
+        }
+
+        var previous = TranscriptSink.Value;
+        TranscriptSink.Value = sink;
+        return new CaptureScope(() => TranscriptSink.Value = previous);
+    }
+
+    private static void EmitToTranscript(string text)
+    {
+        if (!string.IsNullOrEmpty(text))
+        {
+            TranscriptSink.Value?.Invoke(text);
+        }
+    }
+
+    /// <summary>
+    /// Emits a line to the active transcript capture without writing to the console.
+    /// </summary>
+    internal void CaptureOnly(string text) => EmitToTranscript(text);
+
+    private sealed class CaptureScope(Action onDispose) : IDisposable
+    {
+        private readonly Action _onDispose = onDispose;
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _onDispose();
+        }
+    }
+
+    /// <summary>
     /// Writes a success message.
     /// </summary>
     /// <param name="message">The message to display.</param>
     public void Success(string message)
     {
+        EmitToTranscript($"OK: {message}");
         _console.MarkupLine($"[green]✓[/] {SpectreMarkup.Escape(message)}");
     }
 
@@ -61,6 +108,7 @@ public class ConsoleOutput
     /// <param name="message">The error message.</param>
     public void Error(string message)
     {
+        EmitToTranscript($"ERROR: {message}");
         _console.MarkupLine($"[red]✗ Error:[/] {SpectreMarkup.Escape(message)}");
     }
 
@@ -71,6 +119,7 @@ public class ConsoleOutput
     /// <param name="exception">The exception.</param>
     public void Error(string message, Exception exception)
     {
+        EmitToTranscript($"ERROR: {message}");
         _console.MarkupLine($"[red]✗ Error:[/] {SpectreMarkup.Escape(message)}");
 
         if (_verbose)
@@ -79,6 +128,7 @@ public class ConsoleOutput
         }
         else
         {
+            EmitToTranscript(exception.Message);
             _console.MarkupLine($"[dim]{SpectreMarkup.Escape(exception.Message)}[/]");
         }
     }
@@ -89,6 +139,7 @@ public class ConsoleOutput
     /// <param name="message">The warning message.</param>
     public void Warning(string message)
     {
+        EmitToTranscript($"WARN: {message}");
         _console.MarkupLine($"[yellow]⚠ Warning:[/] {SpectreMarkup.Escape(message)}");
     }
 
@@ -98,6 +149,7 @@ public class ConsoleOutput
     /// <param name="message">The message.</param>
     public void Info(string message)
     {
+        EmitToTranscript($"INFO: {message}");
         _console.MarkupLine($"[blue]ℹ[/] {SpectreMarkup.Escape(message)}");
     }
 
@@ -107,6 +159,7 @@ public class ConsoleOutput
     /// <param name="message">The message.</param>
     public void Dim(string message)
     {
+        EmitToTranscript(message);
         _console.MarkupLine($"[dim]{SpectreMarkup.Escape(message)}[/]");
     }
 
@@ -116,6 +169,7 @@ public class ConsoleOutput
     /// <param name="message">The message.</param>
     public void WriteLine(string message = "")
     {
+        EmitToTranscript(message);
         _console.WriteLine(message);
     }
 
@@ -125,6 +179,7 @@ public class ConsoleOutput
     /// <param name="markup">The markup string.</param>
     public void Markup(string markup)
     {
+        EmitToTranscript(StripSpectreMarkup(markup));
         _console.MarkupLine(markup);
     }
 
@@ -135,6 +190,7 @@ public class ConsoleOutput
     /// <param name="value">The value.</param>
     public void KeyValue(string key, string? value)
     {
+        EmitToTranscript($"{key}: {value ?? "(not set)"}");
         _console.MarkupLine($"  [cyan]{SpectreMarkup.Escape(key)}:[/] {SpectreMarkup.Escape(value ?? "(not set)")}");
     }
 
@@ -144,6 +200,7 @@ public class ConsoleOutput
     /// <param name="title">The title text.</param>
     public void Header(string title)
     {
+        EmitToTranscript(title);
         var rule = new Rule($"[bold cyan]{SpectreMarkup.Escape(title)}[/]")
         {
             Justification = Justify.Left,
@@ -159,6 +216,7 @@ public class ConsoleOutput
     /// <param name="content">The panel content.</param>
     public void Panel(string title, string content)
     {
+        EmitToTranscript($"{title}: {content}");
         var panel = new Panel(new Text(content))
         {
             Header = new PanelHeader(title),
@@ -175,6 +233,16 @@ public class ConsoleOutput
     /// <param name="rows">Table rows.</param>
     public void Table(string[] headers, IEnumerable<string[]> rows)
     {
+        if (headers.Length > 0)
+        {
+            EmitToTranscript(string.Join("\t", headers));
+        }
+
+        foreach (var row in rows)
+        {
+            EmitToTranscript(string.Join("\t", row.Select(cell => cell ?? string.Empty)));
+        }
+
         var table = new Table()
             .Border(TableBorder.Rounded)
             .BorderColor(Color.Grey);
@@ -190,6 +258,23 @@ public class ConsoleOutput
         }
 
         _console.Write(table);
+    }
+
+    private static string StripSpectreMarkup(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return string.Empty;
+        }
+
+        const string open = "\u0001";
+        const string close = "\u0002";
+        text = text.Replace("[[", open, StringComparison.Ordinal).Replace("]]", close, StringComparison.Ordinal);
+        text = System.Text.RegularExpressions.Regex.Replace(text, "\\[[^\\[\\]]+\\]", string.Empty);
+        return text
+            .Replace(open, "[", StringComparison.Ordinal)
+            .Replace(close, "]", StringComparison.Ordinal)
+            .TrimEnd();
     }
 
     /// <summary>
@@ -407,4 +492,3 @@ public class ConsoleOutput
     /// </summary>
     public IAnsiConsole Console => _console;
 }
-

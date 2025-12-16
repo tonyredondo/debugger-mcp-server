@@ -67,5 +67,24 @@ public class ConsoleOutputTests
 
         Assert.Contains("Title", console.Output);
     }
-}
 
+    [Fact]
+    public void BeginTranscriptCapture_CapturesEmittedMessages()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        var captured = new List<string>();
+        using (output.BeginTranscriptCapture(captured.Add))
+        {
+            output.Success("ok");
+            output.KeyValue("Key", "Value");
+            output.Markup("[green]hello[/] [[x]]");
+        }
+
+        Assert.Contains(captured, line => line.Contains("OK:", StringComparison.Ordinal));
+        Assert.Contains(captured, line => line.Contains("Key: Value", StringComparison.Ordinal));
+        Assert.Contains(captured, line => line.Contains("hello", StringComparison.Ordinal));
+        Assert.Contains(captured, line => line.Contains("[x]", StringComparison.Ordinal));
+    }
+}
