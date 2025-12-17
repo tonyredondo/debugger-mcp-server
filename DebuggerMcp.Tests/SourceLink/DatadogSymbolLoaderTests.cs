@@ -9,6 +9,74 @@ namespace DebuggerMcp.Tests.SourceLink;
 public class DatadogSymbolLoaderTests
 {
     [Fact]
+    public void FindManagedPdbDirectories_ReturnsEmpty_WhenCacheDirectoryDoesNotExist()
+    {
+        // Arrange
+        var missing = Path.Combine(Path.GetTempPath(), $"missing_{Guid.NewGuid():N}");
+
+        // Act
+        var dirs = DatadogSymbolLoader.FindManagedPdbDirectories(missing);
+
+        // Assert
+        Assert.NotNull(dirs);
+        Assert.Empty(dirs);
+    }
+
+    [Fact]
+    public void FindManagedPdbDirectories_ReturnsEmpty_WhenDatadogRootDoesNotExist()
+    {
+        // Arrange
+        var tempDir = Path.Combine(Path.GetTempPath(), $"dd_cache_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            // Act
+            var dirs = DatadogSymbolLoader.FindManagedPdbDirectories(tempDir);
+
+            // Assert
+            Assert.NotNull(dirs);
+            Assert.Empty(dirs);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void FindManagedPdbDirectories_ReturnsDistinctParentDirectories_WithSorting()
+    {
+        // Arrange
+        var tempDir = Path.Combine(Path.GetTempPath(), $"dd_cache_{Guid.NewGuid():N}");
+        var datadogRoot = Path.Combine(tempDir, ".datadog");
+        var net60 = Path.Combine(datadogRoot, "symbols-linux-x64", "net6.0");
+        var net70 = Path.Combine(datadogRoot, "symbols-linux-x64", "net7.0");
+        Directory.CreateDirectory(net60);
+        Directory.CreateDirectory(net70);
+
+        File.WriteAllText(Path.Combine(net60, "Datadog.Trace.pdb"), "");
+        File.WriteAllText(Path.Combine(net60, "Datadog.Trace.MSBuild.pdb"), "");
+        File.WriteAllText(Path.Combine(net70, "Datadog.Trace.pdb"), "");
+
+        try
+        {
+            // Act
+            var dirs = DatadogSymbolLoader.FindManagedPdbDirectories(tempDir);
+
+            // Assert
+            Assert.NotNull(dirs);
+            Assert.Equal(2, dirs.Count);
+            Assert.Equal(net60, dirs[0], ignoreCase: true);
+            Assert.Equal(net70, dirs[1], ignoreCase: true);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void GenerateLldbCommands_ReturnsEmpty_WhenMergeResultIsNull()
     {
         // Arrange
@@ -182,4 +250,3 @@ public class DatadogSymbolLoaderTests
         }
     }
 }
-

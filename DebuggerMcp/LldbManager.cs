@@ -1188,6 +1188,35 @@ public class LldbManager : IDebuggerManager
             _logger.LogInformation("[LLDB] Configuring NuGet symbol server: {Command}", nugetSymbolServerCmd);
             ExecuteCommandInternal(nugetSymbolServerCmd);
 
+            // Also configure Datadog managed symbol directories (if present in the per-dump cache).
+            // These are local PDBs (.datadog/.../netX.Y) and may not be found unless explicitly registered.
+            try
+            {
+                var datadogManagedDirs = SourceLink.DatadogSymbolLoader.FindManagedPdbDirectories(cacheDir);
+                if (datadogManagedDirs.Count > 0)
+                {
+                    _logger.LogInformation(
+                        "[LLDB] Configuring Datadog managed PDB directories for SOS ({Count}): {Dirs}",
+                        datadogManagedDirs.Count,
+                        string.Join(" | ", datadogManagedDirs));
+
+                    foreach (var dir in datadogManagedDirs)
+                    {
+                        var cmd = $"setsymbolserver -directory \"{dir}\"";
+                        _logger.LogInformation("[LLDB] Configuring Datadog PDB directory: {Command}", cmd);
+                        ExecuteCommandInternal(cmd);
+                    }
+                }
+                else
+                {
+                    _logger.LogDebug("[LLDB] No Datadog managed PDB directories found under: {CacheDir}", cacheDir);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[LLDB] Failed to configure Datadog managed PDB directories for SOS");
+            }
+
             // Step 5: Flush SOS internal cache to pick up any modules we loaded
             _logger.LogInformation("[LLDB] Flushing SOS internal cache...");
             ExecuteCommandInternal("sosflush");

@@ -41,6 +41,79 @@ public class DatadogSymbolLoader
     private readonly ILogger? _logger;
 
     /// <summary>
+    /// Discovers directories that contain Datadog managed PDBs under a per-dump symbol cache directory.
+    /// </summary>
+    /// <param name="symbolCacheDirectory">The per-dump symbol cache directory (e.g., <c>.symbols_&lt;dumpId&gt;</c>).</param>
+    /// <returns>Ordered, de-duplicated list of directories that contain managed PDBs.</returns>
+    public static IReadOnlyList<string> FindManagedPdbDirectories(string symbolCacheDirectory)
+    {
+        if (string.IsNullOrWhiteSpace(symbolCacheDirectory))
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            var fullSymbolCacheDirectory = Path.GetFullPath(symbolCacheDirectory);
+            if (!Directory.Exists(fullSymbolCacheDirectory))
+            {
+                return Array.Empty<string>();
+            }
+
+            var datadogRoot = Path.Combine(fullSymbolCacheDirectory, ".datadog");
+            if (!Directory.Exists(datadogRoot))
+            {
+                return Array.Empty<string>();
+            }
+
+            var results = new List<string>();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // Datadog managed symbols are typically under ".datadog/.../netX.Y", but we intentionally
+            // discover by actual *.pdb presence to handle future layout changes.
+            IEnumerable<string> pdbFiles = Enumerable.Empty<string>();
+            try
+            {
+                pdbFiles = Directory.EnumerateFiles(datadogRoot, "*.pdb", SearchOption.AllDirectories)
+                    .Concat(Directory.EnumerateFiles(datadogRoot, "*.PDB", SearchOption.AllDirectories));
+            }
+            catch
+            {
+                // Best-effort.
+            }
+
+            foreach (var pdbFile in pdbFiles)
+            {
+                try
+                {
+                    var parent = Path.GetDirectoryName(pdbFile);
+                    if (string.IsNullOrWhiteSpace(parent))
+                    {
+                        continue;
+                    }
+
+                    var fullParent = Path.GetFullPath(parent);
+                    if (seen.Add(fullParent))
+                    {
+                        results.Add(fullParent);
+                    }
+                }
+                catch
+                {
+                    // Best-effort.
+                }
+            }
+
+            results.Sort(StringComparer.OrdinalIgnoreCase);
+            return results;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="DatadogSymbolLoader"/> class.
     /// </summary>
     /// <param name="logger">Optional logger for diagnostics.</param>
