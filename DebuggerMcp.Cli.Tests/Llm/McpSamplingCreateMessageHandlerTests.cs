@@ -167,4 +167,40 @@ public class McpSamplingCreateMessageHandlerTests
         Assert.NotNull(seenRequest);
         Assert.Null(seenRequest!.Tools);
     }
+
+    [Fact]
+    public async Task HandleAsync_IgnoresToolsWithNonFunctionTypeEvenIfNamePresent()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "tools": [
+            {
+              "type": "web_search",
+              "name": "exec",
+              "description": "run debugger command",
+              "inputSchema": { "type":"object","properties":{"command":{"type":"string"}} }
+            }
+          ],
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Null(seenRequest!.Tools);
+    }
 }

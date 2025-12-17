@@ -170,8 +170,7 @@ internal sealed class McpSamplingCreateMessageHandler(
                 : (JsonElement?)null;
 
             if (!string.IsNullOrWhiteSpace(type) &&
-                !string.Equals(type, "function", StringComparison.OrdinalIgnoreCase) &&
-                openAiFunction != null)
+                !string.Equals(type, "function", StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
