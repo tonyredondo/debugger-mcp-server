@@ -4610,10 +4610,7 @@ public class Program
                 var insertIndex = list.TakeWhile(m => m.Role == "system").Count();
                 foreach (var a in attachments)
                 {
-                    var label = a.DisplayPath;
-                    var codeFence = GuessFenceLanguage(a.DisplayPath);
-                    var content = $"Attached file: {label}{Environment.NewLine}```{codeFence}{Environment.NewLine}{a.Content}{Environment.NewLine}```";
-                    list.Insert(insertIndex++, new ChatMessage("system", content));
+                    list.Insert(insertIndex++, new ChatMessage("system", a.MessageForModel));
                 }
                 messages = list;
             }
@@ -4654,21 +4651,6 @@ public class Program
         {
             output.Error(ex.Message);
         }
-    }
-
-    private static string GuessFenceLanguage(string path)
-    {
-        var ext = Path.GetExtension(path).ToLowerInvariant();
-        return ext switch
-        {
-            ".json" => "json",
-            ".md" => "markdown",
-            ".yml" or ".yaml" => "yaml",
-            ".xml" => "xml",
-            ".cs" => "csharp",
-            ".txt" or "" => "",
-            _ => ""
-        };
     }
 
     private static async Task<string> RunLlmAgentLoopAsync(

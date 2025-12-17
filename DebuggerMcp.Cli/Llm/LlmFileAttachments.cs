@@ -23,7 +23,7 @@ internal static class LlmFileAttachments
         @"(?<!\w)#(?:(?<path>(?:\./|\.\./|/|~\/)[^\s,;:\)\]\}\""']+|[A-Za-z]:\\[^\s,;:\)\]\}\""']+)|\((?<path>(?:\./|\.\./|/|~\/)[^)]+|[A-Za-z]:\\[^)]+)\))(?<trail>[,.;:\)\]\}\""']*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
-    internal sealed record Attachment(string DisplayPath, string AbsolutePath, string Content, bool Truncated);
+    internal sealed record Attachment(string DisplayPath, string AbsolutePath, string Content, string MessageForModel, bool Truncated);
 
     internal sealed record ReportAttachmentContext(
         string DisplayPath,
@@ -122,8 +122,15 @@ internal static class LlmFileAttachments
                 return (null, null, 0);
             }
 
-            var limit = Math.Min(Math.Max(0, maxBytesPerFile), Math.Max(0, remainingTotalBytes));
-            if (limit <= 0)
+            var language = GuessFenceLanguage(displayPath);
+            var header = $"Attached file: {displayPath}{Environment.NewLine}```{language}{Environment.NewLine}";
+            var footer = $"{Environment.NewLine}```";
+            var wrapperBytes = Encoding.UTF8.GetByteCount(header + footer);
+
+            var bodyLimit = Math.Min(
+                Math.Max(0, maxBytesPerFile),
+                Math.Max(0, remainingTotalBytes - wrapperBytes));
+            if (bodyLimit <= 0)
             {
                 return (null, null, 0);
             }
@@ -141,8 +148,8 @@ internal static class LlmFileAttachments
 
                 // Respect the remaining total budget, including the wrapper message overhead.
                 var wrapperOverhead = LlmReportCache.BuildModelAttachmentMessage(displayPath, summaryJson: string.Empty, manifestJson: string.Empty);
-                var wrapperBytes = Encoding.UTF8.GetByteCount(wrapperOverhead);
-                var budgetForPayload = Math.Max(0, remainingTotalBytes - wrapperBytes);
+                var reportWrapperBytes = Encoding.UTF8.GetByteCount(wrapperOverhead);
+                var budgetForPayload = Math.Max(0, remainingTotalBytes - reportWrapperBytes);
 
                 // Allocate remaining budget: manifest first, then summary.
                 var manifestForModel = cached.ManifestJson;
@@ -160,15 +167,15 @@ internal static class LlmFileAttachments
                     summaryForModel = TruncateUtf8ToBytes(summaryForModel, remainingForSummary, "... (truncated report summary) ...");
                 }
 
-                var message = LlmReportCache.BuildModelAttachmentMessage(displayPath, summaryForModel, manifestForModel);
-                message = TruncateUtf8ToBytes(message, remainingTotalBytes, "... (truncated attachment) ...");
-                var used = Encoding.UTF8.GetByteCount(message);
+                var reportMessage = LlmReportCache.BuildModelAttachmentMessage(displayPath, summaryForModel, manifestForModel);
+                reportMessage = TruncateUtf8ToBytes(reportMessage, remainingTotalBytes, "... (truncated attachment) ...");
+                var used = Encoding.UTF8.GetByteCount(reportMessage);
 
-                var report = new ReportAttachmentContext(displayPath, absolute, cached, message, idToFile, ptrToFile);
+                var report = new ReportAttachmentContext(displayPath, absolute, cached, reportMessage, idToFile, ptrToFile);
                 return (null, report, used);
             }
 
-            var (text, truncated, bytesRead) = ReadTextCapped(absolute, limit);
+            var (text, truncated, _) = ReadTextCapped(absolute, bodyLimit);
             if (string.IsNullOrWhiteSpace(text))
             {
                 return (null, null, 0);
@@ -177,10 +184,9 @@ internal static class LlmFileAttachments
             // Redact any secrets before sending to the model.
             text = TranscriptRedactor.RedactText(text);
 
-            // Budget accounting should reflect the bytes we will actually send to the model,
-            // not merely the bytes read from disk (which ignores redaction and encoding).
-            var bytesUsed = Encoding.UTF8.GetByteCount(text);
-            return (new Attachment(displayPath, absolute, text, truncated), null, bytesUsed);
+            var message = header + text + footer;
+            var bytesUsed = Encoding.UTF8.GetByteCount(message);
+            return (new Attachment(displayPath, absolute, text, message, truncated), null, bytesUsed);
         }
         catch
         {
@@ -242,18 +248,51 @@ internal static class LlmFileAttachments
 
         if (!truncated)
         {
-            var text = Encoding.UTF8.GetString(buffer, 0, effective);
+            var text = DecodeUtf8Prefix(buffer, effective);
             return (text, false, effective);
         }
 
         // Ensure the truncation marker fits *within* maxBytes (so total attachment budgets remain accurate).
         var marker = $"[...file truncated to {maxBytes} bytes...]";
         var markerBytes = Encoding.UTF8.GetByteCount(Environment.NewLine + marker);
+        if (markerBytes > maxBytes)
+        {
+            // Budget is too small to include the marker; return the largest valid prefix we can.
+            var prefixOnly = DecodeUtf8Prefix(buffer, Math.Min(effective, maxBytes));
+            return (prefixOnly, true, Math.Min(effective, maxBytes));
+        }
+
         var allowedPrefixBytes = Math.Max(0, maxBytes - markerBytes);
         var prefixBytes = Math.Min(effective, allowedPrefixBytes);
-        var prefix = Encoding.UTF8.GetString(buffer, 0, prefixBytes);
+        var prefix = DecodeUtf8Prefix(buffer, prefixBytes);
         var combined = prefix + Environment.NewLine + marker;
         return (combined, true, prefixBytes);
+    }
+
+    private static string DecodeUtf8Prefix(byte[] buffer, int count)
+    {
+        if (count <= 0)
+        {
+            return string.Empty;
+        }
+
+        // Avoid splitting multi-byte UTF-8 sequences by backing off a few bytes at most.
+        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+        var safeCount = Math.Min(count, buffer.Length);
+        for (var i = 0; i <= 4 && safeCount - i >= 0; i++)
+        {
+            try
+            {
+                return encoding.GetString(buffer, 0, safeCount - i);
+            }
+            catch (DecoderFallbackException)
+            {
+                // try again with fewer bytes
+            }
+        }
+
+        // Fallback: best-effort replacement.
+        return Encoding.UTF8.GetString(buffer, 0, safeCount);
     }
 
     private static string TrimTrailingPathPunctuation(string path)
@@ -293,8 +332,28 @@ internal static class LlmFileAttachments
         }
 
         var suffixBytes = Encoding.UTF8.GetByteCount(Environment.NewLine + suffix);
+        if (suffixBytes > maxBytes)
+        {
+            return DecodeUtf8Prefix(bytes, maxBytes);
+        }
+
         var limit = Math.Max(0, maxBytes - suffixBytes);
-        var prefix = Encoding.UTF8.GetString(bytes, 0, limit);
+        var prefix = DecodeUtf8Prefix(bytes, limit);
         return prefix + Environment.NewLine + suffix;
+    }
+
+    private static string GuessFenceLanguage(string path)
+    {
+        var ext = Path.GetExtension(path).ToLowerInvariant();
+        return ext switch
+        {
+            ".json" => "json",
+            ".md" => "markdown",
+            ".yml" or ".yaml" => "yaml",
+            ".xml" => "xml",
+            ".cs" => "csharp",
+            ".txt" or "" => "",
+            _ => ""
+        };
     }
 }

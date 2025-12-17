@@ -27,6 +27,7 @@ public class LlmFileAttachmentsTests
         Assert.Equal($"./{Path.GetFileName(filePath)}", attachments[0].DisplayPath);
         Assert.EndsWith("report.json", attachments[0].AbsolutePath, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"hello\"", attachments[0].Content);
+        Assert.Contains("Attached file:", attachments[0].MessageForModel);
     }
 
     [Fact]
@@ -143,7 +144,26 @@ public class LlmFileAttachmentsTests
         Assert.False(attachments[0].Truncated);
         Assert.True(attachments[1].Truncated);
 
-        var total = Encoding.UTF8.GetByteCount(attachments[0].Content) + Encoding.UTF8.GetByteCount(attachments[1].Content);
+        var total = Encoding.UTF8.GetByteCount(attachments[0].MessageForModel) + Encoding.UTF8.GetByteCount(attachments[1].MessageForModel);
         Assert.True(total <= 900);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_DoesNotExceedBudget_WhenBudgetIsTiny()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        var filePath = Path.Combine(tempRoot, "a.txt");
+        File.WriteAllText(filePath, new string('a', 1000));
+
+        var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze #./a.txt",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1000,
+            maxTotalBytes: 60);
+
+        var a = Assert.Single(attachments);
+        Assert.True(Encoding.UTF8.GetByteCount(a.MessageForModel) <= 60);
     }
 }
