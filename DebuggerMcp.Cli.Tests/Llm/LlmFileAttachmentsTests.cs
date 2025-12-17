@@ -120,6 +120,40 @@ public class LlmFileAttachmentsTests
     }
 
     [Fact]
+    public void ExtractAndLoad_DoesNotRewriteJsonPointersStartingWithHashSlash()
+    {
+        var prompt = "Fetch section #/analysis/threads/faultingThread please";
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            prompt,
+            baseDirectory: Environment.CurrentDirectory);
+
+        Assert.Equal(prompt, cleaned);
+        Assert.Empty(attachments);
+        Assert.Empty(reports);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_AllowsAbsolutePathsOnlyWithParentheses()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var filePath = Path.Combine(tempRoot, "abs.json");
+        File.WriteAllText(filePath, "{\"hello\":\"world\"}");
+
+        var prompt = $"Analyze #({filePath}) please";
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            prompt,
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1000,
+            maxTotalBytes: 2000);
+
+        Assert.Contains("(<attached:", cleaned);
+        Assert.Single(attachments);
+        Assert.Empty(reports);
+        Assert.Equal(filePath, attachments[0].DisplayPath);
+    }
+
+    [Fact]
     public void ExtractAndLoad_RespectsMaxTotalBytesAcrossMultipleAttachments()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));

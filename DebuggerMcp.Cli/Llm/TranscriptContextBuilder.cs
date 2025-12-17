@@ -30,29 +30,36 @@ internal static class TranscriptContextBuilder
 
         var messages = new List<ChatMessage>();
 
-        var contextHeader = new StringBuilder();
-        contextHeader.AppendLine(LlmSystemPrompts.BuildSystemPrompt(agentModeEnabled, agentConfirmationEnabled));
-        contextHeader.AppendLine();
-        contextHeader.AppendLine("Context:");
+        messages.Add(new ChatMessage("system", LlmSystemPrompts.BuildSystemPrompt(agentModeEnabled, agentConfirmationEnabled).Trim()));
+
+        // Treat all runtime context as untrusted data to reduce prompt-injection risk.
+        var runtimeContext = new StringBuilder();
+        runtimeContext.AppendLine("CLI runtime context (untrusted data):");
         if (!string.IsNullOrWhiteSpace(serverUrl))
         {
-            contextHeader.AppendLine($"Connected server: {serverUrl}");
+            runtimeContext.AppendLine($"Connected server: {serverUrl}");
         }
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
-            contextHeader.AppendLine($"Session: {sessionId}");
+            runtimeContext.AppendLine($"Session: {sessionId}");
         }
         if (!string.IsNullOrWhiteSpace(dumpId))
         {
-            contextHeader.AppendLine($"Opened dump: {dumpId}");
+            runtimeContext.AppendLine($"Opened dump: {dumpId}");
         }
-        messages.Add(new ChatMessage("system", contextHeader.ToString().Trim()));
 
         var cliContext = BuildCliTranscriptContext(transcriptTail, maxContextChars: maxContextChars);
         if (!string.IsNullOrWhiteSpace(cliContext))
         {
-            // Treat transcript context as untrusted data to reduce prompt-injection risk.
-            messages.Add(new ChatMessage("user", $"CLI transcript context (untrusted data):{Environment.NewLine}{cliContext}"));
+            runtimeContext.AppendLine();
+            runtimeContext.AppendLine(cliContext);
+        }
+
+        var runtimePayload = runtimeContext.ToString().Trim();
+        if (!string.IsNullOrWhiteSpace(runtimePayload) &&
+            !string.Equals(runtimePayload, "CLI runtime context (untrusted data):", StringComparison.OrdinalIgnoreCase))
+        {
+            messages.Add(new ChatMessage("user", runtimePayload));
         }
 
         var llmEntries = transcriptTail.Where(e => e.Kind is "llm_user" or "llm_assistant").ToList();
