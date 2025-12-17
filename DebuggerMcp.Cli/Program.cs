@@ -4604,29 +4604,14 @@ public class Program
                 agentModeEnabled: llmSettings.AgentModeEnabled,
                 agentConfirmationEnabled: llmSettings.AgentModeConfirmToolCalls);
 
-            if (attachments.Count > 0)
-            {
-                var list = messages.ToList();
-                var insertIndex = list.TakeWhile(m => m.Role == "system").Count();
-                foreach (var a in attachments)
-                {
-                    list.Insert(insertIndex++, new ChatMessage("system", a.MessageForModel));
-                }
-                messages = list;
-            }
-
-            if (reports.Count > 0)
-            {
-                var list = messages.ToList();
-                var insertIndex = list.TakeWhile(m => m.Role == "system").Count();
-
-                foreach (var report in reports)
-                {
-                    list.Insert(insertIndex++, new ChatMessage("system", report.MessageForModel));
-                }
-
-                messages = list;
-            }
+            var attachmentMessages = attachments.Select(a => a.MessageForModel).ToList();
+            var reportMessages = reports.Select(r => r.MessageForModel).ToList();
+            var combinedMessages = attachmentMessages.Count == 0 && reportMessages.Count == 0
+                ? messages
+                : LlmPromptComposer.InsertUserAttachmentsBeforeLastUserMessage(
+                    messages,
+                    attachmentMessages.Concat(reportMessages).ToList());
+            messages = combinedMessages;
 
             var response = llmSettings.AgentModeEnabled
                 ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, reports, transcript, cancellationToken: default)
