@@ -11,6 +11,37 @@ namespace DebuggerMcp.Tests.Analysis;
 public class AiAnalysisOrchestratorTests
 {
     [Fact]
+    public async Task AnalyzeCrashAsync_IncludesSosHelpGuidanceInSystemPrompt()
+    {
+        CreateMessageRequestParams? seenRequest = null;
+
+        var sampling = new CapturingSamplingClient(
+            onRequest: req => seenRequest = req,
+            result: CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 1
+        };
+
+        _ = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(seenRequest);
+        Assert.False(string.IsNullOrWhiteSpace(seenRequest!.SystemPrompt));
+        Assert.Contains("sos help", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sos clrstack -a", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_WhenSamplingNotSupported_ReturnsUnavailableResult()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: false, isToolUseSupported: false);
@@ -409,6 +440,22 @@ public class AiAnalysisOrchestratorTests
             }
 
             return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private sealed class CapturingSamplingClient(Action<CreateMessageRequestParams> onRequest, CreateMessageResult result) : ISamplingClient
+    {
+        private readonly Action<CreateMessageRequestParams> _onRequest = onRequest;
+        private readonly CreateMessageResult _result = result;
+
+        public bool IsSamplingSupported => true;
+
+        public bool IsToolUseSupported => true;
+
+        public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
+        {
+            _onRequest(request);
+            return Task.FromResult(_result);
         }
     }
 }

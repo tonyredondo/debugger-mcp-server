@@ -712,14 +712,21 @@ Available tools:
 - get_thread_stack: Get a full stack trace for a specific thread from the report
 - analysis_complete: Call when you've determined the root cause
 
+SOS/.NET debugger command notes:
+- If SOS is loaded, prefer running SOS commands via: exec "sos <command> <args>".
+- Do not guess flags. When unsure, run: exec "sos help <command>" (or exec "sos help") and use the documented arguments.
+- Common SOS commands (examples only): sos clrstack -a, sos printexception, sos dumpheap -stat, sos dumpobj <addr>, sos dumpmt -md <mt>, sos dumpmodule <addr>, sos name2ee <assembly> <type>.
+- If a command errors with "Unrecognized command or argument" or "Unknown option", adapt based on "sos help <command>" instead of retrying randomly.
+
 Investigation approach:
 1. Review the initial crash report carefully
 2. Identify the crashing thread and exception type
 3. Examine the call stack for suspicious patterns
 4. Inspect relevant objects if addresses are available
 5. Check for common issues: null references, race conditions, memory corruption
-6. Form a hypothesis and gather evidence to confirm it
-7. Call analysis_complete with your findings
+6. Verify key claims with evidence (e.g., if you suspect MissingMethodException, confirm by inspecting the exception and verifying method presence via SOS output)
+7. Form a hypothesis and gather evidence to confirm it
+8. Call analysis_complete with your findings
 
 Be thorough but efficient. Don't run unnecessary commands.
 """;
