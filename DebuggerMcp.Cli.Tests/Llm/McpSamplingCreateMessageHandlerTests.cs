@@ -79,4 +79,92 @@ public class McpSamplingCreateMessageHandlerTests
         Assert.True(result.Content[1].Input.HasValue);
         Assert.Equal("bt", result.Content[1].Input!.Value.GetProperty("command").GetString());
     }
+
+    [Fact]
+    public async Task HandleAsync_ParsesOpenAiStyleToolsAndToolChoice()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Model = "openrouter/test",
+                    Text = "ok"
+                });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "exec",
+                "description": "run debugger command",
+                "parameters": { "type":"object","properties":{"command":{"type":"string"}},"required":["command"] }
+              }
+            }
+          ],
+          "tool_choice": { "type": "function", "function": { "name": "exec" } },
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.NotNull(seenRequest!.Tools);
+        Assert.Single(seenRequest.Tools!);
+        Assert.Equal("exec", seenRequest.Tools![0].Name);
+        Assert.Equal("run debugger command", seenRequest.Tools![0].Description);
+        Assert.Equal("string", seenRequest.Tools![0].Parameters.GetProperty("properties").GetProperty("command").GetProperty("type").GetString());
+
+        Assert.NotNull(seenRequest.ToolChoice);
+        Assert.Equal("exec", seenRequest.ToolChoice!.FunctionName);
+    }
+
+    [Fact]
+    public async Task HandleAsync_IgnoresNonFunctionOpenAiTools()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "tools": [
+            {
+              "type": "web_search",
+              "function": {
+                "name": "exec",
+                "description": "run debugger command",
+                "parameters": { "type":"object","properties":{"command":{"type":"string"}} }
+              }
+            }
+          ],
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Null(seenRequest!.Tools);
+    }
 }

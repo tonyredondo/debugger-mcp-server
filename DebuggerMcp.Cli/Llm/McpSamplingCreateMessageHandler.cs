@@ -164,13 +164,31 @@ internal sealed class McpSamplingCreateMessageHandler(
                 continue;
             }
 
-            var name = TryGetString(tool, "name") ?? string.Empty;
+            var type = TryGetString(tool, "type");
+            var openAiFunction = TryGetProperty(tool, "function", out var fn) && fn.ValueKind == JsonValueKind.Object
+                ? fn
+                : (JsonElement?)null;
+
+            if (!string.IsNullOrWhiteSpace(type) &&
+                !string.Equals(type, "function", StringComparison.OrdinalIgnoreCase) &&
+                openAiFunction != null)
+            {
+                continue;
+            }
+
+            var name =
+                TryGetString(openAiFunction ?? tool, "name") ??
+                string.Empty;
+
             if (string.IsNullOrWhiteSpace(name))
             {
                 continue;
             }
 
-            var description = TryGetString(tool, "description");
+            var description =
+                TryGetString(openAiFunction ?? tool, "description") ??
+                TryGetString(tool, "description");
+
             var schema = GetToolSchema(tool);
 
             result.Add(new ChatTool
@@ -186,6 +204,15 @@ internal sealed class McpSamplingCreateMessageHandler(
 
     private static JsonElement GetToolSchema(JsonElement tool)
     {
+        // OpenAI-style: { "type":"function", "function": { "parameters": { ... } } }
+        if (TryGetProperty(tool, "function", out var fn) && fn.ValueKind == JsonValueKind.Object)
+        {
+            if (TryGetProperty(fn, "parameters", out var p) && (p.ValueKind == JsonValueKind.Object || p.ValueKind == JsonValueKind.Array))
+            {
+                return p.Clone();
+            }
+        }
+
         if (TryGetProperty(tool, "inputSchema", out var schema) ||
             TryGetProperty(tool, "input_schema", out schema) ||
             TryGetProperty(tool, "parameters", out schema))
