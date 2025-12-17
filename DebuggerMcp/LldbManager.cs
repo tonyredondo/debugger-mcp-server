@@ -412,6 +412,12 @@ public class LldbManager : IDebuggerManager
                     {
                         _logger.LogInformation("[LLDB] Added {Count} subdirectories to symbol search path", subDirs.Length);
                     }
+
+                    var datadogDir = Path.Combine(_symbolCacheDirectory, ".datadog");
+                    if (Directory.Exists(datadogDir))
+                    {
+                        _logger.LogInformation("[LLDB] Datadog symbols directory detected: {Path} (included via debug-file-search-paths subdirectories)", datadogDir);
+                    }
                 }
                 catch (Exception ex)
                 {

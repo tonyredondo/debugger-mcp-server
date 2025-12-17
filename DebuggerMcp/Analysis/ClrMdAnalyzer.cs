@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Reflection.Metadata;
 using System.Text;
+using System.Diagnostics;
 using Microsoft.Diagnostics.Runtime;
 using Microsoft.Extensions.Logging;
 
@@ -53,10 +54,64 @@ public class ClrMdAnalyzer : IDisposable
         {
             try
             {
+                var totalSw = Stopwatch.StartNew();
+                var logger = _logger;
+                if (logger != null)
+                {
+                    logger.LogInformation("[ClrMD] Opening dump for analysis: {Path}", dumpPath);
+                }
+
+                try
+                {
+                    var fi = new FileInfo(dumpPath);
+                    if (logger != null)
+                    {
+                        logger.LogInformation("[ClrMD] Dump file size: {Size} bytes ({SizeMB:N1} MB)", fi.Length, fi.Length / (1024.0 * 1024.0));
+                    }
+                }
+                catch
+                {
+                    // Best-effort.
+                }
+
                 CloseDump();
-                
+
+                var loadSw = Stopwatch.StartNew();
                 _dataTarget = DataTarget.LoadDump(dumpPath);
-                
+                loadSw.Stop();
+
+                if (logger != null)
+                {
+                    var clrVersionCount = _dataTarget.ClrVersions.Count();
+                    Microsoft.Extensions.Logging.LoggerExtensions.LogInformation(
+                        logger,
+                        "[ClrMD] DataTarget.LoadDump completed - Elapsed: {Elapsed}ms, ClrVersions: {ClrVersionCount}",
+                        loadSw.ElapsedMilliseconds,
+                        clrVersionCount);
+                }
+
+                // Log our expected per-dump symbol directories; ClrMD CreateRuntime can spend significant time locating DAC/DBI.
+                try
+                {
+                    var dumpDir = Path.GetDirectoryName(dumpPath);
+                    var dumpName = Path.GetFileNameWithoutExtension(dumpPath);
+                    if (!string.IsNullOrWhiteSpace(dumpDir) && !string.IsNullOrWhiteSpace(dumpName))
+                    {
+                        var perDumpSymbols = Path.Combine(dumpDir, $".symbols_{dumpName}");
+                        var datadogSymbols = Path.Combine(perDumpSymbols, ".datadog");
+                        logger?.LogInformation(
+                            "[ClrMD] Per-dump symbols: {SymbolsDir} (exists: {Exists}), Datadog: {DatadogDir} (exists: {DatadogExists})",
+                            perDumpSymbols,
+                            Directory.Exists(perDumpSymbols),
+                            datadogSymbols,
+                            Directory.Exists(datadogSymbols));
+                    }
+                }
+                catch
+                {
+                    // Best-effort.
+                }
+
                 var clrInfo = _dataTarget.ClrVersions.FirstOrDefault();
                 if (clrInfo == null)
                 {
@@ -64,10 +119,26 @@ public class ClrMdAnalyzer : IDisposable
                     CloseDump();
                     return false;
                 }
-                
+
+                var runtimeSw = Stopwatch.StartNew();
+                if (logger != null)
+                {
+                    logger.LogInformation("[ClrMD] Creating runtime (CLR: {Version})...", clrInfo.Version);
+                }
                 _runtime = clrInfo.CreateRuntime();
-                _logger?.LogInformation("[ClrMD] Opened dump: {Path}, CLR: {Version}", 
-                    dumpPath, clrInfo.Version);
+                runtimeSw.Stop();
+
+                totalSw.Stop();
+                if (logger != null)
+                {
+                    logger.LogInformation(
+                        "[ClrMD] Opened dump: {Path}, CLR: {Version} (LoadDump: {LoadMs}ms, CreateRuntime: {RuntimeMs}ms, Total: {TotalMs}ms)",
+                        dumpPath,
+                        clrInfo.Version,
+                        loadSw.ElapsedMilliseconds,
+                        runtimeSw.ElapsedMilliseconds,
+                        totalSw.ElapsedMilliseconds);
+                }
                 return true;
             }
             catch (Exception ex)

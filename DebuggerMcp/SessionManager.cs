@@ -497,60 +497,32 @@ public class DebuggerSessionManager
                         session.ClrMdAnalyzer = clrMdAnalyzer;
                         _logger.LogInformation("[SessionManager] ClrMD analyzer attached for metadata enrichment");
 
-                        // Set up SequencePointResolver for source location resolution in ClrStack
-                        try
-                        {
-                            var seqResolver = new SourceLink.SequencePointResolver(_logger);
-                            
-                            // Add dump directory as PDB search path (for side-by-side PDBs)
-                            var dumpDirectory = Path.GetDirectoryName(metadata.CurrentDumpPath);
-                            if (!string.IsNullOrEmpty(dumpDirectory))
-                            {
-                                seqResolver.AddPdbSearchPath(dumpDirectory);
-                                
-                                // Also add symbol directory if it exists
-                                var symbolDir = Path.Combine(dumpDirectory, $".symbols_{metadata.CurrentDumpId}");
-                                if (Directory.Exists(symbolDir))
-                                {
-                                    seqResolver.AddPdbSearchPath(symbolDir);
-                                }
-                            }
-                            
-                            // Add common symbol cache locations
-                            var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-                            if (!string.IsNullOrEmpty(homeDir))
-                            {
-                                // dotnet-symbol cache
-                                var dotnetSymbolCache = Path.Combine(homeDir, ".dotnet", "symbolcache");
-                                if (Directory.Exists(dotnetSymbolCache))
-                                {
-                                    seqResolver.AddPdbSearchPath(dotnetSymbolCache);
-                                }
-                                
-                                // NuGet symbol cache
-                                var nugetSymbols = Path.Combine(homeDir, ".nuget", "packages");
-                                if (Directory.Exists(nugetSymbols))
-                                {
-                                    seqResolver.AddPdbSearchPath(nugetSymbols);
-                                }
-                            }
-                            
-                            // Extract runtime directory from ClrMD modules and add as search path
-                            if (clrMdAnalyzer.Runtime != null)
-                            {
-                                foreach (var module in clrMdAnalyzer.Runtime.EnumerateModules())
-                                {
-                                    var moduleDir = Path.GetDirectoryName(module.Name);
-                                    if (!string.IsNullOrEmpty(moduleDir) && Directory.Exists(moduleDir))
-                                    {
-                                        seqResolver.AddPdbSearchPath(moduleDir);
-                                    }
-                                }
-                            }
-                            
-                            clrMdAnalyzer.SetSequencePointResolver(seqResolver);
-                            _logger.LogDebug("[SessionManager] SequencePointResolver configured for ClrStack");
-                        }
+	                        // Set up SequencePointResolver for source location resolution in ClrStack
+	                        try
+	                        {
+	                            var seqResolver = new SourceLink.SequencePointResolver(_logger);
+
+	                            var pdbPaths = SourceLink.PdbSearchPathBuilder.BuildExistingPaths(
+	                                metadata.CurrentDumpPath,
+	                                dumpId: metadata.CurrentDumpId,
+	                                runtime: clrMdAnalyzer.Runtime);
+
+	                            if (pdbPaths.Count > 0)
+	                            {
+	                                _logger.LogInformation(
+	                                    "[SessionManager] PDB search paths for ClrStack ({Count}): {Paths}",
+	                                    pdbPaths.Count,
+	                                    string.Join(" | ", pdbPaths));
+	                            }
+
+	                            foreach (var path in pdbPaths)
+	                            {
+	                                seqResolver.AddPdbSearchPath(path);
+	                            }
+	                            
+	                            clrMdAnalyzer.SetSequencePointResolver(seqResolver);
+	                            _logger.LogDebug("[SessionManager] SequencePointResolver configured for ClrStack");
+	                        }
                         catch (Exception seqEx)
                         {
                             _logger.LogDebug(seqEx, "[SessionManager] SequencePointResolver setup failed, ClrStack will work without source locations");
