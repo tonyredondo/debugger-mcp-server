@@ -38,6 +38,23 @@ public class LlmReportCacheTests
     }
 
     [Fact]
+    public void LooksLikeDebuggerMcpReport_LargePrefixWithLongStringToken_ReturnsTrue()
+    {
+        // Regression test: signature detection must not fail when a long JSON string token appears before analysis,
+        // and would previously be truncated by a small fixed prefix read.
+        var pad = new string('x', 900_000);
+        var json = $$"""
+        {
+          "metadata": { "dumpId": "abc", "pad": "{{pad}}" },
+          "analysis": { "environment": { "os": "linux" } }
+        }
+        """;
+
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+        Assert.True(LlmReportCache.LooksLikeDebuggerMcpReport(stream));
+    }
+
+    [Fact]
     public void ExtractAndLoad_LargeReport_UsesCacheAndExcludesBiasedFields()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));

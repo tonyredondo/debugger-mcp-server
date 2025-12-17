@@ -615,10 +615,13 @@ internal static class LlmReportCache
 
         try
         {
-            // Parse a single buffer to avoid token-splitting issues with streaming Utf8JsonReader usage.
+            // Parse up to a capped prefix. If we hit the cap (not EOF), treat it as non-final to avoid false negatives
+            // caused by a truncated JSON token at the end of the buffer (e.g., a long string).
             // DebuggerMcp reports always include metadata+analysis near the start of the file.
-            var data = ReadFirstBytes(utf8JsonStream, 512 * 1024);
-            var reader = new Utf8JsonReader(data, isFinalBlock: true, state: default);
+            const int maxScanBytes = 4 * 1024 * 1024;
+
+            var data = ReadFirstBytes(utf8JsonStream, maxScanBytes, out var isFinalBlock);
+            var reader = new Utf8JsonReader(data, isFinalBlock: isFinalBlock, state: default);
 
             if (!reader.Read() || reader.TokenType != JsonTokenType.StartObject)
             {
@@ -720,7 +723,7 @@ internal static class LlmReportCache
         }
     }
 
-    private static byte[] ReadFirstBytes(Stream stream, int maxBytes)
+    private static byte[] ReadFirstBytes(Stream stream, int maxBytes, out bool isFinalBlock)
     {
         if (stream.CanSeek)
         {
@@ -728,7 +731,18 @@ internal static class LlmReportCache
         }
 
         var buffer = new byte[maxBytes];
-        var read = stream.Read(buffer, 0, buffer.Length);
+        var read = 0;
+        while (read < buffer.Length)
+        {
+            var n = stream.Read(buffer, read, buffer.Length - read);
+            if (n <= 0)
+            {
+                break;
+            }
+            read += n;
+        }
+
+        isFinalBlock = read < maxBytes;
         return buffer.AsSpan(0, read).ToArray();
     }
 
