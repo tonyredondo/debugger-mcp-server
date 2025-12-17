@@ -14,6 +14,7 @@ Tool reference: the canonical MCP tool list is `debugger://mcp-tools`.
 |---------|-----------------|-------------|
 | **Crash Analysis** | `analyze(kind="crash")` | General crash analysis with memory leak and deadlock detection |
 | **.NET Analysis** | `analyze(kind="dotnet_crash")` | .NET-specific analysis including managed exceptions, heap stats |
+| **AI Crash Analysis** | `analyze(kind="ai")` | AI-assisted root cause analysis via MCP sampling (iterative, tool-driven) |
 | **Dump Comparison** | `compare(kind="dumps")` | Compare two dumps for memory, threads, and modules |
 | **Heap Comparison** | `compare(kind="heaps")` | Memory allocation comparison for leak detection |
 | **Thread Comparison** | `compare(kind="threads")` | Thread state comparison for deadlock detection |
@@ -130,6 +131,29 @@ analyze(kind: "crash", sessionId: "your-session-id", userId: "your-user-id")
     "Some modules are missing symbols. Upload symbol files for better analysis."
   ]
 }
+```
+
+---
+
+## 🤖 AI Crash Analysis (`analyze` / kind=`ai`)
+
+### Overview
+
+Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
+1. Build an initial structured crash report (JSON)
+2. Use MCP sampling (`sampling/createMessage`) to ask the connected client’s LLM to analyze it
+3. Allow the LLM to request additional evidence via tools (e.g., `exec`, `inspect`, `get_thread_stack`)
+4. Return the original report enriched with `aiAnalysis`
+
+### Prerequisites
+
+- The connected MCP client must support sampling with tools enabled.
+  - The Debugger MCP CLI supports this when OpenRouter is configured.
+
+### Usage
+
+```
+analyze(kind: "ai", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
 ---

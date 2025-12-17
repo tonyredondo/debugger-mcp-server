@@ -1,0 +1,595 @@
+#nullable enable
+
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using DebuggerMcp.Sampling;
+using Microsoft.Extensions.Logging;
+using ModelContextProtocol.Protocol;
+
+namespace DebuggerMcp.Analysis;
+
+/// <summary>
+/// Orchestrates iterative AI-powered crash analysis using MCP sampling.
+/// </summary>
+public sealed class AiAnalysisOrchestrator(
+    ISamplingClient samplingClient,
+    ILogger<AiAnalysisOrchestrator> logger)
+{
+    private readonly ISamplingClient _samplingClient = samplingClient ?? throw new ArgumentNullException(nameof(samplingClient));
+    private readonly ILogger<AiAnalysisOrchestrator> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+
+    /// <summary>
+    /// Gets or sets the maximum number of sampling iterations to perform.
+    /// </summary>
+    public int MaxIterations { get; set; } = 10;
+
+    /// <summary>
+    /// Gets or sets the maximum number of output tokens to request per sampling call.
+    /// </summary>
+    public int MaxTokensPerRequest { get; set; } = 4096;
+
+    /// <summary>
+    /// Gets a value indicating whether AI analysis is available for the connected client.
+    /// </summary>
+    public bool IsSamplingAvailable => _samplingClient.IsSamplingSupported;
+
+    /// <summary>
+    /// Performs AI-powered crash analysis with an iterative investigation loop.
+    /// </summary>
+    /// <param name="initialReport">Initial structured crash report.</param>
+    /// <param name="initialReportJson">The JSON string used as the source-of-truth prompt for the initial report.</param>
+    /// <param name="debugger">Debugger manager used to execute commands.</param>
+    /// <param name="clrMdAnalyzer">Optional ClrMD analyzer for managed object inspection.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The AI analysis result.</returns>
+    public async Task<AiAnalysisResult> AnalyzeCrashAsync(
+        CrashAnalysisResult initialReport,
+        string initialReportJson,
+        IDebuggerManager debugger,
+        ClrMdAnalyzer? clrMdAnalyzer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(initialReport);
+        ArgumentNullException.ThrowIfNull(initialReportJson);
+        ArgumentNullException.ThrowIfNull(debugger);
+
+        if (!_samplingClient.IsSamplingSupported)
+        {
+            return new AiAnalysisResult
+            {
+                RootCause = "AI analysis unavailable: MCP client does not support sampling.",
+                Confidence = "low",
+                Reasoning = "The connected MCP client did not advertise sampling capability.",
+                Iterations = 0,
+                CommandsExecuted = []
+            };
+        }
+
+        if (!_samplingClient.IsToolUseSupported)
+        {
+            return new AiAnalysisResult
+            {
+                RootCause = "AI analysis unavailable: MCP client does not support tool use for sampling.",
+                Confidence = "low",
+                Reasoning = "The connected MCP client advertises sampling but not tools support. This analysis loop requires tools.",
+                Iterations = 0,
+                CommandsExecuted = []
+            };
+        }
+
+        var commandsExecuted = new List<ExecutedCommand>();
+        var messages = new List<SamplingMessage>
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock
+                    {
+                        Text = BuildInitialPrompt(initialReportJson)
+                    }
+                ]
+            }
+        };
+
+        var tools = SamplingTools.GetDebuggerTools();
+
+        for (var iteration = 1; iteration <= Math.Max(1, MaxIterations); iteration++)
+        {
+            var request = new CreateMessageRequestParams
+            {
+                SystemPrompt = SystemPrompt,
+                Messages = messages,
+                MaxTokens = MaxTokensPerRequest,
+                Tools = tools,
+                ToolChoice = new ToolChoice { Mode = "auto" }
+            };
+
+            CreateMessageResult response;
+            try
+            {
+                _logger.LogInformation("[AI] Sampling iteration {Iteration}...", iteration);
+                response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "[AI] Sampling failed at iteration {Iteration}", iteration);
+                return new AiAnalysisResult
+                {
+                    RootCause = "AI analysis failed: sampling request error.",
+                    Confidence = "low",
+                    Reasoning = ex.Message,
+                    Iterations = iteration - 1,
+                    CommandsExecuted = commandsExecuted,
+                    AnalyzedAt = DateTime.UtcNow
+                };
+            }
+
+            if (response.Content == null || response.Content.Count == 0)
+            {
+                _logger.LogWarning("[AI] Sampling returned empty content at iteration {Iteration}", iteration);
+                return new AiAnalysisResult
+                {
+                    RootCause = "AI analysis failed: empty sampling response.",
+                    Confidence = "low",
+                    Reasoning = "The sampling client returned an empty response.",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted,
+                    Model = response.Model,
+                    AnalyzedAt = DateTime.UtcNow
+                };
+            }
+
+            // Persist assistant content in the conversation history before executing any tool calls.
+            messages.Add(new SamplingMessage
+            {
+                Role = Role.Assistant,
+                Content = response.Content
+            });
+
+            // Tool uses requested by the assistant.
+            var toolUses = response.Content.OfType<ToolUseContentBlock>().ToList();
+            if (toolUses.Count == 0)
+            {
+                // No tool calls; continue until max iterations. Capture model in the result to aid debugging.
+                _logger.LogDebug("[AI] No tool calls in iteration {Iteration}", iteration);
+                continue;
+            }
+
+            foreach (var toolUse in toolUses)
+            {
+                if (string.Equals(toolUse.Name, "analysis_complete", StringComparison.OrdinalIgnoreCase))
+                {
+                    var completed = ParseAnalysisComplete(toolUse.Input, commandsExecuted, iteration, response.Model);
+                    completed.AnalyzedAt = DateTime.UtcNow;
+                    return completed;
+                }
+
+                var sw = Stopwatch.StartNew();
+                var toolName = toolUse.Name ?? string.Empty;
+                var toolInput = toolUse.Input.Clone();
+
+                try
+                {
+                    var output = await ExecuteToolAsync(toolName, toolInput, initialReport, debugger, clrMdAnalyzer, cancellationToken)
+                        .ConfigureAwait(false);
+
+                    sw.Stop();
+                    commandsExecuted.Add(new ExecutedCommand
+                    {
+                        Tool = toolName,
+                        Input = toolInput,
+                        Output = output,
+                        Iteration = iteration,
+                        Duration = sw.Elapsed.ToString("c")
+                    });
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new ToolResultContentBlock
+                            {
+                                ToolUseId = toolUse.Id ?? string.Empty,
+                                IsError = false,
+                                Content =
+                                [
+                                    new TextContentBlock
+                                    {
+                                        Text = output
+                                    }
+                                ]
+                            }
+                        ]
+                    });
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    sw.Stop();
+                    var message = ex.Message;
+                    _logger.LogWarning(ex, "[AI] Tool execution failed: {Tool}", toolName);
+
+                    commandsExecuted.Add(new ExecutedCommand
+                    {
+                        Tool = toolName,
+                        Input = toolInput,
+                        Output = message,
+                        Iteration = iteration,
+                        Duration = sw.Elapsed.ToString("c")
+                    });
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new ToolResultContentBlock
+                            {
+                                ToolUseId = toolUse.Id ?? string.Empty,
+                                IsError = true,
+                                Content =
+                                [
+                                    new TextContentBlock
+                                    {
+                                        Text = message
+                                    }
+                                ]
+                            }
+                        ]
+                    });
+                }
+            }
+        }
+
+        return new AiAnalysisResult
+        {
+            RootCause = "Analysis incomplete - maximum iterations reached.",
+            Confidence = "low",
+            Reasoning = $"The AI did not call analysis_complete within {MaxIterations} iterations.",
+            Iterations = MaxIterations,
+            CommandsExecuted = commandsExecuted,
+            AnalyzedAt = DateTime.UtcNow
+        };
+    }
+
+    private static string BuildInitialPrompt(string initialReportJson)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Analyze this crash report JSON.");
+        sb.AppendLine("If you need more data, call tools (exec/inspect/get_thread_stack).");
+        sb.AppendLine();
+        sb.AppendLine(initialReportJson);
+        return sb.ToString();
+    }
+
+    private static AiAnalysisResult ParseAnalysisComplete(
+        JsonElement input,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        string? model)
+    {
+        var result = new AiAnalysisResult
+        {
+            RootCause = TryGetString(input, "rootCause") ?? string.Empty,
+            Confidence = TryGetString(input, "confidence") ?? "unknown",
+            Reasoning = TryGetString(input, "reasoning"),
+            Recommendations = TryGetStringArray(input, "recommendations"),
+            AdditionalFindings = TryGetStringArray(input, "additionalFindings"),
+            Iterations = iteration,
+            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+            Model = model
+        };
+
+        if (string.IsNullOrWhiteSpace(result.RootCause))
+        {
+            result.RootCause = "AI analysis complete, but no rootCause was provided.";
+            result.Confidence = "low";
+        }
+
+        return result;
+    }
+
+    private static string? TryGetString(JsonElement element, string name)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!element.TryGetProperty(name, out var prop))
+        {
+            return null;
+        }
+
+        return prop.ValueKind == JsonValueKind.String ? prop.GetString() : prop.ToString();
+    }
+
+    private static List<string>? TryGetStringArray(JsonElement element, string name)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        if (!element.TryGetProperty(name, out var prop) || prop.ValueKind != JsonValueKind.Array)
+        {
+            return null;
+        }
+
+        var result = new List<string>();
+        foreach (var item in prop.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var s = item.GetString();
+                if (!string.IsNullOrWhiteSpace(s))
+                {
+                    result.Add(s!);
+                }
+            }
+            else if (item.ValueKind != JsonValueKind.Null && item.ValueKind != JsonValueKind.Undefined)
+            {
+                result.Add(item.ToString());
+            }
+        }
+
+        return result.Count == 0 ? null : result;
+    }
+
+    private static async Task<string> ExecuteToolAsync(
+        string toolName,
+        JsonElement toolInput,
+        CrashAnalysisResult initialReport,
+        IDebuggerManager debugger,
+        ClrMdAnalyzer? clrMdAnalyzer,
+        CancellationToken cancellationToken)
+    {
+        var normalized = (toolName ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "exec" => await ExecuteExecAsync(toolInput, debugger, cancellationToken).ConfigureAwait(false),
+            "inspect" => ExecuteInspect(toolInput, clrMdAnalyzer),
+            "get_thread_stack" => ExecuteGetThreadStack(toolInput, initialReport),
+            _ => throw new InvalidOperationException($"Unknown tool: {toolName}")
+        };
+    }
+
+    private static Task<string> ExecuteExecAsync(JsonElement toolInput, IDebuggerManager debugger, CancellationToken cancellationToken)
+    {
+        var command = TryGetString(toolInput, "command");
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            throw new ArgumentException("exec.command is required.");
+        }
+
+        EnsureSafeDebuggerCommand(command);
+        cancellationToken.ThrowIfCancellationRequested();
+        var output = debugger.ExecuteCommand(command);
+        return Task.FromResult(output ?? string.Empty);
+    }
+
+    private static string ExecuteInspect(JsonElement toolInput, ClrMdAnalyzer? clrMdAnalyzer)
+    {
+        var address = TryGetString(toolInput, "address");
+        if (string.IsNullOrWhiteSpace(address))
+        {
+            throw new ArgumentException("inspect.address is required.");
+        }
+
+        var maxDepth = 3;
+        if (toolInput.ValueKind == JsonValueKind.Object &&
+            toolInput.TryGetProperty("maxDepth", out var md) &&
+            md.ValueKind == JsonValueKind.Number &&
+            md.TryGetInt32(out var n) &&
+            n > 0)
+        {
+            maxDepth = Math.Min(5, n);
+        }
+
+        if (clrMdAnalyzer == null || !clrMdAnalyzer.IsOpen)
+        {
+            var hint = new
+            {
+                error = "ClrMD analyzer not available; cannot inspect managed objects. Use exec with SOS (!dumpobj / !dumpvc) for managed inspection.",
+                address,
+                maxDepth
+            };
+
+            return JsonSerializer.Serialize(hint);
+        }
+
+        var addressValue = ParseHexAddress(address);
+        if (addressValue == null)
+        {
+            return JsonSerializer.Serialize(new { error = $"Invalid address format: {address}" });
+        }
+
+        var inspected = clrMdAnalyzer.InspectObject(
+            addressValue.Value,
+            methodTable: null,
+            maxDepth: maxDepth,
+            maxArrayElements: 10,
+            maxStringLength: 1024);
+
+        if (inspected == null)
+        {
+            return JsonSerializer.Serialize(new { error = "Failed to inspect object.", address });
+        }
+
+        return JsonSerializer.Serialize(inspected, new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        });
+    }
+
+    private static string ExecuteGetThreadStack(JsonElement toolInput, CrashAnalysisResult initialReport)
+    {
+        var id = TryGetString(toolInput, "threadId");
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            throw new ArgumentException("get_thread_stack.threadId is required.");
+        }
+
+        var thread = FindThread(initialReport, id);
+        if (thread == null)
+        {
+            return JsonSerializer.Serialize(new
+            {
+                error = "Thread not found in report.",
+                threadId = id
+            });
+        }
+
+        return JsonSerializer.Serialize(thread, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    private static ThreadInfo? FindThread(CrashAnalysisResult report, string threadIdOrOsId)
+    {
+        if (report.Threads == null)
+        {
+            return null;
+        }
+
+        var all = new List<ThreadInfo>();
+        if (report.Threads.FaultingThread != null)
+        {
+            all.Add(report.Threads.FaultingThread);
+        }
+        if (report.Threads.All != null)
+        {
+            all.AddRange(report.Threads.All);
+        }
+
+        if (all.Count == 0)
+        {
+            return null;
+        }
+
+        var needle = threadIdOrOsId.Trim();
+
+        int? needleInt = null;
+        if (int.TryParse(needle, out var parsed))
+        {
+            needleInt = parsed;
+        }
+
+        foreach (var t in all)
+        {
+            if (string.Equals(t.ThreadId, needle, StringComparison.OrdinalIgnoreCase))
+            {
+                return t;
+            }
+
+            if (needleInt.HasValue && t.ManagedThreadId == needleInt.Value)
+            {
+                return t;
+            }
+
+            if (!string.IsNullOrWhiteSpace(t.OsThreadId) &&
+                string.Equals(NormalizeHex(t.OsThreadId), NormalizeHex(needle), StringComparison.OrdinalIgnoreCase))
+            {
+                return t;
+            }
+
+            if (!string.IsNullOrWhiteSpace(t.OsThreadIdDecimal) &&
+                string.Equals(t.OsThreadIdDecimal, needle, StringComparison.OrdinalIgnoreCase))
+            {
+                return t;
+            }
+
+        }
+
+        return null;
+    }
+
+    private static string NormalizeHex(string value)
+    {
+        var v = value.Trim();
+        if (v.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            v = v[2..];
+        }
+
+        v = v.TrimStart('0');
+        return string.IsNullOrEmpty(v) ? "0" : v.ToLowerInvariant();
+    }
+
+    private static ulong? ParseHexAddress(string value)
+    {
+        var clean = value.Trim();
+        if (clean.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+        {
+            clean = clean[2..];
+        }
+
+        if (ulong.TryParse(clean, System.Globalization.NumberStyles.HexNumber, null, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static void EnsureSafeDebuggerCommand(string command)
+    {
+        // AI-driven exec must not be able to run host OS commands.
+        // These commands exist in common debuggers and can be abused if an LLM is compromised.
+        var trimmed = command.TrimStart();
+
+        if (trimmed.Contains('\n') || trimmed.Contains('\r'))
+        {
+            throw new InvalidOperationException("Multi-line debugger commands are not allowed in AI analysis.");
+        }
+
+        var lower = trimmed.ToLowerInvariant();
+
+        // WinDbg: .shell executes OS commands.
+        if (lower.StartsWith(".shell", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Blocked unsafe debugger command: .shell");
+        }
+
+        // LLDB: `script` executes Python in-process with full host access.
+        if (lower.StartsWith("script", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Blocked unsafe debugger command: script");
+        }
+
+        // LLDB: `platform shell` executes OS commands.
+        if (lower.StartsWith("platform shell", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("Blocked unsafe debugger command: platform shell");
+        }
+    }
+
+    private const string SystemPrompt = """
+You are an expert crash dump analyst. You've been given an initial crash analysis report from a memory dump.
+
+Your task is to determine the ROOT CAUSE of the crash through systematic investigation.
+
+Available tools:
+- exec: Run any debugger command (LLDB/WinDbg/SOS)
+- inspect: Inspect .NET objects by address (when available)
+- get_thread_stack: Get a full stack trace for a specific thread from the report
+- analysis_complete: Call when you've determined the root cause
+
+Investigation approach:
+1. Review the initial crash report carefully
+2. Identify the crashing thread and exception type
+3. Examine the call stack for suspicious patterns
+4. Inspect relevant objects if addresses are available
+5. Check for common issues: null references, race conditions, memory corruption
+6. Form a hypothesis and gather evidence to confirm it
+7. Call analysis_complete with your findings
+
+Be thorough but efficient. Don't run unnecessary commands.
+""";
+}

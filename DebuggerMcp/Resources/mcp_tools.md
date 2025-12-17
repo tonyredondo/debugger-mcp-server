@@ -39,6 +39,7 @@ Run analysis on the currently open dump.
 
 - **crash**: `analyze(kind: "crash", sessionId: "...", userId: "...")`
 - **dotnet_crash**: `analyze(kind: "dotnet_crash", sessionId: "...", userId: "...")`
+- **ai**: `analyze(kind: "ai", sessionId: "...", userId: "...", maxIterations: 10, maxTokens: 4096, includeWatches: true, includeSecurity: true)`
 - **performance**: `analyze(kind: "performance", sessionId: "...", userId: "...")`
 - **cpu**: `analyze(kind: "cpu", sessionId: "...", userId: "...")`
 - **allocations**: `analyze(kind: "allocations", sessionId: "...", userId: "...")`
@@ -46,6 +47,9 @@ Run analysis on the currently open dump.
 - **contention**: `analyze(kind: "contention", sessionId: "...", userId: "...")`
 - **security**: `analyze(kind: "security", sessionId: "...", userId: "...")`
 - **security capabilities**: `analyze(kind: "security", action: "capabilities")`
+
+Notes:
+- `kind: "ai"` requires the connected MCP client to support sampling (`sampling/createMessage`) with tools enabled.
 
 ### 6) `compare`
 Compare two sessions (each must have a dump open).

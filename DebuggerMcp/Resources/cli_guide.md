@@ -62,6 +62,7 @@ dbg-mcp> report -o ./report.md
 ### Analysis (`help analysis`)
 - `analyze crash` - Crash analysis
 - `analyze dotnet` - .NET analysis
+- `analyze ai` - AI-powered deep crash analysis (requires MCP sampling / OpenRouter config)
 - `analyze perf/cpu/memory/gc/contention` - Performance
 - `analyze security` - Security scan
 - `compare <s1> <s2>` - Compare dumps

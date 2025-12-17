@@ -22,6 +22,7 @@ public sealed class CompactTools
     private readonly SessionTools _sessionTools;
     private readonly DumpTools _dumpTools;
     private readonly AnalysisTools _analysisTools;
+    private readonly AiAnalysisTools _aiAnalysisTools;
     private readonly PerformanceTools _performanceTools;
     private readonly SecurityTools _securityTools;
     private readonly ComparisonTools _comparisonTools;
@@ -44,6 +45,7 @@ public sealed class CompactTools
         _sessionTools = new SessionTools(sessionManager, symbolManager, watchStore, loggerFactory.CreateLogger<SessionTools>());
         _dumpTools = new DumpTools(sessionManager, symbolManager, watchStore, loggerFactory.CreateLogger<DumpTools>());
         _analysisTools = new AnalysisTools(sessionManager, symbolManager, watchStore, loggerFactory.CreateLogger<AnalysisTools>());
+        _aiAnalysisTools = new AiAnalysisTools(sessionManager, symbolManager, watchStore, loggerFactory, loggerFactory.CreateLogger<AiAnalysisTools>());
         _performanceTools = new PerformanceTools(sessionManager, symbolManager, watchStore, loggerFactory.CreateLogger<PerformanceTools>());
         _securityTools = new SecurityTools(sessionManager, symbolManager, watchStore, loggerFactory.CreateLogger<SecurityTools>());
         _comparisonTools = new ComparisonTools(sessionManager, symbolManager, watchStore, loggerFactory.CreateLogger<ComparisonTools>());
@@ -141,18 +143,32 @@ public sealed class CompactTools
     /// Runs analysis and diagnostics on the currently open dump.
     /// </summary>
     [McpServerTool(Name = "analyze")]
-    [Description("Analyze a dump: crash | dotnet_crash | performance | cpu | allocations | gc | contention | security. For security capabilities: kind=security, action=capabilities.")]
+    [Description("Analyze a dump: crash | dotnet_crash | ai | performance | cpu | allocations | gc | contention | security. For security capabilities: kind=security, action=capabilities.")]
     public Task<string> Analyze(
-        [Description("Kind: crash | dotnet_crash | performance | cpu | allocations | gc | contention | security")] string kind,
+        McpServer server,
+        [Description("Kind: crash | dotnet_crash | ai | performance | cpu | allocations | gc | contention | security")] string kind,
         [Description("Session ID (required for all kinds except security capabilities)")] string? sessionId = null,
         [Description("User ID (required for all kinds except security capabilities)")] string? userId = null,
         [Description("Optional action (security only): capabilities")] string? action = null,
-        [Description("Include watches (default: true)")] bool includeWatches = true)
+        [Description("Include watches (default: true)")] bool includeWatches = true,
+        [Description("Include security analysis (AI only, default: true)")] bool includeSecurity = true,
+        [Description("Maximum AI iterations (AI only, default: 10)")] int maxIterations = 10,
+        [Description("Maximum output tokens (AI only, default: 4096)")] int maxTokens = 4096,
+        CancellationToken cancellationToken = default)
     {
         return NormalizeRequired(kind, nameof(kind)) switch
         {
             "crash" => _analysisTools.AnalyzeCrash(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
             "dotnet_crash" => _analysisTools.AnalyzeDotNetCrash(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
+            "ai" => _aiAnalysisTools.AnalyzeCrashWithAiAsync(
+                server,
+                Require(sessionId, nameof(sessionId)),
+                Require(userId, nameof(userId)),
+                maxIterations: maxIterations,
+                maxTokens: maxTokens,
+                includeWatches: includeWatches,
+                includeSecurity: includeSecurity,
+                cancellationToken: cancellationToken),
             "performance" => _performanceTools.AnalyzePerformance(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
             "cpu" or "cpu_usage" => _performanceTools.AnalyzeCpuUsage(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId))),
             "allocations" => _performanceTools.AnalyzeAllocations(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId))),

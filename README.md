@@ -396,6 +396,11 @@ analyze(kind="crash", sessionId, userId) → Returns JSON with:
   - Watch expression results
   - Recommendations
 
+# AI-assisted crash analysis (requires MCP sampling support in the connected client)
+analyze(kind="ai", sessionId, userId) → Returns the same report enriched with:
+  - aiAnalysis.rootCause / confidence / reasoning
+  - aiAnalysis.commandsExecuted (debugger commands the AI requested)
+
 # .NET specific analysis (SOS auto-loaded when opening .NET dumps)
 analyze(kind="dotnet_crash", sessionId, userId) → Returns JSON with:
   - CLR version and runtime info

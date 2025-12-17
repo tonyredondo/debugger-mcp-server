@@ -151,6 +151,13 @@ public class CrashAnalysisResult
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<SourceContextEntry>? SourceContext { get; set; }
 
+    /// <summary>
+    /// AI-powered analysis results (only populated when explicitly requested).
+    /// </summary>
+    [JsonPropertyName("aiAnalysis")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AiAnalysisResult? AiAnalysis { get; set; }
+
 }
 
 /// <summary>

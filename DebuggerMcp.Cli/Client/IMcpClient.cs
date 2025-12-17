@@ -133,6 +133,15 @@ public interface IMcpClient : IAsyncDisposable
     /// <returns>.NET analysis results.</returns>
     Task<string> AnalyzeDotNetAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Runs AI-powered deep crash analysis via MCP sampling (requires client sampling support).
+    /// </summary>
+    /// <param name="sessionId">The session ID.</param>
+    /// <param name="userId">The user ID.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Crash analysis results enriched with AI findings.</returns>
+    Task<string> AnalyzeAiAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
+
 
 
     /// <summary>

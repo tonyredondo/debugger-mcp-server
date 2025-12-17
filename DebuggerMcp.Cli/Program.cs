@@ -7234,6 +7234,7 @@ public class Program
             output.Markup("[bold]Analysis Types:[/]");
             output.Markup("  [cyan]crash[/]       General crash analysis");
             output.Markup("  [cyan]dotnet[/]      .NET-specific analysis");
+            output.Markup("  [cyan]ai[/]          AI-powered deep crash analysis (MCP sampling)");
             output.Markup("  [cyan]perf[/]        Performance profiling summary");
             output.Markup("  [cyan]cpu[/]         CPU usage analysis");
             output.Markup("  [cyan]memory[/]      Memory allocation analysis");
@@ -7259,6 +7260,11 @@ public class Program
                 case "net":
                     await RunAnalysisAsync(output, ".NET Analysis",
                         () => mcpClient.AnalyzeDotNetAsync(state.SessionId!, state.Settings.UserId), state);
+                    break;
+
+                case "ai":
+                    await RunAnalysisAsync(output, "AI Crash Analysis",
+                        () => mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId), state);
                     break;
 
                 case "perf":
@@ -7301,7 +7307,7 @@ public class Program
 
                 default:
                     output.Error($"Unknown analysis type: {analysisType}");
-                    output.Dim("Available types: crash, dotnet, perf, cpu, memory, gc, threads, security");
+                    output.Dim("Available types: crash, dotnet, ai, perf, cpu, memory, gc, threads, security");
                     break;
             }
         }

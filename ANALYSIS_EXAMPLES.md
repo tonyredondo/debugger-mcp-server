@@ -12,7 +12,7 @@ The Debugger MCP Server includes automated analysis tools that execute relevant 
 
 | Tool | Description | Key parameters |
 |------|-------------|----------------|
-| `analyze` | Automated analysis (crash/.NET/perf/security) | `kind`, `sessionId`, `userId`, `includeWatches?`, `deepAnalysis?` |
+| `analyze` | Automated analysis (crash/.NET/AI/perf/security) | `kind`, `sessionId`, `userId`, `includeWatches?` |
 | `compare` | Compare two sessions/dumps | `kind`, `sessionId`, `userId`, `targetSessionId`, `targetUserId` |
 | `inspect` | Object/module/SOS helpers | `kind`, `sessionId`, `userId` (+ kind-specific args) |
 | `dump` | Open/close a dump in a session | `action`, `sessionId`, `userId`, `dumpId` |
@@ -238,6 +238,35 @@ analyze(kind="crash", sessionId="session-123", userId="user1", includeWatches=tr
     "~*k": "Child-SP          RetAddr           Call Site...",
     "~": "   0  Id: 1234.5678 Suspend: 1 Teb: 00000000`00001000...",
     "lm": "start             end                 module name..."
+  }
+}
+```
+
+---
+
+## 1b. analyze(kind="ai")
+
+**Purpose**: AI-assisted crash analysis via MCP sampling. The server generates an initial crash report (JSON) and then runs an iterative LLM investigation loop where the LLM can request additional evidence via tools.
+
+**Usage**:
+```
+analyze(kind="ai", sessionId="session-123", userId="user1")
+```
+
+**Notes**:
+- Requires an MCP client that supports sampling (`sampling/createMessage`) with tools enabled.
+- Output matches `analyze(kind="crash")` plus an `aiAnalysis` section.
+
+**Example Output (excerpt)**:
+```json
+{
+  "aiAnalysis": {
+    "rootCause": "Race condition in UserService.GetCurrentUser() leading to a null dereference during logout.",
+    "confidence": "high",
+    "reasoning": "The faulting thread dereferenced a field that another thread set to null; no synchronization was present.",
+    "commandsExecuted": [
+      { "tool": "exec", "input": { "command": "!threads" }, "output": "...", "iteration": 1, "duration": "00:00:00.123" }
+    ]
   }
 }
 ```
