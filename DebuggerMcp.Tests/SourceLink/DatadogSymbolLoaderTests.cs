@@ -77,6 +77,85 @@ public class DatadogSymbolLoaderTests
     }
 
     [Fact]
+    public void FindDatadogSymbolDirectories_ReturnsEmpty_WhenDatadogRootDoesNotExist()
+    {
+        // Arrange
+        var tempDir = Path.Combine(Path.GetTempPath(), $"dd_cache_{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            // Act
+            var dirs = DatadogSymbolLoader.FindDatadogSymbolDirectories(tempDir);
+
+            // Assert
+            Assert.NotNull(dirs);
+            Assert.Empty(dirs);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void FindDatadogSymbolDirectories_ReturnsRootAndAllSubdirectories_WithSorting()
+    {
+        // Arrange
+        var tempDir = Path.Combine(Path.GetTempPath(), $"dd_cache_{Guid.NewGuid():N}");
+        var datadogRoot = Path.Combine(tempDir, ".datadog");
+        var net60 = Path.Combine(datadogRoot, "symbols-linux-x64", "net6.0");
+        var linuxX64 = Path.Combine(datadogRoot, "symbols-linux-x64", "linux-x64");
+        Directory.CreateDirectory(net60);
+        Directory.CreateDirectory(linuxX64);
+
+        try
+        {
+            // Act
+            var dirs = DatadogSymbolLoader.FindDatadogSymbolDirectories(tempDir);
+
+            // Assert
+            Assert.NotNull(dirs);
+            Assert.Contains(datadogRoot, dirs, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains(net60, dirs, StringComparer.OrdinalIgnoreCase);
+            Assert.Contains(linuxX64, dirs, StringComparer.OrdinalIgnoreCase);
+            Assert.True(dirs.Count >= 3);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void FindDatadogSymbolDirectories_RespectsMaxDirectoriesCap()
+    {
+        // Arrange
+        var tempDir = Path.Combine(Path.GetTempPath(), $"dd_cache_{Guid.NewGuid():N}");
+        var datadogRoot = Path.Combine(tempDir, ".datadog");
+        Directory.CreateDirectory(datadogRoot);
+        for (var i = 0; i < 20; i++)
+        {
+            Directory.CreateDirectory(Path.Combine(datadogRoot, "d", i.ToString("D2")));
+        }
+
+        try
+        {
+            // Act
+            var dirs = DatadogSymbolLoader.FindDatadogSymbolDirectories(tempDir, maxDirectories: 5);
+
+            // Assert
+            Assert.NotNull(dirs);
+            Assert.True(dirs.Count <= 5);
+            Assert.Contains(datadogRoot, dirs, StringComparer.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
     public void GenerateLldbCommands_ReturnsEmpty_WhenMergeResultIsNull()
     {
         // Arrange

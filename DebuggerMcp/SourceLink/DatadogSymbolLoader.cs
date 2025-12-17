@@ -114,6 +114,94 @@ public class DatadogSymbolLoader
     }
 
     /// <summary>
+    /// Discovers all directories under the Datadog symbol root (<c>.datadog</c>) for SOS configuration.
+    /// </summary>
+    /// <param name="symbolCacheDirectory">The per-dump symbol cache directory (e.g., <c>.symbols_&lt;dumpId&gt;</c>).</param>
+    /// <param name="maxDirectories">Maximum number of directories to return to avoid runaway enumeration.</param>
+    /// <returns>Ordered, de-duplicated list of directories under <c>.datadog</c>, including the root.</returns>
+    public static IReadOnlyList<string> FindDatadogSymbolDirectories(string symbolCacheDirectory, int maxDirectories = 5000)
+    {
+        if (string.IsNullOrWhiteSpace(symbolCacheDirectory))
+        {
+            return Array.Empty<string>();
+        }
+
+        if (maxDirectories <= 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        try
+        {
+            var fullSymbolCacheDirectory = Path.GetFullPath(symbolCacheDirectory);
+            if (!Directory.Exists(fullSymbolCacheDirectory))
+            {
+                return Array.Empty<string>();
+            }
+
+            var datadogRoot = Path.Combine(fullSymbolCacheDirectory, ".datadog");
+            if (!Directory.Exists(datadogRoot))
+            {
+                return Array.Empty<string>();
+            }
+
+            var results = new List<string>(capacity: Math.Min(64, maxDirectories));
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            void Add(string path)
+            {
+                if (results.Count >= maxDirectories)
+                {
+                    return;
+                }
+
+                try
+                {
+                    var full = Path.GetFullPath(path);
+                    if (!Directory.Exists(full))
+                    {
+                        return;
+                    }
+
+                    if (seen.Add(full))
+                    {
+                        results.Add(full);
+                    }
+                }
+                catch
+                {
+                    // Best-effort.
+                }
+            }
+
+            Add(datadogRoot);
+
+            try
+            {
+                foreach (var dir in Directory.EnumerateDirectories(datadogRoot, "*", SearchOption.AllDirectories))
+                {
+                    Add(dir);
+                    if (results.Count >= maxDirectories)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch
+            {
+                // Best-effort.
+            }
+
+            results.Sort(StringComparer.OrdinalIgnoreCase);
+            return results;
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
+    }
+
+    /// <summary>
     /// Initializes a new instance of the <see cref="DatadogSymbolLoader"/> class.
     /// </summary>
     /// <param name="logger">Optional logger for diagnostics.</param>

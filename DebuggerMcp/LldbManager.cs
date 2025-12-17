@@ -1192,7 +1192,7 @@ public class LldbManager : IDebuggerManager
             // These are local PDBs (.datadog/.../netX.Y) and may not be found unless explicitly registered.
             try
             {
-                var datadogManagedDirs = SourceLink.DatadogSymbolLoader.FindManagedPdbDirectories(cacheDir);
+                var datadogManagedDirs = SourceLink.DatadogSymbolLoader.FindDatadogSymbolDirectories(cacheDir);
                 if (datadogManagedDirs.Count > 0)
                 {
                     _logger.LogInformation(
