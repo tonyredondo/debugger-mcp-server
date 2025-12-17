@@ -152,4 +152,43 @@ public class OpenRouterClientTests
         Assert.Equal("auto", reqDoc.RootElement.GetProperty("tool_choice").GetString());
         Assert.Equal(50, reqDoc.RootElement.GetProperty("max_tokens").GetInt32());
     }
+
+    [Fact]
+    public async Task ChatCompletionAsync_ToolChoiceRequiredWithName_SendsFunctionObject()
+    {
+        var settings = new LlmSettings
+        {
+            OpenRouterApiKey = "k",
+            OpenRouterModel = "openrouter/auto",
+            OpenRouterBaseUrl = "https://openrouter.ai/api/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenRouterClient(http, settings);
+
+        using var schemaDoc = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}");
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")],
+            Tools = [new ChatTool { Name = "exec", Description = "d", Parameters = schemaDoc.RootElement.Clone() }],
+            ToolChoice = new ChatToolChoice { Mode = "required", FunctionName = "exec" },
+            MaxTokens = null
+        });
+
+        using var reqDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        var toolChoice = reqDoc.RootElement.GetProperty("tool_choice");
+        Assert.Equal(JsonValueKind.Object, toolChoice.ValueKind);
+        Assert.Equal("function", toolChoice.GetProperty("type").GetString());
+        Assert.Equal("exec", toolChoice.GetProperty("function").GetProperty("name").GetString());
+    }
 }

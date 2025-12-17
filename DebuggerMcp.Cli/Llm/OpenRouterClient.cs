@@ -219,12 +219,8 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             return null;
         }
 
-        var mode = (choice.Mode ?? "auto").Trim().ToLowerInvariant();
-        if (mode is "auto" or "none" or "required")
-        {
-            return mode;
-        }
-
+        // If a specific function name is provided, prefer the explicit OpenAI-style object.
+        // This should override generic modes like "required".
         if (!string.IsNullOrWhiteSpace(choice.FunctionName))
         {
             return new
@@ -232,6 +228,12 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
                 type = "function",
                 function = new { name = choice.FunctionName }
             };
+        }
+
+        var mode = (choice.Mode ?? "auto").Trim().ToLowerInvariant();
+        if (mode is "auto" or "none" or "required")
+        {
+            return mode;
         }
 
         return "auto";
