@@ -49,7 +49,7 @@ public sealed class AiAnalysisTools(
         McpServer server,
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
-        [Description("Maximum analysis iterations (default: 10)")] int maxIterations = 10,
+        [Description("Maximum analysis iterations (default: 100)")] int maxIterations = 100,
         [Description("Maximum output tokens per sampling request (default: 4096)")] int maxTokens = 4096,
         [Description("Include watch expression evaluations in the initial report (default: true)")] bool includeWatches = true,
         [Description("Include security analysis in the initial report (default: true)")] bool includeSecurity = true,
@@ -102,7 +102,7 @@ public sealed class AiAnalysisTools(
         }
 
         // Clamp user-controlled parameters to avoid accidental runaway sampling loops / oversized completions.
-        maxIterations = Math.Clamp(maxIterations, 1, 20);
+        maxIterations = Math.Clamp(maxIterations, 1, 100);
         maxTokens = Math.Clamp(maxTokens, 256, 8192);
 
         // Build a bounded JSON prompt for the LLM to keep sampling payload sizes reasonable.

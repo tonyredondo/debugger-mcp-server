@@ -152,7 +152,7 @@ public sealed class CompactTools
         [Description("Optional action (security only): capabilities")] string? action = null,
         [Description("Include watches (default: true)")] bool includeWatches = true,
         [Description("Include security analysis (AI only, default: true)")] bool includeSecurity = true,
-        [Description("Maximum AI iterations (AI only, default: 10)")] int maxIterations = 10,
+        [Description("Maximum AI iterations (AI only, default: 100)")] int maxIterations = 100,
         [Description("Maximum output tokens (AI only, default: 4096)")] int maxTokens = 4096,
         CancellationToken cancellationToken = default)
     {

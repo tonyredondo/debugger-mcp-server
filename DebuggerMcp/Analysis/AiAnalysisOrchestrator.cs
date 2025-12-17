@@ -23,7 +23,7 @@ public sealed class AiAnalysisOrchestrator(
     /// <summary>
     /// Gets or sets the maximum number of sampling iterations to perform.
     /// </summary>
-    public int MaxIterations { get; set; } = 10;
+    public int MaxIterations { get; set; } = 100;
 
     /// <summary>
     /// Gets or sets the maximum number of output tokens to request per sampling call.
