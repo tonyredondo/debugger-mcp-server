@@ -3803,23 +3803,26 @@ public class Program
 
             try
             {
-                var result = await output.WithSpinnerAsync(
-                    "Scanning dump and downloading Datadog symbols...",
-                    () => mcpClient.PrepareDatadogSymbolsAsync(
-                        state.SessionId!,
-                        state.Settings.UserId,
-                        loadIntoDebugger,
-                        forceVersion));
+	                var result = await output.WithSpinnerAsync(
+	                    "Scanning dump and downloading Datadog symbols...",
+	                    () => mcpClient.PrepareDatadogSymbolsAsync(
+	                        state.SessionId!,
+	                        state.Settings.UserId,
+	                        loadIntoDebugger,
+	                        forceVersion));
 
-                if (IsErrorResult(result))
-                {
-                    output.Error(result);
-                    return;
-                }
+	                if (IsErrorResult(result))
+	                {
+	                    if (!TryRenderJsonError(output, result))
+	                    {
+	                        output.Error(result);
+	                    }
+	                    return;
+	                }
 
-                // Pretty print the auto-detection result
-                try
-                {
+	                // Pretty print the auto-detection result
+	                try
+	                {
                     using var doc = System.Text.Json.JsonDocument.Parse(result);
                     var root = doc.RootElement;
 
@@ -3842,127 +3845,25 @@ public class Program
                     }
 
                     // If not successful, show error message and return
-                    if (!isSuccess)
-                    {
-                        if (root.TryGetProperty("message", out var msg))
-                        {
-                            output.Error(msg.GetString() ?? "Symbol download failed");
+	                    if (!isSuccess)
+	                    {
+	                        if (root.TryGetProperty("message", out var msg))
+	                        {
+	                            output.Error(msg.GetString() ?? "Symbol download failed");
                         }
                         else
                         {
                             output.Error("Symbol download failed");
                         }
-                        return;
-                    }
+	                        return;
+	                    }
 
-                    // Show download result
-                    if (root.TryGetProperty("downloadResult", out var dl) &&
-                        dl.ValueKind == System.Text.Json.JsonValueKind.Object)
-                    {
-                        output.Success("Symbols downloaded!");
-
-                        // Show source (GitHub Releases vs Azure Pipelines)
-                        var isGitHub = dl.TryGetProperty("buildUrl", out var urlProp) &&
-                                      urlProp.GetString()?.Contains("github.com") == true;
-
-                        if (dl.TryGetProperty("buildNumber", out var buildNum))
-                            output.KeyValue(isGitHub ? "Release" : "Build", buildNum.GetString() ?? "");
-
-                        if (dl.TryGetProperty("buildId", out var dlBuildId) &&
-                            dlBuildId.ValueKind == System.Text.Json.JsonValueKind.Number)
-                            output.KeyValue("Build ID", dlBuildId.GetInt32().ToString());
-
-                        if (dl.TryGetProperty("downloadedArtifacts", out var artifacts) &&
-                            artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
-                            output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
-
-                        // Only show files extracted if > 0 (can be 0 when cached)
-                        if (dl.TryGetProperty("filesExtracted", out var files) &&
-                            files.ValueKind == System.Text.Json.JsonValueKind.Number &&
-                            files.GetInt32() > 0)
-                            output.KeyValue("Files Extracted", files.GetInt32().ToString());
-
-                        // Show source URL
-                        if (urlProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                            output.Dim($"Source: {urlProp.GetString()}");
-                    }
-
-                    // Show load result
-                    if (root.TryGetProperty("symbolsLoaded", out var loaded) &&
-                        loaded.ValueKind == System.Text.Json.JsonValueKind.Object)
-                    {
-                        output.WriteLine();
-                        output.Markup("[bold]Symbol Loading:[/]");
-                        if (loaded.TryGetProperty("nativeSymbolsLoaded", out var native) &&
-                            native.ValueKind == System.Text.Json.JsonValueKind.Number)
-                            output.KeyValue("Native Symbols", native.GetInt32().ToString());
-                        if (loaded.TryGetProperty("managedSymbolPaths", out var managed) &&
-                            managed.ValueKind == System.Text.Json.JsonValueKind.Number)
-                            output.KeyValue("Managed Symbol Paths", managed.GetInt32().ToString());
-                    }
-
-                    // Show SHA mismatch warning if we fell back from commit to version
-                    if (root.TryGetProperty("downloadResult", out var dlResult) &&
-                        dlResult.TryGetProperty("shaMismatch", out var shaMismatch) &&
-                        shaMismatch.ValueKind == System.Text.Json.JsonValueKind.True)
-                    {
-                        output.WriteLine();
-                        output.Warning("Note: Exact commit SHA not found - downloaded symbols by version tag.");
-                        output.Dim("  The symbols should match, but are from a release build rather than the exact commit.");
-                    }
-
-                    // Show PDB patching results if any
-                    if (root.TryGetProperty("pdbsPatched", out var pdbsPatched) &&
-                        pdbsPatched.ValueKind == System.Text.Json.JsonValueKind.Object)
-                    {
-                        var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched)
-                            ? patched.GetInt32() : 0;
-                        var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified)
-                            ? verified.GetInt32() : 0;
-
-                        if (patchedCount > 0)
-                        {
-                            output.WriteLine();
-                            if (verifiedCount == patchedCount)
-                            {
-                                output.Success($"⚙ Patched and verified {patchedCount} PDB file(s) to match dump module GUIDs:");
-                            }
-                            else if (verifiedCount > 0)
-                            {
-                                output.Warning($"⚙ Patched {patchedCount} PDB file(s), but only {verifiedCount} verified successfully:");
-                            }
-                            else
-                            {
-                                output.Error($"⚙ Patched {patchedCount} PDB file(s), but verification FAILED:");
-                            }
-
-                            if (pdbsPatched.TryGetProperty("files", out var patchedFiles) &&
-                                patchedFiles.ValueKind == System.Text.Json.JsonValueKind.Array)
-                            {
-                                foreach (var patchedFile in patchedFiles.EnumerateArray())
-                                {
-                                    var fileName = patchedFile.TryGetProperty("file", out var f)
-                                        ? f.GetString() : "unknown";
-                                    var fileVerified = patchedFile.TryGetProperty("verified", out var fv) && fv.GetBoolean();
-                                    var checkmark = fileVerified ? "✓" : "✗";
-                                    output.Dim($"  {checkmark} {fileName}");
-                                }
-                            }
-
-                            if (verifiedCount == patchedCount)
-                            {
-                                output.Dim("  This allows SOS to load symbols despite the version mismatch.");
-                            }
-                            else
-                            {
-                                output.Error("  Symbol loading may not work correctly. Try clearing symbols and re-downloading.");
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Show error but don't dump raw JSON
+	                    output.Success("Datadog symbols downloaded!");
+	                    RenderDatadogSymbolsResultSummary(output, result);
+	                }
+	                catch (Exception ex)
+	                {
+	                    // Show error but don't dump raw JSON
                     output.Error($"Error parsing result: {ex.Message}");
                 }
 
@@ -4001,10 +3902,10 @@ public class Program
             output.Dim($"Target framework: {targetFramework}");
         }
 
-        try
-        {
-            var result = await output.WithSpinnerAsync(
-                "Downloading Datadog symbols...",
+	        try
+	        {
+	            var result = await output.WithSpinnerAsync(
+	                "Downloading Datadog symbols...",
                 () => mcpClient.DownloadDatadogSymbolsAsync(
                     state.SessionId!,
                     state.Settings.UserId,
@@ -4015,127 +3916,295 @@ public class Program
                     version: null,
                     buildId: buildId));
 
-            if (IsErrorResult(result))
-            {
-                output.Error(result);
-            }
-            else
-            {
-                output.Success("Datadog symbols downloaded!");
-
-                // Pretty print the JSON result
-                try
-                {
-                    using var doc = System.Text.Json.JsonDocument.Parse(result);
-                    var root = doc.RootElement;
-
-                    // Determine source type
-                    var isGitHub = root.TryGetProperty("buildUrl", out var urlProp) &&
-                                  urlProp.GetString()?.Contains("github.com") == true;
-
-                    if (root.TryGetProperty("buildNumber", out var buildNumElem))
-                        output.KeyValue(isGitHub ? "Release" : "Build", buildNumElem.GetString() ?? "");
-
-                    if (root.TryGetProperty("buildId", out var buildIdElem) &&
-                        buildIdElem.ValueKind == System.Text.Json.JsonValueKind.Number)
-                        output.KeyValue("Build ID", buildIdElem.GetInt32().ToString());
-
-                    if (root.TryGetProperty("downloadedArtifacts", out var artifacts) &&
-                        artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
-                        output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
-
-                    // Only show files extracted if > 0 (can be 0 when cached)
-                    if (root.TryGetProperty("filesExtracted", out var files) &&
-                        files.ValueKind == System.Text.Json.JsonValueKind.Number &&
-                        files.GetInt32() > 0)
-                        output.KeyValue("Files Extracted", files.GetInt32().ToString());
-
-                    if (root.TryGetProperty("symbolsLoaded", out var loaded) &&
-                        loaded.ValueKind == System.Text.Json.JsonValueKind.Object)
-                    {
-                        if (loaded.TryGetProperty("nativeSymbolsLoaded", out var native) &&
-                            native.ValueKind == System.Text.Json.JsonValueKind.Number)
-                            output.KeyValue("Native Symbols", native.GetInt32().ToString());
-                        if (loaded.TryGetProperty("managedSymbolPaths", out var managed) &&
-                            managed.ValueKind == System.Text.Json.JsonValueKind.Number)
-                            output.KeyValue("Managed Paths", managed.GetInt32().ToString());
-                    }
-
-                    if (urlProp.ValueKind == System.Text.Json.JsonValueKind.String)
-                        output.Dim($"Source: {urlProp.GetString()}");
-
-                    // Show SHA mismatch warning and PDB patching info
-                    if (root.TryGetProperty("shaMismatch", out var shaMismatch) &&
-                        shaMismatch.ValueKind == System.Text.Json.JsonValueKind.True)
-                    {
-                        output.WriteLine();
-                        output.Warning("Note: Exact commit SHA not found - downloaded symbols by version tag.");
-
-                        // Show PDB patching info if any PDBs were patched
-                        if (root.TryGetProperty("pdbsPatched", out var pdbsPatched) &&
-                            pdbsPatched.ValueKind == System.Text.Json.JsonValueKind.Object)
-                        {
-                            var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched)
-                                ? patched.GetInt32() : 0;
-                            var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified)
-                                ? verified.GetInt32() : 0;
-
-                            if (patchedCount > 0)
-                            {
-                                output.WriteLine();
-                                if (verifiedCount == patchedCount)
-                                {
-                                    output.Success($"⚙ Patched and verified {patchedCount} PDB file(s) to match dump module GUIDs:");
-                                }
-                                else if (verifiedCount > 0)
-                                {
-                                    output.Warning($"⚙ Patched {patchedCount} PDB file(s), but only {verifiedCount} verified successfully:");
-                                }
-                                else
-                                {
-                                    output.Error($"⚙ Patched {patchedCount} PDB file(s), but verification FAILED:");
-                                }
-
-                                if (pdbsPatched.TryGetProperty("files", out var patchedFiles) &&
-                                    patchedFiles.ValueKind == System.Text.Json.JsonValueKind.Array)
-                                {
-                                    foreach (var patchedFile in patchedFiles.EnumerateArray())
-                                    {
-                                        var fileName = patchedFile.TryGetProperty("file", out var f)
-                                            ? f.GetString() : "unknown";
-                                        var fileVerified = patchedFile.TryGetProperty("verified", out var fv) && fv.GetBoolean();
-                                        var checkmark = fileVerified ? "✓" : "✗";
-                                        output.Dim($"  {checkmark} {fileName}");
-                                    }
-                                }
-
-                                if (verifiedCount == patchedCount)
-                                {
-                                    output.Dim("  This allows SOS to load symbols despite the version mismatch.");
-                                }
-                                else
-                                {
-                                    output.Error("  Symbol loading may not work correctly. Try clearing symbols and re-downloading.");
-                                }
-                            }
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    output.Error($"Error parsing result: {ex.Message}");
-                }
-            }
-        }
-        catch (McpClientException ex)
-        {
+	            if (IsErrorResult(result))
+	            {
+	                if (!TryRenderJsonError(output, result))
+	                {
+	                    output.Error(result);
+	                }
+	            }
+	            else
+	            {
+	                output.Success("Datadog symbols downloaded!");
+	                RenderDatadogSymbolsResultSummary(output, result);
+	            }
+	        }
+	        catch (McpClientException ex)
+	        {
             output.Error($"Failed to download Datadog symbols: {ex.Message}");
         }
         catch (Exception ex)
         {
             output.Error($"Failed to download Datadog symbols: {ex.Message}");
-        }
-    }
+	        }
+	    }
+
+	    private static bool TryRenderJsonError(ConsoleOutput output, string result)
+	    {
+	        try
+	        {
+	            using var doc = System.Text.Json.JsonDocument.Parse(result);
+	            var root = doc.RootElement;
+	            if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+	            {
+	                return false;
+	            }
+
+	            if (root.TryGetProperty("error", out var err))
+	            {
+	                if (err.ValueKind == System.Text.Json.JsonValueKind.String && !string.IsNullOrWhiteSpace(err.GetString()))
+	                {
+	                    output.Error(err.GetString()!);
+	                    return true;
+	                }
+
+	                if (err.ValueKind == System.Text.Json.JsonValueKind.Object &&
+	                    err.TryGetProperty("message", out var msg) &&
+	                    msg.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                    !string.IsNullOrWhiteSpace(msg.GetString()))
+	                {
+	                    output.Error(msg.GetString()!);
+	                    return true;
+	                }
+	            }
+
+	            if (root.TryGetProperty("message", out var message) &&
+	                message.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                !string.IsNullOrWhiteSpace(message.GetString()))
+	            {
+	                output.Error(message.GetString()!);
+	                return true;
+	            }
+
+	            return false;
+	        }
+	        catch
+	        {
+	            return false;
+	        }
+	    }
+
+	    private static void RenderDatadogSymbolsResultSummary(ConsoleOutput output, string result)
+	    {
+	        try
+	        {
+	            using var doc = System.Text.Json.JsonDocument.Parse(result);
+	            var root = doc.RootElement;
+	            if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+	            {
+	                output.Error("Unexpected result format (expected JSON object).");
+	                return;
+	            }
+
+	            var summaryRoot = root.TryGetProperty("downloadResult", out var dl) &&
+	                              dl.ValueKind == System.Text.Json.JsonValueKind.Object
+	                ? dl
+	                : root;
+
+	            // Build / Release
+	            var isGitHub = summaryRoot.TryGetProperty("buildUrl", out var urlProp) &&
+	                           urlProp.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                           (urlProp.GetString() ?? "").Contains("github.com", StringComparison.OrdinalIgnoreCase);
+
+	            if (summaryRoot.TryGetProperty("buildNumber", out var buildNum) &&
+	                buildNum.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                !string.IsNullOrWhiteSpace(buildNum.GetString()))
+	            {
+	                output.KeyValue(isGitHub ? "Release" : "Build", buildNum.GetString());
+	            }
+
+	            if (summaryRoot.TryGetProperty("buildId", out var buildIdElem) &&
+	                buildIdElem.ValueKind == System.Text.Json.JsonValueKind.Number)
+	            {
+	                output.KeyValue("Build ID", buildIdElem.GetInt32().ToString());
+	            }
+
+	            // Platform / TFM
+	            if (root.TryGetProperty("platform", out var platform) &&
+	                platform.ValueKind == System.Text.Json.JsonValueKind.Object)
+	            {
+	                var os = platform.TryGetProperty("os", out var osProp) && osProp.ValueKind == System.Text.Json.JsonValueKind.String
+	                    ? osProp.GetString()
+	                    : null;
+	                var arch = platform.TryGetProperty("architecture", out var archProp) && archProp.ValueKind == System.Text.Json.JsonValueKind.String
+	                    ? archProp.GetString()
+	                    : null;
+	                var suffix = platform.TryGetProperty("suffix", out var suffixProp) && suffixProp.ValueKind == System.Text.Json.JsonValueKind.String
+	                    ? suffixProp.GetString()
+	                    : null;
+	                var isAlpine = platform.TryGetProperty("isAlpine", out var alpineProp) &&
+	                               (alpineProp.ValueKind == System.Text.Json.JsonValueKind.True ||
+	                                alpineProp.ValueKind == System.Text.Json.JsonValueKind.False)
+	                    ? alpineProp.GetBoolean()
+	                    : (bool?)null;
+
+	                var platformParts = new List<string>();
+	                if (!string.IsNullOrWhiteSpace(os)) platformParts.Add(os!);
+	                if (!string.IsNullOrWhiteSpace(arch)) platformParts.Add(arch!);
+	                if (!string.IsNullOrWhiteSpace(suffix)) platformParts.Add($"({suffix})");
+	                if (isAlpine == true) platformParts.Add("[Alpine]");
+	                if (isAlpine == false) platformParts.Add("[glibc]");
+
+	                if (platformParts.Count > 0)
+	                {
+	                    output.KeyValue("Platform", string.Join(" ", platformParts));
+	                }
+	            }
+
+	            if (root.TryGetProperty("targetFramework", out var tfm) &&
+	                tfm.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                !string.IsNullOrWhiteSpace(tfm.GetString()))
+	            {
+	                output.KeyValue("Target Framework", tfm.GetString());
+	            }
+
+	            // Artifacts
+	            if (summaryRoot.TryGetProperty("downloadedArtifacts", out var artifacts) &&
+	                artifacts.ValueKind == System.Text.Json.JsonValueKind.Array)
+	            {
+	                output.KeyValue("Artifacts", artifacts.GetArrayLength().ToString());
+	                foreach (var a in artifacts.EnumerateArray())
+	                {
+	                    if (a.ValueKind == System.Text.Json.JsonValueKind.String && !string.IsNullOrWhiteSpace(a.GetString()))
+	                    {
+	                        output.Dim($"  - {a.GetString()}");
+	                    }
+	                }
+	            }
+
+	            // Files extracted
+	            if (summaryRoot.TryGetProperty("filesExtracted", out var files) &&
+	                files.ValueKind == System.Text.Json.JsonValueKind.Number &&
+	                files.GetInt32() > 0)
+	            {
+	                output.KeyValue("Files Extracted", files.GetInt32().ToString());
+	            }
+
+	            // Server-side directories (only provided by direct download tool)
+	            if (root.TryGetProperty("symbolDirectory", out var symbolDir) &&
+	                symbolDir.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                !string.IsNullOrWhiteSpace(symbolDir.GetString()))
+	            {
+	                output.WriteLine();
+	                output.Markup("[bold]Server Directories:[/]");
+	                output.KeyValue("Symbol Root", symbolDir.GetString());
+	                if (root.TryGetProperty("nativeSymbolsDirectory", out var nativeDir) &&
+	                    nativeDir.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                    !string.IsNullOrWhiteSpace(nativeDir.GetString()))
+	                {
+	                    output.KeyValue("Native", nativeDir.GetString());
+	                }
+	                if (root.TryGetProperty("managedSymbolsDirectory", out var managedDir) &&
+	                    managedDir.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                    !string.IsNullOrWhiteSpace(managedDir.GetString()))
+	                {
+	                    output.KeyValue("Managed", managedDir.GetString());
+	                }
+	            }
+
+	            // Symbol loading
+	            if (root.TryGetProperty("symbolsLoaded", out var loaded) &&
+	                loaded.ValueKind == System.Text.Json.JsonValueKind.Object)
+	            {
+	                output.WriteLine();
+	                output.Markup("[bold]Symbol Loading:[/]");
+
+	                if (loaded.TryGetProperty("success", out var loadedSuccess) &&
+	                    (loadedSuccess.ValueKind == System.Text.Json.JsonValueKind.True ||
+	                     loadedSuccess.ValueKind == System.Text.Json.JsonValueKind.False))
+	                {
+	                    output.KeyValue("Success", loadedSuccess.GetBoolean().ToString());
+	                }
+
+	                if (loaded.TryGetProperty("nativeSymbolsLoaded", out var native) &&
+	                    native.ValueKind == System.Text.Json.JsonValueKind.Number)
+	                {
+	                    output.KeyValue("Native Symbols", native.GetInt32().ToString());
+	                }
+
+	                if (loaded.TryGetProperty("managedSymbolPaths", out var managed) &&
+	                    managed.ValueKind == System.Text.Json.JsonValueKind.Number)
+	                {
+	                    output.KeyValue("Managed Symbol Paths", managed.GetInt32().ToString());
+	                }
+
+	                if (loaded.TryGetProperty("commandsExecuted", out var cmds) &&
+	                    cmds.ValueKind == System.Text.Json.JsonValueKind.Number)
+	                {
+	                    output.KeyValue("Commands Executed", cmds.GetInt32().ToString());
+	                }
+	            }
+
+	            // SHA mismatch warning + patching details
+	            if ((summaryRoot.TryGetProperty("shaMismatch", out var shaMismatch) && shaMismatch.ValueKind == System.Text.Json.JsonValueKind.True) ||
+	                (root.TryGetProperty("shaMismatch", out var shaMismatch2) && shaMismatch2.ValueKind == System.Text.Json.JsonValueKind.True))
+	            {
+	                output.WriteLine();
+	                output.Warning("SHA mismatch: symbols were not built for the exact commit.");
+	                output.Dim("  SOS may fail to load symbols unless PDBs were patched.");
+	            }
+
+	            if (root.TryGetProperty("pdbsPatched", out var pdbsPatched) &&
+	                pdbsPatched.ValueKind == System.Text.Json.JsonValueKind.Object)
+	            {
+	                var patchedCount = pdbsPatched.TryGetProperty("patched", out var patched)
+	                    ? patched.GetInt32() : 0;
+	                var verifiedCount = pdbsPatched.TryGetProperty("verified", out var verified)
+	                    ? verified.GetInt32() : 0;
+
+	                if (patchedCount > 0)
+	                {
+	                    output.WriteLine();
+	                    if (verifiedCount == patchedCount)
+	                    {
+	                        output.Success($"⚙ Patched and verified {patchedCount} PDB file(s) to match dump module GUIDs:");
+	                    }
+	                    else if (verifiedCount > 0)
+	                    {
+	                        output.Warning($"⚙ Patched {patchedCount} PDB file(s), but only {verifiedCount} verified successfully:");
+	                    }
+	                    else
+	                    {
+	                        output.Error($"⚙ Patched {patchedCount} PDB file(s), but verification FAILED:");
+	                    }
+
+	                    if (pdbsPatched.TryGetProperty("files", out var patchedFiles) &&
+	                        patchedFiles.ValueKind == System.Text.Json.JsonValueKind.Array)
+	                    {
+	                        foreach (var patchedFile in patchedFiles.EnumerateArray())
+	                        {
+	                            var fileName = patchedFile.TryGetProperty("file", out var f) ? f.GetString() : null;
+	                            var fileVerified = patchedFile.TryGetProperty("verified", out var fv) && fv.ValueKind == System.Text.Json.JsonValueKind.True;
+	                            if (!string.IsNullOrWhiteSpace(fileName))
+	                            {
+	                                var checkmark = fileVerified ? "✓" : "✗";
+	                                output.Dim($"  {checkmark} {fileName}");
+	                            }
+	                        }
+	                    }
+	                }
+	            }
+
+	            // Source URL
+	            if (summaryRoot.TryGetProperty("source", out var source) &&
+	                source.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                !string.IsNullOrWhiteSpace(source.GetString()))
+	            {
+	                output.WriteLine();
+	                output.Dim($"Source: {source.GetString()}");
+	            }
+	            else if (urlProp.ValueKind == System.Text.Json.JsonValueKind.String &&
+	                     !string.IsNullOrWhiteSpace(urlProp.GetString()))
+	            {
+	                output.WriteLine();
+	                output.Dim($"Source: {urlProp.GetString()}");
+	            }
+	        }
+	        catch (Exception ex)
+	        {
+	            output.Error($"Error parsing result: {ex.Message}");
+	        }
+	    }
 
     /// <summary>
     /// Handles listing available Datadog artifacts for a commit.
