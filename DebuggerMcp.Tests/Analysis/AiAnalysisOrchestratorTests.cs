@@ -221,7 +221,8 @@ public class AiAnalysisOrchestratorTests
             clrMdAnalyzer: null);
 
         Assert.Equal("low", result.Confidence);
-        Assert.Contains("maximum iterations", result.RootCause, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("did not call analysis_complete", result.RootCause, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("still thinking", result.Reasoning);
     }
 
     [Fact]
@@ -242,8 +243,70 @@ public class AiAnalysisOrchestratorTests
             clrMdAnalyzer: null);
 
         Assert.Equal(1, result.Iterations);
+        Assert.Equal("AI returned an answer but did not call analysis_complete.", result.RootCause);
+        Assert.Equal("still thinking", result.Reasoning);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenToolBudgetExceeded_StopsAndDoesNotExecuteExtraCommands()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!threads" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!dumpheap -stat" }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10,
+            MaxToolCalls = 2
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("low", result.Confidence);
+        Assert.Contains("tool call budget", result.RootCause, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(2, debugger.ExecutedCommands.Count);
+        Assert.DoesNotContain(debugger.ExecutedCommands, c => c.Contains("dumpheap", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Equal(2, result.CommandsExecuted!.Count);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenMaxIterationsReachedWithToolCalls_ReturnsMaxIterationsResult()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!threads" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack" }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 2
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("low", result.Confidence);
+        Assert.Contains("maximum iterations", result.RootCause, StringComparison.OrdinalIgnoreCase);
         Assert.NotNull(result.Reasoning);
-        Assert.Contains("within 1 iterations", result.Reasoning!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("did not call analysis_complete", result.Reasoning!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

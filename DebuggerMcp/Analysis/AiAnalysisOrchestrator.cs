@@ -31,6 +31,11 @@ public sealed class AiAnalysisOrchestrator(
     public int MaxTokensPerRequest { get; set; } = 4096;
 
     /// <summary>
+    /// Gets or sets the maximum number of tool calls to execute across all iterations.
+    /// </summary>
+    public int MaxToolCalls { get; set; } = 50;
+
+    /// <summary>
     /// Gets a value indicating whether AI analysis is available for the connected client.
     /// </summary>
     public bool IsSamplingAvailable => _samplingClient.IsSamplingSupported;
@@ -97,7 +102,12 @@ public sealed class AiAnalysisOrchestrator(
 
         var maxIterations = Math.Max(1, MaxIterations);
         var maxTokens = MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024;
+        var maxToolCalls = MaxToolCalls > 0 ? MaxToolCalls : 50;
         var tools = SamplingTools.GetDebuggerTools();
+
+        string? lastIterationAssistantText = null;
+        bool lastIterationHadToolCalls = false;
+        string? lastModel = null;
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
@@ -145,6 +155,18 @@ public sealed class AiAnalysisOrchestrator(
                 };
             }
 
+            lastModel = response.Model;
+            lastIterationHadToolCalls = false;
+            lastIterationAssistantText = null;
+            var textBlocks = response.Content.OfType<TextContentBlock>()
+                .Select(t => t.Text)
+                .Where(t => !string.IsNullOrWhiteSpace(t))
+                .ToList();
+            if (textBlocks.Count > 0)
+            {
+                lastIterationAssistantText = string.Join("\n", textBlocks).Trim();
+            }
+
             // Persist assistant content in the conversation history before executing any tool calls.
             messages.Add(new SamplingMessage
             {
@@ -168,6 +190,24 @@ public sealed class AiAnalysisOrchestrator(
                     var completed = ParseAnalysisComplete(toolUse.Input, commandsExecuted, iteration, response.Model);
                     completed.AnalyzedAt = DateTime.UtcNow;
                     return completed;
+                }
+
+                lastIterationHadToolCalls = true;
+
+                if (commandsExecuted.Count >= maxToolCalls)
+                {
+                    _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping analysis.", maxToolCalls);
+                    return new AiAnalysisResult
+                    {
+                        RootCause = "Analysis incomplete - tool call budget exceeded.",
+                        Confidence = "low",
+                        Reasoning = $"The AI attempted to execute more than {maxToolCalls} tool calls. " +
+                                    "Increase MaxToolCalls if you need a longer investigation loop.",
+                        Iterations = iteration,
+                        CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                        Model = response.Model,
+                        AnalyzedAt = DateTime.UtcNow
+                    };
                 }
 
                 var sw = Stopwatch.StartNew();
@@ -279,13 +319,28 @@ public sealed class AiAnalysisOrchestrator(
             }
         }
 
+        if (!lastIterationHadToolCalls && !string.IsNullOrWhiteSpace(lastIterationAssistantText))
+        {
+            return new AiAnalysisResult
+            {
+                RootCause = "AI returned an answer but did not call analysis_complete.",
+                Confidence = "low",
+                Reasoning = lastIterationAssistantText,
+                Iterations = maxIterations,
+                CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                Model = lastModel,
+                AnalyzedAt = DateTime.UtcNow
+            };
+        }
+
         return new AiAnalysisResult
         {
             RootCause = "Analysis incomplete - maximum iterations reached.",
             Confidence = "low",
             Reasoning = $"The AI did not call analysis_complete within {maxIterations} iterations.",
             Iterations = maxIterations,
-            CommandsExecuted = commandsExecuted,
+            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+            Model = lastModel,
             AnalyzedAt = DateTime.UtcNow
         };
     }
