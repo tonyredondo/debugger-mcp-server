@@ -24,14 +24,14 @@ public class LlmAgentRunnerTests
             }
 
             // After tool result is injected, stop.
-            Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c1");
+            Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c1" && m.Content.Contains("apiKey=***", StringComparison.OrdinalIgnoreCase));
             return Task.FromResult(new ChatCompletionResult { Text = "Done", ToolCalls = [] });
         }
 
         Task<string> ExecuteToolAsync(ChatToolCall call, CancellationToken _)
         {
             calls.Add(call);
-            return Task.FromResult("bt-output");
+            return Task.FromResult("apiKey=secret\nbt-output");
         }
 
         var runner = new LlmAgentRunner(CompleteAsync, ExecuteToolAsync, maxIterations: 5);

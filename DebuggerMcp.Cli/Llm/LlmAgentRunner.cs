@@ -1,3 +1,5 @@
+using DebuggerMcp.Cli.Shell.Transcript;
+
 namespace DebuggerMcp.Cli.Llm;
 
 /// <summary>
@@ -50,6 +52,8 @@ internal sealed class LlmAgentRunner(
             {
                 var toolResult = await _executeToolAsync(toolCall, cancellationToken).ConfigureAwait(false);
                 toolCallsExecuted++;
+                // Defense-in-depth: redact sensitive values before sending tool output to the model.
+                toolResult = TranscriptRedactor.RedactText(toolResult);
                 messages.Add(new ChatMessage("tool", toolResult, toolCall.Id, toolCalls: null));
             }
         }
