@@ -718,6 +718,10 @@ SOS/.NET debugger command notes:
 - Common SOS commands (examples only): sos clrstack -a, sos printexception, sos dumpheap -stat, sos dumpobj <addr>, sos dumpmt -md <mt>, sos dumpmodule <addr>, sos name2ee <assembly> <type>.
 - If a command errors with "Unrecognized command or argument" or "Unknown option", adapt based on "sos help <command>" instead of retrying randomly.
 
+Managed object inspection notes:
+- Prefer using the inspect tool for managed objects: inspect(address=0x..., maxDepth=...).
+- Use SOS dumpobj/dumpvc only as a fallback (e.g., inspect unavailable) or to cross-check specific fields.
+
 Investigation approach:
 1. Review the initial crash report carefully
 2. Identify the crashing thread and exception type

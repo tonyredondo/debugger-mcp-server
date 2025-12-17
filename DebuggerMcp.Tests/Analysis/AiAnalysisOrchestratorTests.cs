@@ -39,6 +39,7 @@ public class AiAnalysisOrchestratorTests
         Assert.False(string.IsNullOrWhiteSpace(seenRequest!.SystemPrompt));
         Assert.Contains("sos help", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sos clrstack -a", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Prefer using the inspect tool", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
