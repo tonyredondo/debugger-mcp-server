@@ -203,4 +203,68 @@ public class McpSamplingCreateMessageHandlerTests
         Assert.NotNull(seenRequest);
         Assert.Null(seenRequest!.Tools);
     }
+
+    [Fact]
+    public async Task HandleAsync_ParsesOpenAiStyleToolCallsAndToolResults()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "tools": [
+            {
+              "type": "function",
+              "function": {
+                "name": "exec",
+                "description": "run debugger command",
+                "parameters": { "type":"object","properties":{"command":{"type":"string"}},"required":["command"] }
+              }
+            }
+          ],
+          "messages": [
+            { "role": "user", "content": "Hello" },
+            {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "tc1",
+                  "type": "function",
+                  "function": { "name": "exec", "arguments": "{\"command\":\"bt\"}" }
+                }
+              ]
+            },
+            { "role": "tool", "tool_call_id": "tc1", "content": "ok" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal(3, seenRequest!.Messages.Count);
+
+        Assert.Equal("user", seenRequest.Messages[0].Role);
+        Assert.Equal("Hello", seenRequest.Messages[0].Content);
+
+        Assert.Equal("assistant", seenRequest.Messages[1].Role);
+        Assert.NotNull(seenRequest.Messages[1].ToolCalls);
+        Assert.Single(seenRequest.Messages[1].ToolCalls!);
+        Assert.Equal("tc1", seenRequest.Messages[1].ToolCalls![0].Id);
+        Assert.Equal("exec", seenRequest.Messages[1].ToolCalls![0].Name);
+        Assert.Contains("\"command\":\"bt\"", seenRequest.Messages[1].ToolCalls![0].ArgumentsJson);
+
+        Assert.Equal("tool", seenRequest.Messages[2].Role);
+        Assert.Equal("tc1", seenRequest.Messages[2].ToolCallId);
+        Assert.Equal("ok", seenRequest.Messages[2].Content);
+    }
 }
