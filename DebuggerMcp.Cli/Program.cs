@@ -5944,11 +5944,35 @@ public class Program
             {
                 using var doc = System.Text.Json.JsonDocument.Parse(result);
                 var root = doc.RootElement;
+
+                // Arrays (or other non-object JSON) cannot have an "error" property.
+                if (root.ValueKind != System.Text.Json.JsonValueKind.Object)
+                {
+                    return false;
+                }
                 
                 // Check for top-level "error" property
                 if (root.TryGetProperty("error", out var errorProp))
                 {
-                    // Has an explicit error field - this is an error
+                    // Many success responses include "error": null, so only treat it as an error
+                    // when it contains an actual message/object/flag.
+                    if (errorProp.ValueKind == System.Text.Json.JsonValueKind.Null ||
+                        errorProp.ValueKind == System.Text.Json.JsonValueKind.Undefined)
+                    {
+                        return false;
+                    }
+
+                    if (errorProp.ValueKind == System.Text.Json.JsonValueKind.String)
+                    {
+                        return !string.IsNullOrWhiteSpace(errorProp.GetString());
+                    }
+
+                    if (errorProp.ValueKind == System.Text.Json.JsonValueKind.False)
+                    {
+                        return false;
+                    }
+
+                    // For objects/arrays/numbers/true: assume it's an error payload.
                     return true;
                 }
                 
