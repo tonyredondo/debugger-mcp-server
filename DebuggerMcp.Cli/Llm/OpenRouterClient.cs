@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DebuggerMcp.Cli.Configuration;
 using DebuggerMcp.Cli.Serialization;
+using DebuggerMcp.Cli.Shell.Transcript;
 
 namespace DebuggerMcp.Cli.Llm;
 
@@ -13,6 +14,7 @@ namespace DebuggerMcp.Cli.Llm;
 public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings)
 {
     private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CaseInsensitiveCamelCaseIgnoreNull;
+    private const int MaxErrorBodyBytes = 32_000;
 
     private readonly HttpClient _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
     private readonly LlmSettings _settings = settings ?? throw new ArgumentNullException(nameof(settings));
@@ -75,12 +77,20 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
         using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
-        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
-            throw new HttpRequestException($"OpenRouter request failed ({(int)response.StatusCode}): {responseBody}");
+            var (errorBody, truncated) = await ReadContentCappedAsync(response.Content, MaxErrorBodyBytes, cancellationToken).ConfigureAwait(false);
+            errorBody = TranscriptRedactor.RedactText(errorBody);
+            if (truncated)
+            {
+                errorBody += $"{Environment.NewLine}... (truncated) ...";
+            }
+
+            throw new HttpRequestException($"OpenRouter request failed ({(int)response.StatusCode}): {errorBody}");
         }
+
+        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
         OpenRouterChatResponse? parsed;
         try
@@ -116,6 +126,44 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             Text = content,
             ToolCalls = toolCalls
         };
+    }
+
+    private static async Task<(string Text, bool Truncated)> ReadContentCappedAsync(
+        HttpContent content,
+        int maxBytes,
+        CancellationToken cancellationToken)
+    {
+        maxBytes = Math.Max(0, maxBytes);
+        if (maxBytes == 0)
+        {
+            return (string.Empty, false);
+        }
+
+        try
+        {
+            await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+            var buffer = new byte[maxBytes + 1];
+            var read = 0;
+            while (read < buffer.Length)
+            {
+                var n = await stream.ReadAsync(buffer.AsMemory(read, buffer.Length - read), cancellationToken).ConfigureAwait(false);
+                if (n <= 0)
+                {
+                    break;
+                }
+                read += n;
+            }
+
+            var truncated = read > maxBytes;
+            var effective = Math.Min(read, maxBytes);
+            var text = Encoding.UTF8.GetString(buffer, 0, effective);
+            return (text, truncated);
+        }
+        catch
+        {
+            // Best-effort: do not block on error-body parsing.
+            return (string.Empty, false);
+        }
     }
 
     private static OpenRouterChatMessage ToOpenRouterMessage(ChatMessage message)

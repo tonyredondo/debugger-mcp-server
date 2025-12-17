@@ -1,11 +1,14 @@
 using System.Net;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using DebuggerMcp.Cli.Configuration;
 using DebuggerMcp.Cli.Llm;
+using Xunit;
 
 namespace DebuggerMcp.Cli.Tests.Llm;
 
+[Collection("NonParallelConsole")]
 public class OpenRouterClientTests
 {
     private sealed class CapturingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
@@ -59,6 +62,35 @@ public class OpenRouterClientTests
         Assert.Equal(1, messages.GetArrayLength());
         Assert.Equal("user", messages[0].GetProperty("role").GetString());
         Assert.Equal("hi", messages[0].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task ChatAsync_Error_TruncatesAndRedactsBody()
+    {
+        var secret = "sk-123";
+        var body = "apiKey=" + secret + "\n" + new string('x', 100_000);
+
+        var settings = new LlmSettings
+        {
+            OpenRouterApiKey = "k",
+            OpenRouterModel = "openrouter/auto",
+            OpenRouterBaseUrl = "https://openrouter.ai/api/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "text/plain")
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenRouterClient(http, settings);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync([new ChatMessage("user", "hi")]));
+        Assert.DoesNotContain(secret, ex.Message, StringComparison.Ordinal);
+        Assert.Contains("apiKey=***", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("truncated", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(ex.Message.Length < 50_000);
     }
 
     [Fact]
