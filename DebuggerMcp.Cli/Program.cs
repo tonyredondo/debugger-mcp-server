@@ -4487,7 +4487,7 @@ public class Program
             output.WriteLine();
             output.Dim("Usage:");
             output.Dim("  llm <prompt>");
-            output.Dim("    Tip: Attach local files with #./path (e.g., llm Analyze #./report.json)");
+            output.Dim("    Tip: Attach local files with @./path (e.g., llm Analyze @./report.json)");
             output.Dim("  llm model <openrouter-model-id>");
             output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json)");
             output.Dim("  llm set-agent <true|false>       (toggles tool-using agent mode)");

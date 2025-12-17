@@ -16,7 +16,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(filePath, "{\"hello\":\"world\"}");
 
         var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
-            $"Analyze #./{Path.GetFileName(filePath)} please",
+            $"Analyze @./{Path.GetFileName(filePath)} please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 1000,
             maxTotalBytes: 2000);
@@ -28,6 +28,26 @@ public class LlmFileAttachmentsTests
         Assert.EndsWith("report.json", attachments[0].AbsolutePath, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"hello\"", attachments[0].Content);
         Assert.Contains("untrusted", attachments[0].MessageForModel, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_BackCompat_HashMarkerStillWorks()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var filePath = Path.Combine(tempRoot, "report.json");
+        File.WriteAllText(filePath, "{\"hello\":\"world\"}");
+
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            $"Analyze #./{Path.GetFileName(filePath)} please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1000,
+            maxTotalBytes: 2000);
+
+        Assert.Contains("(<attached:", cleaned);
+        Assert.Single(attachments);
+        Assert.Empty(reports);
+        Assert.Equal($"./{Path.GetFileName(filePath)}", attachments[0].DisplayPath);
     }
 
     [Fact]
@@ -53,7 +73,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(filePath, new string('x', 1_100_000));
 
         var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
-            $"Analyze #./{Path.GetFileName(filePath)} please",
+            $"Analyze @./{Path.GetFileName(filePath)} please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 2_000_000,
             maxTotalBytes: 3_000_000);
@@ -72,7 +92,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(filePath, "{\"hello\":\"world\"}");
 
         var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
-            "Analyze #./report.json, please",
+            "Analyze @./report.json, please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 1000,
             maxTotalBytes: 2000);
@@ -90,7 +110,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(filePath, "{\"hello\":\"world\"}");
 
         var (cleaned, attachments, _) = LlmFileAttachments.ExtractAndLoad(
-            "Analyze (#./report.json) please",
+            "Analyze (@./report.json) please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 1000,
             maxTotalBytes: 2000);
@@ -110,7 +130,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(filePath, "{\"hello\":\"world\"}");
 
         var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
-            "Analyze #(./my report.json) please",
+            "Analyze @(./my report.json) please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 1000,
             maxTotalBytes: 2000);
@@ -133,14 +153,14 @@ public class LlmFileAttachmentsTests
     }
 
     [Fact]
-    public void ExtractAndLoad_AllowsAbsolutePathsOnlyWithParentheses()
+    public void ExtractAndLoad_AllowsAbsolutePathsWithAtMarker()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(tempRoot);
         var filePath = Path.Combine(tempRoot, "abs.json");
         File.WriteAllText(filePath, "{\"hello\":\"world\"}");
 
-        var prompt = $"Analyze #({filePath}) please";
+        var prompt = $"Analyze @{filePath} please";
         var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
             prompt,
             baseDirectory: tempRoot,
@@ -151,6 +171,19 @@ public class LlmFileAttachmentsTests
         Assert.Single(attachments);
         Assert.Empty(reports);
         Assert.Equal(filePath, attachments[0].DisplayPath);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_DoesNotTreatEmailAddressesAsAttachments()
+    {
+        var prompt = "Contact foo@bar.com about this";
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            prompt,
+            baseDirectory: Environment.CurrentDirectory);
+
+        Assert.Equal(prompt, cleaned);
+        Assert.Empty(attachments);
+        Assert.Empty(reports);
     }
 
     [Fact]
@@ -166,7 +199,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(fileB, new string('b', 800));
 
         var (cleaned, attachments, _) = LlmFileAttachments.ExtractAndLoad(
-            "Analyze #./a.txt and #./b.txt please",
+            "Analyze @./a.txt and @./b.txt please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 2000,
             maxTotalBytes: 900);
@@ -191,7 +224,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(filePath, new string('a', 1000));
 
         var (cleaned, attachments, _) = LlmFileAttachments.ExtractAndLoad(
-            "Analyze #./a.txt",
+            "Analyze @./a.txt",
             baseDirectory: tempRoot,
             maxBytesPerFile: 1000,
             maxTotalBytes: 60);
@@ -207,7 +240,7 @@ public class LlmFileAttachmentsTests
         Directory.CreateDirectory(tempRoot);
 
         var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
-            "Analyze #./missing.json please",
+            "Analyze @./missing.json please",
             baseDirectory: tempRoot);
 
         Assert.Contains("(<missing:", cleaned);
@@ -225,7 +258,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(filePath, "hello");
 
         var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
-            "Analyze #./a.txt please",
+            "Analyze @./a.txt please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 1000,
             maxTotalBytes: 1);
@@ -244,7 +277,7 @@ public class LlmFileAttachmentsTests
         File.WriteAllText(filePath, "before\n```\ninside\n```\nafter\n");
 
         var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
-            "Analyze #./note.md please",
+            "Analyze @./note.md please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 10_000,
             maxTotalBytes: 20_000);

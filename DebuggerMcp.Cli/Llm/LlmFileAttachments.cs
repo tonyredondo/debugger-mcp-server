@@ -11,16 +11,24 @@ internal static class LlmFileAttachments
 {
     private const int MaxAttachmentReadBytes = 1_048_576;
 
-    // Accept explicit file reference prefixes to avoid accidentally treating hashtags as attachments.
+    // Accept explicit file reference prefixes to avoid accidental matches.
     // Examples:
+    // - @./file.json
+    // - @../logs/output.txt
+    // - @/absolute/path
+    // - @~/path
+    // - @C:\path\file.txt
+    // - @(./path with spaces.json)  (paths with spaces require parentheses)
+    //
+    // Back-compat:
     // - #./file.json
     // - #../logs/output.txt
     // - #~/path
     // - #C:\path\file.txt
     // - #(/absolute/path)   (absolute paths require parentheses to avoid colliding with JSON pointers like "#/analysis/...")
-    // Also supports paths with spaces using parentheses: #(./path with spaces.json)
+    // - #(./path with spaces.json)
     private static readonly Regex AttachmentRegex = new(
-        @"(?<!\w)#(?:(?<path>(?:\./|\.\./|~\/)[^\s,;:\)\]\}\""']+|[A-Za-z]:\\[^\s,;:\)\]\}\""']+)|\((?<path>(?:\./|\.\./|/|~\/)[^)]+|[A-Za-z]:\\[^)]+)\))(?<trail>[,.;:\)\]\}\""']*)",
+        @"(?<![\w.])(?:(?<marker>@)(?<path>(?:\./|\.\./|/|~\/)[^\s,;:\)\]\}\""']+|[A-Za-z]:\\[^\s,;:\)\]\}\""']+)|(?<marker>#)(?<path>(?:\./|\.\./|~\/)[^\s,;:\)\]\}\""']+|[A-Za-z]:\\[^\s,;:\)\]\}\""']+)|(?<marker>[@#])\((?<path>(?:\./|\.\./|/|~\/)[^)]+|[A-Za-z]:\\[^)]+)\))(?<trail>[,.;:\)\]\}\""']*)",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     internal sealed record Attachment(string DisplayPath, string AbsolutePath, string Content, string MessageForModel, bool Truncated);

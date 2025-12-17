@@ -10,7 +10,7 @@ public class TranscriptRedactorTests
     [InlineData("llm\tset-key\tsk-123", "llm set-key ***")]
     [InlineData("llm my key is sk-123", "llm ***")]
     [InlineData("llm\tmy key is sk-123", "llm ***")]
-    [InlineData("llm Analyze #./report.json", "llm ***")]
+    [InlineData("llm Analyze @./report.json", "llm ***")]
     [InlineData("llm model openai/gpt-4o-mini", "llm model openai/gpt-4o-mini")]
     [InlineData("llm\tmodel openai/gpt-4o-mini", "llm\tmodel openai/gpt-4o-mini")]
     [InlineData("llm set-agent true", "llm set-agent true")]

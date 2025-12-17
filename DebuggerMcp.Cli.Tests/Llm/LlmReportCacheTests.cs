@@ -72,7 +72,7 @@ public class LlmReportCacheTests
 
         // Force cache path using a realistic per-file cap (>= 4096 to satisfy Utf8JsonWriter buffering).
         var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
-            $"Analyze #./{Path.GetFileName(reportPath)} please",
+            $"Analyze @./{Path.GetFileName(reportPath)} please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 10_000,
             maxTotalBytes: 10_000,
@@ -122,7 +122,7 @@ public class LlmReportCacheTests
         File.WriteAllText(reportPath, JsonSerializer.Serialize(report, new JsonSerializerOptions { WriteIndented = true }));
 
         var (_, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
-            $"Analyze #./{Path.GetFileName(reportPath)} please",
+            $"Analyze @./{Path.GetFileName(reportPath)} please",
             baseDirectory: tempRoot,
             maxBytesPerFile: 10_000,
             maxTotalBytes: 10_000,
@@ -165,7 +165,7 @@ public class LlmReportCacheTests
             .Replace("PAD_PLACEHOLDER", new string('p', 30_000)));
 
         var (_, _, reports) = LlmFileAttachments.ExtractAndLoad(
-            $"Look #./{Path.GetFileName(reportPath)}",
+            $"Look @./{Path.GetFileName(reportPath)}",
             baseDirectory: tempRoot,
             maxBytesPerFile: 10_000,
             maxTotalBytes: 10_000,
