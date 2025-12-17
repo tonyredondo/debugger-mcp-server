@@ -166,4 +166,39 @@ public class LlmFileAttachmentsTests
         var a = Assert.Single(attachments);
         Assert.True(Encoding.UTF8.GetByteCount(a.MessageForModel) <= 60);
     }
+
+    [Fact]
+    public void ExtractAndLoad_MissingFile_DoesNotPretendToAttach()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze #./missing.json please",
+            baseDirectory: tempRoot);
+
+        Assert.Contains("(<missing:", cleaned);
+        Assert.Empty(attachments);
+        Assert.Empty(reports);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_SkippedAttachment_DoesNotPretendToAttach()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        var filePath = Path.Combine(tempRoot, "a.txt");
+        File.WriteAllText(filePath, "hello");
+
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze #./a.txt please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1000,
+            maxTotalBytes: 1);
+
+        Assert.Contains("(<skipped:", cleaned);
+        Assert.Empty(attachments);
+        Assert.Empty(reports);
+    }
 }

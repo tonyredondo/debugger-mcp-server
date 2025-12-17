@@ -79,25 +79,44 @@ internal static class LlmFileAttachments
             var trail = pathTrail + (match.Groups["trail"].Value ?? string.Empty);
 
             sb.Append(prompt.AsSpan(lastIndex, match.Index - lastIndex));
-            sb.Append($"(<attached: {path}>)");
+            var placeholder = $"(<attached: {path}>)";
+
+            if (!TryResolveAbsolutePath(path, baseDirectory, out var absolute) || !File.Exists(absolute))
+            {
+                placeholder = $"(<missing: {path}>)";
+            }
+            else
+            {
+                // If we have no budget left (or not enough to even wrap a message), don't claim it was attached.
+                var wrapperBytes = GetAttachmentWrapperBytes(path);
+                if (remainingTotal <= wrapperBytes)
+                {
+                    placeholder = $"(<skipped: {path}>)";
+                }
+                else
+                {
+                    var (attachment, report, bytesUsed) = TryLoad(path, baseDirectory, maxBytesPerFile, remainingTotal, cacheRootDirectory);
+                    remainingTotal -= bytesUsed;
+
+                    if (attachment != null)
+                    {
+                        attachments.Add(attachment);
+                    }
+                    if (report != null)
+                    {
+                        reports.Add(report);
+                    }
+
+                    if (attachment == null && report == null)
+                    {
+                        placeholder = $"(<unavailable: {path}>)";
+                    }
+                }
+            }
+
+            sb.Append(placeholder);
             sb.Append(trail);
             lastIndex = match.Index + match.Length;
-
-            if (remainingTotal <= 0)
-            {
-                continue;
-            }
-
-            var (attachment, report, bytesUsed) = TryLoad(path, baseDirectory, maxBytesPerFile, remainingTotal, cacheRootDirectory);
-            remainingTotal -= bytesUsed;
-            if (attachment != null)
-            {
-                attachments.Add(attachment);
-            }
-            if (report != null)
-            {
-                reports.Add(report);
-            }
         }
 
         sb.Append(prompt.AsSpan(lastIndex));
@@ -191,6 +210,21 @@ internal static class LlmFileAttachments
         catch
         {
             return (null, null, 0);
+        }
+    }
+
+    private static bool TryResolveAbsolutePath(string displayPath, string baseDirectory, out string absolutePath)
+    {
+        absolutePath = string.Empty;
+        try
+        {
+            var expanded = ExpandHome(displayPath);
+            absolutePath = Path.GetFullPath(expanded, baseDirectory);
+            return true;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -355,5 +389,13 @@ internal static class LlmFileAttachments
             ".txt" or "" => "",
             _ => ""
         };
+    }
+
+    private static int GetAttachmentWrapperBytes(string displayPath)
+    {
+        var language = GuessFenceLanguage(displayPath);
+        var header = $"Attached file: {displayPath}{Environment.NewLine}```{language}{Environment.NewLine}";
+        var footer = $"{Environment.NewLine}```";
+        return Encoding.UTF8.GetByteCount(header + footer);
     }
 }
