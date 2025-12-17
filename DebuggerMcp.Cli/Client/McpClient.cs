@@ -24,6 +24,7 @@ public class McpClient : IMcpClient
     private string? _messageEndpoint;
     private readonly List<string> _availableTools = [];
     private bool _disposed;
+    private bool _protocolInitialized;
     private int _requestId;
 
     // SSE response handling
@@ -88,6 +89,8 @@ public class McpClient : IMcpClient
             await DisconnectAsync();
         }
 
+        _protocolInitialized = false;
+
         // Normalize URL
         _serverUrl = serverUrl.TrimEnd('/');
         _apiKey = apiKey;
@@ -110,6 +113,17 @@ public class McpClient : IMcpClient
         try
         {
             await InitializeMcpConnectionAsync(apiKey, cancellationToken);
+            try
+            {
+                await InitializeProtocolAsync(cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                // Non-fatal: tools can still work without initialize, but sampling capability advertisement won't.
+                Console.ForegroundColor = ConsoleColor.Yellow;
+                Console.WriteLine($"Warning: MCP initialize failed: {ex.Message}");
+                Console.ResetColor();
+            }
             await DiscoverToolsAsync(cancellationToken);
         }
         catch (Exception ex)
@@ -563,6 +577,8 @@ public class McpClient : IMcpClient
     {
         await StopSseListenerAsync().ConfigureAwait(false);
 
+        _protocolInitialized = false;
+
         // Complete any pending requests with cancellation
         foreach (var kvp in _pendingRequests)
         {
@@ -767,6 +783,78 @@ public class McpClient : IMcpClient
             throw new InvalidOperationException(
                 "MCP client is not connected. Ensure the server is started with --mcp-http flag.");
         }
+    }
+
+    private async Task InitializeProtocolAsync(CancellationToken cancellationToken)
+    {
+        if (_protocolInitialized)
+        {
+            return;
+        }
+
+        EnsureConnected();
+
+        var request = new McpRequest
+        {
+            JsonRpc = "2.0",
+            Id = Interlocked.Increment(ref _requestId),
+            Method = "initialize",
+            Params = BuildInitializeParams()
+        };
+
+        _ = await SendMcpRequestAsync<Dictionary<string, object?>>(request, cancellationToken).ConfigureAwait(false);
+        _protocolInitialized = true;
+
+        // Best-effort initialized notification.
+        try
+        {
+            await SendMcpNotificationAsync("initialized", new { }, cancellationToken).ConfigureAwait(false);
+        }
+        catch
+        {
+            // Ignore: some servers/transports may not require it.
+        }
+    }
+
+    internal static Dictionary<string, object?> BuildInitializeParams()
+    {
+        var version =
+            System.Reflection.Assembly.GetEntryAssembly()?.GetName().Version?.ToString()
+            ?? System.Reflection.Assembly.GetExecutingAssembly().GetName().Version?.ToString()
+            ?? "unknown";
+
+        return new Dictionary<string, object?>
+        {
+            ["protocolVersion"] = "2024-11-05",
+            ["clientInfo"] = new Dictionary<string, object?>
+            {
+                ["name"] = "dbg-mcp",
+                ["version"] = version
+            },
+            ["capabilities"] = new Dictionary<string, object?>
+            {
+                // Advertise MCP sampling with tools so the server can drive an investigation loop.
+                ["sampling"] = new Dictionary<string, object?>
+                {
+                    ["tools"] = new Dictionary<string, object?>()
+                }
+            }
+        };
+    }
+
+    private async Task SendMcpNotificationAsync(string method, object? @params, CancellationToken cancellationToken)
+    {
+        EnsureConnected();
+
+        var payload = new
+        {
+            jsonrpc = "2.0",
+            method,
+            @params
+        };
+
+        var json = JsonSerializer.Serialize(payload, JsonOptions);
+        await PostJsonRpcAsync(json, cancellationToken).ConfigureAwait(false);
     }
 
 
