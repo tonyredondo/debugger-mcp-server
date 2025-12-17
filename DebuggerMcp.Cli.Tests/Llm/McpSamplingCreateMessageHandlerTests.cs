@@ -9,6 +9,78 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 public class McpSamplingCreateMessageHandlerTests
 {
     [Fact]
+    public async Task HandleAsync_WhenModelRequestsTool_EmitsProgress()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var progress = new List<string>();
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "ok",
+                    ToolCalls =
+                    [
+                        new ChatToolCall("tc1", "exec", "{\"command\":\"bt\"}")
+                    ]
+                });
+            },
+            progress.Add);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.Contains(progress, p => p.Contains("AI requests tool: exec", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenReceivingToolResult_EmitsProgressOnce()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var progress = new List<string>();
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            progress.Add);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                { "type": "tool_use", "id": "tc1", "name": "exec", "input": { "command": "!clrstack" } }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                { "type": "tool_result", "tool_use_id": "tc1", "content": [ { "type": "text", "text": "OUTPUT" } ] }
+              ]
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.Single(progress, p => p.Contains("AI tool result", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(progress, p => p.Contains("exec", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(progress, p => p.Contains("OUTPUT", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task HandleAsync_BuildsChatCompletionRequestAndMapsToolCalls()
     {
         var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };

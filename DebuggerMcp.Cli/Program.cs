@@ -2046,6 +2046,7 @@ public class Program
             var llmSettings = state.Settings.Llm;
             llmSettings.ApplyEnvironmentOverrides();
 
+            var progressLock = new object();
             var handler = new McpSamplingCreateMessageHandler(
                 llmSettings,
                 async (request, ct) =>
@@ -2053,6 +2054,13 @@ public class Program
                     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
                     var client = new OpenRouterClient(http, llmSettings);
                     return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
+                },
+                progress: message =>
+                {
+                    lock (progressLock)
+                    {
+                        output.Dim(message);
+                    }
                 });
 
             mcpClient.RegisterServerRequestHandler(

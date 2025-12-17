@@ -9,11 +9,16 @@ namespace DebuggerMcp.Cli.Llm;
 /// </summary>
 internal sealed class McpSamplingCreateMessageHandler(
     LlmSettings settings,
-    Func<ChatCompletionRequest, CancellationToken, Task<ChatCompletionResult>> complete)
+    Func<ChatCompletionRequest, CancellationToken, Task<ChatCompletionResult>> complete,
+    Action<string>? progress = null)
 {
     private readonly LlmSettings _settings = settings ?? throw new ArgumentNullException(nameof(settings));
     private readonly Func<ChatCompletionRequest, CancellationToken, Task<ChatCompletionResult>> _complete =
         complete ?? throw new ArgumentNullException(nameof(complete));
+    private readonly Action<string>? _progress = progress;
+
+    private readonly HashSet<string> _seenToolResults = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _seenToolUses = new(StringComparer.OrdinalIgnoreCase);
 
     public async Task<SamplingCreateMessageResult> HandleAsync(JsonElement? parameters, CancellationToken cancellationToken)
     {
@@ -24,10 +29,14 @@ internal sealed class McpSamplingCreateMessageHandler(
 
         _settings.ApplyEnvironmentOverrides();
 
+        EmitProgressForNewToolResults(parameters.Value);
+
         var systemPrompt = TryGetString(parameters.Value, "systemPrompt") ?? TryGetString(parameters.Value, "SystemPrompt");
         var request = BuildChatCompletionRequest(systemPrompt, parameters.Value);
 
         var response = await _complete(request, cancellationToken).ConfigureAwait(false);
+
+        EmitProgressForRequestedTools(response);
 
         return new SamplingCreateMessageResult
         {
@@ -61,6 +70,191 @@ internal sealed class McpSamplingCreateMessageHandler(
         }
 
         return blocks;
+    }
+
+    private void EmitProgressForNewToolResults(JsonElement parameters)
+    {
+        if (_progress == null)
+        {
+            return;
+        }
+
+        if (!TryGetProperty(parameters, "messages", out var messagesProp) || messagesProp.ValueKind != JsonValueKind.Array)
+        {
+            return;
+        }
+
+        var toolUseLookup = BuildToolUseLookup(messagesProp);
+
+        foreach (var msg in messagesProp.EnumerateArray())
+        {
+            if (msg.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var blocks = ExtractContentBlocks(msg);
+            foreach (var toolResult in blocks.ToolResults)
+            {
+                if (!_seenToolResults.Add(toolResult.ToolCallId))
+                {
+                    continue;
+                }
+
+                var name = toolUseLookup.TryGetValue(toolResult.ToolCallId, out var n) ? n : "tool";
+                var summary = CompactOneLine(toolResult.Content, 160);
+                if (string.IsNullOrWhiteSpace(summary))
+                {
+                    summary = "(no output)";
+                }
+
+                _progress($"AI tool result: {name} -> {summary}");
+            }
+        }
+    }
+
+    private void EmitProgressForRequestedTools(ChatCompletionResult response)
+    {
+        if (_progress == null)
+        {
+            return;
+        }
+
+        if (response.ToolCalls == null || response.ToolCalls.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var call in response.ToolCalls)
+        {
+            if (string.IsNullOrWhiteSpace(call.Id) || string.IsNullOrWhiteSpace(call.Name))
+            {
+                continue;
+            }
+
+            if (!_seenToolUses.Add(call.Id))
+            {
+                continue;
+            }
+
+            var summary = SummarizeToolCall(call);
+            _progress(string.IsNullOrWhiteSpace(summary)
+                ? $"AI requests tool: {call.Name}"
+                : $"AI requests tool: {call.Name} ({summary})");
+        }
+    }
+
+    private static Dictionary<string, string> BuildToolUseLookup(JsonElement messagesProp)
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var msg in messagesProp.EnumerateArray())
+        {
+            if (msg.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var role = NormalizeRole(TryGetString(msg, "role") ?? "user");
+            if (!string.Equals(role, "assistant", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var blocks = ExtractContentBlocks(msg);
+            var openAiCalls = ParseOpenAiToolCalls(msg);
+
+            foreach (var call in blocks.ToolCalls)
+            {
+                if (!string.IsNullOrWhiteSpace(call.Id) && !string.IsNullOrWhiteSpace(call.Name))
+                {
+                    map[call.Id] = call.Name;
+                }
+            }
+
+            foreach (var call in openAiCalls)
+            {
+                if (!string.IsNullOrWhiteSpace(call.Id) && !string.IsNullOrWhiteSpace(call.Name))
+                {
+                    map[call.Id] = call.Name;
+                }
+            }
+        }
+
+        return map;
+    }
+
+    private static string SummarizeToolCall(ChatToolCall call)
+    {
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(call.ArgumentsJson))
+            {
+                using var doc = JsonDocument.Parse(call.ArgumentsJson);
+                var args = doc.RootElement;
+
+                if (string.Equals(call.Name, "exec", StringComparison.OrdinalIgnoreCase) &&
+                    args.ValueKind == JsonValueKind.Object &&
+                    TryGetProperty(args, "command", out var cmd) &&
+                    cmd.ValueKind == JsonValueKind.String)
+                {
+                    return CompactOneLine(cmd.GetString() ?? string.Empty, 160);
+                }
+
+                if (string.Equals(call.Name, "inspect", StringComparison.OrdinalIgnoreCase) &&
+                    args.ValueKind == JsonValueKind.Object &&
+                    TryGetProperty(args, "address", out var addr) &&
+                    addr.ValueKind == JsonValueKind.String)
+                {
+                    return $"address={CompactOneLine(addr.GetString() ?? string.Empty, 80)}";
+                }
+
+                if (string.Equals(call.Name, "get_thread_stack", StringComparison.OrdinalIgnoreCase) &&
+                    args.ValueKind == JsonValueKind.Object &&
+                    TryGetProperty(args, "threadId", out var tid) &&
+                    tid.ValueKind == JsonValueKind.String)
+                {
+                    return $"threadId={CompactOneLine(tid.GetString() ?? string.Empty, 40)}";
+                }
+
+                if (string.Equals(call.Name, "analysis_complete", StringComparison.OrdinalIgnoreCase) &&
+                    args.ValueKind == JsonValueKind.Object &&
+                    TryGetProperty(args, "rootCause", out var rc) &&
+                    rc.ValueKind == JsonValueKind.String)
+                {
+                    return $"rootCause={CompactOneLine(rc.GetString() ?? string.Empty, 120)}";
+                }
+
+                return CompactOneLine(call.ArgumentsJson, 160);
+            }
+        }
+        catch
+        {
+            // Ignore; fall through.
+        }
+
+        return string.Empty;
+    }
+
+    private static string CompactOneLine(string value, int maxLen)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var s = value.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal).Trim();
+        while (s.Contains("  ", StringComparison.Ordinal))
+        {
+            s = s.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        if (maxLen > 0 && s.Length > maxLen)
+        {
+            return s.Substring(0, maxLen) + "...";
+        }
+
+        return s;
     }
 
     private static JsonElement ParseToolArguments(string? argumentsJson)
