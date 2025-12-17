@@ -76,7 +76,8 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         var json = JsonSerializer.Serialize(payload, JsonOptions);
         httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        using var response = await _httpClient.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
+        // Use ResponseHeadersRead so we can cap error bodies without buffering the entire response.
+        using var response = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -156,7 +157,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
             var truncated = read > maxBytes;
             var effective = Math.Min(read, maxBytes);
-            var text = Encoding.UTF8.GetString(buffer, 0, effective);
+            var text = DecodeUtf8Prefix(buffer, effective);
             return (text, truncated);
         }
         catch
@@ -164,6 +165,31 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             // Best-effort: do not block on error-body parsing.
             return (string.Empty, false);
         }
+    }
+
+    private static string DecodeUtf8Prefix(byte[] buffer, int count)
+    {
+        if (count <= 0)
+        {
+            return string.Empty;
+        }
+
+        // Avoid splitting multi-byte UTF-8 sequences by backing off a few bytes at most.
+        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+        var safeCount = Math.Min(count, buffer.Length);
+        for (var i = 0; i <= 4 && safeCount - i >= 0; i++)
+        {
+            try
+            {
+                return encoding.GetString(buffer, 0, safeCount - i);
+            }
+            catch (DecoderFallbackException)
+            {
+                // try again with fewer bytes
+            }
+        }
+
+        return Encoding.UTF8.GetString(buffer, 0, safeCount);
     }
 
     private static OpenRouterChatMessage ToOpenRouterMessage(ChatMessage message)
