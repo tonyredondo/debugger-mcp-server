@@ -27,7 +27,7 @@ public class LlmFileAttachmentsTests
         Assert.Equal($"./{Path.GetFileName(filePath)}", attachments[0].DisplayPath);
         Assert.EndsWith("report.json", attachments[0].AbsolutePath, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"hello\"", attachments[0].Content);
-        Assert.Contains("Attached file:", attachments[0].MessageForModel);
+        Assert.Contains("untrusted", attachments[0].MessageForModel, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -138,13 +138,12 @@ public class LlmFileAttachmentsTests
             maxTotalBytes: 900);
 
         Assert.Contains("(<attached:", cleaned);
-        Assert.Equal(2, attachments.Count);
+        Assert.Contains("(<skipped:", cleaned);
+        Assert.Single(attachments);
         Assert.Equal("./a.txt", attachments[0].DisplayPath);
-        Assert.Equal("./b.txt", attachments[1].DisplayPath);
-        Assert.False(attachments[0].Truncated);
-        Assert.True(attachments[1].Truncated);
+        Assert.True(attachments[0].Truncated);
 
-        var total = Encoding.UTF8.GetByteCount(attachments[0].MessageForModel) + Encoding.UTF8.GetByteCount(attachments[1].MessageForModel);
+        var total = Encoding.UTF8.GetByteCount(attachments[0].MessageForModel);
         Assert.True(total <= 900);
     }
 
@@ -157,14 +156,14 @@ public class LlmFileAttachmentsTests
         var filePath = Path.Combine(tempRoot, "a.txt");
         File.WriteAllText(filePath, new string('a', 1000));
 
-        var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
+        var (cleaned, attachments, _) = LlmFileAttachments.ExtractAndLoad(
             "Analyze #./a.txt",
             baseDirectory: tempRoot,
             maxBytesPerFile: 1000,
             maxTotalBytes: 60);
 
-        var a = Assert.Single(attachments);
-        Assert.True(Encoding.UTF8.GetByteCount(a.MessageForModel) <= 60);
+        Assert.Empty(attachments);
+        Assert.Contains("(<skipped:", cleaned);
     }
 
     [Fact]
@@ -200,5 +199,26 @@ public class LlmFileAttachmentsTests
         Assert.Contains("(<skipped:", cleaned);
         Assert.Empty(attachments);
         Assert.Empty(reports);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_FileContainingBackticks_UsesLongerFence()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var filePath = Path.Combine(tempRoot, "note.md");
+        File.WriteAllText(filePath, "before\n```\ninside\n```\nafter\n");
+
+        var (_, attachments, _) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze #./note.md please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 10_000,
+            maxTotalBytes: 20_000);
+
+        var a = Assert.Single(attachments);
+
+        // Should not use the same ``` fence when the content contains ```.
+        Assert.DoesNotContain("\n```markdown\nbefore\n```\ninside", a.MessageForModel, StringComparison.Ordinal);
+        Assert.Contains("````", a.MessageForModel, StringComparison.Ordinal);
     }
 }
