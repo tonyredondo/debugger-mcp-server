@@ -74,7 +74,7 @@ public static class HelpSystem
             new("showobj", "<address>", "Inspect .NET object as JSON", ["showobj f7158ec79b48", "so f7158ec79b48 --depth 3"])
         ],
         ["analysis"] = [
-            new("analyze", "<type>", "Run automated analysis (crash, dotnet, perf, cpu, memory, gc, threads, security)", ["analyze crash", "analyze dotnet", "analyze perf", "analyze security"]),
+            new("analyze", "<type> -o <file>", "Run automated analysis (crash, dotnet, ai, perf, cpu, memory, gc, threads, security) and save output to a file", ["analyze crash -o ./crash.json", "analyze dotnet -o ./dotnet.json", "analyze ai -o ./ai.json", "analyze perf -o ./perf.json"]),
             new("compare", "<type>", "Compare two dumps (all, heap, threads, modules)", ["compare <dumpId>", "compare heap <dumpId>", "compare threads <dumpId>"])
         ],
         ["llm"] = [
@@ -258,8 +258,9 @@ public static class HelpSystem
 
             case ShellStateLevel.DumpLoaded:
                 output.Markup("  [yellow]exec <cmd>[/]              Execute debugger command");
-                output.Markup("  [yellow]analyze crash[/]           Run crash analysis");
-                output.Markup("  [yellow]analyze dotnet[/]          Run .NET analysis");
+                output.Markup("  [yellow]analyze crash -o <file>[/]  Run crash analysis (writes to file)");
+                output.Markup("  [yellow]analyze dotnet -o <file>[/] Run .NET analysis (writes to file)");
+                output.Markup("  [yellow]analyze ai -o <file>[/]     Run AI crash analysis (writes to file)");
                 output.Markup("  [yellow]symbols datadog download[/] Download Datadog symbols (if present)");
                 output.Markup("  [yellow]exec !threads[/]           List all threads (.NET)");
                 output.Markup("  [yellow]exec k[/]                  Show call stack");

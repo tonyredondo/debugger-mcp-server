@@ -137,6 +137,43 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains(result.CommandsExecuted!, c => c.Tool == "exec" && c.Output.Contains("Blocked unsafe", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Theory]
+    [InlineData("; .shell whoami")]
+    [InlineData("command script import os")]
+    [InlineData(";command script import os")]
+    [InlineData("platform shell whoami")]
+    public async Task AnalyzeCrashAsync_ExecBlockedCommand_WithSeparators_DoesNotExecute(string blocked)
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = blocked }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "Blocked unsafe command."
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Empty(debugger.ExecutedCommands);
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c => c.Tool == "exec" && c.Output.Contains("Blocked unsafe", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task AnalyzeCrashAsync_UnknownTool_ReturnsToolErrorAndContinues()
     {
@@ -185,6 +222,28 @@ public class AiAnalysisOrchestratorTests
 
         Assert.Equal("low", result.Confidence);
         Assert.Contains("maximum iterations", result.RootCause, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenMaxIterationsIsZero_RunsAtLeastOneIteration()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithText("still thinking"));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal(1, result.Iterations);
+        Assert.NotNull(result.Reasoning);
+        Assert.Contains("within 1 iterations", result.Reasoning!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

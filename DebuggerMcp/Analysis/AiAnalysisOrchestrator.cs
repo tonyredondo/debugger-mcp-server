@@ -3,6 +3,7 @@
 using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using DebuggerMcp.Sampling;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
@@ -94,15 +95,17 @@ public sealed class AiAnalysisOrchestrator(
             }
         };
 
+        var maxIterations = Math.Max(1, MaxIterations);
+        var maxTokens = MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024;
         var tools = SamplingTools.GetDebuggerTools();
 
-        for (var iteration = 1; iteration <= Math.Max(1, MaxIterations); iteration++)
+        for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
             var request = new CreateMessageRequestParams
             {
                 SystemPrompt = SystemPrompt,
                 Messages = messages,
-                MaxTokens = MaxTokensPerRequest,
+                MaxTokens = maxTokens,
                 Tools = tools,
                 ToolChoice = new ToolChoice { Mode = "auto" }
             };
@@ -169,19 +172,46 @@ public sealed class AiAnalysisOrchestrator(
 
                 var sw = Stopwatch.StartNew();
                 var toolName = toolUse.Name ?? string.Empty;
-                var toolInput = toolUse.Input.Clone();
+                var toolInput = CloneToolInput(toolUse.Input);
+                var toolUseId = toolUse.Id;
+                if (string.IsNullOrWhiteSpace(toolUseId))
+                {
+                    // Tool results require a tool_use_id. If missing, respond with plain text so the model can retry.
+                    sw.Stop();
+                    var msg = $"Tool call '{toolName}' is missing required id; cannot execute. Please call the tool again with a valid id.";
+
+                    commandsExecuted.Add(new ExecutedCommand
+                    {
+                        Tool = toolName,
+                        Input = toolInput,
+                        Output = msg,
+                        Iteration = iteration,
+                        Duration = sw.Elapsed.ToString("c")
+                    });
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new TextContentBlock { Text = msg }
+                        ]
+                    });
+                    continue;
+                }
 
                 try
                 {
                     var output = await ExecuteToolAsync(toolName, toolInput, initialReport, debugger, clrMdAnalyzer, cancellationToken)
                         .ConfigureAwait(false);
+                    var outputForModel = TruncateForModel(output);
 
                     sw.Stop();
                     commandsExecuted.Add(new ExecutedCommand
                     {
                         Tool = toolName,
                         Input = toolInput,
-                        Output = output,
+                        Output = outputForModel,
                         Iteration = iteration,
                         Duration = sw.Elapsed.ToString("c")
                     });
@@ -193,13 +223,13 @@ public sealed class AiAnalysisOrchestrator(
                         [
                             new ToolResultContentBlock
                             {
-                                ToolUseId = toolUse.Id ?? string.Empty,
+                                ToolUseId = toolUseId,
                                 IsError = false,
                                 Content =
                                 [
                                     new TextContentBlock
                                     {
-                                        Text = output
+                                        Text = outputForModel
                                     }
                                 ]
                             }
@@ -215,12 +245,13 @@ public sealed class AiAnalysisOrchestrator(
                     sw.Stop();
                     var message = ex.Message;
                     _logger.LogWarning(ex, "[AI] Tool execution failed: {Tool}", toolName);
+                    var messageForModel = TruncateForModel(message);
 
                     commandsExecuted.Add(new ExecutedCommand
                     {
                         Tool = toolName,
                         Input = toolInput,
-                        Output = message,
+                        Output = messageForModel,
                         Iteration = iteration,
                         Duration = sw.Elapsed.ToString("c")
                     });
@@ -232,13 +263,13 @@ public sealed class AiAnalysisOrchestrator(
                         [
                             new ToolResultContentBlock
                             {
-                                ToolUseId = toolUse.Id ?? string.Empty,
+                                ToolUseId = toolUseId,
                                 IsError = true,
                                 Content =
                                 [
                                     new TextContentBlock
                                     {
-                                        Text = message
+                                        Text = messageForModel
                                     }
                                 ]
                             }
@@ -252,8 +283,8 @@ public sealed class AiAnalysisOrchestrator(
         {
             RootCause = "Analysis incomplete - maximum iterations reached.",
             Confidence = "low",
-            Reasoning = $"The AI did not call analysis_complete within {MaxIterations} iterations.",
-            Iterations = MaxIterations,
+            Reasoning = $"The AI did not call analysis_complete within {maxIterations} iterations.",
+            Iterations = maxIterations,
             CommandsExecuted = commandsExecuted,
             AnalyzedAt = DateTime.UtcNow
         };
@@ -264,8 +295,9 @@ public sealed class AiAnalysisOrchestrator(
         var sb = new StringBuilder();
         sb.AppendLine("Analyze this crash report JSON.");
         sb.AppendLine("If you need more data, call tools (exec/inspect/get_thread_stack).");
+        sb.AppendLine("Note: Very large sections may be omitted to keep the prompt bounded; use tools to fetch more evidence.");
         sb.AppendLine();
-        sb.AppendLine(initialReportJson);
+        sb.AppendLine(TruncateInitialPrompt(initialReportJson));
         return sb.ToString();
     }
 
@@ -538,6 +570,56 @@ public sealed class AiAnalysisOrchestrator(
         return null;
     }
 
+    private static JsonElement CloneToolInput(JsonElement input)
+    {
+        if (input.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            using var empty = JsonDocument.Parse("{}");
+            return empty.RootElement.Clone();
+        }
+
+        try
+        {
+            return input.Clone();
+        }
+        catch
+        {
+            using var empty = JsonDocument.Parse("{}");
+            return empty.RootElement.Clone();
+        }
+    }
+
+    private static string TruncateInitialPrompt(string text)
+        => TruncateText(text, maxChars: 200_000);
+
+    private static string TruncateForModel(string text)
+        => TruncateText(text, maxChars: 50_000);
+
+    private static string TruncateText(string text, int maxChars)
+    {
+        if (string.IsNullOrEmpty(text) || maxChars <= 0 || text.Length <= maxChars)
+        {
+            return text ?? string.Empty;
+        }
+
+        if (maxChars < 128)
+        {
+            return text.Substring(0, maxChars);
+        }
+
+        var marker = $"\n... [truncated, total {text.Length} chars]\n";
+        var remaining = maxChars - marker.Length;
+        if (remaining <= 0)
+        {
+            return text.Substring(0, maxChars);
+        }
+
+        var head = remaining / 2;
+        var tail = remaining - head;
+
+        return text.Substring(0, head) + marker + text.Substring(text.Length - tail);
+    }
+
     private static void EnsureSafeDebuggerCommand(string command)
     {
         // AI-driven exec must not be able to run host OS commands.
@@ -549,26 +631,20 @@ public sealed class AiAnalysisOrchestrator(
             throw new InvalidOperationException("Multi-line debugger commands are not allowed in AI analysis.");
         }
 
-        var lower = trimmed.ToLowerInvariant();
-
-        // WinDbg: .shell executes OS commands.
-        if (lower.StartsWith(".shell", StringComparison.Ordinal))
+        // A single line can contain multiple debugger statements separated by ';' or '|', so detect unsafe
+        // commands even when they are not the first token.
+        if (UnsafeExecCommandRegex.IsMatch(trimmed))
         {
-            throw new InvalidOperationException("Blocked unsafe debugger command: .shell");
-        }
-
-        // LLDB: `script` executes Python in-process with full host access.
-        if (lower.StartsWith("script", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Blocked unsafe debugger command: script");
-        }
-
-        // LLDB: `platform shell` executes OS commands.
-        if (lower.StartsWith("platform shell", StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("Blocked unsafe debugger command: platform shell");
+            throw new InvalidOperationException("Blocked unsafe debugger command.");
         }
     }
+
+    private static readonly Regex UnsafeExecCommandRegex = new(
+        // Start-of-command or after common separators (best-effort across WinDbg/LLDB).
+        @"(^|[;&|]\s*)\.shell\b" +
+        @"|(^|[;&|]\s*)platform\s+shell\b" +
+        @"|(^|[;&|]\s*)(command\s+script|script)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private const string SystemPrompt = """
 You are an expert crash dump analyst. You've been given an initial crash analysis report from a memory dump.

@@ -1480,30 +1480,32 @@ public class Program
                     output.Markup("  [yellow]exec !threads[/]");
                     break;
 
-                case "analyze":
-                    output.Header("ANALYZE Command");
-                    output.WriteLine();
-                    output.Markup("Run automated analysis on the current dump.");
-                    output.WriteLine();
-                    output.Markup("[bold]USAGE[/]");
-                    output.Markup("  analyze <type>");
-                    output.WriteLine();
-                    output.Markup("[bold]ANALYSIS TYPES[/]");
-                    output.Markup("  [cyan]crash[/]         General crash analysis");
-                    output.Markup("  [cyan]dotnet[/]        .NET-specific analysis");
-                    output.Markup("  [cyan]perf[/]          Performance profiling summary");
-                    output.Markup("  [cyan]cpu[/]           CPU usage analysis");
-                    output.Markup("  [cyan]memory[/]        Memory allocation analysis");
-                    output.Markup("  [cyan]gc[/]            Garbage collection analysis");
-                    output.Markup("  [cyan]contention[/]    Thread contention analysis");
-                    output.Markup("  [cyan]security[/]      Security vulnerability scan");
-                    output.WriteLine();
-                    output.Markup("[bold]EXAMPLES[/]");
-                    output.Markup("  [yellow]analyze crash[/]");
-                    output.Markup("  [yellow]analyze dotnet[/]");
-                    output.Markup("  [yellow]analyze perf[/]");
-                    output.Markup("  [yellow]analyze security[/]");
-                    break;
+	                case "analyze":
+	                    output.Header("ANALYZE Command");
+	                    output.WriteLine();
+	                    output.Markup("Run automated analysis on the current dump.");
+	                    output.WriteLine();
+	                    output.Markup("[bold]USAGE[/]");
+	                    output.Markup("  analyze <type> -o <file>");
+	                    output.WriteLine();
+	                    output.Markup("[bold]ANALYSIS TYPES[/]");
+	                    output.Markup("  [cyan]crash[/]         General crash analysis");
+	                    output.Markup("  [cyan]dotnet[/]        .NET-specific analysis");
+	                    output.Markup("  [cyan]ai[/]            AI-powered deep crash analysis (MCP sampling)");
+	                    output.Markup("  [cyan]perf[/]          Performance profiling summary");
+	                    output.Markup("  [cyan]cpu[/]           CPU usage analysis");
+	                    output.Markup("  [cyan]memory[/]        Memory allocation analysis");
+	                    output.Markup("  [cyan]gc[/]            Garbage collection analysis");
+	                    output.Markup("  [cyan]contention[/]    Thread contention analysis");
+	                    output.Markup("  [cyan]security[/]      Security vulnerability scan");
+	                    output.WriteLine();
+	                    output.Markup("[bold]EXAMPLES[/]");
+	                    output.Markup("  [yellow]analyze crash -o ./crash.json[/]");
+	                    output.Markup("  [yellow]analyze dotnet -o ./dotnet.json[/]");
+	                    output.Markup("  [yellow]analyze ai -o ./ai.json[/]");
+	                    output.Markup("  [yellow]analyze perf -o ./perf.json[/]");
+	                    output.Markup("  [yellow]analyze security -o ./security.json[/]");
+	                    break;
 
                 case "compare":
                     output.Header("COMPARE Command");
@@ -1707,7 +1709,7 @@ public class Program
                     output.Markup("[bold]EXAMPLES[/]");
                     output.Markup("  [yellow]exec bt[/]             Execute backtrace command");
                     output.Markup("  [yellow]copy[/]                Copy the backtrace to clipboard");
-                    output.Markup("  [yellow]analyze crash[/]       Analyze crash");
+                    output.Markup("  [yellow]analyze crash -o <file>[/] Analyze crash (writes to file)");
                     output.Markup("  [yellow]cp[/]                  Copy analysis result to clipboard");
                     break;
 
@@ -5458,7 +5460,7 @@ public class Program
                 }
                 
                 output.WriteLine();
-                output.Dim("Tip: For .NET dumps, SOS is auto-loaded. Try 'analyze dotnet' or 'exec !threads'");
+                output.Dim("Tip: For .NET dumps, SOS is auto-loaded. Try 'analyze dotnet -o ./dotnet.json' or 'exec !threads'");
             }
         }
         catch (McpClientException ex) when (retryOnExpiredSession && IsSessionNotFoundError(ex))
@@ -7229,7 +7231,7 @@ public class Program
         if (args.Length == 0)
         {
             output.Error("Analysis type required.");
-            output.Dim("Usage: analyze <type>");
+            output.Dim("Usage: analyze <type> -o <file>");
             output.WriteLine();
             output.Markup("[bold]Analysis Types:[/]");
             output.Markup("  [cyan]crash[/]       General crash analysis");
@@ -7245,6 +7247,43 @@ public class Program
         }
 
         var analysisType = args[0].ToLowerInvariant();
+        string? outputFile = null;
+
+        // Parse output file: analyze <type> -o <file>
+        if (args.Length > 1)
+        {
+            for (var i = 1; i < args.Length; i++)
+            {
+                var a = args[i];
+                if (a is "-o" or "--out")
+                {
+                    if (i + 1 >= args.Length)
+                    {
+                        output.Error("Missing output file. Usage: analyze <type> -o <file>");
+                        return;
+                    }
+
+                    outputFile = args[i + 1];
+                    i++;
+                    continue;
+                }
+
+                if (a.StartsWith("-", StringComparison.Ordinal))
+                {
+                    output.Error($"Unknown option: {a}");
+                    output.Dim("Usage: analyze <type> -o <file>");
+                    return;
+                }
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(outputFile))
+        {
+            output.Error("Output file is required.");
+            output.Dim("Usage: analyze <type> -o <file>");
+            output.Dim("Example: analyze ai -o ./ai-analysis.json");
+            return;
+        }
 
         try
         {
@@ -7252,57 +7291,57 @@ public class Program
             {
                 case "crash":
                     await RunAnalysisAsync(output, "Crash Analysis",
-                        () => mcpClient.AnalyzeCrashAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzeCrashAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "dotnet":
                 case ".net":
                 case "net":
                     await RunAnalysisAsync(output, ".NET Analysis",
-                        () => mcpClient.AnalyzeDotNetAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzeDotNetAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "ai":
                     await RunAnalysisAsync(output, "AI Crash Analysis",
-                        () => mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "perf":
                 case "performance":
                     await RunAnalysisAsync(output, "Performance Analysis",
-                        () => mcpClient.AnalyzePerformanceAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzePerformanceAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "cpu":
                     await RunAnalysisAsync(output, "CPU Usage Analysis",
-                        () => mcpClient.AnalyzeCpuUsageAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzeCpuUsageAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "memory":
                 case "alloc":
                 case "allocations":
                     await RunAnalysisAsync(output, "Memory Allocation Analysis",
-                        () => mcpClient.AnalyzeAllocationsAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzeAllocationsAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "gc":
                 case "garbage":
                     await RunAnalysisAsync(output, "Garbage Collection Analysis",
-                        () => mcpClient.AnalyzeGcAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzeGcAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "threads":
                 case "contention":
                 case "locks":
                     await RunAnalysisAsync(output, "Thread Contention Analysis",
-                        () => mcpClient.AnalyzeContentionAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzeContentionAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "security":
                 case "vuln":
                 case "vulnerabilities":
                     await RunAnalysisAsync(output, "Security Vulnerability Analysis",
-                        () => mcpClient.AnalyzeSecurityAsync(state.SessionId!, state.Settings.UserId), state);
+                        () => mcpClient.AnalyzeSecurityAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 default:
@@ -7336,12 +7375,13 @@ public class Program
         ConsoleOutput output,
         string analysisName,
         Func<Task<string>> analyzeFunc,
-        ShellState? state = null)
+        ShellState? state = null,
+        string? outputFile = null)
     {
         output.Dim($"Starting {analysisName}...");
         output.Dim("This involves executing debugger commands and parsing output.");
         output.WriteLine();
-        
+
         var result = await output.WithSpinnerAsync(
             $"Analyzing (executing debugger commands)...",
             analyzeFunc);
@@ -7350,6 +7390,21 @@ public class Program
         state?.SetLastResult($"analyze: {analysisName}", result);
 
         output.Success($"{analysisName} complete!");
+        if (!string.IsNullOrWhiteSpace(outputFile))
+        {
+            var fullPath = Path.GetFullPath(outputFile);
+            var dir = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrWhiteSpace(dir))
+            {
+                Directory.CreateDirectory(dir);
+            }
+
+            await File.WriteAllTextAsync(fullPath, result, System.Text.Encoding.UTF8);
+            output.Success($"Saved to: {fullPath}");
+            output.Dim("Tip: Use 'copy' to copy the full result.");
+            return;
+        }
+
         output.Header($"{analysisName} Results");
         output.WriteLine();
         output.WriteLine(result);

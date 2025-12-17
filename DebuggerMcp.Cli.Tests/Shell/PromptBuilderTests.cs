@@ -179,8 +179,7 @@ public class PromptBuilderTests
 
         // Assert
         Assert.Contains("exec <cmd>", hints);
-        Assert.Contains("analyze crash", hints);
+        Assert.Contains("analyze crash -o <file>", hints);
         Assert.Contains("close", hints);
     }
 }
-

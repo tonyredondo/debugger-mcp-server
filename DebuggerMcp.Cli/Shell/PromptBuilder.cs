@@ -117,9 +117,8 @@ public static class PromptBuilder
             ShellStateLevel.Initial => ["connect <url>", "help", "exit"],
             ShellStateLevel.Connected => ["upload <file>", "dumps list", "session create", "open <dumpId>"],
             ShellStateLevel.Session => ["open <dumpId>", "session close", "dumps list"],
-            ShellStateLevel.DumpLoaded => ["exec <cmd>", "analyze crash", "threads", "stack", "close"],
+            ShellStateLevel.DumpLoaded => ["exec <cmd>", "analyze crash -o <file>", "threads", "stack", "close"],
             _ => ["help"]
         };
     }
 }
-

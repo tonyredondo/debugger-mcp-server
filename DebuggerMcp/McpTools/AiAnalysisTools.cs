@@ -30,6 +30,9 @@ public sealed class AiAnalysisTools(
 {
     private readonly ILoggerFactory _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
 
+    internal static bool ShouldUseDotNetAnalyzer(bool isSosLoaded, bool isClrMdOpen)
+        => isSosLoaded || isClrMdOpen;
+
     /// <summary>
     /// Performs AI-powered deep crash analysis using a server-driven sampling loop.
     /// </summary>
@@ -64,15 +67,19 @@ public sealed class AiAnalysisTools(
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
         CrashAnalysisResult initialReport;
-        if (manager.IsSosLoaded)
+        if (ShouldUseDotNetAnalyzer(manager.IsSosLoaded, session.ClrMdAnalyzer?.IsOpen == true))
         {
-            Logger.LogInformation("[AI] SOS loaded, using DotNetCrashAnalyzer for initial report");
+            Logger.LogInformation("[AI] Using DotNetCrashAnalyzer for initial report (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+                manager.IsSosLoaded,
+                session.ClrMdAnalyzer?.IsOpen == true);
             var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
             initialReport = await dotNetAnalyzer.AnalyzeDotNetCrashAsync().ConfigureAwait(false);
         }
         else
         {
-            Logger.LogInformation("[AI] SOS not loaded, using CrashAnalyzer for initial report");
+            Logger.LogInformation("[AI] Using CrashAnalyzer for initial report (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+                manager.IsSosLoaded,
+                session.ClrMdAnalyzer?.IsOpen == true);
             var basicAnalyzer = new CrashAnalyzer(manager, sourceLinkResolver);
             initialReport = await basicAnalyzer.AnalyzeCrashAsync().ConfigureAwait(false);
         }
@@ -94,7 +101,12 @@ public sealed class AiAnalysisTools(
             }
         }
 
-        var initialJson = JsonSerializer.Serialize(initialReport, JsonSerializationDefaults.IndentedIgnoreNull);
+        // Clamp user-controlled parameters to avoid accidental runaway sampling loops / oversized completions.
+        maxIterations = Math.Clamp(maxIterations, 1, 20);
+        maxTokens = Math.Clamp(maxTokens, 256, 8192);
+
+        // Build a bounded JSON prompt for the LLM to keep sampling payload sizes reasonable.
+        var promptJson = AiSamplingPromptBuilder.Build(initialReport);
 
         var samplingClient = new McpSamplingClient(server);
         var orchestrator = new AiAnalysisOrchestrator(
@@ -107,7 +119,7 @@ public sealed class AiAnalysisTools(
 
         var aiResult = await orchestrator.AnalyzeCrashAsync(
                 initialReport,
-                initialJson,
+                promptJson,
                 manager,
                 session.ClrMdAnalyzer,
                 cancellationToken)
@@ -118,4 +130,3 @@ public sealed class AiAnalysisTools(
         return JsonSerializer.Serialize(initialReport, JsonSerializationDefaults.IndentedIgnoreNull);
     }
 }
-
