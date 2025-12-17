@@ -267,4 +267,39 @@ public class McpSamplingCreateMessageHandlerTests
         Assert.Equal("tc1", seenRequest.Messages[2].ToolCallId);
         Assert.Equal("ok", seenRequest.Messages[2].Content);
     }
+
+    [Fact]
+    public async Task HandleAsync_ToolMessageWithoutToolCallId_PreservesAsUserMessage()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" },
+            { "role": "tool", "content": "tool output without id" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal(2, seenRequest!.Messages.Count);
+        Assert.Equal("user", seenRequest.Messages[0].Role);
+        Assert.Equal("Hello", seenRequest.Messages[0].Content);
+
+        Assert.Equal("user", seenRequest.Messages[1].Role);
+        Assert.Contains("missing tool_call_id", seenRequest.Messages[1].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tool output without id", seenRequest.Messages[1].Content, StringComparison.Ordinal);
+    }
 }

@@ -283,7 +283,15 @@ internal sealed class McpSamplingCreateMessageHandler(
 
                 if (!string.IsNullOrWhiteSpace(messageBlocks.Text))
                 {
-                    result.Add(new ChatMessage("tool", messageBlocks.Text, toolCallId: toolCallId, toolCalls: null));
+                    if (!string.IsNullOrWhiteSpace(toolCallId))
+                    {
+                        result.Add(new ChatMessage("tool", messageBlocks.Text, toolCallId: toolCallId, toolCalls: null));
+                    }
+                    else
+                    {
+                        // OpenAI-compatible APIs require tool_call_id for role=tool; preserve the content as a user message instead.
+                        result.Add(new ChatMessage("user", $"[tool output missing tool_call_id]{Environment.NewLine}{messageBlocks.Text}"));
+                    }
                 }
             }
             else if (!string.IsNullOrWhiteSpace(messageBlocks.Text))
