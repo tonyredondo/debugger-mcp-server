@@ -124,9 +124,7 @@ internal static class TranscriptContextBuilder
         sb.AppendLine($"{index}) $ {command}");
         if (!string.IsNullOrWhiteSpace(output))
         {
-            sb.AppendLine("```");
-            sb.AppendLine(output);
-            sb.AppendLine("```");
+            sb.AppendLine(MarkdownCodeBlock.Format(output));
         }
         sb.AppendLine();
         return sb.ToString();

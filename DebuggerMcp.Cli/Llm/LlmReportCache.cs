@@ -562,14 +562,10 @@ internal static class LlmReportCache
         sb.AppendLine("If multiple reports are attached, add `{ \"report\": \"<fileName>\" }` to disambiguate.");
         sb.AppendLine();
         sb.AppendLine("Report summary (factual; excludes recommendations/root cause):");
-        sb.AppendLine("```json");
-        sb.AppendLine(summaryJson);
-        sb.AppendLine("```");
+        sb.AppendLine(MarkdownCodeBlock.Format(summaryJson, "json"));
         sb.AppendLine();
         sb.AppendLine("Report index:");
-        sb.AppendLine("```json");
-        sb.AppendLine(manifestJson);
-        sb.AppendLine("```");
+        sb.AppendLine(MarkdownCodeBlock.Format(manifestJson, "json"));
         return sb.ToString();
     }
 
