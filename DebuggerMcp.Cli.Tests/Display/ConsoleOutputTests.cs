@@ -87,4 +87,23 @@ public class ConsoleOutputTests
         Assert.Contains(captured, line => line.Contains("hello", StringComparison.Ordinal));
         Assert.Contains(captured, line => line.Contains("[x]", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void PromptLlmAgentToolApproval_RedactsSecretsInTranscriptAndPrompt()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        var captured = new List<string>();
+        using (output.BeginTranscriptCapture(captured.Add))
+        {
+            var decision = output.PromptLlmAgentToolApproval("exec", "apiKey=secret");
+            Assert.Equal(DebuggerMcp.Cli.Llm.LlmAgentToolApprovalDecision.DenyOnce, decision);
+        }
+
+        Assert.DoesNotContain(captured, line => line.Contains("secret", StringComparison.Ordinal));
+        Assert.Contains(captured, line => line.Contains("apiKey=***", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain("secret", console.Output, StringComparison.Ordinal);
+        Assert.Contains("apiKey=***", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
 }
