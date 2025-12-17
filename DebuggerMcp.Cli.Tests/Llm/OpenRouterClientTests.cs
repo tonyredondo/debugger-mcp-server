@@ -191,4 +191,50 @@ public class OpenRouterClientTests
         Assert.Equal("function", toolChoice.GetProperty("type").GetString());
         Assert.Equal("exec", toolChoice.GetProperty("function").GetProperty("name").GetString());
     }
+
+    [Fact]
+    public async Task ChatCompletionAsync_AssistantToolCallsWithEmptyContent_OmitsContentField()
+    {
+        var settings = new LlmSettings
+        {
+            OpenRouterApiKey = "k",
+            OpenRouterModel = "openrouter/auto",
+            OpenRouterBaseUrl = "https://openrouter.ai/api/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenRouterClient(http, settings);
+
+        using var schemaDoc = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}");
+
+        var toolCalls = new List<ChatToolCall> { new("call_1", "exec", "{\"command\":\"bt\"}") };
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages =
+            [
+                new ChatMessage("user", "hi"),
+                new ChatMessage("assistant", "", toolCallId: null, toolCalls: toolCalls)
+            ],
+            Tools = [new ChatTool { Name = "exec", Description = "d", Parameters = schemaDoc.RootElement.Clone() }],
+            ToolChoice = new ChatToolChoice { Mode = "auto" },
+            MaxTokens = null
+        });
+
+        using var reqDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        var messages = reqDoc.RootElement.GetProperty("messages");
+        Assert.Equal(2, messages.GetArrayLength());
+        Assert.Equal("assistant", messages[1].GetProperty("role").GetString());
+        Assert.True(messages[1].TryGetProperty("tool_calls", out _));
+        Assert.False(messages[1].TryGetProperty("content", out _));
+    }
 }

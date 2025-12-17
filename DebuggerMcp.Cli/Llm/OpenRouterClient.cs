@@ -209,6 +209,12 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         if (string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase) &&
             message.ToolCalls is { Count: > 0 })
         {
+            // OpenAI-style: assistant messages with tool_calls may omit content or set it to null.
+            if (string.IsNullOrWhiteSpace(message.Content))
+            {
+                msg.Content = null;
+            }
+
             msg.ToolCalls = message.ToolCalls
                 .Select(tc => new OpenRouterToolCall
                 {
@@ -289,7 +295,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         public string Role { get; set; } = "user";
 
         [JsonPropertyName("content")]
-        public string Content { get; set; } = string.Empty;
+        public string? Content { get; set; }
 
         [JsonPropertyName("tool_call_id")]
         public string? ToolCallId { get; set; }
