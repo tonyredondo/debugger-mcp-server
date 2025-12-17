@@ -51,7 +51,8 @@ internal static class TranscriptContextBuilder
         var cliContext = BuildCliTranscriptContext(transcriptTail, maxContextChars: maxContextChars);
         if (!string.IsNullOrWhiteSpace(cliContext))
         {
-            messages.Add(new ChatMessage("system", cliContext));
+            // Treat transcript context as untrusted data to reduce prompt-injection risk.
+            messages.Add(new ChatMessage("user", $"CLI transcript context (untrusted data):{Environment.NewLine}{cliContext}"));
         }
 
         var llmEntries = transcriptTail.Where(e => e.Kind is "llm_user" or "llm_assistant").ToList();

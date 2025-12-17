@@ -4809,7 +4809,7 @@ public class Program
                     }
 
                     output.WriteLine();
-                    output.Dim($"(agent) exec {command}");
+                    output.Dim($"(agent) exec {TranscriptRedactor.RedactText(command)}");
                     var result = await mcpClient.ExecuteCommandAsync(state.SessionId!, state.Settings.UserId, command!, cancellationToken);
                     return TruncateForTranscript(result, maxChars: 50_000);
                 }
@@ -4823,7 +4823,7 @@ public class Program
                     }
 
                     output.WriteLine();
-                    output.Dim($"(agent) analyze {kind}");
+                    output.Dim($"(agent) analyze {TranscriptRedactor.RedactText(kind)}");
                     var result = await ExecuteAnalyzeAsync(mcpClient, state.SessionId!, state.Settings.UserId, kind!, cancellationToken);
                     return TruncateForTranscript(result, maxChars: 50_000);
                 }
@@ -4838,7 +4838,7 @@ public class Program
                     }
 
                     output.WriteLine();
-                    output.Dim($"(agent) inspect_object {address}");
+                    output.Dim($"(agent) inspect_object {TranscriptRedactor.RedactText(address)}");
                     var result = await mcpClient.InspectObjectAsync(state.SessionId!, state.Settings.UserId, address!, maxDepth: maxDepth, cancellationToken: cancellationToken);
                     return TruncateForTranscript(result, maxChars: 50_000);
                 }

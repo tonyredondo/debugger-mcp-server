@@ -28,7 +28,8 @@ public class TranscriptContextBuilderTests
 
         Assert.True(messages.Count >= 4);
         Assert.Equal("system", messages[0].Role);
-        Assert.Equal("system", messages[1].Role);
+        Assert.Equal("user", messages[1].Role);
+        Assert.Contains("untrusted", messages[1].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("exec bt", messages[1].Content);
         Assert.Contains("bt-output", messages[1].Content);
         // Should not be broken by embedded triple-backticks.
