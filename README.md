@@ -738,6 +738,7 @@ llmagent> Analyze the current dump and run whatever commands you need
 Notes:
 - `llmagent` supports `/help`, `/reset`, `/reset conversation`, `/tools`, `/exit`.
 - `llm reset` clears LLM context for the current server/session/dump scope.
+- When provider is `openai` and no API key is configured, the CLI will try to fall back to `~/.codex/auth.json` (expects `OPENAI_API_KEY`). Override with `DEBUGGER_MCP_CODEX_AUTH_PATH`.
 
 ### Configuration
 

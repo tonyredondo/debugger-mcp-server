@@ -125,6 +125,10 @@ export OPENAI_API_KEY="..."
 export DEBUGGER_MCP_LLM_PROVIDER="openrouter"   # or "openai"
 export OPENROUTER_MODEL="openrouter/auto"
 export OPENAI_MODEL="gpt-4o-mini"
+
+# If provider is "openai" and no API key is configured, the CLI can fall back to ~/.codex/auth.json (expects OPENAI_API_KEY).
+# Override the Codex auth file path with:
+export DEBUGGER_MCP_CODEX_AUTH_PATH="/path/to/auth.json"
 ```
 
 ### Config File (`~/.dbg-mcp/config.json`)

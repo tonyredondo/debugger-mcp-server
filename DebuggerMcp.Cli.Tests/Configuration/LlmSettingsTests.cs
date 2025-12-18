@@ -94,7 +94,7 @@ public class LlmSettingsTests
             settings.ApplyEnvironmentOverrides();
 
             Assert.Equal("k-codex", settings.GetEffectiveOpenAiApiKey());
-            Assert.Equal("~/.codex/auth.json", settings.GetEffectiveApiKeySource());
+            Assert.Equal("codex auth (override path)", settings.GetEffectiveApiKeySource());
         }
         finally
         {

@@ -106,6 +106,7 @@ dbg-mcp> exit
 
 Notes:
 - When provider is `openai` and no API key is configured, the CLI will try to fall back to `~/.codex/auth.json` (expects a JSON field `OPENAI_API_KEY`).
+- Override the Codex auth file path with `DEBUGGER_MCP_CODEX_AUTH_PATH`.
 
 ### Configuration File
 

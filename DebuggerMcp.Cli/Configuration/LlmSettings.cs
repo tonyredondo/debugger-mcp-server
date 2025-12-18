@@ -58,6 +58,12 @@ public sealed class LlmSettings
     public string? OpenAiApiKeyFromCodexAuth { get; private set; }
 
     /// <summary>
+    /// Gets a value indicating whether <see cref="OpenAiApiKeyFromCodexAuth"/> came from an override path rather than the default <c>~/.codex/auth.json</c>.
+    /// </summary>
+    [JsonIgnore]
+    public bool OpenAiApiKeyFromCodexAuthUsedOverridePath { get; private set; }
+
+    /// <summary>
     /// Gets or sets the OpenAI model identifier.
     /// </summary>
     /// <remarks>
@@ -95,13 +101,14 @@ public sealed class LlmSettings
         OpenRouterApiKeyFromEnvironment = null;
         OpenAiApiKeyFromEnvironment = null;
         OpenAiApiKeyFromCodexAuth = null;
+        OpenAiApiKeyFromCodexAuthUsedOverridePath = false;
 
         var provider =
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_PROVIDER") ??
             Environment.GetEnvironmentVariable("LLM_PROVIDER");
         if (!string.IsNullOrWhiteSpace(provider))
         {
-            Provider = provider.Trim();
+            Provider = NormalizeProvider(provider);
         }
 
         // Support both OpenRouter-standard and DebuggerMcp-prefixed env vars.
@@ -186,6 +193,7 @@ public sealed class LlmSettings
             string.IsNullOrWhiteSpace(OpenAiApiKey))
         {
             var overridePath = Environment.GetEnvironmentVariable("DEBUGGER_MCP_CODEX_AUTH_PATH");
+            OpenAiApiKeyFromCodexAuthUsedOverridePath = !string.IsNullOrWhiteSpace(overridePath);
             OpenAiApiKeyFromCodexAuth = CodexAuthReader.TryReadOpenAiApiKey(overridePath);
         }
     }
@@ -213,7 +221,12 @@ public sealed class LlmSettings
         {
             if (!string.IsNullOrWhiteSpace(OpenAiApiKeyFromEnvironment)) return "env";
             if (!string.IsNullOrWhiteSpace(OpenAiApiKey)) return "config";
-            if (!string.IsNullOrWhiteSpace(OpenAiApiKeyFromCodexAuth)) return "~/.codex/auth.json";
+            if (!string.IsNullOrWhiteSpace(OpenAiApiKeyFromCodexAuth))
+            {
+                return OpenAiApiKeyFromCodexAuthUsedOverridePath
+                    ? "codex auth (override path)"
+                    : "~/.codex/auth.json";
+            }
             return "(not set)";
         }
 

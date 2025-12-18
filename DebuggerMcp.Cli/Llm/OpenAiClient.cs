@@ -302,12 +302,37 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
                 read = maxBytes;
             }
 
-            return (Encoding.UTF8.GetString(buffer, 0, read), truncated);
+            return (DecodeUtf8Prefix(buffer, read), truncated);
         }
         catch
         {
             return (string.Empty, false);
         }
+    }
+
+    private static string DecodeUtf8Prefix(byte[] buffer, int count)
+    {
+        if (count <= 0)
+        {
+            return string.Empty;
+        }
+
+        // Avoid splitting multi-byte UTF-8 sequences by backing off a few bytes at most.
+        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
+        var safeCount = Math.Min(count, buffer.Length);
+        for (var i = 0; i <= 4 && safeCount - i >= 0; i++)
+        {
+            try
+            {
+                return encoding.GetString(buffer, 0, safeCount - i);
+            }
+            catch (DecoderFallbackException)
+            {
+                // try again with fewer bytes
+            }
+        }
+
+        return Encoding.UTF8.GetString(buffer, 0, safeCount);
     }
 
     private sealed class OpenAiChatRequest

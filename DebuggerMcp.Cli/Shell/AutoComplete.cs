@@ -241,6 +241,29 @@ public class AutoComplete
     {
         var completions = new List<string>();
 
+        // LLM provider selector values
+        if (command == "llm" &&
+            parts.Length >= 2 &&
+            parts[1].Equals("provider", StringComparison.OrdinalIgnoreCase))
+        {
+            completions.AddRange(new[] { "openrouter", "openai" }.Where(p =>
+                string.IsNullOrEmpty(prefix) ||
+                p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        // LLM boolean toggles
+        if (command == "llm" &&
+            parts.Length >= 2 &&
+            (parts[1].Equals("set-agent", StringComparison.OrdinalIgnoreCase) ||
+             parts[1].Equals("set-agent-confirm", StringComparison.OrdinalIgnoreCase) ||
+             parts[1].Equals("agent", StringComparison.OrdinalIgnoreCase) ||
+             parts[1].Equals("agent-confirm", StringComparison.OrdinalIgnoreCase)))
+        {
+            completions.AddRange(new[] { "true", "false" }.Where(v =>
+                string.IsNullOrEmpty(prefix) ||
+                v.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
+        }
+
         // Commands that accept dump IDs
         if (command is "open" or "compare" && _getDumpIds != null)
         {

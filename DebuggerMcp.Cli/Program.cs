@@ -4552,7 +4552,7 @@ public class Program
     }
 
     /// <summary>
-    /// Handles the llm command (OpenRouter chat queries).
+    /// Handles the llm command (LLM chat queries).
     /// </summary>
     private static async Task HandleLlmAsync(
         string[] args,
