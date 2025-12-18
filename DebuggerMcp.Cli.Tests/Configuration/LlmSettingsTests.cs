@@ -166,4 +166,42 @@ public class LlmSettingsTests
         Assert.Equal("high", settings.OpenAiReasoningEffort);
         Assert.Equal("low", settings.OpenRouterReasoningEffort);
     }
+
+    [Fact]
+    public void ApplyEnvironmentOverrides_WhenReasoningEffortInvalid_DoesNotOverrideExistingValue()
+    {
+        var old = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_REASONING_EFFORT");
+        try
+        {
+            Environment.SetEnvironmentVariable("DEBUGGER_MCP_LLM_REASONING_EFFORT", "invalid");
+            var settings = new LlmSettings { Provider = "openai", OpenAiReasoningEffort = "high" };
+            settings.ApplyEnvironmentOverrides();
+            Assert.Equal("high", settings.OpenAiReasoningEffort);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DEBUGGER_MCP_LLM_REASONING_EFFORT", old);
+        }
+    }
+
+    [Theory]
+    [InlineData("unset")]
+    [InlineData("default")]
+    [InlineData("auto")]
+    [InlineData("none")]
+    public void ApplyEnvironmentOverrides_WhenReasoningEffortUnset_ClearsValue(string value)
+    {
+        var old = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_REASONING_EFFORT");
+        try
+        {
+            Environment.SetEnvironmentVariable("DEBUGGER_MCP_LLM_REASONING_EFFORT", value);
+            var settings = new LlmSettings { Provider = "openai", OpenAiReasoningEffort = "high" };
+            settings.ApplyEnvironmentOverrides();
+            Assert.Null(settings.OpenAiReasoningEffort);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DEBUGGER_MCP_LLM_REASONING_EFFORT", old);
+        }
+    }
 }

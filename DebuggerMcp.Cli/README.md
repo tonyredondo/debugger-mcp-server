@@ -85,12 +85,16 @@ dbg-mcp> exit
 | `OPENROUTER_MODEL` | OpenRouter model id | openrouter/auto |
 | `OPENROUTER_BASE_URL` | OpenRouter base URL | https://openrouter.ai/api/v1 |
 | `OPENROUTER_TIMEOUT_SECONDS` | LLM request timeout | 120 |
+| `OPENROUTER_REASONING_EFFORT` | Reasoning effort (`low|medium|high|unset`) | - |
 | `DEBUGGER_MCP_OPENROUTER_API_KEY` | Alternate API key env var | - |
 | `DEBUGGER_MCP_OPENROUTER_MODEL` | Alternate model env var | - |
+| `DEBUGGER_MCP_OPENROUTER_REASONING_EFFORT` | Alternate reasoning effort env var | - |
 | `DEBUGGER_MCP_LLM_AGENT_MODE` | Enable agent mode by default | false |
 | `DEBUGGER_MCP_LLM_AGENT_CONFIRM` | Confirm each tool call in agent mode | true |
 | `DEBUGGER_MCP_LLM_PROVIDER` | Provider selector (`openrouter` or `openai`) | openrouter |
 | `LLM_PROVIDER` | Provider selector (alias) | - |
+| `DEBUGGER_MCP_LLM_REASONING_EFFORT` | Reasoning effort for current provider (`low|medium|high|unset`) | - |
+| `LLM_REASONING_EFFORT` | Reasoning effort (alias) | - |
 
 #### LLM / OpenAI
 
@@ -100,9 +104,11 @@ dbg-mcp> exit
 | `OPENAI_MODEL` | OpenAI model id | gpt-4o-mini |
 | `OPENAI_BASE_URL` | OpenAI base URL | https://api.openai.com/v1 |
 | `OPENAI_TIMEOUT_SECONDS` | LLM request timeout (alias) | - |
+| `OPENAI_REASONING_EFFORT` | Reasoning effort (`low|medium|high|unset`) | - |
 | `DEBUGGER_MCP_OPENAI_API_KEY` | Alternate API key env var | - |
 | `DEBUGGER_MCP_OPENAI_MODEL` | Alternate model env var | - |
 | `DEBUGGER_MCP_OPENAI_BASE_URL` | Alternate base URL env var | - |
+| `DEBUGGER_MCP_OPENAI_REASONING_EFFORT` | Alternate reasoning effort env var | - |
 
 Notes:
 - When provider is `openai` and no API key is configured, the CLI will try to fall back to `~/.codex/auth.json` (expects a JSON field `OPENAI_API_KEY`).

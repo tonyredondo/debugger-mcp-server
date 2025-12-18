@@ -187,7 +187,7 @@ public sealed class LlmSettings
             Environment.GetEnvironmentVariable("LLM_REASONING_EFFORT");
         if (!string.IsNullOrWhiteSpace(reasoningEffort))
         {
-            SetReasoningEffortForCurrentProvider(reasoningEffort);
+            ApplyReasoningEffortOverride(reasoningEffort, set: SetReasoningEffortForCurrentProvider);
         }
 
         var openRouterReasoningEffort =
@@ -195,7 +195,7 @@ public sealed class LlmSettings
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENROUTER_REASONING_EFFORT");
         if (!string.IsNullOrWhiteSpace(openRouterReasoningEffort))
         {
-            OpenRouterReasoningEffort = NormalizeReasoningEffort(openRouterReasoningEffort);
+            ApplyReasoningEffortOverride(openRouterReasoningEffort, set: v => OpenRouterReasoningEffort = v);
         }
 
         var openAiReasoningEffort =
@@ -203,7 +203,7 @@ public sealed class LlmSettings
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_REASONING_EFFORT");
         if (!string.IsNullOrWhiteSpace(openAiReasoningEffort))
         {
-            OpenAiReasoningEffort = NormalizeReasoningEffort(openAiReasoningEffort);
+            ApplyReasoningEffortOverride(openAiReasoningEffort, set: v => OpenAiReasoningEffort = v);
         }
 
         var timeoutSeconds =
@@ -321,12 +321,44 @@ public sealed class LlmSettings
         }
 
         var v = effort.Trim().ToLowerInvariant();
-        if (v is "unset" or "default" or "auto" or "none")
+        if (IsReasoningEffortUnsetToken(v))
         {
             return null;
         }
 
         return v is "low" or "medium" or "high" ? v : null;
+    }
+
+    internal static bool IsReasoningEffortUnsetToken(string? effort)
+    {
+        if (string.IsNullOrWhiteSpace(effort))
+        {
+            return false;
+        }
+
+        var v = effort.Trim().ToLowerInvariant();
+        return v is "unset" or "default" or "auto" or "none";
+    }
+
+    private static void ApplyReasoningEffortOverride(string rawValue, Action<string?> set)
+    {
+        if (set == null)
+        {
+            throw new ArgumentNullException(nameof(set));
+        }
+
+        if (IsReasoningEffortUnsetToken(rawValue))
+        {
+            set(null);
+            return;
+        }
+
+        var normalized = NormalizeReasoningEffort(rawValue);
+        if (normalized != null)
+        {
+            set(normalized);
+        }
+        // Invalid values are ignored (do not override existing config).
     }
 }
 
