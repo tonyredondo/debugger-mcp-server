@@ -155,7 +155,6 @@ public class CrashAnalyzer
 
         // Get all threads' backtraces
         var backtraceAllOutput = await ExecuteCommandAsync("bt all");
-        var cleanedBacktrace = CleanLldbOutput(backtraceAllOutput);
         ParseLldbBacktraceAll(backtraceAllOutput, result);
 
         // Get module information
@@ -2293,27 +2292,4 @@ public class CrashAnalyzer
         return $"https://raw.githubusercontent.com/{org}/{repo}/{commitHash}/{relativePath}";
     }
 
-    /// <summary>
-    /// Cleans up LLDB command output by removing known error patterns that shouldn't be there.
-    /// This handles leftover Python errors from previous LLDB sessions or failed commands.
-    /// </summary>
-    protected static string CleanLldbOutput(string output)
-    {
-        if (string.IsNullOrEmpty(output))
-            return output;
-
-        // Remove Python traceback errors (from failed script commands)
-        output = Regex.Replace(output,
-            @"Traceback \(most recent call last\):.*?(?:NameError|SyntaxError|TypeError|AttributeError):[^\n]*\n?",
-            "",
-            RegexOptions.Singleline);
-
-        // Remove common LLDB Python errors
-        output = Regex.Replace(output,
-            @"(?:File ""<string>"", line \d+, in <module>|name '[^']+' is not defined)\n?",
-            "",
-            RegexOptions.Multiline);
-
-        return output.Trim();
-    }
 }

@@ -447,7 +447,7 @@ When `API_KEY` environment variable is set, include `X-API-Key` header in all re
 ### Generate Report
 - **GET** `/api/dumps/{userId}/{dumpId}/report?format=markdown`
 - **Headers**: `X-API-Key` (if enabled)
-- **Query Params**: `format` (markdown, html, json), `includeRaw` (bool)
+- **Query Params**: `format` (markdown, html, json)
 - **Returns**: Analysis report as downloadable file
 
 ### Upload Symbol ZIP

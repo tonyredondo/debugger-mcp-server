@@ -573,7 +573,6 @@ public class ReportGeneratorTests
         Assert.True(options.IncludeHeapStats);
         Assert.True(options.IncludeRecommendations);
         Assert.True(options.IncludeCharts);
-        Assert.False(options.IncludeRawOutput);
     }
 
     [Fact]

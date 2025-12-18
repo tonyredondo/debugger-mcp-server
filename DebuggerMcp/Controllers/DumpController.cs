@@ -924,7 +924,6 @@ public class DumpController : ControllerBase
     /// <param name="userId">The user ID who owns the dump.</param>
     /// <param name="dumpId">The dump ID to generate report for.</param>
     /// <param name="format">Report format: markdown, html, or json (default: markdown).</param>
-    /// <param name="includeRaw">Whether to include raw debugger output (default: false).</param>
     /// <returns>The generated report as a downloadable file.</returns>
     /// <remarks>
     /// Generates a comprehensive crash analysis report for the specified dump.
@@ -953,8 +952,7 @@ public class DumpController : ControllerBase
     public async Task<IActionResult> GenerateReport(
         string userId,
         string dumpId,
-        [FromQuery] string format = "markdown",
-        [FromQuery] bool includeRaw = false)
+        [FromQuery] string format = "markdown")
     {
         IDebuggerManager? manager = null;
 
@@ -1038,8 +1036,7 @@ public class DumpController : ControllerBase
             var reportService = new ReportService();
             var options = new ReportOptions
             {
-                Format = reportFormat,
-                IncludeRawOutput = includeRaw
+                Format = reportFormat
             };
             var metadata = new ReportMetadata
             {

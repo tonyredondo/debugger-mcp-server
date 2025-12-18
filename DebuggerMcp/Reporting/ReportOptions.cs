@@ -113,12 +113,6 @@ public class ReportOptions
     public bool IncludeCharts { get; set; } = true;
 
     /// <summary>
-    /// Gets or sets whether to include raw debugger output.
-    /// This can make reports very large.
-    /// </summary>
-    public bool IncludeRawOutput { get; set; } = false;
-
-    /// <summary>
     /// Gets or sets the maximum number of threads to include in detail.
     /// Set to 0 for unlimited.
     /// </summary>
@@ -153,8 +147,7 @@ public class ReportOptions
         IncludeDotNetInfo = true,
         IncludeProcessInfo = true,
         IncludeRecommendations = true,
-        IncludeCharts = true,
-        IncludeRawOutput = false
+        IncludeCharts = true
     };
 
     /// <summary>
@@ -175,7 +168,6 @@ public class ReportOptions
         IncludeProcessInfo = true,
         IncludeRecommendations = true,
         IncludeCharts = true,
-        IncludeRawOutput = false,
         MaxCallStackFrames = 10,
         MaxThreadsToShow = 5,
         MaxEnvironmentVariables = 20  // Show fewer env vars in summary
@@ -223,4 +215,3 @@ public class ReportMetadata
     [JsonPropertyName("serverVersion")]
     public string ServerVersion { get; set; } = "1.0.0";
 }
-
