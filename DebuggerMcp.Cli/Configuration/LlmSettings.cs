@@ -139,7 +139,7 @@ public sealed class LlmSettings
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENROUTER_API_KEY");
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
-            OpenRouterApiKeyFromEnvironment = apiKey;
+            OpenRouterApiKeyFromEnvironment = apiKey.Trim();
         }
 
         var model =
@@ -163,7 +163,7 @@ public sealed class LlmSettings
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_API_KEY");
         if (!string.IsNullOrWhiteSpace(openAiApiKey))
         {
-            OpenAiApiKeyFromEnvironment = openAiApiKey;
+            OpenAiApiKeyFromEnvironment = openAiApiKey.Trim();
         }
 
         var openAiModel =
@@ -248,13 +248,13 @@ public sealed class LlmSettings
     /// Gets the effective OpenRouter API key (environment overrides config).
     /// </summary>
     public string? GetEffectiveOpenRouterApiKey()
-        => OpenRouterApiKeyFromEnvironment ?? OpenRouterApiKey;
+        => NormalizeApiKey(OpenRouterApiKeyFromEnvironment) ?? NormalizeApiKey(OpenRouterApiKey);
 
     /// <summary>
     /// Gets the effective OpenAI API key (environment overrides config; falls back to <c>~/.codex/auth.json</c> when available).
     /// </summary>
     public string? GetEffectiveOpenAiApiKey()
-        => OpenAiApiKeyFromEnvironment ?? OpenAiApiKey ?? OpenAiApiKeyFromCodexAuth;
+        => NormalizeApiKey(OpenAiApiKeyFromEnvironment) ?? NormalizeApiKey(OpenAiApiKey) ?? NormalizeApiKey(OpenAiApiKeyFromCodexAuth);
 
     public string? GetEffectiveApiKey()
         => GetProviderKind() == LlmProviderKind.OpenAi
@@ -359,6 +359,18 @@ public sealed class LlmSettings
             set(normalized);
         }
         // Invalid values are ignored (do not override existing config).
+    }
+
+    private static string? NormalizeApiKey(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        // Keys should not contain surrounding whitespace; trim defensively.
+        var trimmed = value.Trim();
+        return trimmed.Length == 0 ? null : trimmed;
     }
 }
 

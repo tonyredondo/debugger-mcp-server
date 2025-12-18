@@ -72,6 +72,30 @@ public class LlmSettingsTests
     }
 
     [Fact]
+    public void GetEffectiveOpenAiApiKey_TrimsWhitespace()
+    {
+        var settings = new LlmSettings { Provider = "openai", OpenAiApiKey = "  k1  " };
+        Assert.Equal("k1", settings.GetEffectiveOpenAiApiKey());
+    }
+
+    [Fact]
+    public void ApplyEnvironmentOverrides_TrimsEnvApiKeys()
+    {
+        var old = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        try
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", "  k2  ");
+            var settings = new LlmSettings { Provider = "openai" };
+            settings.ApplyEnvironmentOverrides();
+            Assert.Equal("k2", settings.GetEffectiveOpenAiApiKey());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("OPENAI_API_KEY", old);
+        }
+    }
+
+    [Fact]
     public void ApplyEnvironmentOverrides_WhenProviderOpenAi_LoadsApiKeyFromCodexAuth()
     {
         var oldProvider = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_PROVIDER");

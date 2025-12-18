@@ -4761,6 +4761,7 @@ public class Program
         catch (Exception ex)
         {
             output.Error(ex.Message);
+            WriteLlmErrorContext(output, llmSettings);
         }
     }
 
@@ -4874,7 +4875,40 @@ public class Program
             catch (Exception ex)
             {
                 output.Error(ex.Message);
+                WriteLlmErrorContext(output, llmSettings);
             }
+        }
+    }
+
+    private static void WriteLlmErrorContext(ConsoleOutput output, LlmSettings settings)
+    {
+        try
+        {
+            settings.ApplyEnvironmentOverrides();
+        }
+        catch
+        {
+            // Best-effort; don't block error reporting.
+        }
+
+        try
+        {
+            output.Dim($"LLM provider: {settings.GetProviderDisplayName()}");
+            output.Dim($"LLM model: {settings.GetEffectiveModel()}");
+            output.Dim($"LLM reasoning effort: {settings.GetEffectiveReasoningEffort() ?? "(default)"}");
+            output.Dim($"LLM API key source: {settings.GetEffectiveApiKeySource()}");
+            if (settings.GetProviderKind() == LlmProviderKind.OpenAi)
+            {
+                output.Dim($"LLM base URL: {settings.OpenAiBaseUrl}");
+            }
+            else
+            {
+                output.Dim($"LLM base URL: {settings.OpenRouterBaseUrl}");
+            }
+        }
+        catch
+        {
+            // Never fail on diagnostics.
         }
     }
 
