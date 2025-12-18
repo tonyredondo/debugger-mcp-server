@@ -4572,6 +4572,7 @@ public class Program
             output.WriteLine();
             output.KeyValue("Provider", llmSettings.GetProviderDisplayName());
             output.KeyValue("Model", llmSettings.GetEffectiveModel());
+            output.KeyValue("Reasoning Effort", llmSettings.GetEffectiveReasoningEffort() ?? "(default)");
             output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveApiKey()) ? "(not set)" : "(configured)");
             output.KeyValue("API Key Source", llmSettings.GetEffectiveApiKeySource());
             output.KeyValue("Agent Mode", llmSettings.AgentModeEnabled ? "enabled" : "disabled");
@@ -4582,6 +4583,7 @@ public class Program
             output.Dim("    Tip: Attach local files with @./path (e.g., llm Analyze @./report.json)");
             output.Dim("  llm provider <openrouter|openai>");
             output.Dim("  llm model <model-id>");
+            output.Dim("  llm reasoning-effort <low|medium|high|unset>");
             output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json for current provider)");
             output.Dim("  llm set-agent <true|false>       (toggles tool-using agent mode)");
             output.Dim("  llm set-agent-confirm <true|false> (confirm each tool call in agent mode)");
@@ -4628,6 +4630,34 @@ public class Program
                 }
                 state.Settings.Save();
                 output.Success($"LLM model set: {llmSettings.GetEffectiveModel()}");
+                return;
+
+            case "reasoning-effort":
+            case "effort":
+                if (args.Length < 2)
+                {
+                    output.Error("Usage: llm reasoning-effort <low|medium|high|unset>");
+                    return;
+                }
+                {
+                    var raw = args[1].Trim();
+                    var v = raw.ToLowerInvariant();
+                    if (v is "unset" or "default" or "auto" or "none")
+                    {
+                        llmSettings.SetReasoningEffortForCurrentProvider(null);
+                    }
+                    else if (v is "low" or "medium" or "high")
+                    {
+                        llmSettings.SetReasoningEffortForCurrentProvider(v);
+                    }
+                    else
+                    {
+                        output.Error("Invalid reasoning effort. Use low, medium, high, or unset.");
+                        return;
+                    }
+                }
+                state.Settings.Save();
+                output.Success($"LLM reasoning effort set: {llmSettings.GetEffectiveReasoningEffort() ?? "(default)"}");
                 return;
 
             case "set-key":
@@ -4769,6 +4799,7 @@ public class Program
         output.WriteLine();
         output.KeyValue("Provider", llmSettings.GetProviderDisplayName());
         output.KeyValue("Model", llmSettings.GetEffectiveModel());
+        output.KeyValue("Reasoning Effort", llmSettings.GetEffectiveReasoningEffort() ?? "(default)");
         output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveApiKey()) ? "(not set)" : "(configured)");
         output.KeyValue("API Key Source", llmSettings.GetEffectiveApiKeySource());
         output.KeyValue("Agent Mode", "enabled");
@@ -4955,7 +4986,8 @@ public class Program
                         Messages = messages,
                         Tools = tools,
                         ToolChoice = new ChatToolChoice { Mode = "auto" },
-                        MaxTokens = null
+                        MaxTokens = null,
+                        ReasoningEffort = llmSettings.GetEffectiveReasoningEffort()
                     }, ct));
             },
             async (toolCall, ct) =>

@@ -560,4 +560,33 @@ public class McpSamplingCreateMessageHandlerTests
         Assert.Contains("missing tool_call_id", seenRequest.Messages[1].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("tool output without id", seenRequest.Messages[1].Content, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public async Task HandleAsync_WhenRequestIncludesReasoningEffort_PropagatesToCompletionRequest()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "reasoningEffort": "high",
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal("high", seenRequest!.ReasoningEffort);
+    }
 }

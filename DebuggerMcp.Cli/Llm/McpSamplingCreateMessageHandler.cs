@@ -721,14 +721,39 @@ internal sealed class McpSamplingCreateMessageHandler(
         var tools = ParseTools(parameters);
         var toolChoice = ParseToolChoice(parameters);
         var maxTokens = ParseMaxTokens(parameters);
+        var reasoningEffort = ParseReasoningEffort(parameters);
 
         return new ChatCompletionRequest
         {
             Messages = messages,
             Tools = tools,
             ToolChoice = toolChoice,
-            MaxTokens = maxTokens
+            MaxTokens = maxTokens,
+            ReasoningEffort = reasoningEffort
         };
+    }
+
+    private static string? ParseReasoningEffort(JsonElement parameters)
+    {
+        if (TryGetProperty(parameters, "reasoningEffort", out var v) ||
+            TryGetProperty(parameters, "reasoning_effort", out v))
+        {
+            if (v.ValueKind == JsonValueKind.String)
+            {
+                return LlmSettings.NormalizeReasoningEffort(v.GetString());
+            }
+        }
+
+        if (TryGetProperty(parameters, "reasoning", out var reasoning) && reasoning.ValueKind == JsonValueKind.Object)
+        {
+            var effort = TryGetString(reasoning, "effort");
+            if (!string.IsNullOrWhiteSpace(effort))
+            {
+                return LlmSettings.NormalizeReasoningEffort(effort);
+            }
+        }
+
+        return null;
     }
 
     private static int? ParseMaxTokens(JsonElement parameters)

@@ -21,7 +21,13 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
     public async Task<string> ChatAsync(IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken = default)
     {
-        var result = await ChatCompletionAsync(new ChatCompletionRequest { Messages = messages }, cancellationToken).ConfigureAwait(false);
+        var result = await ChatCompletionAsync(
+            new ChatCompletionRequest
+            {
+                Messages = messages,
+                ReasoningEffort = _settings.OpenRouterReasoningEffort
+            },
+            cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(result.Text))
         {
             throw new InvalidOperationException("OpenRouter response did not contain any message content.");
@@ -70,7 +76,8 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             Messages = completionRequest.Messages.Select(ToOpenRouterMessage).ToList(),
             Tools = completionRequest.Tools?.Select(ToOpenRouterTool).ToList(),
             ToolChoice = ToOpenRouterToolChoice(completionRequest.ToolChoice),
-            MaxTokens = completionRequest.MaxTokens
+            MaxTokens = completionRequest.MaxTokens,
+            ReasoningEffort = completionRequest.ReasoningEffort
         };
 
         var json = JsonSerializer.Serialize(payload, JsonOptions);
@@ -462,6 +469,9 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
         [JsonPropertyName("max_tokens")]
         public int? MaxTokens { get; set; }
+
+        [JsonPropertyName("reasoning_effort")]
+        public string? ReasoningEffort { get; set; }
     }
 
     private sealed class OpenRouterChatMessage

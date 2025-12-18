@@ -31,6 +31,7 @@ public class OpenRouterClientTests
         {
             OpenRouterApiKey = "k",
             OpenRouterModel = "openrouter/auto",
+            OpenRouterReasoningEffort = "high",
             OpenRouterBaseUrl = "https://openrouter.ai/api/v1",
             TimeoutSeconds = 10
         };
@@ -58,6 +59,7 @@ public class OpenRouterClientTests
         var requestBody = handler.LastRequestBody!;
         using var doc = JsonDocument.Parse(requestBody);
         Assert.Equal("openrouter/auto", doc.RootElement.GetProperty("model").GetString());
+        Assert.Equal("high", doc.RootElement.GetProperty("reasoning_effort").GetString());
         var messages = doc.RootElement.GetProperty("messages");
         Assert.Equal(1, messages.GetArrayLength());
         Assert.Equal("user", messages[0].GetProperty("role").GetString());

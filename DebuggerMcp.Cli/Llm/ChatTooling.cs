@@ -61,6 +61,15 @@ internal sealed class ChatCompletionRequest
     public ChatToolChoice? ToolChoice { get; init; }
 
     public int? MaxTokens { get; init; }
+
+    /// <summary>
+    /// Reasoning effort hint for reasoning-capable models (provider-specific support).
+    /// </summary>
+    /// <remarks>
+    /// Supported values: <c>low</c>, <c>medium</c>, <c>high</c>.
+    /// When <c>null</c>, the field is omitted.
+    /// </remarks>
+    public string? ReasoningEffort { get; init; }
 }
 
 /// <summary>

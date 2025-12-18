@@ -138,4 +138,32 @@ public class LlmSettingsTests
             try { Directory.Delete(dir, recursive: true); } catch { }
         }
     }
+
+    [Theory]
+    [InlineData("low", "low")]
+    [InlineData("MEDIUM", "medium")]
+    [InlineData("High", "high")]
+    [InlineData("unset", null)]
+    [InlineData("default", null)]
+    [InlineData("auto", null)]
+    [InlineData("none", null)]
+    [InlineData("invalid", null)]
+    public void NormalizeReasoningEffort_NormalizesExpectedValues(string input, string? expected)
+    {
+        Assert.Equal(expected, LlmSettings.NormalizeReasoningEffort(input));
+    }
+
+    [Fact]
+    public void SetReasoningEffortForCurrentProvider_SetsProviderSpecificValue()
+    {
+        var settings = new LlmSettings { Provider = "openai" };
+        settings.SetReasoningEffortForCurrentProvider("high");
+        Assert.Equal("high", settings.OpenAiReasoningEffort);
+        Assert.Null(settings.OpenRouterReasoningEffort);
+
+        settings.Provider = "openrouter";
+        settings.SetReasoningEffortForCurrentProvider("low");
+        Assert.Equal("high", settings.OpenAiReasoningEffort);
+        Assert.Equal("low", settings.OpenRouterReasoningEffort);
+    }
 }

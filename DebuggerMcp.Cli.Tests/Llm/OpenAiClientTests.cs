@@ -31,6 +31,7 @@ public class OpenAiClientTests
             Provider = "openai",
             OpenAiApiKey = "k",
             OpenAiModel = "gpt-4o-mini",
+            OpenAiReasoningEffort = "medium",
             OpenAiBaseUrl = "https://api.openai.com/v1",
             TimeoutSeconds = 10
         };
@@ -60,6 +61,7 @@ public class OpenAiClientTests
         var requestBody = handler.LastRequestBody!;
         using var doc = JsonDocument.Parse(requestBody);
         Assert.Equal("gpt-4o-mini", doc.RootElement.GetProperty("model").GetString());
+        Assert.Equal("medium", doc.RootElement.GetProperty("reasoning_effort").GetString());
         var messages = doc.RootElement.GetProperty("messages");
         Assert.Equal(1, messages.GetArrayLength());
         Assert.Equal("user", messages[0].GetProperty("role").GetString());
@@ -96,4 +98,3 @@ public class OpenAiClientTests
         Assert.True(ex.Message.Length < 50_000);
     }
 }
-

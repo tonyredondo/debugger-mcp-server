@@ -40,7 +40,7 @@ public class AutoComplete
         ["watch"] = ["add", "list", "eval", "remove", "clear"],
         ["report"] = ["--format", "--output", "--summary", "markdown", "html", "json"],
         ["sourcelink"] = ["resolve", "info"],
-        ["llm"] = ["provider", "set-provider", "model", "set-key", "set-agent", "agent", "set-agent-confirm", "agent-confirm", "reset"],
+        ["llm"] = ["provider", "set-provider", "model", "reasoning-effort", "effort", "set-key", "set-agent", "agent", "set-agent-confirm", "agent-confirm", "reset"],
         ["set"] = ["verbose", "output", "timeout", "user"],
         ["history"] = ["clear", "search"]
     };
@@ -271,6 +271,17 @@ public class AutoComplete
             parts[1].Equals("reset", StringComparison.OrdinalIgnoreCase))
         {
             completions.AddRange(new[] { "conversation" }.Where(v =>
+                string.IsNullOrEmpty(prefix) ||
+                v.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        // LLM reasoning effort values
+        if (command == "llm" &&
+            parts.Length >= 2 &&
+            (parts[1].Equals("reasoning-effort", StringComparison.OrdinalIgnoreCase) ||
+             parts[1].Equals("effort", StringComparison.OrdinalIgnoreCase)))
+        {
+            completions.AddRange(new[] { "low", "medium", "high", "unset" }.Where(v =>
                 string.IsNullOrEmpty(prefix) ||
                 v.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
         }

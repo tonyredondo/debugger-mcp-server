@@ -82,6 +82,7 @@ public static class HelpSystem
                 "llm Explain the faulting thread in the last report",
                 "llm provider openai",
                 "llm model gpt-4o-mini",
+                "llm reasoning-effort medium",
                 "llm reset",
                 "llm reset conversation"
             ]),

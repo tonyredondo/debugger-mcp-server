@@ -41,6 +41,15 @@ public sealed class LlmSettings
     public string OpenRouterBaseUrl { get; set; } = "https://openrouter.ai/api/v1";
 
     /// <summary>
+    /// Gets or sets the OpenRouter reasoning effort (when supported by the selected model/provider).
+    /// </summary>
+    /// <remarks>
+    /// Supported values: <c>low</c>, <c>medium</c>, <c>high</c>.
+    /// Use <c>null</c> to omit the field (provider default).
+    /// </remarks>
+    public string? OpenRouterReasoningEffort { get; set; }
+
+    /// <summary>
     /// Gets or sets the OpenAI API key.
     /// </summary>
     public string? OpenAiApiKey { get; set; }
@@ -75,6 +84,15 @@ public sealed class LlmSettings
     /// Gets or sets the OpenAI base URL.
     /// </summary>
     public string OpenAiBaseUrl { get; set; } = "https://api.openai.com/v1";
+
+    /// <summary>
+    /// Gets or sets the OpenAI reasoning effort (when supported by the selected model).
+    /// </summary>
+    /// <remarks>
+    /// Supported values: <c>low</c>, <c>medium</c>, <c>high</c>.
+    /// Use <c>null</c> to omit the field (provider default).
+    /// </remarks>
+    public string? OpenAiReasoningEffort { get; set; }
 
     /// <summary>
     /// Gets or sets the LLM request timeout in seconds.
@@ -164,6 +182,30 @@ public sealed class LlmSettings
             OpenAiBaseUrl = openAiBaseUrl.Trim().TrimEnd('/');
         }
 
+        var reasoningEffort =
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_REASONING_EFFORT") ??
+            Environment.GetEnvironmentVariable("LLM_REASONING_EFFORT");
+        if (!string.IsNullOrWhiteSpace(reasoningEffort))
+        {
+            SetReasoningEffortForCurrentProvider(reasoningEffort);
+        }
+
+        var openRouterReasoningEffort =
+            Environment.GetEnvironmentVariable("OPENROUTER_REASONING_EFFORT") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENROUTER_REASONING_EFFORT");
+        if (!string.IsNullOrWhiteSpace(openRouterReasoningEffort))
+        {
+            OpenRouterReasoningEffort = NormalizeReasoningEffort(openRouterReasoningEffort);
+        }
+
+        var openAiReasoningEffort =
+            Environment.GetEnvironmentVariable("OPENAI_REASONING_EFFORT") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_REASONING_EFFORT");
+        if (!string.IsNullOrWhiteSpace(openAiReasoningEffort))
+        {
+            OpenAiReasoningEffort = NormalizeReasoningEffort(openAiReasoningEffort);
+        }
+
         var timeoutSeconds =
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_TIMEOUT_SECONDS") ??
             Environment.GetEnvironmentVariable("LLM_TIMEOUT_SECONDS") ??
@@ -249,11 +291,43 @@ public sealed class LlmSettings
     public string GetEffectiveModel()
         => GetProviderKind() == LlmProviderKind.OpenAi ? OpenAiModel : OpenRouterModel;
 
+    public string? GetEffectiveReasoningEffort()
+        => GetProviderKind() == LlmProviderKind.OpenAi ? OpenAiReasoningEffort : OpenRouterReasoningEffort;
+
     public string GetProviderDisplayName()
         => GetProviderKind() == LlmProviderKind.OpenAi ? "OpenAI" : "OpenRouter";
 
+    public void SetReasoningEffortForCurrentProvider(string? value)
+    {
+        var normalized = NormalizeReasoningEffort(value);
+        if (GetProviderKind() == LlmProviderKind.OpenAi)
+        {
+            OpenAiReasoningEffort = normalized;
+        }
+        else
+        {
+            OpenRouterReasoningEffort = normalized;
+        }
+    }
+
     internal static string NormalizeProvider(string? provider)
         => string.IsNullOrWhiteSpace(provider) ? "openrouter" : provider.Trim().ToLowerInvariant();
+
+    internal static string? NormalizeReasoningEffort(string? effort)
+    {
+        if (string.IsNullOrWhiteSpace(effort))
+        {
+            return null;
+        }
+
+        var v = effort.Trim().ToLowerInvariant();
+        if (v is "unset" or "default" or "auto" or "none")
+        {
+            return null;
+        }
+
+        return v is "low" or "medium" or "high" ? v : null;
+    }
 }
 
 public enum LlmProviderKind

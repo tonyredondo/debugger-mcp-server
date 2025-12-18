@@ -21,7 +21,13 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
 
     public async Task<string> ChatAsync(IReadOnlyList<ChatMessage> messages, CancellationToken cancellationToken = default)
     {
-        var result = await ChatCompletionAsync(new ChatCompletionRequest { Messages = messages }, cancellationToken).ConfigureAwait(false);
+        var result = await ChatCompletionAsync(
+            new ChatCompletionRequest
+            {
+                Messages = messages,
+                ReasoningEffort = _settings.OpenAiReasoningEffort
+            },
+            cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(result.Text))
         {
             throw new InvalidOperationException("OpenAI response did not contain any message content.");
@@ -66,7 +72,8 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
             Messages = completionRequest.Messages.Select(ToOpenAiMessage).ToList(),
             Tools = completionRequest.Tools?.Select(ToOpenAiTool).ToList(),
             ToolChoice = ToOpenAiToolChoice(completionRequest.ToolChoice),
-            MaxTokens = completionRequest.MaxTokens
+            MaxTokens = completionRequest.MaxTokens,
+            ReasoningEffort = completionRequest.ReasoningEffort
         };
 
         var json = JsonSerializer.Serialize(payload, JsonOptions);
@@ -351,6 +358,9 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
 
         [JsonPropertyName("max_tokens")]
         public int? MaxTokens { get; set; }
+
+        [JsonPropertyName("reasoning_effort")]
+        public string? ReasoningEffort { get; set; }
     }
 
     private sealed class OpenAiChatMessage
