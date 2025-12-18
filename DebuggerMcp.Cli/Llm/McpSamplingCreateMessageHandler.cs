@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using DebuggerMcp.Cli.Configuration;
 
 namespace DebuggerMcp.Cli.Llm;
@@ -336,7 +337,54 @@ internal sealed class McpSamplingCreateMessageHandler(
         return sb.ToString().Trim();
     }
 
-    private static List<SamplingContentItem> BuildSamplingContentBlocks(ChatCompletionResult response)
+    private List<SamplingContentItem> BuildSamplingContentBlocks(ChatCompletionResult response)
+    {
+        // Prefer preserving raw provider content blocks when available, especially for providers that
+        // require "reasoning/thought_signature" blocks to be echoed back verbatim across tool turns.
+        if (_settings.GetProviderKind() == LlmProviderKind.OpenRouter &&
+            response.RawMessageContent.HasValue &&
+            response.RawMessageContent.Value.ValueKind == JsonValueKind.Array)
+        {
+            var blocks = BuildSamplingContentBlocksFromRawArray(response.RawMessageContent.Value);
+
+            // If we failed to recover any blocks, fall back to the normalized representation.
+            if (blocks.Count > 0)
+            {
+                // Ensure any tool calls that weren't encoded as tool_use blocks are still emitted.
+                var existingToolUseIds = new HashSet<string>(
+                    blocks.Where(b => string.Equals(b.Type, "tool_use", StringComparison.OrdinalIgnoreCase))
+                          .Select(b => b.Id ?? string.Empty),
+                    StringComparer.OrdinalIgnoreCase);
+
+                foreach (var call in response.ToolCalls)
+                {
+                    if (existingToolUseIds.Add(call.Id))
+                    {
+                        blocks.Add(new SamplingContentItem
+                        {
+                            Type = "tool_use",
+                            Id = call.Id,
+                            Name = call.Name,
+                            Input = ParseToolArguments(call.ArgumentsJson)
+                        });
+                    }
+                }
+
+                // Preserve plain text (if any) even when the provider omitted explicit text blocks.
+                if (!string.IsNullOrWhiteSpace(response.Text) &&
+                    blocks.All(b => !string.Equals(b.Type, "text", StringComparison.OrdinalIgnoreCase)))
+                {
+                    blocks.Insert(0, new SamplingContentItem { Type = "text", Text = response.Text!.TrimEnd() });
+                }
+
+                return blocks;
+            }
+        }
+
+        return BuildSamplingContentBlocksNormalized(response);
+    }
+
+    private static List<SamplingContentItem> BuildSamplingContentBlocksNormalized(ChatCompletionResult response)
     {
         var blocks = new List<SamplingContentItem>();
         if (!string.IsNullOrWhiteSpace(response.Text))
@@ -360,6 +408,85 @@ internal sealed class McpSamplingCreateMessageHandler(
         }
 
         return blocks;
+    }
+
+    private static List<SamplingContentItem> BuildSamplingContentBlocksFromRawArray(JsonElement rawArray)
+    {
+        var blocks = new List<SamplingContentItem>();
+
+        foreach (var item in rawArray.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var s = item.GetString();
+                if (!string.IsNullOrWhiteSpace(s))
+                {
+                    blocks.Add(new SamplingContentItem { Type = "text", Text = s!.TrimEnd() });
+                }
+                continue;
+            }
+
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var type = TryGetString(item, "type") ?? string.Empty;
+            if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
+            {
+                var text = TryGetString(item, "text") ?? string.Empty;
+                var block = new SamplingContentItem { Type = "text", Text = text.TrimEnd() };
+                CopyExtensionData(item, block, excludedKeys: ["type", "text"]);
+                blocks.Add(block);
+                continue;
+            }
+
+            if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+            {
+                var block = new SamplingContentItem
+                {
+                    Type = "tool_use",
+                    Id = TryGetString(item, "id"),
+                    Name = TryGetString(item, "name"),
+                    Input = TryGetProperty(item, "input", out var inputProp) ? inputProp.Clone() : null
+                };
+                CopyExtensionData(item, block, excludedKeys: ["type", "id", "name", "input", "text"]);
+                blocks.Add(block);
+                continue;
+            }
+
+            // Unknown provider-specific blocks: preserve as compact JSON in a text block.
+            blocks.Add(new SamplingContentItem { Type = "text", Text = item.GetRawText() });
+        }
+
+        return blocks;
+    }
+
+    private static void CopyExtensionData(JsonElement obj, SamplingContentItem target, string[] excludedKeys)
+    {
+        try
+        {
+            Dictionary<string, JsonElement>? ext = null;
+            foreach (var prop in obj.EnumerateObject())
+            {
+                if (excludedKeys.Any(k => string.Equals(k, prop.Name, StringComparison.OrdinalIgnoreCase)))
+                {
+                    continue;
+                }
+
+                ext ??= new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+                ext[prop.Name] = prop.Value.Clone();
+            }
+
+            if (ext is { Count: > 0 })
+            {
+                target.ExtensionData = ext;
+            }
+        }
+        catch
+        {
+            // best-effort
+        }
     }
 
     private void EmitProgressForNewToolResults(JsonElement parameters)
@@ -587,9 +714,10 @@ internal sealed class McpSamplingCreateMessageHandler(
         }
     }
 
-    private static ChatCompletionRequest BuildChatCompletionRequest(string? systemPrompt, JsonElement parameters)
+    private ChatCompletionRequest BuildChatCompletionRequest(string? systemPrompt, JsonElement parameters)
     {
-        var messages = BuildChatMessages(systemPrompt, parameters);
+        var preserveMcpContentBlocks = _settings.GetProviderKind() == LlmProviderKind.OpenRouter;
+        var messages = BuildChatMessages(systemPrompt, parameters, preserveMcpContentBlocks);
         var tools = ParseTools(parameters);
         var toolChoice = ParseToolChoice(parameters);
         var maxTokens = ParseMaxTokens(parameters);
@@ -729,7 +857,7 @@ internal sealed class McpSamplingCreateMessageHandler(
         return emptyDoc.RootElement.Clone();
     }
 
-    private static List<ChatMessage> BuildChatMessages(string? systemPrompt, JsonElement parameters)
+    private static List<ChatMessage> BuildChatMessages(string? systemPrompt, JsonElement parameters, bool preserveMcpContentBlocks)
     {
         var result = new List<ChatMessage>();
 
@@ -751,7 +879,26 @@ internal sealed class McpSamplingCreateMessageHandler(
             }
 
             var role = NormalizeRole(TryGetString(msg, "role") ?? "user");
-            var messageBlocks = ExtractContentBlocks(msg);
+            if (preserveMcpContentBlocks && role is "user" or "assistant")
+            {
+                if (TryGetProperty(msg, "content", out var contentProp) &&
+                    contentProp.ValueKind is JsonValueKind.Array or JsonValueKind.Object)
+                {
+                    // Preserve raw MCP/Anthropic-style content blocks verbatim so providers that require
+                    // thought signatures (e.g., Gemini tool calls) continue to work across iterations.
+                    var messageBlocks = ExtractContentBlocks(msg);
+                    result.Add(new ChatMessage(
+                        role,
+                        messageBlocks.Text,
+                        toolCallId: null,
+                        toolCalls: null,
+                        contentJson: contentProp.Clone(),
+                        providerMessageFields: null));
+                    continue;
+                }
+            }
+
+            var parsed = ExtractContentBlocks(msg);
             var openAiToolCalls = role == "assistant"
                 ? ParseOpenAiToolCalls(msg)
                 : [];
@@ -759,24 +906,24 @@ internal sealed class McpSamplingCreateMessageHandler(
             if (openAiToolCalls.Count > 0)
             {
                 // Merge, preserving order; avoid duplicate ids.
-                var seen = new HashSet<string>(messageBlocks.ToolCalls.Select(t => t.Id), StringComparer.OrdinalIgnoreCase);
+                var seen = new HashSet<string>(parsed.ToolCalls.Select(t => t.Id), StringComparer.OrdinalIgnoreCase);
                 foreach (var call in openAiToolCalls)
                 {
                     if (seen.Add(call.Id))
                     {
-                        messageBlocks.ToolCalls.Add(call);
+                        parsed.ToolCalls.Add(call);
                     }
                 }
             }
 
-            if (messageBlocks.Text.Length == 0 && messageBlocks.ToolCalls.Count == 0 && messageBlocks.ToolResults.Count == 0)
+            if (parsed.Text.Length == 0 && parsed.ToolCalls.Count == 0 && parsed.ToolResults.Count == 0)
             {
                 continue;
             }
 
-            if (messageBlocks.ToolCalls.Count > 0 && role == "assistant")
+            if (parsed.ToolCalls.Count > 0 && role == "assistant")
             {
-                result.Add(new ChatMessage("assistant", messageBlocks.Text, toolCallId: null, toolCalls: messageBlocks.ToolCalls));
+                result.Add(new ChatMessage("assistant", parsed.Text, toolCallId: null, toolCalls: parsed.ToolCalls));
             }
             else if (role == "tool")
             {
@@ -784,25 +931,25 @@ internal sealed class McpSamplingCreateMessageHandler(
                     TryGetString(msg, "tool_call_id") ??
                     TryGetString(msg, "toolCallId");
 
-                if (!string.IsNullOrWhiteSpace(messageBlocks.Text))
+                if (!string.IsNullOrWhiteSpace(parsed.Text))
                 {
                     if (!string.IsNullOrWhiteSpace(toolCallId))
                     {
-                        result.Add(new ChatMessage("tool", messageBlocks.Text, toolCallId: toolCallId, toolCalls: null));
+                        result.Add(new ChatMessage("tool", parsed.Text, toolCallId: toolCallId, toolCalls: null));
                     }
                     else
                     {
                         // OpenAI-compatible APIs require tool_call_id for role=tool; preserve the content as a user message instead.
-                        result.Add(new ChatMessage("user", $"[tool output missing tool_call_id]{Environment.NewLine}{messageBlocks.Text}"));
+                        result.Add(new ChatMessage("user", $"[tool output missing tool_call_id]{Environment.NewLine}{parsed.Text}"));
                     }
                 }
             }
-            else if (!string.IsNullOrWhiteSpace(messageBlocks.Text))
+            else if (!string.IsNullOrWhiteSpace(parsed.Text))
             {
-                result.Add(new ChatMessage(role, messageBlocks.Text));
+                result.Add(new ChatMessage(role, parsed.Text));
             }
 
-            foreach (var toolResult in messageBlocks.ToolResults)
+            foreach (var toolResult in parsed.ToolResults)
             {
                 result.Add(new ChatMessage("tool", toolResult.Content, toolResult.ToolCallId, toolCalls: null));
             }
@@ -1066,4 +1213,7 @@ internal sealed class SamplingContentItem
     public string? Name { get; set; }
 
     public JsonElement? Input { get; set; }
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
 }

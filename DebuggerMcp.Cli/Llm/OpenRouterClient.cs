@@ -163,6 +163,48 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             {
                 rawContent = contentProp.Clone();
                 text = ExtractText(contentProp);
+
+                // Some providers (notably Gemini via OpenRouter) emit tool calls as MCP/Anthropic-style blocks
+                // in message.content rather than OpenAI-style message.tool_calls.
+                if (contentProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in contentProp.EnumerateArray())
+                    {
+                        if (item.ValueKind != JsonValueKind.Object)
+                        {
+                            continue;
+                        }
+
+                        var type = item.TryGetProperty("type", out var typeProp) && typeProp.ValueKind == JsonValueKind.String
+                            ? typeProp.GetString() ?? string.Empty
+                            : string.Empty;
+
+                        if (!string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        var id = item.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String
+                            ? idProp.GetString() ?? string.Empty
+                            : string.Empty;
+
+                        var name = item.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String
+                            ? nameProp.GetString() ?? string.Empty
+                            : string.Empty;
+
+                        var input = item.TryGetProperty("input", out var inputProp)
+                            ? inputProp.GetRawText()
+                            : "{}";
+
+                        if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                        {
+                            if (!toolCalls.Any(tc => string.Equals(tc.Id, id, StringComparison.OrdinalIgnoreCase)))
+                            {
+                                toolCalls.Add(new ChatToolCall(id, name, input));
+                            }
+                        }
+                    }
+                }
             }
 
             var providerFields = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);

@@ -345,4 +345,57 @@ public class OpenRouterClientTests
         Assert.True(messages[1].TryGetProperty("tool_calls", out _));
         Assert.False(messages[1].TryGetProperty("content", out _));
     }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenToolUseBlocksInContent_ParsesToolCalls()
+    {
+        var settings = new LlmSettings
+        {
+            OpenRouterApiKey = "k",
+            OpenRouterModel = "openrouter/auto",
+            OpenRouterBaseUrl = "https://openrouter.ai/api/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """
+            {
+              "model":"openrouter/auto",
+              "choices":[
+                {
+                  "message":{
+                    "content":[
+                      {"type":"tool_use","id":"tc1","name":"exec","thought_signature":"sig1","input":{"command":"bt"}}
+                    ]
+                  }
+                }
+              ]
+            }
+            """;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenRouterClient(http, settings);
+
+        using var schemaDoc = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}");
+        var result = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")],
+            Tools = [new ChatTool { Name = "exec", Description = "d", Parameters = schemaDoc.RootElement.Clone() }],
+            ToolChoice = new ChatToolChoice { Mode = "auto" },
+            MaxTokens = null
+        });
+
+        Assert.Single(result.ToolCalls);
+        Assert.Equal("tc1", result.ToolCalls[0].Id);
+        Assert.Equal("exec", result.ToolCalls[0].Name);
+        Assert.Contains("bt", result.ToolCalls[0].ArgumentsJson, StringComparison.Ordinal);
+        Assert.True(result.RawMessageContent.HasValue);
+        Assert.Equal(JsonValueKind.Array, result.RawMessageContent!.Value.ValueKind);
+    }
 }
