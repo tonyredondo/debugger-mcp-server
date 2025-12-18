@@ -622,4 +622,72 @@ public class McpSamplingCreateMessageHandlerTests
         Assert.NotNull(seenRequest);
         Assert.Equal("medium", seenRequest!.ReasoningEffort);
     }
+
+    [Fact]
+    public async Task HandleAsync_WhenReasoningEffortInvalid_FallsBackToConfiguredDefault()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openrouter",
+            OpenRouterModel = "openrouter/test",
+            OpenRouterReasoningEffort = "medium"
+        };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "reasoningEffort": "invalid",
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal("medium", seenRequest!.ReasoningEffort);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenReasoningEffortUnset_ClearsEffort()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openrouter",
+            OpenRouterModel = "openrouter/test",
+            OpenRouterReasoningEffort = "medium"
+        };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "reasoningEffort": "unset",
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Null(seenRequest!.ReasoningEffort);
+    }
 }

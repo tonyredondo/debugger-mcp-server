@@ -730,6 +730,7 @@ Examples:
 ```bash
 llm Explain the faulting thread in the last report
 llm set-agent true
+llm reasoning-effort medium
 llmagent
 llmagent> /help
 llmagent> Analyze the current dump and run whatever commands you need

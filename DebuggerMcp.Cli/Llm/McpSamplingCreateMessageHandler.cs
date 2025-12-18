@@ -721,11 +721,7 @@ internal sealed class McpSamplingCreateMessageHandler(
         var tools = ParseTools(parameters);
         var toolChoice = ParseToolChoice(parameters);
         var maxTokens = ParseMaxTokens(parameters);
-        var reasoningEffort = ParseReasoningEffort(parameters, out var reasoningEffortSpecified);
-        if (!reasoningEffortSpecified)
-        {
-            reasoningEffort = _settings.GetEffectiveReasoningEffort();
-        }
+        var reasoningEffort = GetEffectiveReasoningEffort(parameters);
 
         return new ChatCompletionRequest
         {
@@ -737,35 +733,87 @@ internal sealed class McpSamplingCreateMessageHandler(
         };
     }
 
-    private static string? ParseReasoningEffort(JsonElement parameters, out bool specified)
+    private string? GetEffectiveReasoningEffort(JsonElement parameters)
     {
-        specified = false;
+        var parsed = ParseReasoningEffort(parameters);
+        return parsed.Status switch
+        {
+            ReasoningEffortParseStatus.NotSpecified => _settings.GetEffectiveReasoningEffort(),
+            ReasoningEffortParseStatus.InvalidSpecified => _settings.GetEffectiveReasoningEffort(),
+            ReasoningEffortParseStatus.ExplicitClear => null,
+            ReasoningEffortParseStatus.ValidValue => parsed.Value,
+            _ => _settings.GetEffectiveReasoningEffort()
+        };
+    }
 
+    private sealed record ReasoningEffortParseResult(string? Value, ReasoningEffortParseStatus Status)
+    {
+        public static ReasoningEffortParseResult NotSpecified => new(null, ReasoningEffortParseStatus.NotSpecified);
+        public static ReasoningEffortParseResult InvalidSpecified => new(null, ReasoningEffortParseStatus.InvalidSpecified);
+        public static ReasoningEffortParseResult ExplicitClear => new(null, ReasoningEffortParseStatus.ExplicitClear);
+        public static ReasoningEffortParseResult ValidValue(string value) => new(value, ReasoningEffortParseStatus.ValidValue);
+    }
+
+    private enum ReasoningEffortParseStatus
+    {
+        NotSpecified = 0,
+        InvalidSpecified = 1,
+        ExplicitClear = 2,
+        ValidValue = 3
+    }
+
+    private static ReasoningEffortParseResult ParseReasoningEffort(JsonElement parameters)
+    {
         if (TryGetProperty(parameters, "reasoningEffort", out var v) ||
             TryGetProperty(parameters, "reasoning_effort", out v))
         {
-            specified = true;
-            if (v.ValueKind == JsonValueKind.String)
-            {
-                return LlmSettings.NormalizeReasoningEffort(v.GetString());
-            }
-
-            return null;
+            return ParseReasoningEffortValue(v);
         }
 
         if (TryGetProperty(parameters, "reasoning", out var reasoning) && reasoning.ValueKind == JsonValueKind.Object)
         {
-            specified = true;
             var effort = TryGetString(reasoning, "effort");
-            if (!string.IsNullOrWhiteSpace(effort))
+            if (string.IsNullOrWhiteSpace(effort))
             {
-                return LlmSettings.NormalizeReasoningEffort(effort);
+                return ReasoningEffortParseResult.InvalidSpecified;
             }
 
-            return null;
+            return ParseReasoningEffortString(effort);
         }
 
-        return null;
+        return ReasoningEffortParseResult.NotSpecified;
+    }
+
+    private static ReasoningEffortParseResult ParseReasoningEffortValue(JsonElement value)
+    {
+        if (value.ValueKind != JsonValueKind.String)
+        {
+            return ReasoningEffortParseResult.InvalidSpecified;
+        }
+
+        var s = value.GetString();
+        if (string.IsNullOrWhiteSpace(s))
+        {
+            return ReasoningEffortParseResult.InvalidSpecified;
+        }
+
+        return ParseReasoningEffortString(s);
+    }
+
+    private static ReasoningEffortParseResult ParseReasoningEffortString(string value)
+    {
+        if (LlmSettings.IsReasoningEffortUnsetToken(value))
+        {
+            return ReasoningEffortParseResult.ExplicitClear;
+        }
+
+        var normalized = LlmSettings.NormalizeReasoningEffort(value);
+        if (normalized != null)
+        {
+            return ReasoningEffortParseResult.ValidValue(normalized);
+        }
+
+        return ReasoningEffortParseResult.InvalidSpecified;
     }
 
     private static int? ParseMaxTokens(JsonElement parameters)

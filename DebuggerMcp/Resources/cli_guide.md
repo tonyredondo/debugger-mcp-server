@@ -70,6 +70,7 @@ dbg-mcp> report -o ./report.md
 ### LLM (`help llm`)
 - `llm <prompt>` - Ask a configured LLM (OpenRouter/OpenAI) using your CLI transcript as context
 - `llm set-agent <true|false>` - Enable/disable tool-using agent mode for `llm`
+- `llm reasoning-effort <low|medium|high|unset>` - Set reasoning effort for the current provider/model
 - `llm reset` - Clear LLM context (conversation + transcript context) for the current session/dump
 - `llmagent` - Interactive agent mode (no `llm` prefix required)
 
@@ -125,6 +126,7 @@ export OPENAI_API_KEY="..."
 export DEBUGGER_MCP_LLM_PROVIDER="openrouter"   # or "openai"
 export OPENROUTER_MODEL="openrouter/auto"
 export OPENAI_MODEL="gpt-4o-mini"
+export DEBUGGER_MCP_LLM_REASONING_EFFORT="medium"   # low|medium|high|unset
 
 # If provider is "openai" and no API key is configured, the CLI can fall back to ~/.codex/auth.json (expects OPENAI_API_KEY).
 # Override the Codex auth file path with:
