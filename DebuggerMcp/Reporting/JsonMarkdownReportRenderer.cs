@@ -41,7 +41,6 @@ internal static class JsonMarkdownReportRenderer
         AppendSymbols(sb, root);
         AppendTimeline(sb, root);
 
-        AppendRawCommands(sb, root);
         AppendSourceContextIndex(sb, root);
         AppendSignatureAndSelection(sb, root);
 
@@ -107,7 +106,6 @@ internal static class JsonMarkdownReportRenderer
         sb.AppendLine("- [Modules](#modules)");
         sb.AppendLine("- [Symbols](#symbols)");
         sb.AppendLine("- [Timeline](#timeline)");
-        sb.AppendLine("- [Raw commands](#raw-commands)");
         sb.AppendLine("- [Source context index](#source-context-index)");
         sb.AppendLine("- [Signature & stack selection](#signature--stack-selection)");
         sb.AppendLine();
@@ -898,46 +896,6 @@ internal static class JsonMarkdownReportRenderer
         }
 
         AppendJsonDetails(sb, "Timeline JSON", timeline);
-        sb.AppendLine();
-    }
-
-    private static void AppendRawCommands(StringBuilder sb, JsonElement root)
-    {
-        sb.AppendLine("## Raw commands");
-        sb.AppendLine();
-
-        if (!TryGetAnalysis(root, out var analysis) ||
-            !analysis.TryGetProperty("rawCommands", out var raw) ||
-            raw.ValueKind != JsonValueKind.Object)
-        {
-            sb.AppendLine("_No raw command output available._");
-            sb.AppendLine();
-            return;
-        }
-
-        sb.AppendLine("<details><summary>Commands</summary>");
-        sb.AppendLine();
-        foreach (var cmd in raw.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
-        {
-            sb.AppendLine($"- `{EscapeInline(cmd.Name)}`");
-        }
-        sb.AppendLine();
-        sb.AppendLine("</details>");
-        sb.AppendLine();
-
-        foreach (var cmd in raw.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
-        {
-            sb.AppendLine($"<details><summary>{EscapeInline(cmd.Name)}</summary>");
-            sb.AppendLine();
-            sb.AppendLine("```text");
-            sb.AppendLine(ElementToText(cmd.Value));
-            sb.AppendLine("```");
-            sb.AppendLine();
-            sb.AppendLine("</details>");
-            sb.AppendLine();
-        }
-
-        AppendJsonDetails(sb, "Raw commands JSON", raw);
         sb.AppendLine();
     }
 

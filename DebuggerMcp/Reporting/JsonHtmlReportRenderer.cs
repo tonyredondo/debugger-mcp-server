@@ -64,7 +64,6 @@ internal static class JsonHtmlReportRenderer
         RenderModules(sb, root);
         RenderSymbols(sb, root);
         RenderTimeline(sb, root);
-        RenderRawCommands(sb, root);
         RenderSourceContextIndex(sb, root);
         RenderSignatureAndSelection(sb, root);
 
@@ -96,7 +95,6 @@ internal static class JsonHtmlReportRenderer
         AppendNavLink(sb, "Modules", "#modules");
         AppendNavLink(sb, "Symbols", "#symbols");
         AppendNavLink(sb, "Timeline", "#timeline");
-        AppendNavLink(sb, "Raw commands", "#raw-commands");
         AppendNavLink(sb, "Source context index", "#source-context-index");
         AppendNavLink(sb, "Signature & selection", "#signature-selection");
         sb.AppendLine("</nav>");
@@ -957,42 +955,6 @@ internal static class JsonHtmlReportRenderer
         }
 
         RenderJsonDetails(sb, "Timeline JSON", timeline);
-        sb.AppendLine("</section>");
-    }
-
-    private static void RenderRawCommands(StringBuilder sb, JsonElement root)
-    {
-        sb.AppendLine("<section class=\"card\" id=\"raw-commands\">");
-        sb.AppendLine("<h2>Raw commands</h2>");
-
-        if (!TryGetAnalysis(root, out var analysis) ||
-            !analysis.TryGetProperty("rawCommands", out var raw) ||
-            raw.ValueKind != JsonValueKind.Object)
-        {
-            sb.AppendLine("<div class=\"muted\">No raw command output available.</div>");
-            sb.AppendLine("</section>");
-            return;
-        }
-
-        sb.AppendLine("<details class=\"details\">");
-        sb.AppendLine("<summary>Commands</summary>");
-        sb.AppendLine("<ul>");
-        foreach (var cmd in raw.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
-        {
-            sb.AppendLine("<li><code>" + HttpUtility.HtmlEncode(cmd.Name) + "</code></li>");
-        }
-        sb.AppendLine("</ul>");
-        sb.AppendLine("</details>");
-
-        foreach (var cmd in raw.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
-        {
-            sb.AppendLine("<details class=\"details\">");
-            sb.AppendLine("<summary><code>" + HttpUtility.HtmlEncode(cmd.Name) + "</code></summary>");
-            sb.AppendLine("<pre class=\"code\"><code class=\"language-text\">" + HttpUtility.HtmlEncode(ElementToText(cmd.Value)) + "</code></pre>");
-            sb.AppendLine("</details>");
-        }
-
-        RenderJsonDetails(sb, "Raw commands JSON", raw);
         sb.AppendLine("</section>");
     }
 
