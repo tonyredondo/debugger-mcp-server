@@ -301,6 +301,7 @@ analyze security
 | `llm provider <openrouter|openai>` | Switch providers |
 | `llm set-key <key>` | Persist an API key for the current provider to `~/.dbg-mcp/config.json` |
 | `llm model <model-id>` | Set the model for the current provider |
+| `llm reasoning-effort <low|medium|high|unset>` | Set reasoning effort for the current provider/model |
 | `llm set-agent <true|false>` | Enable/disable tool-using agent mode for `llm` |
 | `llm set-agent-confirm <true|false>` | Confirm each tool call in agent mode |
 | `llm reset` | Clear LLM context (conversation + transcript context) for the current session/dump |
