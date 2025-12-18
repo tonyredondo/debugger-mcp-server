@@ -721,7 +721,11 @@ internal sealed class McpSamplingCreateMessageHandler(
         var tools = ParseTools(parameters);
         var toolChoice = ParseToolChoice(parameters);
         var maxTokens = ParseMaxTokens(parameters);
-        var reasoningEffort = ParseReasoningEffort(parameters);
+        var reasoningEffort = ParseReasoningEffort(parameters, out var reasoningEffortSpecified);
+        if (!reasoningEffortSpecified)
+        {
+            reasoningEffort = _settings.GetEffectiveReasoningEffort();
+        }
 
         return new ChatCompletionRequest
         {
@@ -733,24 +737,32 @@ internal sealed class McpSamplingCreateMessageHandler(
         };
     }
 
-    private static string? ParseReasoningEffort(JsonElement parameters)
+    private static string? ParseReasoningEffort(JsonElement parameters, out bool specified)
     {
+        specified = false;
+
         if (TryGetProperty(parameters, "reasoningEffort", out var v) ||
             TryGetProperty(parameters, "reasoning_effort", out v))
         {
+            specified = true;
             if (v.ValueKind == JsonValueKind.String)
             {
                 return LlmSettings.NormalizeReasoningEffort(v.GetString());
             }
+
+            return null;
         }
 
         if (TryGetProperty(parameters, "reasoning", out var reasoning) && reasoning.ValueKind == JsonValueKind.Object)
         {
+            specified = true;
             var effort = TryGetString(reasoning, "effort");
             if (!string.IsNullOrWhiteSpace(effort))
             {
                 return LlmSettings.NormalizeReasoningEffort(effort);
             }
+
+            return null;
         }
 
         return null;

@@ -589,4 +589,37 @@ public class McpSamplingCreateMessageHandlerTests
         Assert.NotNull(seenRequest);
         Assert.Equal("high", seenRequest!.ReasoningEffort);
     }
+
+    [Fact]
+    public async Task HandleAsync_WhenReasoningEffortOmitted_UsesConfiguredDefault()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openrouter",
+            OpenRouterModel = "openrouter/test",
+            OpenRouterReasoningEffort = "medium"
+        };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal("medium", seenRequest!.ReasoningEffort);
+    }
 }
