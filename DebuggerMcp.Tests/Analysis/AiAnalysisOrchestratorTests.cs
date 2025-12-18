@@ -2,6 +2,7 @@ using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Sampling;
 using DebuggerMcp.Tests.TestDoubles;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using ModelContextProtocol.Protocol;
 using Xunit;
@@ -10,6 +11,36 @@ namespace DebuggerMcp.Tests.Analysis;
 
 public class AiAnalysisOrchestratorTests
 {
+    [Fact]
+    public async Task AnalyzeCrashAsync_EmitsSamplingRequestAndResponseLogs()
+    {
+        var logs = new List<(LogLevel Level, string Message)>();
+        var logger = new CollectingLogger<AiAnalysisOrchestrator>((level, message) => logs.Add((level, message)));
+
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, logger)
+        {
+            MaxIterations = 1
+        };
+
+        _ = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{\"x\":1}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Contains(logs, l => l.Level == LogLevel.Debug && l.Message.Contains("Sampling request", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logs, l => l.Level == LogLevel.Debug && l.Message.Contains("Sampling response", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logs, l => l.Level == LogLevel.Debug && l.Message.Contains("Tool requested", StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task AnalyzeCrashAsync_IncludesSosHelpGuidanceInSystemPrompt()
     {
@@ -457,6 +488,29 @@ public class AiAnalysisOrchestratorTests
         {
             _onRequest(request);
             return Task.FromResult(_result);
+        }
+    }
+
+    private sealed class CollectingLogger<T>(Action<LogLevel, string> sink) : ILogger<T>
+    {
+        private readonly Action<LogLevel, string> _sink = sink;
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            _sink(logLevel, formatter(state, exception));
+        }
+
+        private sealed class NullScope : IDisposable
+        {
+            public static readonly NullScope Instance = new();
+            public void Dispose()
+            {
+            }
         }
     }
 }

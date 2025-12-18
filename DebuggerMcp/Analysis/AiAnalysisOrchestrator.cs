@@ -124,6 +124,7 @@ public sealed class AiAnalysisOrchestrator(
             try
             {
                 _logger.LogInformation("[AI] Sampling iteration {Iteration}...", iteration);
+                LogSamplingRequestSummary(iteration, request);
                 response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -167,6 +168,8 @@ public sealed class AiAnalysisOrchestrator(
                 lastIterationAssistantText = string.Join("\n", textBlocks).Trim();
             }
 
+            LogSamplingResponseSummary(iteration, response, lastIterationAssistantText);
+
             // Persist assistant content in the conversation history before executing any tool calls.
             messages.Add(new SamplingMessage
             {
@@ -185,6 +188,8 @@ public sealed class AiAnalysisOrchestrator(
 
             foreach (var toolUse in toolUses)
             {
+                LogRequestedToolSummary(iteration, toolUse);
+
                 if (string.Equals(toolUse.Name, "analysis_complete", StringComparison.OrdinalIgnoreCase))
                 {
                     var completed = ParseAnalysisComplete(toolUse.Input, commandsExecuted, iteration, response.Model);
@@ -343,6 +348,134 @@ public sealed class AiAnalysisOrchestrator(
             Model = lastModel,
             AnalyzedAt = DateTime.UtcNow
         };
+    }
+
+    private void LogSamplingRequestSummary(int iteration, CreateMessageRequestParams request)
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        var messageCount = request.Messages?.Count ?? 0;
+        var roles = request.Messages == null
+            ? string.Empty
+            : string.Join(",", request.Messages.Select(m => m.Role.ToString()));
+
+        var toolNames = request.Tools == null
+            ? string.Empty
+            : string.Join(",", request.Tools.Select(t => t.Name).Where(n => !string.IsNullOrWhiteSpace(n)));
+
+        _logger.LogDebug(
+            "[AI] Sampling request: iteration={Iteration} maxTokens={MaxTokens} messages={MessageCount} roles={Roles} tools={ToolNames} toolChoice={ToolChoiceMode} systemPromptChars={SystemPromptChars}",
+            iteration,
+            request.MaxTokens,
+            messageCount,
+            roles,
+            toolNames,
+            request.ToolChoice?.Mode ?? "(none)",
+            request.SystemPrompt?.Length ?? 0);
+    }
+
+    private void LogSamplingResponseSummary(int iteration, CreateMessageResult response, string? assistantText)
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        var blocks = response.Content?.Count ?? 0;
+        var toolUses = response.Content?.OfType<ToolUseContentBlock>().Count() ?? 0;
+        var textChars = assistantText?.Length ?? 0;
+
+        _logger.LogDebug(
+            "[AI] Sampling response: iteration={Iteration} model={Model} blocks={Blocks} toolUses={ToolUses} assistantTextChars={TextChars}",
+            iteration,
+            response.Model ?? "(unknown)",
+            blocks,
+            toolUses,
+            textChars);
+    }
+
+    private void LogRequestedToolSummary(int iteration, ToolUseContentBlock toolUse)
+    {
+        if (!_logger.IsEnabled(LogLevel.Debug))
+        {
+            return;
+        }
+
+        var name = toolUse.Name ?? string.Empty;
+        var id = toolUse.Id ?? string.Empty;
+        var summary = SummarizeToolInput(name, toolUse.Input);
+
+        _logger.LogDebug(
+            "[AI] Tool requested: iteration={Iteration} name={ToolName} id={ToolUseId} input={InputSummary}",
+            iteration,
+            name,
+            id,
+            summary);
+    }
+
+    private static string SummarizeToolInput(string toolName, JsonElement input)
+    {
+        try
+        {
+            if (string.Equals(toolName, "exec", StringComparison.OrdinalIgnoreCase))
+            {
+                var cmd = TryGetString(input, "command");
+                return string.IsNullOrWhiteSpace(cmd) ? "{}" : $"command={CompactOneLine(cmd, 200)}";
+            }
+
+            if (string.Equals(toolName, "inspect", StringComparison.OrdinalIgnoreCase))
+            {
+                var addr = TryGetString(input, "address");
+                var depth = TryGetString(input, "maxDepth");
+                if (!string.IsNullOrWhiteSpace(addr) && !string.IsNullOrWhiteSpace(depth))
+                {
+                    return $"address={addr}, maxDepth={depth}";
+                }
+                return string.IsNullOrWhiteSpace(addr) ? "{}" : $"address={addr}";
+            }
+
+            if (string.Equals(toolName, "get_thread_stack", StringComparison.OrdinalIgnoreCase))
+            {
+                var tid = TryGetString(input, "threadId");
+                return string.IsNullOrWhiteSpace(tid) ? "{}" : $"threadId={tid}";
+            }
+
+            if (string.Equals(toolName, "analysis_complete", StringComparison.OrdinalIgnoreCase))
+            {
+                var rc = TryGetString(input, "rootCause");
+                return string.IsNullOrWhiteSpace(rc) ? "{}" : $"rootCause={CompactOneLine(rc, 200)}";
+            }
+
+            return CompactOneLine(input.ToString(), 200);
+        }
+        catch
+        {
+            return "{}";
+        }
+    }
+
+    private static string CompactOneLine(string value, int maxLen)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+
+        var s = value.Replace("\r", " ", StringComparison.Ordinal).Replace("\n", " ", StringComparison.Ordinal).Trim();
+        while (s.Contains("  ", StringComparison.Ordinal))
+        {
+            s = s.Replace("  ", " ", StringComparison.Ordinal);
+        }
+
+        if (maxLen > 0 && s.Length > maxLen)
+        {
+            return s.Substring(0, maxLen) + "...";
+        }
+
+        return s;
     }
 
     private static string BuildInitialPrompt(string initialReportJson)
