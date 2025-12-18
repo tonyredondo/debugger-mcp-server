@@ -116,7 +116,11 @@ public sealed class AiAnalysisTools(
         {
             MaxIterations = maxIterations,
             MaxTokensPerRequest = maxTokens,
-            EnableVerboseSamplingTrace = EnvironmentConfig.IsAiSamplingTraceEnabled()
+            EnableVerboseSamplingTrace = EnvironmentConfig.IsAiSamplingTraceEnabled(),
+            EnableSamplingTraceFiles = EnvironmentConfig.IsAiSamplingTraceFilesEnabled(),
+            SamplingTraceFilesRootDirectory = EnvironmentConfig.GetAiSamplingTraceFilesDirectory(),
+            SamplingTraceMaxFileBytes = EnvironmentConfig.GetAiSamplingTraceMaxFileBytes(),
+            SamplingTraceLabel = $"{sessionId}-{session.CurrentDumpId ?? "no-dump"}"
         };
 
         var aiResult = await orchestrator.AnalyzeCrashAsync(

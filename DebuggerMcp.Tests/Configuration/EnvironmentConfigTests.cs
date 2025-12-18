@@ -16,6 +16,7 @@ public class EnvironmentConfigTests : IDisposable
         // Store original environment variables to restore after tests
         StoreOriginalValue(EnvironmentConfig.DumpStoragePath);
         StoreOriginalValue(EnvironmentConfig.SymbolStoragePath);
+        StoreOriginalValue(EnvironmentConfig.LogStoragePath);
         StoreOriginalValue(EnvironmentConfig.ApiKey);
         StoreOriginalValue(EnvironmentConfig.CorsAllowedOrigins);
         StoreOriginalValue(EnvironmentConfig.RateLimitRequestsPerMinute);
@@ -28,6 +29,8 @@ public class EnvironmentConfigTests : IDisposable
         StoreOriginalValue(EnvironmentConfig.Port);
         StoreOriginalValue(EnvironmentConfig.MaxRequestBodySizeGb);
         StoreOriginalValue(EnvironmentConfig.AiSamplingTrace);
+        StoreOriginalValue(EnvironmentConfig.AiSamplingTraceFiles);
+        StoreOriginalValue(EnvironmentConfig.AiSamplingTraceMaxFileBytes);
     }
 
     private void StoreOriginalValue(string name)
@@ -145,6 +148,24 @@ public class EnvironmentConfigTests : IDisposable
     public void AiSamplingTrace_ConstantName_IsCorrect()
     {
         Assert.Equal("DEBUGGER_MCP_AI_SAMPLING_TRACE", EnvironmentConfig.AiSamplingTrace);
+    }
+
+    [Fact]
+    public void AiSamplingTraceFiles_ConstantName_IsCorrect()
+    {
+        Assert.Equal("DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES", EnvironmentConfig.AiSamplingTraceFiles);
+    }
+
+    [Fact]
+    public void AiSamplingTraceMaxFileBytes_ConstantName_IsCorrect()
+    {
+        Assert.Equal("DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES", EnvironmentConfig.AiSamplingTraceMaxFileBytes);
+    }
+
+    [Fact]
+    public void LogStoragePath_ConstantName_IsCorrect()
+    {
+        Assert.Equal("LOG_STORAGE_PATH", EnvironmentConfig.LogStoragePath);
     }
 
     // ========== Default Values Tests ==========
@@ -695,6 +716,58 @@ public class EnvironmentConfigTests : IDisposable
 
         // Assert
         Assert.False(result);
+    }
+
+    [Fact]
+    public void IsAiSamplingTraceFilesEnabled_EnvSetTrue_ReturnsTrue()
+    {
+        // Arrange
+        SetEnv(EnvironmentConfig.AiSamplingTraceFiles, "true");
+
+        // Act
+        var result = EnvironmentConfig.IsAiSamplingTraceFilesEnabled();
+
+        // Assert
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsAiSamplingTraceFilesEnabled_EnvNotSet_ReturnsFalse()
+    {
+        // Arrange
+        ClearEnv(EnvironmentConfig.AiSamplingTraceFiles);
+
+        // Act
+        var result = EnvironmentConfig.IsAiSamplingTraceFilesEnabled();
+
+        // Assert
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void GetAiSamplingTraceMaxFileBytes_EnvNotSet_ReturnsDefault()
+    {
+        // Arrange
+        ClearEnv(EnvironmentConfig.AiSamplingTraceMaxFileBytes);
+
+        // Act
+        var result = EnvironmentConfig.GetAiSamplingTraceMaxFileBytes();
+
+        // Assert
+        Assert.Equal(2_000_000, result);
+    }
+
+    [Fact]
+    public void GetAiSamplingTraceMaxFileBytes_EnvSet_ReturnsValue()
+    {
+        // Arrange
+        SetEnv(EnvironmentConfig.AiSamplingTraceMaxFileBytes, "1234");
+
+        // Act
+        var result = EnvironmentConfig.GetAiSamplingTraceMaxFileBytes();
+
+        // Assert
+        Assert.Equal(1234, result);
     }
 
     [Fact]

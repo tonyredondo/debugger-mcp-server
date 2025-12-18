@@ -23,6 +23,8 @@ services:
       - LOG_STORAGE_PATH=/app/logs
       - SESSION_STORAGE_PATH=/app/sessions
       - DEBUGGER_MCP_AI_SAMPLING_TRACE=true
+      - DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
+      - DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:
@@ -59,6 +61,8 @@ services:
       - LOG_STORAGE_PATH=/app/logs
       - SESSION_STORAGE_PATH=/app/sessions
       - DEBUGGER_MCP_AI_SAMPLING_TRACE=true
+      - DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
+      - DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:
@@ -101,6 +105,8 @@ services:
       - SKIP_SYNC_BLOCKS=true
       - SKIP_HEAP_ENUM=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE=true
+      - DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
+      - DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:
@@ -139,6 +145,8 @@ services:
       - SKIP_SYNC_BLOCKS=true
       - SKIP_HEAP_ENUM=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE=true
+      - DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
+      - DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:

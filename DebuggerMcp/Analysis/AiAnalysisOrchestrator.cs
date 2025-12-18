@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using DebuggerMcp.Configuration;
 using DebuggerMcp.Sampling;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
@@ -47,6 +48,26 @@ public sealed class AiAnalysisOrchestrator(
     public bool EnableVerboseSamplingTrace { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether to write full sampling request/response payloads to trace files on disk.
+    /// </summary>
+    public bool EnableSamplingTraceFiles { get; set; }
+
+    /// <summary>
+    /// Gets or sets the root directory for sampling trace files (a unique subdirectory will be created per run).
+    /// </summary>
+    public string? SamplingTraceFilesRootDirectory { get; set; }
+
+    /// <summary>
+    /// Gets or sets an optional label included in the sampling trace directory name (e.g., session and dump id).
+    /// </summary>
+    public string? SamplingTraceLabel { get; set; }
+
+    /// <summary>
+    /// Gets or sets the maximum bytes written per sampling trace file.
+    /// </summary>
+    public int SamplingTraceMaxFileBytes { get; set; } = 2_000_000;
+
+    /// <summary>
     /// Gets a value indicating whether AI analysis is available for the connected client.
     /// </summary>
     public bool IsSamplingAvailable => _samplingClient.IsSamplingSupported;
@@ -64,7 +85,7 @@ public sealed class AiAnalysisOrchestrator(
         CrashAnalysisResult initialReport,
         string initialReportJson,
         IDebuggerManager debugger,
-        ClrMdAnalyzer? clrMdAnalyzer,
+        IManagedObjectInspector? clrMdAnalyzer,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(initialReport);
@@ -119,6 +140,9 @@ public sealed class AiAnalysisOrchestrator(
         string? lastIterationAssistantText = null;
         bool lastIterationHadToolCalls = false;
         string? lastModel = null;
+        var toolIndexByIteration = new Dictionary<int, int>();
+
+        var traceRunDir = InitializeSamplingTraceDirectory();
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
@@ -136,6 +160,7 @@ public sealed class AiAnalysisOrchestrator(
             {
                 _logger.LogInformation("[AI] Sampling iteration {Iteration}...", iteration);
                 LogSamplingRequestSummary(iteration, request);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-request.json", BuildTraceRequest(iteration, request));
                 response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -155,6 +180,7 @@ public sealed class AiAnalysisOrchestrator(
             if (response.Content == null || response.Content.Count == 0)
             {
                 _logger.LogWarning("[AI] Sampling returned empty content at iteration {Iteration}", iteration);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
                 return new AiAnalysisResult
                 {
                     RootCause = "AI analysis failed: empty sampling response.",
@@ -166,6 +192,8 @@ public sealed class AiAnalysisOrchestrator(
                     AnalyzedAt = DateTime.UtcNow
                 };
             }
+
+            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
 
             lastModel = response.Model;
             lastIterationHadToolCalls = false;
@@ -199,12 +227,14 @@ public sealed class AiAnalysisOrchestrator(
 
             foreach (var toolUse in toolUses)
             {
-                LogRequestedToolSummary(iteration, toolUse);
+                var (effectiveToolName, effectiveToolInput) = RewriteToolUseIfNeeded(toolUse, clrMdAnalyzer);
+                LogRequestedToolSummary(iteration, toolUse, effectiveToolName, effectiveToolInput);
 
-                if (string.Equals(toolUse.Name, "analysis_complete", StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(effectiveToolName, "analysis_complete", StringComparison.OrdinalIgnoreCase))
                 {
-                    var completed = ParseAnalysisComplete(toolUse.Input, commandsExecuted, iteration, response.Model);
+                    var completed = ParseAnalysisComplete(effectiveToolInput, commandsExecuted, iteration, response.Model);
                     completed.AnalyzedAt = DateTime.UtcNow;
+                    WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", completed);
                     return completed;
                 }
 
@@ -227,8 +257,8 @@ public sealed class AiAnalysisOrchestrator(
                 }
 
                 var sw = Stopwatch.StartNew();
-                var toolName = toolUse.Name ?? string.Empty;
-                var toolInput = CloneToolInput(toolUse.Input);
+                var toolName = effectiveToolName ?? string.Empty;
+                var toolInput = CloneToolInput(effectiveToolInput);
                 var toolUseId = toolUse.Id;
                 if (string.IsNullOrWhiteSpace(toolUseId))
                 {
@@ -263,6 +293,8 @@ public sealed class AiAnalysisOrchestrator(
                     var outputForModel = TruncateForModel(output);
 
                     sw.Stop();
+                    var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+                    toolIndexByIteration[iteration] = toolOrdinal;
                     commandsExecuted.Add(new ExecutedCommand
                     {
                         Tool = toolName,
@@ -271,6 +303,8 @@ public sealed class AiAnalysisOrchestrator(
                         Iteration = iteration,
                         Duration = sw.Elapsed.ToString("c")
                     });
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
+                        new { tool = toolName, input = toolInput.ToString(), output = outputForModel, isError = false, duration = sw.Elapsed.ToString("c") });
 
                     messages.Add(new SamplingMessage
                     {
@@ -303,6 +337,8 @@ public sealed class AiAnalysisOrchestrator(
                     _logger.LogWarning(ex, "[AI] Tool execution failed: {Tool}", toolName);
                     var messageForModel = TruncateForModel(message);
 
+                    var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+                    toolIndexByIteration[iteration] = toolOrdinal;
                     commandsExecuted.Add(new ExecutedCommand
                     {
                         Tool = toolName,
@@ -311,6 +347,8 @@ public sealed class AiAnalysisOrchestrator(
                         Iteration = iteration,
                         Duration = sw.Elapsed.ToString("c")
                     });
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
+                        new { tool = toolName, input = toolInput.ToString(), output = messageForModel, isError = true, duration = sw.Elapsed.ToString("c") });
 
                     messages.Add(new SamplingMessage
                     {
@@ -337,7 +375,7 @@ public sealed class AiAnalysisOrchestrator(
 
         if (!lastIterationHadToolCalls && !string.IsNullOrWhiteSpace(lastIterationAssistantText))
         {
-            return new AiAnalysisResult
+            var result = new AiAnalysisResult
             {
                 RootCause = "AI returned an answer but did not call analysis_complete.",
                 Confidence = "low",
@@ -347,9 +385,11 @@ public sealed class AiAnalysisOrchestrator(
                 Model = lastModel,
                 AnalyzedAt = DateTime.UtcNow
             };
+            WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", result);
+            return result;
         }
 
-        return new AiAnalysisResult
+        var incomplete = new AiAnalysisResult
         {
             RootCause = "Analysis incomplete - maximum iterations reached.",
             Confidence = "low",
@@ -359,6 +399,8 @@ public sealed class AiAnalysisOrchestrator(
             Model = lastModel,
             AnalyzedAt = DateTime.UtcNow
         };
+        WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", incomplete);
+        return incomplete;
     }
 
     private void LogSamplingRequestSummary(int iteration, CreateMessageRequestParams request)
@@ -428,7 +470,7 @@ public sealed class AiAnalysisOrchestrator(
         }
     }
 
-    private void LogRequestedToolSummary(int iteration, ToolUseContentBlock toolUse)
+    private void LogRequestedToolSummary(int iteration, ToolUseContentBlock toolUse, string effectiveName, JsonElement effectiveInput)
     {
         var level = SamplingTraceLevel;
         if (!_logger.IsEnabled(level))
@@ -436,18 +478,193 @@ public sealed class AiAnalysisOrchestrator(
             return;
         }
 
-        var name = toolUse.Name ?? string.Empty;
+        var originalName = toolUse.Name ?? string.Empty;
+        var name = effectiveName ?? string.Empty;
         var id = toolUse.Id ?? string.Empty;
-        var summary = SummarizeToolInput(name, toolUse.Input);
+        var originalSummary = SummarizeToolInput(originalName, toolUse.Input);
+        var summary = SummarizeToolInput(name, effectiveInput);
+
+        if (string.Equals(originalName, name, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(originalSummary, summary, StringComparison.Ordinal))
+        {
+            _logger.Log(
+                level,
+                "[AI] Tool requested: iteration={Iteration} name={ToolName} id={ToolUseId} input={InputSummary}",
+                iteration,
+                name,
+                id,
+                summary);
+            return;
+        }
 
         _logger.Log(
             level,
-            "[AI] Tool requested: iteration={Iteration} name={ToolName} id={ToolUseId} input={InputSummary}",
+            "[AI] Tool requested: iteration={Iteration} name={ToolName} id={ToolUseId} input={InputSummary} (original: {OriginalName} {OriginalInput})",
             iteration,
             name,
             id,
-            summary);
+            summary,
+            originalName,
+            originalSummary);
     }
+
+    private (string Name, JsonElement Input) RewriteToolUseIfNeeded(ToolUseContentBlock toolUse, IManagedObjectInspector? inspector)
+    {
+        var name = (toolUse.Name ?? string.Empty).Trim();
+        if (!string.Equals(name, "exec", StringComparison.OrdinalIgnoreCase))
+        {
+            return (name, toolUse.Input);
+        }
+
+        if (inspector == null || !inspector.IsOpen)
+        {
+            return (name, toolUse.Input);
+        }
+
+        var cmd = TryGetString(toolUse.Input, "command") ?? string.Empty;
+        var match = Regex.Match(cmd, @"^\s*sos\s+(dumpobj|dumpvc)\s+(?<addr>0x[0-9a-fA-F]+|[0-9a-fA-F]+)\s*$",
+            RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
+        if (!match.Success)
+        {
+            return (name, toolUse.Input);
+        }
+
+        var addr = match.Groups["addr"].Value;
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["address"] = addr.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? addr : "0x" + addr,
+            ["maxDepth"] = 4
+        }));
+
+        return ("inspect", doc.RootElement.Clone());
+    }
+
+    private string? InitializeSamplingTraceDirectory()
+    {
+        if (!EnableSamplingTraceFiles)
+        {
+            return null;
+        }
+
+        var root = SamplingTraceFilesRootDirectory;
+        if (string.IsNullOrWhiteSpace(root))
+        {
+            root = EnvironmentConfig.GetAiSamplingTraceFilesDirectory();
+        }
+
+        var label = string.IsNullOrWhiteSpace(SamplingTraceLabel) ? "run" : SanitizeFileComponent(SamplingTraceLabel);
+        var dirName = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{label}-{Guid.NewGuid():N}";
+        var full = Path.Combine(root, dirName);
+
+        try
+        {
+            Directory.CreateDirectory(full);
+            _logger.LogInformation("[AI] Sampling trace files: {Directory}", full);
+            return full;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[AI] Failed to create sampling trace directory: {Directory}", full);
+            return null;
+        }
+    }
+
+    private void WriteSamplingTraceFile(string? traceRunDir, string fileName, object payload)
+    {
+        if (string.IsNullOrWhiteSpace(traceRunDir))
+        {
+            return;
+        }
+
+        try
+        {
+            var path = Path.Combine(traceRunDir, fileName);
+            var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+            var maxBytes = SamplingTraceMaxFileBytes > 0 ? SamplingTraceMaxFileBytes : 2_000_000;
+            var bytes = Encoding.UTF8.GetBytes(json);
+            if (bytes.Length > maxBytes)
+            {
+                var truncated = Encoding.UTF8.GetString(bytes, 0, maxBytes);
+                truncated += $"{Environment.NewLine}... [truncated, totalBytes={bytes.Length}]";
+                File.WriteAllText(path, truncated, Encoding.UTF8);
+            }
+            else
+            {
+                File.WriteAllText(path, json, Encoding.UTF8);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "[AI] Failed to write sampling trace file: {FileName}", fileName);
+        }
+    }
+
+    private static string SanitizeFileComponent(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "x";
+        }
+
+        var s = value.Trim();
+        s = Regex.Replace(s, @"[^a-zA-Z0-9._-]+", "_", RegexOptions.CultureInvariant);
+        s = s.Trim('_');
+        return string.IsNullOrWhiteSpace(s) ? "x" : s;
+    }
+
+    private static object BuildTraceRequest(int iteration, CreateMessageRequestParams request)
+        => new
+	        {
+	            iteration,
+	            timestampUtc = DateTime.UtcNow,
+	            maxTokens = request.MaxTokens,
+	            toolChoice = request.ToolChoice?.Mode,
+	            systemPrompt = request.SystemPrompt,
+	            tools = request.Tools?.Select(t => new
+	            {
+	                name = t.Name,
+	                description = t.Description,
+	                inputSchema = t.InputSchema.ToString()
+	            }),
+	            messages = request.Messages?.Select(m => new
+	            {
+	                role = m.Role.ToString(),
+	                content = m.Content?.Select<ContentBlock, object>(b => b switch
+	                {
+	                    TextContentBlock tb => (object)new { type = "text", text = tb.Text },
+	                    ToolUseContentBlock tu => (object)new { type = "tool_use", id = tu.Id, name = tu.Name, input = tu.Input.ToString() },
+	                    ToolResultContentBlock tr => new
+	                    {
+	                        type = "tool_result",
+	                        tool_use_id = tr.ToolUseId,
+	                        isError = tr.IsError,
+	                        content = tr.Content?.OfType<TextContentBlock>().Select(x => x.Text).ToList()
+	                    },
+	                    _ => (object)new { type = b.GetType().Name }
+	                })
+	            })
+	        };
+
+    private static object BuildTraceResponse(int iteration, CreateMessageResult response)
+        => new
+	        {
+	            iteration,
+	            timestampUtc = DateTime.UtcNow,
+	            model = response.Model,
+	            content = response.Content?.Select<ContentBlock, object>(b => b switch
+	            {
+	                TextContentBlock tb => (object)new { type = "text", text = tb.Text },
+	                ToolUseContentBlock tu => (object)new { type = "tool_use", id = tu.Id, name = tu.Name, input = tu.Input.ToString() },
+	                ToolResultContentBlock tr => new
+	                {
+	                    type = "tool_result",
+	                    tool_use_id = tr.ToolUseId,
+	                    isError = tr.IsError,
+	                    content = tr.Content?.OfType<TextContentBlock>().Select(x => x.Text).ToList()
+	                },
+	                _ => (object)new { type = b.GetType().Name }
+	            })
+	        };
 
     private static string SummarizeToolInput(string toolName, JsonElement input)
     {
@@ -681,7 +898,7 @@ public sealed class AiAnalysisOrchestrator(
         JsonElement toolInput,
         CrashAnalysisResult initialReport,
         IDebuggerManager debugger,
-        ClrMdAnalyzer? clrMdAnalyzer,
+        IManagedObjectInspector? clrMdAnalyzer,
         CancellationToken cancellationToken)
     {
         var normalized = (toolName ?? string.Empty).Trim().ToLowerInvariant();
@@ -708,7 +925,7 @@ public sealed class AiAnalysisOrchestrator(
         return Task.FromResult(output ?? string.Empty);
     }
 
-    private static string ExecuteInspect(JsonElement toolInput, ClrMdAnalyzer? clrMdAnalyzer)
+    private static string ExecuteInspect(JsonElement toolInput, IManagedObjectInspector? clrMdAnalyzer)
     {
         var address = TryGetString(toolInput, "address");
         if (string.IsNullOrWhiteSpace(address))
@@ -966,6 +1183,7 @@ SOS/.NET debugger command notes:
 
 Managed object inspection notes:
 - Prefer using the inspect tool for managed objects: inspect(address=0x..., maxDepth=...).
+- If inspect is available, do NOT use sos dumpobj/dumpvc first. Always try inspect first for any object address, then fall back to SOS only if inspect fails or is unavailable.
 - Use SOS dumpobj/dumpvc only as a fallback (e.g., inspect unavailable) or to cross-check specific fields.
 
 Investigation approach:

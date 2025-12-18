@@ -134,6 +134,14 @@ public static class EnvironmentConfig
     public const string SymbolStoragePath = "SYMBOL_STORAGE_PATH";
 
     /// <summary>
+    /// Environment variable name for log storage path.
+    /// </summary>
+    /// <remarks>
+    /// Specifies the directory where server log files and trace artifacts are stored.
+    /// </remarks>
+    public const string LogStoragePath = "LOG_STORAGE_PATH";
+
+    /// <summary>
     /// Gets the default symbol cache path based on the current platform.
     /// </summary>
     /// <returns>
@@ -359,6 +367,23 @@ public static class EnvironmentConfig
     public const string AiSamplingTrace = "DEBUGGER_MCP_AI_SAMPLING_TRACE";
 
     /// <summary>
+    /// Environment variable name for enabling AI sampling trace files on disk.
+    /// </summary>
+    /// <remarks>
+    /// When enabled, the server writes full sampling request/response payloads to files under LOG_STORAGE_PATH.
+    /// This is intended for debugging the sampling loop and can produce large artifacts.
+    /// </remarks>
+    public const string AiSamplingTraceFiles = "DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES";
+
+    /// <summary>
+    /// Environment variable name for limiting AI sampling trace file size.
+    /// </summary>
+    /// <remarks>
+    /// Maximum bytes per trace file; oversized payloads are truncated.
+    /// </remarks>
+    public const string AiSamplingTraceMaxFileBytes = "DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES";
+
+    /// <summary>
     /// Default maximum request body size in GB when environment variable is not set.
     /// </summary>
     public const int DefaultMaxRequestBodySizeGb = 5;
@@ -478,6 +503,33 @@ public static class EnvironmentConfig
     /// </summary>
     /// <returns>True when verbose AI sampling trace logs should be enabled.</returns>
     public static bool IsAiSamplingTraceEnabled() => GetBool(AiSamplingTrace, false);
+
+    /// <summary>
+    /// Checks whether AI sampling trace files should be written to disk.
+    /// </summary>
+    /// <returns>True when AI sampling trace files should be written.</returns>
+    public static bool IsAiSamplingTraceFilesEnabled() => GetBool(AiSamplingTraceFiles, false);
+
+    /// <summary>
+    /// Gets the configured log storage path.
+    /// </summary>
+    /// <returns>The log storage path from environment or platform default.</returns>
+    public static string GetLogStoragePath()
+        => GetString(LogStoragePath, Path.Combine(AppContext.BaseDirectory, "logs"));
+
+    /// <summary>
+    /// Gets the directory used to write AI sampling trace files.
+    /// </summary>
+    /// <returns>Trace directory path.</returns>
+    public static string GetAiSamplingTraceFilesDirectory()
+        => Path.Combine(GetLogStoragePath(), "ai-sampling");
+
+    /// <summary>
+    /// Gets the configured maximum bytes for a single AI sampling trace file.
+    /// </summary>
+    /// <returns>Maximum bytes per file.</returns>
+    public static int GetAiSamplingTraceMaxFileBytes()
+        => GetInt(AiSamplingTraceMaxFileBytes, 2_000_000);
 
     /// <summary>
     /// Gets the configured API key, if any.

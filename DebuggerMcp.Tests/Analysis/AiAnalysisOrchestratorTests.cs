@@ -1,3 +1,4 @@
+using System.IO;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Sampling;
@@ -259,6 +260,101 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains("!threads", debugger.ExecutedCommands);
         Assert.NotNull(result.CommandsExecuted);
         Assert.Contains(result.CommandsExecuted!, c => c.Tool == "exec" && c.Output.Contains("OUTPUT:!threads", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenExecDumpobjAndInspectorIsOpen_RewritesToInspect()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "sos dumpobj 0x1234" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var inspector = new FakeManagedObjectInspector(isOpen: true, address =>
+            new ClrMdObjectInspection
+            {
+                Address = $"0x{address:x}",
+                Type = "System.String",
+                Size = 8,
+                IsString = true,
+                Value = "hello"
+            });
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: inspector);
+
+        Assert.Empty(debugger.ExecutedCommands);
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c => c.Tool == "inspect" && c.Output.Contains("System.String", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenSamplingTraceFilesEnabled_WritesTraceFiles()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcpTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+            {
+                MaxIterations = 1,
+                EnableSamplingTraceFiles = true,
+                SamplingTraceFilesRootDirectory = tempRoot,
+                SamplingTraceLabel = "trace-test",
+                SamplingTraceMaxFileBytes = 500_000
+            };
+
+            _ = await orchestrator.AnalyzeCrashAsync(
+                new CrashAnalysisResult(),
+                "{\"x\":1}",
+                new FakeDebuggerManager(),
+                clrMdAnalyzer: null);
+
+            var runDirs = Directory.GetDirectories(tempRoot);
+            Assert.Single(runDirs);
+
+            var runDir = runDirs[0];
+            Assert.True(File.Exists(Path.Combine(runDir, "iter-0001-request.json")));
+            Assert.True(File.Exists(Path.Combine(runDir, "iter-0001-response.json")));
+            Assert.True(File.Exists(Path.Combine(runDir, "final-ai-analysis.json")));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+        }
     }
 
     [Fact]
@@ -606,5 +702,20 @@ public class AiAnalysisOrchestratorTests
             {
             }
         }
+    }
+
+    private sealed class FakeManagedObjectInspector(bool isOpen, Func<ulong, ClrMdObjectInspection?> inspect) : IManagedObjectInspector
+    {
+        private readonly Func<ulong, ClrMdObjectInspection?> _inspect = inspect;
+
+        public bool IsOpen { get; } = isOpen;
+
+        public ClrMdObjectInspection? InspectObject(
+            ulong address,
+            ulong? methodTable = null,
+            int maxDepth = 5,
+            int maxArrayElements = 10,
+            int maxStringLength = 1024)
+            => _inspect(address);
     }
 }

@@ -13,6 +13,7 @@ namespace DebuggerMcp.Analysis;
 /// that are not easily accessible via debugger commands.
 /// </summary>
 public class ClrMdAnalyzer : IDisposable
+    , IManagedObjectInspector
 {
     private readonly ILogger? _logger;
     private DataTarget? _dataTarget;
