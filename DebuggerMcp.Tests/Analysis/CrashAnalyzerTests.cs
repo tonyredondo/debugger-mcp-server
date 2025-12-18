@@ -144,11 +144,13 @@ public class CrashAnalyzerTests
 
         // Act
         var result = await analyzer.AnalyzeCrashAsync();
+        result.RawCommands = new Dictionary<string, string> { ["bt all"] = "output" };
         var json = System.Text.Json.JsonSerializer.Serialize(result);
 
         // Assert
         Assert.NotNull(json);
         Assert.NotEmpty(json);
+        Assert.DoesNotContain("\"rawCommands\"", json, StringComparison.OrdinalIgnoreCase);
         // JSON serialization successful
     }
 

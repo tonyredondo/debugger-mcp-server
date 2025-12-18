@@ -99,7 +99,7 @@ public class CrashAnalysisResult
     /// Raw debugger command outputs.
     /// </summary>
     [JsonPropertyName("rawCommands")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.Always)]
     public Dictionary<string, string>? RawCommands { get; set; }
 
     /// <summary>
