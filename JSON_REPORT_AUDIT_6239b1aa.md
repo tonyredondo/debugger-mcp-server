@@ -1,9 +1,9 @@
-# JSON Report Audit: `DebuggerMcp.Cli/6239b1aa.json`
+# JSON Report Audit: `6239b1aa` (local report file)
 
 Goal: track every inconsistency/bug found in the report, plus the plan and notes for fixing each item one-by-one without losing context.
 
 Scope:
-- Report: `DebuggerMcp.Cli/6239b1aa.json` (mtime: `2025-12-14 00:02:12` local)
+- Report: (not checked in; generate locally as needed)
 - Logs: latest run in `logs/server-2025-12-13-1.log` (UTC timestamps)
 
 Legend:

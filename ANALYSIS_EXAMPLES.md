@@ -35,8 +35,7 @@ All analysis tools return a hierarchical JSON structure with these top-level sec
   "modules": [ ],       // Native modules
   "async": { },         // Async/await state machines, tasks, timers
   "security": { },      // Security analysis findings
-  "watches": { },       // Watch expression evaluation results
-  "rawCommands": { }    // Raw debugger command outputs
+  "watches": { }        // Watch expression evaluation results
 }
 ```
 
@@ -233,14 +232,10 @@ analyze(kind="crash", sessionId="session-123", userId="user1", includeWatches=tr
       "⚠️ Watch 'g_DataManager' is NULL - may be relevant to crash"
     ]
   },
-  "rawCommands": {
-    "!analyze -v": "EXCEPTION_ACCESS_VIOLATION (c0000005)...",
-    "~*k": "Child-SP          RetAddr           Call Site...",
-    "~": "   0  Id: 1234.5678 Suspend: 1 Teb: 00000000`00001000...",
-    "lm": "start             end                 module name..."
-  }
 }
 ```
+
+Note: Raw debugger command outputs are intentionally not embedded in the report JSON to keep exports smaller and avoid polluting downstream LLM context.
 
 ---
 
@@ -559,14 +554,6 @@ analyze(kind="dotnet_crash", sessionId="session-123", userId="user1", deepAnalys
       }
     ]
   },
-  "rawCommands": {
-    "!eeversion": "8.0.10.23424 free",
-    "!pe -nested": "Exception object: 00007ff8a1234567...",
-    "!clrthreads": "ThreadCount: 15...",
-    "!dumpheap -stat": "MT    Count    TotalSize Class Name...",
-    "bt all": "* thread #1, name = 'dotnet', stop reason = signal SIGSEGV...",
-    "image list": "[  0] F8BB27F0-695C-DF56-DC59-B17C539FE26D-A7252ED8 0x0000c5f644..."
-  }
 }
 ```
 
