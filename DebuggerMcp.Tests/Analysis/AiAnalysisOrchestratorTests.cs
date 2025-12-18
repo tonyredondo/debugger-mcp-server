@@ -67,8 +67,39 @@ public class AiAnalysisOrchestratorTests
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
-        Assert.Contains(logs, l => l.Level == LogLevel.Debug && l.Message.Contains("system prompt preview", StringComparison.OrdinalIgnoreCase));
-        Assert.Contains(logs, l => l.Level == LogLevel.Debug && l.Message.Contains("messages tail preview", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logs, l => l.Level == LogLevel.Information && l.Message.Contains("system prompt preview", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logs, l => l.Level == LogLevel.Information && l.Message.Contains("messages tail preview", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenVerboseTraceEnabled_EmitsSamplingTraceAtInformation()
+    {
+        var logs = new List<(LogLevel Level, string Message)>();
+        var logger = new CollectingLogger<AiAnalysisOrchestrator>((level, message) => logs.Add((level, message)));
+
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, logger)
+        {
+            MaxIterations = 1,
+            EnableVerboseSamplingTrace = true
+        };
+
+        _ = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{\"x\":1}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Contains(logs, l => l.Level == LogLevel.Information && l.Message.Contains("Sampling request", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logs, l => l.Level == LogLevel.Information && l.Message.Contains("Sampling response", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(logs, l => l.Level == LogLevel.Information && l.Message.Contains("Tool requested", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]

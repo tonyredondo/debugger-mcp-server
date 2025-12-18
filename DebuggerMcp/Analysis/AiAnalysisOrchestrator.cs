@@ -20,6 +20,8 @@ public sealed class AiAnalysisOrchestrator(
     private readonly ISamplingClient _samplingClient = samplingClient ?? throw new ArgumentNullException(nameof(samplingClient));
     private readonly ILogger<AiAnalysisOrchestrator> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
+    private LogLevel SamplingTraceLevel => EnableVerboseSamplingTrace ? LogLevel.Information : LogLevel.Debug;
+
     /// <summary>
     /// Gets or sets the maximum number of sampling iterations to perform.
     /// </summary>
@@ -191,7 +193,7 @@ public sealed class AiAnalysisOrchestrator(
             if (toolUses.Count == 0)
             {
                 // No tool calls; continue until max iterations. Capture model in the result to aid debugging.
-                _logger.LogDebug("[AI] No tool calls in iteration {Iteration}", iteration);
+                _logger.Log(SamplingTraceLevel, "[AI] No tool calls in iteration {Iteration}", iteration);
                 continue;
             }
 
@@ -361,7 +363,8 @@ public sealed class AiAnalysisOrchestrator(
 
     private void LogSamplingRequestSummary(int iteration, CreateMessageRequestParams request)
     {
-        if (!_logger.IsEnabled(LogLevel.Debug))
+        var level = SamplingTraceLevel;
+        if (!_logger.IsEnabled(level))
         {
             return;
         }
@@ -375,7 +378,8 @@ public sealed class AiAnalysisOrchestrator(
             ? string.Empty
             : string.Join(",", request.Tools.Select(t => t.Name).Where(n => !string.IsNullOrWhiteSpace(n)));
 
-        _logger.LogDebug(
+        _logger.Log(
+            level,
             "[AI] Sampling request: iteration={Iteration} maxTokens={MaxTokens} messages={MessageCount} roles={Roles} tools={ToolNames} toolChoice={ToolChoiceMode} systemPromptChars={SystemPromptChars}",
             iteration,
             request.MaxTokens,
@@ -387,10 +391,10 @@ public sealed class AiAnalysisOrchestrator(
 
         if (EnableVerboseSamplingTrace)
         {
-            _logger.LogDebug("[AI] Sampling system prompt preview: {Preview}",
+            _logger.Log(level, "[AI] Sampling system prompt preview: {Preview}",
                 MakePreview(request.SystemPrompt ?? string.Empty, headChars: 800, tailChars: 200));
 
-            _logger.LogDebug("[AI] Sampling messages tail preview:{NewLine}{Preview}",
+            _logger.Log(level, "[AI] Sampling messages tail preview:{NewLine}{Preview}",
                 Environment.NewLine,
                 BuildMessagesTailPreview(request.Messages, tailCount: 4));
         }
@@ -398,7 +402,8 @@ public sealed class AiAnalysisOrchestrator(
 
     private void LogSamplingResponseSummary(int iteration, CreateMessageResult response, string? assistantText)
     {
-        if (!_logger.IsEnabled(LogLevel.Debug))
+        var level = SamplingTraceLevel;
+        if (!_logger.IsEnabled(level))
         {
             return;
         }
@@ -407,7 +412,8 @@ public sealed class AiAnalysisOrchestrator(
         var toolUses = response.Content?.OfType<ToolUseContentBlock>().Count() ?? 0;
         var textChars = assistantText?.Length ?? 0;
 
-        _logger.LogDebug(
+        _logger.Log(
+            level,
             "[AI] Sampling response: iteration={Iteration} model={Model} blocks={Blocks} toolUses={ToolUses} assistantTextChars={TextChars}",
             iteration,
             response.Model ?? "(unknown)",
@@ -417,14 +423,15 @@ public sealed class AiAnalysisOrchestrator(
 
         if (EnableVerboseSamplingTrace && !string.IsNullOrWhiteSpace(assistantText))
         {
-            _logger.LogDebug("[AI] Sampling assistant text preview: {Preview}",
+            _logger.Log(level, "[AI] Sampling assistant text preview: {Preview}",
                 MakePreview(assistantText, headChars: 400, tailChars: 0));
         }
     }
 
     private void LogRequestedToolSummary(int iteration, ToolUseContentBlock toolUse)
     {
-        if (!_logger.IsEnabled(LogLevel.Debug))
+        var level = SamplingTraceLevel;
+        if (!_logger.IsEnabled(level))
         {
             return;
         }
@@ -433,7 +440,8 @@ public sealed class AiAnalysisOrchestrator(
         var id = toolUse.Id ?? string.Empty;
         var summary = SummarizeToolInput(name, toolUse.Input);
 
-        _logger.LogDebug(
+        _logger.Log(
+            level,
             "[AI] Tool requested: iteration={Iteration} name={ToolName} id={ToolUseId} input={InputSummary}",
             iteration,
             name,
