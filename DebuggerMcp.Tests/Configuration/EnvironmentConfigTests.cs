@@ -27,6 +27,7 @@ public class EnvironmentConfigTests : IDisposable
         StoreOriginalValue(EnvironmentConfig.SosPluginPath);
         StoreOriginalValue(EnvironmentConfig.Port);
         StoreOriginalValue(EnvironmentConfig.MaxRequestBodySizeGb);
+        StoreOriginalValue(EnvironmentConfig.AiSamplingTrace);
     }
 
     private void StoreOriginalValue(string name)
@@ -138,6 +139,12 @@ public class EnvironmentConfigTests : IDisposable
     public void MaxRequestBodySizeGb_ConstantName_IsCorrect()
     {
         Assert.Equal("MAX_REQUEST_BODY_SIZE_GB", EnvironmentConfig.MaxRequestBodySizeGb);
+    }
+
+    [Fact]
+    public void AiSamplingTrace_ConstantName_IsCorrect()
+    {
+        Assert.Equal("DEBUGGER_MCP_AI_SAMPLING_TRACE", EnvironmentConfig.AiSamplingTrace);
     }
 
     // ========== Default Values Tests ==========
@@ -659,6 +666,32 @@ public class EnvironmentConfigTests : IDisposable
 
         // Act
         var result = EnvironmentConfig.IsSwaggerEnabled();
+
+        // Assert
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void IsAiSamplingTraceEnabled_EnvSetTrue_ReturnsTrue()
+    {
+        // Arrange
+        SetEnv(EnvironmentConfig.AiSamplingTrace, "true");
+
+        // Act
+        var result = EnvironmentConfig.IsAiSamplingTraceEnabled();
+
+        // Assert
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsAiSamplingTraceEnabled_EnvNotSet_ReturnsFalse()
+    {
+        // Arrange
+        ClearEnv(EnvironmentConfig.AiSamplingTrace);
+
+        // Act
+        var result = EnvironmentConfig.IsAiSamplingTraceEnabled();
 
         // Assert
         Assert.False(result);

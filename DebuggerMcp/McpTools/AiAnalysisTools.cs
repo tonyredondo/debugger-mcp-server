@@ -3,6 +3,7 @@
 using System.ComponentModel;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
+using DebuggerMcp.Configuration;
 using DebuggerMcp.Reporting;
 using DebuggerMcp.Sampling;
 using DebuggerMcp.Security;
@@ -114,7 +115,8 @@ public sealed class AiAnalysisTools(
             _loggerFactory.CreateLogger<AiAnalysisOrchestrator>())
         {
             MaxIterations = maxIterations,
-            MaxTokensPerRequest = maxTokens
+            MaxTokensPerRequest = maxTokens,
+            EnableVerboseSamplingTrace = EnvironmentConfig.IsAiSamplingTraceEnabled()
         };
 
         var aiResult = await orchestrator.AnalyzeCrashAsync(

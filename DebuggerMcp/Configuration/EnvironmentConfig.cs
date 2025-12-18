@@ -347,6 +347,17 @@ public static class EnvironmentConfig
     /// </remarks>
     public const string MaxRequestBodySizeGb = "MAX_REQUEST_BODY_SIZE_GB";
 
+    // ========== AI / Sampling Configuration ==========
+
+    /// <summary>
+    /// Environment variable name for enabling verbose AI sampling trace logs.
+    /// </summary>
+    /// <remarks>
+    /// When set to "true", the server logs previews of the prompts/messages exchanged during AI sampling.
+    /// This can produce large logs and may include sensitive data from debugger outputs.
+    /// </remarks>
+    public const string AiSamplingTrace = "DEBUGGER_MCP_AI_SAMPLING_TRACE";
+
     /// <summary>
     /// Default maximum request body size in GB when environment variable is not set.
     /// </summary>
@@ -461,6 +472,12 @@ public static class EnvironmentConfig
     /// </summary>
     /// <returns>True when dump analysis should be skipped.</returns>
     public static bool IsDumpAnalysisSkipped() => GetBool(SkipDumpAnalysis, false);
+
+    /// <summary>
+    /// Checks whether verbose AI sampling trace logging should be enabled.
+    /// </summary>
+    /// <returns>True when verbose AI sampling trace logs should be enabled.</returns>
+    public static bool IsAiSamplingTraceEnabled() => GetBool(AiSamplingTrace, false);
 
     /// <summary>
     /// Gets the configured API key, if any.
