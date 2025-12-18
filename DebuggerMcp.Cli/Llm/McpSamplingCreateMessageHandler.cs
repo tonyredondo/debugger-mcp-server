@@ -34,6 +34,12 @@ internal sealed class McpSamplingCreateMessageHandler(
         var request = BuildChatCompletionRequest(systemPrompt, parameters.Value);
 
         var response = await _complete(request, cancellationToken).ConfigureAwait(false);
+        response = ApplyMcpToolUseFallback(response);
+
+        if (string.IsNullOrWhiteSpace(response.Text) && (response.ToolCalls == null || response.ToolCalls.Count == 0))
+        {
+            throw new InvalidOperationException("LLM returned empty content and no tool calls.");
+        }
 
         EmitProgressForRequestedTools(response);
 
@@ -43,6 +49,291 @@ internal sealed class McpSamplingCreateMessageHandler(
             Model = response.Model ?? _settings.OpenRouterModel,
             Content = BuildSamplingContentBlocks(response)
         };
+    }
+
+    private static ChatCompletionResult ApplyMcpToolUseFallback(ChatCompletionResult response)
+    {
+        if (response.ToolCalls.Count > 0)
+        {
+            return response;
+        }
+
+        if (string.IsNullOrWhiteSpace(response.Text))
+        {
+            return response;
+        }
+
+        if (!TryParseMcpToolUsesFromText(response.Text, out var calls, out var cleanedText) || calls.Count == 0)
+        {
+            return response;
+        }
+
+        return new ChatCompletionResult
+        {
+            Model = response.Model,
+            Text = string.IsNullOrWhiteSpace(cleanedText) ? null : cleanedText,
+            ToolCalls = calls
+        };
+    }
+
+    private static bool TryParseMcpToolUsesFromText(string text, out List<ChatToolCall> toolCalls, out string? cleanedText)
+    {
+        toolCalls = [];
+        cleanedText = text;
+
+        var trimmed = text.Trim();
+        if (trimmed.Length == 0)
+        {
+            return false;
+        }
+
+        if (!trimmed.Contains("tool_use", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        // First try: the entire text is a JSON value.
+        if (TryExtractToolCallsFromJson(trimmed, toolCalls, out cleanedText))
+        {
+            return toolCalls.Count > 0;
+        }
+
+        // Second try: the tool_use JSON object is embedded somewhere in the text.
+        var matches = ExtractEmbeddedToolUseJsonObjects(text);
+        if (matches.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var m in matches)
+        {
+            if (TryExtractToolCallsFromJson(m.Json, toolCalls, out _))
+            {
+                continue;
+            }
+        }
+
+        if (toolCalls.Count == 0)
+        {
+            return false;
+        }
+
+        // Remove extracted JSON objects from the textual content to reduce model confusion in later turns.
+        cleanedText = RemoveRanges(text, matches.Select(m => (m.Start, m.Length)).ToList());
+        return true;
+    }
+
+    private static bool TryExtractToolCallsFromJson(string json, List<ChatToolCall> toolCalls, out string? cleanedText)
+    {
+        cleanedText = null;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            return TryExtractToolCallsFromJsonElement(doc.RootElement, toolCalls, ref cleanedText);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryExtractToolCallsFromJsonElement(JsonElement element, List<ChatToolCall> toolCalls, ref string? cleanedText)
+    {
+        if (element.ValueKind == JsonValueKind.Object)
+        {
+            var type = TryGetString(element, "type") ?? string.Empty;
+            if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+            {
+                var id = TryGetString(element, "id");
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    id = $"text_tool_{Guid.NewGuid():N}";
+                }
+
+                var name = TryGetString(element, "name") ?? string.Empty;
+                if (string.IsNullOrWhiteSpace(name))
+                {
+                    return false;
+                }
+
+                var input = TryGetProperty(element, "input", out var inputProp)
+                    ? inputProp.GetRawText()
+                    : "{}";
+
+                toolCalls.Add(new ChatToolCall(id, name, input));
+                cleanedText ??= string.Empty;
+                return true;
+            }
+
+            if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
+            {
+                // Some models echo MCP blocks as { "type":"text", "text":"{...tool_use...}" }. Try to unwrap.
+                var inner = TryGetString(element, "text");
+                if (!string.IsNullOrWhiteSpace(inner) && inner!.Contains("tool_use", StringComparison.OrdinalIgnoreCase))
+                {
+                    return TryExtractToolCallsFromJson(inner.Trim(), toolCalls, out cleanedText);
+                }
+            }
+
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Array)
+        {
+            var any = false;
+            foreach (var item in element.EnumerateArray())
+            {
+                any |= TryExtractToolCallsFromJsonElement(item, toolCalls, ref cleanedText);
+            }
+            if (any)
+            {
+                cleanedText ??= string.Empty;
+            }
+            return any;
+        }
+
+        if (element.ValueKind == JsonValueKind.String)
+        {
+            var s = element.GetString();
+            if (!string.IsNullOrWhiteSpace(s) && s!.Contains("tool_use", StringComparison.OrdinalIgnoreCase))
+            {
+                return TryExtractToolCallsFromJson(s.Trim(), toolCalls, out cleanedText);
+            }
+        }
+
+        return false;
+    }
+
+    private sealed record ExtractedJsonObject(int Start, int Length, string Json);
+
+    private static List<ExtractedJsonObject> ExtractEmbeddedToolUseJsonObjects(string text)
+    {
+        var matches = new List<ExtractedJsonObject>();
+
+        var idx = 0;
+        while (idx < text.Length)
+        {
+            var marker = text.IndexOf("tool_use", idx, StringComparison.OrdinalIgnoreCase);
+            if (marker < 0)
+            {
+                break;
+            }
+
+            var start = text.LastIndexOf('{', marker);
+            if (start < 0)
+            {
+                idx = marker + 1;
+                continue;
+            }
+
+            if (!TryExtractBalancedJsonObject(text, start, out var endExclusive))
+            {
+                idx = marker + 1;
+                continue;
+            }
+
+            var json = text.Substring(start, endExclusive - start);
+            matches.Add(new ExtractedJsonObject(start, endExclusive - start, json));
+            idx = endExclusive;
+        }
+
+        // De-dupe identical ranges if the loop found nested markers inside the same object.
+        return matches
+            .GroupBy(m => (m.Start, m.Length))
+            .Select(g => g.First())
+            .OrderBy(m => m.Start)
+            .ToList();
+    }
+
+    private static bool TryExtractBalancedJsonObject(string text, int startIndex, out int endExclusive)
+    {
+        endExclusive = -1;
+
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+
+        for (var i = startIndex; i < text.Length; i++)
+        {
+            var c = text[i];
+
+            if (inString)
+            {
+                if (escaped)
+                {
+                    escaped = false;
+                    continue;
+                }
+
+                if (c == '\\')
+                {
+                    escaped = true;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c == '{')
+            {
+                depth++;
+                continue;
+            }
+
+            if (c == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    endExclusive = i + 1;
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static string RemoveRanges(string text, List<(int Start, int Length)> ranges)
+    {
+        if (ranges.Count == 0)
+        {
+            return text;
+        }
+
+        ranges.Sort((a, b) => a.Start.CompareTo(b.Start));
+        var sb = new StringBuilder(text.Length);
+        var last = 0;
+
+        foreach (var r in ranges)
+        {
+            if (r.Start < last)
+            {
+                continue;
+            }
+
+            sb.Append(text, last, r.Start - last);
+            last = Math.Min(text.Length, r.Start + r.Length);
+        }
+
+        if (last < text.Length)
+        {
+            sb.Append(text, last, text.Length - last);
+        }
+
+        return sb.ToString().Trim();
     }
 
     private static List<SamplingContentItem> BuildSamplingContentBlocks(ChatCompletionResult response)

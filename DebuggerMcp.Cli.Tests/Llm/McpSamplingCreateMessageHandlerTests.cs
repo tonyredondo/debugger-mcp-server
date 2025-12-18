@@ -43,6 +43,61 @@ public class McpSamplingCreateMessageHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenModelReturnsMcpToolUseJsonInText_ConvertsToToolUseBlock()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var progress = new List<string>();
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = """
+                    { "type":"tool_use", "id":"tc1", "name":"exec", "input": { "command":"sos dumpobj 0x1234" } }
+                    """
+                });
+            },
+            progress.Add);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        var result = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(result.Content);
+        Assert.Contains(result.Content, b => string.Equals(b.Type, "tool_use", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(progress, p => p.Contains("AI requests tool: exec", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenModelReturnsEmptyTextAndNoToolCalls_Throws()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) => Task.FromResult(new ChatCompletionResult()),
+            progress: null);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => handler.HandleAsync(doc.RootElement, CancellationToken.None));
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenReceivingToolResult_EmitsProgressOnce()
     {
         var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };

@@ -160,7 +160,7 @@ public sealed class AiAnalysisOrchestrator(
                     RootCause = "AI analysis failed: empty sampling response.",
                     Confidence = "low",
                     Reasoning = "The sampling client returned an empty response.",
-                    Iterations = iteration,
+                    Iterations = iteration - 1,
                     CommandsExecuted = commandsExecuted,
                     Model = response.Model,
                     AnalyzedAt = DateTime.UtcNow

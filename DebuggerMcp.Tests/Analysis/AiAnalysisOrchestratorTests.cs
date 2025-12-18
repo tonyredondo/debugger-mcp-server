@@ -103,6 +103,39 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_WhenSamplingReturnsEmptyContent_DoesNotCountFailedIteration()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(new CreateMessageResult
+            {
+                Model = "test",
+                Content =
+                [
+                    new TextContentBlock { Text = "ok" }
+                ]
+            })
+            .EnqueueResult(new CreateMessageResult
+            {
+                Model = "test",
+                Content = []
+            });
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("AI analysis failed: empty sampling response.", result.RootCause);
+        Assert.Equal(1, result.Iterations);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_IncludesSosHelpGuidanceInSystemPrompt()
     {
         CreateMessageRequestParams? seenRequest = null;
