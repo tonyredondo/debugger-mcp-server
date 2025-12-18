@@ -272,7 +272,7 @@ analyze(kind: "ai", sessionId: "session-xyz-789", userId: "your-user-id")
 Notes:
 - Requires an MCP client that supports sampling (`sampling/createMessage`) with tools enabled.
   - The `dbg-mcp` CLI supports this when OpenRouter is configured (`OPENROUTER_API_KEY`).
-- For managed object inspection, prefer `inspect(kind: "object", ...)` over `exec "sos dumpobj ..."` when the AI requests object details.
+- For managed object inspection during AI sampling, prefer the sampling tool `inspect(address: "0x...")` over `exec "sos dumpobj ..."` when the AI requests object details.
 
 Debugging:
 - Enable `DEBUGGER_MCP_AI_SAMPLING_TRACE=true` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true`.

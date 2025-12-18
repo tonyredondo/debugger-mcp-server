@@ -160,11 +160,12 @@ analyze(kind: "ai", sessionId: "your-session-id", userId: "your-user-id")
 
 ### Tool Guidance (for the LLM)
 
+During AI sampling, the model has access to the sampling tools `exec`, `inspect`, `get_thread_stack`, and `analysis_complete`.
+
 When the AI asks for more evidence, prefer:
-- `inspect(kind: "object", address: "0x...")` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
-  - For value types, provide `methodTable` if needed.
-- `inspect(kind: "clr_stack")` for fast managed stacks (ClrMD).
-- `exec` only for debugger/SOS commands that don’t have a first-class inspect helper.
+- `inspect(address: "0x...", maxDepth: 3)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
+- `get_thread_stack(threadId: "...")` when you need a full stack for a specific thread already present in the report.
+- `exec` only for debugger/SOS commands that don’t have a first-class sampling tool.
 
 ### Debugging Sampling Issues
 

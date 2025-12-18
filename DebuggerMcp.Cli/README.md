@@ -50,7 +50,7 @@ dbg-mcp> dumps upload ./crash.dmp
 dbg-mcp> open <dumpId>
 
 # Run crash analysis
-dbg-mcp> analyze crash
+dbg-mcp> analyze crash -o ./crash.json
 
 # Execute debugger commands
 dbg-mcp> exec !analyze -v
@@ -231,8 +231,8 @@ session close d0307dc3
 | `open <dumpId>` | Open a dump file in debugger |
 | `close` | Close current dump |
 | `exec <cmd>` | Execute debugger command |
-| `threads` | List all threads (shortcut) |
-| `stack` | Show call stack (shortcut) |
+| `cmd` | Enter multi-line command mode (run debugger commands without typing `exec`) |
+| `showobj <address>` | Inspect .NET object as JSON (ClrMD) |
 
 **Examples:**
 ```bash
@@ -240,31 +240,30 @@ open abc123
 exec !analyze -v
 exec k
 exec !dumpheap -stat
-threads
-stack
+cmd
+showobj 0x7f8a2b3c4d50
 ```
 
 ### Analysis Commands
 
 | Command | Description |
 |---------|-------------|
-| `analyze crash` | General crash analysis with security and watches |
-| `analyze dotnet` | .NET-specific analysis with CLR info and heap stats |
-| `analyze dotnet --deep` | Deep .NET analysis with ClrMD heap inspection |
-| `analyze ai` | AI-assisted crash analysis via MCP sampling (LLM-driven, tool-using) |
-| `analyze perf` | Comprehensive performance profiling |
-| `analyze cpu` | CPU usage and hot function analysis |
-| `analyze memory` | Memory allocation analysis |
-| `analyze gc` | Garbage collection behavior analysis |
-| `analyze contention` | Thread contention and lock analysis |
-| `analyze security` | Security vulnerability scan with CWE mappings |
+| `analyze crash -o <file>` | Crash analysis (saves JSON) |
+| `analyze dotnet -o <file>` | .NET crash analysis (saves JSON) |
+| `analyze ai -o <file>` | AI-assisted crash analysis via MCP sampling (saves JSON) |
+| `analyze perf -o <file>` | Comprehensive performance profiling (saves JSON) |
+| `analyze cpu -o <file>` | CPU usage and hot function analysis (saves JSON) |
+| `analyze memory -o <file>` | Memory allocation analysis (saves JSON) |
+| `analyze gc -o <file>` | Garbage collection behavior analysis (saves JSON) |
+| `analyze contention -o <file>` | Thread contention and lock analysis (saves JSON) |
+| `analyze security -o <file>` | Security vulnerability scan with CWE mappings (saves JSON) |
 
 **Examples:**
 ```bash
-analyze crash
-analyze dotnet
-analyze dotnet --deep     # Deep heap analysis (slower but thorough)
-analyze perf
+analyze crash -o ./crash.json
+analyze dotnet -o ./dotnet.json
+analyze ai -o ./ai.json
+analyze perf -o ./perf.json
 analyze security
 ```
 

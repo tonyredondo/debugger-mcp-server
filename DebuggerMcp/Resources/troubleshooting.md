@@ -257,14 +257,15 @@ export DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
 ```
 
 Trace files are written under:
-- `LOG_STORAGE_PATH/ai-sampling` (default `./logs/ai-sampling` in Docker Compose)
+- `LOG_STORAGE_PATH/ai-sampling`
+  - In `docker-compose.yml`, each service mounts a different host logs directory (e.g., `./logs`, `./logs-alpine`, `./logs-x64`). Trace files appear under the corresponding directory in `ai-sampling/`.
 
 ### "The AI keeps using dumpobj instead of inspect"
 
 **Cause**: The model defaults to familiar SOS commands.
 
-**Solution**: Prefer the first-class MCP tool:
-- Use `inspect(kind: "object", ...)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
+**Solution**: Prefer the first-class sampling tool:
+- Use `inspect(address: "0x...", maxDepth: 3)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
 
 ---
 

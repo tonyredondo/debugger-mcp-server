@@ -673,7 +673,7 @@ dbg-mcp> connect http://localhost:5000
 # Upload and analyze a dump
 dbg-mcp> dumps upload ./crash.dmp
 dbg-mcp> open <dumpId>
-dbg-mcp> analyze crash
+dbg-mcp> analyze crash -o ./crash.json
 
 # Generate report
 dbg-mcp> report -o ./crash-report.md
@@ -701,7 +701,7 @@ dbg-mcp> report -o ./crash-report.md
 help connection    # connect, disconnect, status, health, server
 help files         # dumps, symbols, stats
 help session       # session create/list/use/close
-help debugging     # open, close, exec, sos, threads, stack
+help debugging     # open, close, exec, cmd, showobj/inspect
 help analysis      # analyze, compare
 help llm           # llm, llmagent
 help advanced      # watch, report, sourcelink

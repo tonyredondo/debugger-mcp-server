@@ -27,7 +27,7 @@ dbg-mcp> dumps upload ./crash.dmp
 
 # Open and analyze
 dbg-mcp> open <dumpId>
-dbg-mcp> analyze crash
+dbg-mcp> analyze crash -o ./crash.json
 
 # Generate report
 dbg-mcp> report -o ./report.md
@@ -57,14 +57,14 @@ dbg-mcp> report -o ./report.md
 - `open <dumpId>` - Open dump
 - `close` - Close dump
 - `exec <cmd>` - Execute command
-- `threads` / `stack` - Quick commands
+- `cmd` - Multi-line debugger command mode
+- `showobj <address>` - Inspect .NET object as JSON (ClrMD)
 
 ### Analysis (`help analysis`)
-- `analyze crash` - Crash analysis
-- `analyze dotnet` - .NET analysis
-- `analyze ai` - AI-powered deep crash analysis (requires MCP sampling / OpenRouter config)
-- `analyze perf/cpu/memory/gc/contention` - Performance
-- `analyze security` - Security scan
+- `analyze <type> -o <file>` - Run analysis and save output (e.g., `analyze crash -o ./crash.json`)
+- `analyze ai -o <file>` - AI-powered deep crash analysis (requires MCP sampling / OpenRouter config)
+- `analyze perf|cpu|memory|gc|contention -o <file>` - Performance analyses (save JSON)
+- `analyze security -o <file>` - Security scan (save JSON)
 - `compare <s1> <s2>` - Compare dumps
 
 ### LLM (`help llm`)
@@ -150,8 +150,8 @@ Use `server init` to create default config, `server list` to view all servers.
 connect http://localhost:5000
 dumps upload ./crash.dmp
 open <dumpId>
-analyze crash
-analyze dotnet
+analyze crash -o ./crash.json
+analyze dotnet -o ./dotnet.json
 report -o ./crash-report.md
 ```
 
