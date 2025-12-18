@@ -17,8 +17,7 @@ internal sealed class McpSamplingCreateMessageHandler(
         complete ?? throw new ArgumentNullException(nameof(complete));
     private readonly Action<string>? _progress = progress;
 
-    private readonly HashSet<string> _seenToolResults = new(StringComparer.OrdinalIgnoreCase);
-    private readonly HashSet<string> _seenToolUses = new(StringComparer.OrdinalIgnoreCase);
+    private int _lastSeenMessageCount;
 
     public async Task<SamplingCreateMessageResult> HandleAsync(JsonElement? parameters, CancellationToken cancellationToken)
     {
@@ -85,9 +84,27 @@ internal sealed class McpSamplingCreateMessageHandler(
         }
 
         var toolUseLookup = BuildToolUseLookup(messagesProp);
+        var messageCount = messagesProp.GetArrayLength();
+        var startIndex = _lastSeenMessageCount;
+        if (startIndex < 0 || startIndex > messageCount)
+        {
+            startIndex = 0;
+        }
 
+        // If the server resets the conversation, the messages array can shrink; treat as a new stream.
+        if (messageCount < _lastSeenMessageCount)
+        {
+            startIndex = 0;
+        }
+
+        var index = 0;
         foreach (var msg in messagesProp.EnumerateArray())
         {
+            if (index++ < startIndex)
+            {
+                continue;
+            }
+
             if (msg.ValueKind != JsonValueKind.Object)
             {
                 continue;
@@ -96,11 +113,6 @@ internal sealed class McpSamplingCreateMessageHandler(
             var blocks = ExtractContentBlocks(msg);
             foreach (var toolResult in blocks.ToolResults)
             {
-                if (!_seenToolResults.Add(toolResult.ToolCallId))
-                {
-                    continue;
-                }
-
                 var name = toolUseLookup.TryGetValue(toolResult.ToolCallId, out var n) ? n : "tool";
                 var summary = CompactOneLine(toolResult.Content, 160);
                 if (string.IsNullOrWhiteSpace(summary))
@@ -111,6 +123,8 @@ internal sealed class McpSamplingCreateMessageHandler(
                 _progress($"AI tool result: {name} -> {summary}");
             }
         }
+
+        _lastSeenMessageCount = messageCount;
     }
 
     private void EmitProgressForRequestedTools(ChatCompletionResult response)
@@ -125,6 +139,10 @@ internal sealed class McpSamplingCreateMessageHandler(
             return;
         }
 
+        // Tool call IDs are not guaranteed to be globally unique across separate sampling requests.
+        // Only de-dup within the current response to keep the output readable.
+        var seenThisResponse = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
         foreach (var call in response.ToolCalls)
         {
             if (string.IsNullOrWhiteSpace(call.Id) || string.IsNullOrWhiteSpace(call.Name))
@@ -132,7 +150,7 @@ internal sealed class McpSamplingCreateMessageHandler(
                 continue;
             }
 
-            if (!_seenToolUses.Add(call.Id))
+            if (!seenThisResponse.Add(call.Id))
             {
                 continue;
             }

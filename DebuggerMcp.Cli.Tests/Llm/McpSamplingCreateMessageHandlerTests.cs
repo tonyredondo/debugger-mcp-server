@@ -81,6 +81,47 @@ public class McpSamplingCreateMessageHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenModelReusesToolCallIdAcrossRequests_EmitsProgressEachTime()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var progress = new List<string>();
+
+        var callCount = 0;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                callCount++;
+                var cmd = callCount == 1 ? "sos dumpdomain" : "sos clrstack -a";
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "ok",
+                    ToolCalls =
+                    [
+                        // Some providers reuse tool-call IDs (e.g., always "call_0") across requests.
+                        new ChatToolCall("call_0", "exec", $$"""{"command":"{{cmd}}"}""")
+                    ]
+                });
+            },
+            progress.Add);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.Equal(2, progress.Count(p => p.Contains("AI requests tool: exec", StringComparison.OrdinalIgnoreCase)));
+        Assert.Contains(progress, p => p.Contains("dumpdomain", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(progress, p => p.Contains("clrstack", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task HandleAsync_BuildsChatCompletionRequestAndMapsToolCalls()
     {
         var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
