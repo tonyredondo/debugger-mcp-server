@@ -244,8 +244,8 @@ xcode-select --install
 
 **Solutions**:
 - Ensure your MCP client supports sampling (`sampling/createMessage`) with tools enabled.
-  - The `dbg-mcp` CLI supports sampling when OpenRouter is configured (`OPENROUTER_API_KEY`).
-- Try a different OpenRouter model (some providers have stricter tool-call requirements).
+  - The `dbg-mcp` CLI supports sampling when an LLM provider is configured (`OPENROUTER_API_KEY` or `OPENAI_API_KEY` + `llm provider openai`).
+- Try a different model/provider (some providers have stricter tool-call requirements).
 
 ### "I can't see what was sent to the LLM" / "Sampling is truncated"
 

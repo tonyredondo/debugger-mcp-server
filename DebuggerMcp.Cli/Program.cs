@@ -2056,8 +2056,16 @@ public class Program
                 async (request, ct) =>
                 {
                     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
-                    var client = new OpenRouterClient(http, llmSettings);
-                    return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
+                    if (llmSettings.GetProviderKind() == LlmProviderKind.OpenAi)
+                    {
+                        var client = new OpenAiClient(http, llmSettings);
+                        return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        var client = new OpenRouterClient(http, llmSettings);
+                        return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
+                    }
                 },
                 progress: message =>
                 {
@@ -4562,37 +4570,64 @@ public class Program
         {
             output.Header("LLM");
             output.WriteLine();
-            output.KeyValue("Provider", "OpenRouter");
-            output.KeyValue("Model", llmSettings.OpenRouterModel);
-            output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveOpenRouterApiKey()) ? "(not set)" : "(configured)");
+            output.KeyValue("Provider", llmSettings.GetProviderDisplayName());
+            output.KeyValue("Model", llmSettings.GetEffectiveModel());
+            output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveApiKey()) ? "(not set)" : "(configured)");
+            output.KeyValue("API Key Source", llmSettings.GetEffectiveApiKeySource());
             output.KeyValue("Agent Mode", llmSettings.AgentModeEnabled ? "enabled" : "disabled");
             output.KeyValue("Agent Confirm", llmSettings.AgentModeConfirmToolCalls ? "enabled" : "disabled");
             output.WriteLine();
             output.Dim("Usage:");
             output.Dim("  llm <prompt>");
             output.Dim("    Tip: Attach local files with @./path (e.g., llm Analyze @./report.json)");
-            output.Dim("  llm model <openrouter-model-id>");
-            output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json)");
+            output.Dim("  llm provider <openrouter|openai>");
+            output.Dim("  llm model <model-id>");
+            output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json for current provider)");
             output.Dim("  llm set-agent <true|false>       (toggles tool-using agent mode)");
             output.Dim("  llm set-agent-confirm <true|false> (confirm each tool call in agent mode)");
             output.Dim("  llm reset                        (clears LLM conversation + transcript context)");
             output.Dim("  llm reset conversation            (clears only LLM conversation; keeps CLI context)");
-            output.Dim("Tip: Prefer env var OPENROUTER_API_KEY to avoid persisting keys.");
+            output.Dim("Tip: Prefer env vars OPENROUTER_API_KEY / OPENAI_API_KEY to avoid persisting keys.");
             return;
         }
 
         var sub = args[0].ToLowerInvariant();
         switch (sub)
         {
+            case "provider":
+            case "set-provider":
+                if (args.Length < 2)
+                {
+                    output.Error("Usage: llm provider <openrouter|openai>");
+                    return;
+                }
+                var provider = LlmSettings.NormalizeProvider(args[1]);
+                if (provider is not ("openrouter" or "openai"))
+                {
+                    output.Error("Invalid provider. Use openrouter or openai.");
+                    return;
+                }
+                llmSettings.Provider = provider;
+                state.Settings.Save();
+                output.Success($"LLM provider set: {llmSettings.GetProviderDisplayName()}");
+                return;
+
             case "model":
                 if (args.Length < 2)
                 {
-                    output.Error("Usage: llm model <openrouter-model-id>");
+                    output.Error("Usage: llm model <model-id>");
                     return;
                 }
-                llmSettings.OpenRouterModel = args[1].Trim();
+                if (llmSettings.GetProviderKind() == LlmProviderKind.OpenAi)
+                {
+                    llmSettings.OpenAiModel = args[1].Trim();
+                }
+                else
+                {
+                    llmSettings.OpenRouterModel = args[1].Trim();
+                }
                 state.Settings.Save();
-                output.Success($"LLM model set: {llmSettings.OpenRouterModel}");
+                output.Success($"LLM model set: {llmSettings.GetEffectiveModel()}");
                 return;
 
             case "set-key":
@@ -4601,6 +4636,15 @@ public class Program
                     output.Error("Usage: llm set-key <api-key>");
                     return;
                 }
+                if (llmSettings.GetProviderKind() == LlmProviderKind.OpenAi)
+                {
+                    llmSettings.OpenAiApiKey = args[1].Trim();
+                    state.Settings.Save();
+                    output.Success("OpenAI API key saved to config.");
+                    output.Dim("Tip: Prefer env var OPENAI_API_KEY to avoid persisting keys.");
+                    return;
+                }
+
                 llmSettings.OpenRouterApiKey = args[1].Trim();
                 state.Settings.Save();
                 output.Success("OpenRouter API key saved to config.");
@@ -4723,9 +4767,10 @@ public class Program
 
         output.Header("LLM Agent Mode");
         output.WriteLine();
-        output.KeyValue("Provider", "OpenRouter");
-        output.KeyValue("Model", llmSettings.OpenRouterModel);
-        output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveOpenRouterApiKey()) ? "(not set)" : "(configured)");
+        output.KeyValue("Provider", llmSettings.GetProviderDisplayName());
+        output.KeyValue("Model", llmSettings.GetEffectiveModel());
+        output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveApiKey()) ? "(not set)" : "(configured)");
+        output.KeyValue("API Key Source", llmSettings.GetEffectiveApiKeySource());
         output.KeyValue("Agent Mode", "enabled");
         output.KeyValue("Agent Confirm", llmSettings.AgentModeConfirmToolCalls ? "enabled" : "disabled");
         output.WriteLine();
@@ -4831,7 +4876,6 @@ public class Program
         });
 
         using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
-        var client = new OpenRouterClient(http, llmSettings);
 
         var history = transcript.ReadTailForScope(80, state.Settings.ServerUrl, state.SessionId, state.DumpId);
         var messages = TranscriptContextBuilder.BuildMessages(
@@ -4853,11 +4897,21 @@ public class Program
                 attachmentMessages.Concat(reportMessages).ToList());
         messages = combinedMessages;
 
-        var response = llmSettings.AgentModeEnabled
-            ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, reports, transcript, cancellationToken)
-            : await output.WithSpinnerAsync(
-                "Calling LLM...",
-                () => client.ChatAsync(messages, cancellationToken));
+        string response;
+        if (llmSettings.GetProviderKind() == LlmProviderKind.OpenAi)
+        {
+            var client = new OpenAiClient(http, llmSettings);
+            response = llmSettings.AgentModeEnabled
+                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client.ChatCompletionAsync, messages, reports, transcript, cancellationToken)
+                : await output.WithSpinnerAsync("Calling LLM...", () => client.ChatAsync(messages, cancellationToken));
+        }
+        else
+        {
+            var client = new OpenRouterClient(http, llmSettings);
+            response = llmSettings.AgentModeEnabled
+                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client.ChatCompletionAsync, messages, reports, transcript, cancellationToken)
+                : await output.WithSpinnerAsync("Calling LLM...", () => client.ChatAsync(messages, cancellationToken));
+        }
 
         transcript.Append(new CliTranscriptEntry
         {
@@ -4878,7 +4932,7 @@ public class Program
         ShellState state,
         McpClient mcpClient,
         LlmSettings llmSettings,
-        OpenRouterClient client,
+        Func<ChatCompletionRequest, CancellationToken, Task<ChatCompletionResult>> completeAsync,
         IReadOnlyList<ChatMessage> seedMessages,
         IReadOnlyList<LlmFileAttachments.ReportAttachmentContext> reports,
         CliTranscriptStore transcript,
@@ -4896,7 +4950,7 @@ public class Program
             {
                 return await output.WithSpinnerAsync(
                     "LLM agent thinking...",
-                    () => client.ChatCompletionAsync(new ChatCompletionRequest
+                    () => completeAsync(new ChatCompletionRequest
                     {
                         Messages = messages,
                         Tools = tools,

@@ -9,9 +9,9 @@ using DebuggerMcp.Cli.Shell.Transcript;
 namespace DebuggerMcp.Cli.Llm;
 
 /// <summary>
-/// Minimal OpenRouter client for chat completions (OpenAI-compatible API surface).
+/// Minimal OpenAI client for chat completions (OpenAI-compatible API surface).
 /// </summary>
-public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings)
+public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
 {
     private static readonly JsonSerializerOptions JsonOptions = CliJsonSerializationDefaults.CaseInsensitiveCamelCaseIgnoreNull;
     private const int MaxErrorBodyBytes = 32_000;
@@ -24,7 +24,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         var result = await ChatCompletionAsync(new ChatCompletionRequest { Messages = messages }, cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(result.Text))
         {
-            throw new InvalidOperationException("OpenRouter response did not contain any message content.");
+            throw new InvalidOperationException("OpenAI response did not contain any message content.");
         }
         return result.Text.Trim();
     }
@@ -41,16 +41,16 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             throw new ArgumentNullException(nameof(completionRequest.Messages));
         }
 
-        var apiKey = _settings.GetEffectiveOpenRouterApiKey();
+        var apiKey = _settings.GetEffectiveOpenAiApiKey();
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            throw new InvalidOperationException("OpenRouter API key is not configured.");
+            throw new InvalidOperationException("OpenAI API key is not configured.");
         }
 
-        var baseUrl = _settings.OpenRouterBaseUrl?.Trim().TrimEnd('/');
+        var baseUrl = _settings.OpenAiBaseUrl?.Trim().TrimEnd('/');
         if (string.IsNullOrWhiteSpace(baseUrl))
         {
-            throw new InvalidOperationException("OpenRouter base URL is not configured.");
+            throw new InvalidOperationException("OpenAI base URL is not configured.");
         }
 
         var url = $"{baseUrl}/chat/completions";
@@ -60,23 +60,18 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         httpRequest.Headers.UserAgent.ParseAdd("DebuggerMcp.Cli/1.0");
         httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
-        // OpenRouter recommends these for attribution; keep defaults stable.
-        httpRequest.Headers.TryAddWithoutValidation("X-Title", "DebuggerMcp.Cli");
-        httpRequest.Headers.TryAddWithoutValidation("HTTP-Referer", "https://github.com/tonyredondo/debugger-mcp-server");
-
-        var payload = new OpenRouterChatRequest
+        var payload = new OpenAiChatRequest
         {
-            Model = _settings.OpenRouterModel,
-            Messages = completionRequest.Messages.Select(ToOpenRouterMessage).ToList(),
-            Tools = completionRequest.Tools?.Select(ToOpenRouterTool).ToList(),
-            ToolChoice = ToOpenRouterToolChoice(completionRequest.ToolChoice),
+            Model = _settings.OpenAiModel,
+            Messages = completionRequest.Messages.Select(ToOpenAiMessage).ToList(),
+            Tools = completionRequest.Tools?.Select(ToOpenAiTool).ToList(),
+            ToolChoice = ToOpenAiToolChoice(completionRequest.ToolChoice),
             MaxTokens = completionRequest.MaxTokens
         };
 
         var json = JsonSerializer.Serialize(payload, JsonOptions);
         httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-        // Use ResponseHeadersRead so we can cap error bodies without buffering the entire response.
         using var response = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
 
         if (!response.IsSuccessStatusCode)
@@ -88,7 +83,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
                 errorBody += $"{Environment.NewLine}... (truncated) ...";
             }
 
-            throw new HttpRequestException($"OpenRouter request failed ({(int)response.StatusCode}): {errorBody}");
+            throw new HttpRequestException($"OpenAI request failed ({(int)response.StatusCode}): {errorBody}");
         }
 
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
@@ -104,18 +99,18 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             {
                 return new ChatCompletionResult
                 {
-                    Model = model ?? _settings.OpenRouterModel,
+                    Model = model ?? _settings.OpenAiModel,
                     Text = null,
                     ToolCalls = []
                 };
             }
 
-            var choice0 = choices[0];
-            if (!choice0.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
+            var choice = choices[0];
+            if (!choice.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
             {
                 return new ChatCompletionResult
                 {
-                    Model = model ?? _settings.OpenRouterModel,
+                    Model = model ?? _settings.OpenAiModel,
                     Text = null,
                     ToolCalls = []
                 };
@@ -162,7 +157,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             if (message.TryGetProperty("content", out var contentProp))
             {
                 rawContent = contentProp.Clone();
-                text = ExtractText(contentProp);
+                text = OpenRouterClient.ExtractText(contentProp);
             }
 
             var providerFields = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
@@ -180,7 +175,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
             return new ChatCompletionResult
             {
-                Model = model ?? _settings.OpenRouterModel,
+                Model = model ?? _settings.OpenAiModel,
                 Text = text,
                 RawMessageContent = rawContent,
                 ProviderMessageFields = providerFields.Count == 0 ? null : providerFields,
@@ -189,55 +184,91 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         }
         catch (JsonException ex)
         {
-            throw new InvalidOperationException("Failed to parse OpenRouter response JSON.", ex);
+            throw new InvalidOperationException("Failed to parse OpenAI response JSON.", ex);
         }
     }
 
-    internal static string? ExtractText(JsonElement content)
+    private static OpenAiChatMessage ToOpenAiMessage(ChatMessage msg)
     {
-        if (content.ValueKind == JsonValueKind.String)
+        var message = new OpenAiChatMessage
         {
-            return content.GetString();
+            Role = msg.Role,
+            Content = msg.ContentJson.HasValue ? msg.ContentJson.Value : msg.Content
+        };
+
+        if (string.Equals(msg.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
+            !string.IsNullOrWhiteSpace(msg.ToolCallId))
+        {
+            message.ToolCallId = msg.ToolCallId;
         }
 
-        if (content.ValueKind == JsonValueKind.Null || content.ValueKind == JsonValueKind.Undefined)
+        if (string.Equals(msg.Role, "assistant", StringComparison.OrdinalIgnoreCase) &&
+            msg.ToolCalls is { Count: > 0 })
         {
-            return null;
-        }
-
-        if (content.ValueKind == JsonValueKind.Array)
-        {
-            var sb = new StringBuilder();
-            foreach (var item in content.EnumerateArray())
+            if (!msg.ContentJson.HasValue && string.IsNullOrWhiteSpace(msg.Content))
             {
-                if (item.ValueKind != JsonValueKind.Object)
+                message.Content = null;
+            }
+
+            message.ToolCalls = msg.ToolCalls
+                .Select(tc => new OpenAiToolCall
+                {
+                    Id = tc.Id,
+                    Type = "function",
+                    Function = new OpenAiToolCallFunction { Name = tc.Name, Arguments = tc.ArgumentsJson }
+                })
+                .ToList();
+        }
+
+        if (msg.ProviderMessageFields is { Count: > 0 })
+        {
+            message.ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in msg.ProviderMessageFields)
+            {
+                if (string.Equals(kvp.Key, "role", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "content", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "tool_calls", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "tool_call_id", StringComparison.OrdinalIgnoreCase))
                 {
                     continue;
                 }
 
-                if (item.TryGetProperty("type", out var typeProp) &&
-                    typeProp.ValueKind == JsonValueKind.String &&
-                    string.Equals(typeProp.GetString(), "text", StringComparison.OrdinalIgnoreCase) &&
-                    item.TryGetProperty("text", out var textProp) &&
-                    textProp.ValueKind == JsonValueKind.String)
-                {
-                    var t = textProp.GetString();
-                    if (!string.IsNullOrWhiteSpace(t))
-                    {
-                        if (sb.Length > 0) sb.AppendLine();
-                        sb.Append(t.TrimEnd());
-                    }
-                }
+                message.ExtensionData[kvp.Key] = kvp.Value;
             }
 
-            var combined = sb.ToString().Trim();
-            return string.IsNullOrWhiteSpace(combined) ? null : combined;
+            if (message.ExtensionData.Count == 0)
+            {
+                message.ExtensionData = null;
+            }
         }
 
-        // Unknown shape: preserve as JSON text.
-        var raw = content.GetRawText();
-        return string.IsNullOrWhiteSpace(raw) ? null : raw;
+        return message;
     }
+
+    private static OpenAiTool ToOpenAiTool(ChatTool tool)
+        => new()
+        {
+            Type = "function",
+            Function = new OpenAiToolFunction
+            {
+                Name = tool.Name,
+                Description = tool.Description,
+                Parameters = tool.Parameters
+            }
+        };
+
+    private static object? ToOpenAiToolChoice(ChatToolChoice? choice)
+        => choice == null
+            ? null
+            : string.Equals(choice.Mode, "auto", StringComparison.OrdinalIgnoreCase)
+                ? "auto"
+                : string.Equals(choice.Mode, "none", StringComparison.OrdinalIgnoreCase)
+                    ? "none"
+                    : string.Equals(choice.Mode, "required", StringComparison.OrdinalIgnoreCase)
+                        ? "required"
+                        : string.Equals(choice.Mode, "function", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(choice.FunctionName)
+                            ? new { type = "function", function = new { name = choice.FunctionName } }
+                            : "auto";
 
     private static async Task<(string Text, bool Truncated)> ReadContentCappedAsync(
         HttpContent content,
@@ -258,7 +289,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             while (read < buffer.Length)
             {
                 var n = await stream.ReadAsync(buffer.AsMemory(read, buffer.Length - read), cancellationToken).ConfigureAwait(false);
-                if (n <= 0)
+                if (n == 0)
                 {
                     break;
                 }
@@ -266,154 +297,29 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             }
 
             var truncated = read > maxBytes;
-            var effective = Math.Min(read, maxBytes);
-            var text = DecodeUtf8Prefix(buffer, effective);
-            return (text, truncated);
+            if (truncated)
+            {
+                read = maxBytes;
+            }
+
+            return (Encoding.UTF8.GetString(buffer, 0, read), truncated);
         }
         catch
         {
-            // Best-effort: do not block on error-body parsing.
             return (string.Empty, false);
         }
     }
 
-    private static string DecodeUtf8Prefix(byte[] buffer, int count)
-    {
-        if (count <= 0)
-        {
-            return string.Empty;
-        }
-
-        // Avoid splitting multi-byte UTF-8 sequences by backing off a few bytes at most.
-        var encoding = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
-        var safeCount = Math.Min(count, buffer.Length);
-        for (var i = 0; i <= 4 && safeCount - i >= 0; i++)
-        {
-            try
-            {
-                return encoding.GetString(buffer, 0, safeCount - i);
-            }
-            catch (DecoderFallbackException)
-            {
-                // try again with fewer bytes
-            }
-        }
-
-        return Encoding.UTF8.GetString(buffer, 0, safeCount);
-    }
-
-    private static OpenRouterChatMessage ToOpenRouterMessage(ChatMessage message)
-    {
-        var msg = new OpenRouterChatMessage
-        {
-            Role = message.Role,
-            Content = message.ContentJson.HasValue ? message.ContentJson.Value : message.Content
-        };
-
-        if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrWhiteSpace(message.ToolCallId))
-        {
-            msg.ToolCallId = message.ToolCallId;
-        }
-
-        if (string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase) &&
-            message.ToolCalls is { Count: > 0 })
-        {
-            // OpenAI-style: assistant messages with tool_calls may omit content or set it to null.
-            if (!message.ContentJson.HasValue && string.IsNullOrWhiteSpace(message.Content))
-            {
-                msg.Content = null;
-            }
-
-            msg.ToolCalls = message.ToolCalls
-                .Select(tc => new OpenRouterToolCall
-                {
-                    Id = tc.Id,
-                    Type = "function",
-                    Function = new OpenRouterToolCallFunction
-                    {
-                        Name = tc.Name,
-                        Arguments = tc.ArgumentsJson
-                    }
-                })
-                .ToList();
-        }
-
-        if (message.ProviderMessageFields is { Count: > 0 })
-        {
-            msg.ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
-            foreach (var kvp in message.ProviderMessageFields)
-            {
-                // Avoid colliding with known OpenAI fields we already set.
-                if (string.Equals(kvp.Key, "role", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(kvp.Key, "content", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(kvp.Key, "tool_calls", StringComparison.OrdinalIgnoreCase) ||
-                    string.Equals(kvp.Key, "tool_call_id", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                msg.ExtensionData[kvp.Key] = kvp.Value;
-            }
-
-            if (msg.ExtensionData.Count == 0)
-            {
-                msg.ExtensionData = null;
-            }
-        }
-
-        return msg;
-    }
-
-    private static OpenRouterTool ToOpenRouterTool(ChatTool tool)
-        => new()
-        {
-            Type = "function",
-            Function = new OpenRouterToolFunction
-            {
-                Name = tool.Name,
-                Description = tool.Description,
-                Parameters = tool.Parameters
-            }
-        };
-
-    private static object? ToOpenRouterToolChoice(ChatToolChoice? choice)
-    {
-        if (choice == null)
-        {
-            return null;
-        }
-
-        // If a specific function name is provided, prefer the explicit OpenAI-style object.
-        // This should override generic modes like "required".
-        if (!string.IsNullOrWhiteSpace(choice.FunctionName))
-        {
-            return new
-            {
-                type = "function",
-                function = new { name = choice.FunctionName }
-            };
-        }
-
-        var mode = (choice.Mode ?? "auto").Trim().ToLowerInvariant();
-        if (mode is "auto" or "none" or "required")
-        {
-            return mode;
-        }
-
-        return "auto";
-    }
-
-    private sealed class OpenRouterChatRequest
+    private sealed class OpenAiChatRequest
     {
         [JsonPropertyName("model")]
-        public string Model { get; set; } = "openrouter/auto";
+        public string Model { get; set; } = string.Empty;
 
         [JsonPropertyName("messages")]
-        public List<OpenRouterChatMessage> Messages { get; set; } = [];
+        public List<OpenAiChatMessage> Messages { get; set; } = [];
 
         [JsonPropertyName("tools")]
-        public List<OpenRouterTool>? Tools { get; set; }
+        public List<OpenAiTool>? Tools { get; set; }
 
         [JsonPropertyName("tool_choice")]
         public object? ToolChoice { get; set; }
@@ -422,7 +328,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         public int? MaxTokens { get; set; }
     }
 
-    private sealed class OpenRouterChatMessage
+    private sealed class OpenAiChatMessage
     {
         [JsonPropertyName("role")]
         public string Role { get; set; } = "user";
@@ -434,22 +340,22 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         public string? ToolCallId { get; set; }
 
         [JsonPropertyName("tool_calls")]
-        public List<OpenRouterToolCall>? ToolCalls { get; set; }
+        public List<OpenAiToolCall>? ToolCalls { get; set; }
 
         [JsonExtensionData]
         public Dictionary<string, JsonElement>? ExtensionData { get; set; }
     }
 
-    private sealed class OpenRouterTool
+    private sealed class OpenAiTool
     {
         [JsonPropertyName("type")]
         public string Type { get; set; } = "function";
 
         [JsonPropertyName("function")]
-        public OpenRouterToolFunction Function { get; set; } = new();
+        public OpenAiToolFunction Function { get; set; } = new();
     }
 
-    private sealed class OpenRouterToolFunction
+    private sealed class OpenAiToolFunction
     {
         [JsonPropertyName("name")]
         public string Name { get; set; } = string.Empty;
@@ -461,26 +367,24 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         public JsonElement Parameters { get; set; }
     }
 
-    private sealed class OpenRouterToolCall
+    private sealed class OpenAiToolCall
     {
         [JsonPropertyName("id")]
-        public string? Id { get; set; }
+        public string Id { get; set; } = string.Empty;
 
         [JsonPropertyName("type")]
-        public string? Type { get; set; }
+        public string Type { get; set; } = "function";
 
         [JsonPropertyName("function")]
-        public OpenRouterToolCallFunction? Function { get; set; }
+        public OpenAiToolCallFunction Function { get; set; } = new();
     }
 
-    private sealed class OpenRouterToolCallFunction
+    private sealed class OpenAiToolCallFunction
     {
         [JsonPropertyName("name")]
-        public string? Name { get; set; }
+        public string Name { get; set; } = string.Empty;
 
         [JsonPropertyName("arguments")]
-        public string? Arguments { get; set; }
+        public string Arguments { get; set; } = "{}";
     }
-
-    // Response parsing uses JsonDocument to preserve provider-specific fields.
 }

@@ -62,13 +62,13 @@ dbg-mcp> report -o ./report.md
 
 ### Analysis (`help analysis`)
 - `analyze <type> -o <file>` - Run analysis and save output (e.g., `analyze crash -o ./crash.json`)
-- `analyze ai -o <file>` - AI-powered deep crash analysis (requires MCP sampling / OpenRouter config)
+- `analyze ai -o <file>` - AI-powered deep crash analysis (requires MCP sampling / LLM config)
 - `analyze perf|cpu|memory|gc|contention -o <file>` - Performance analyses (save JSON)
 - `analyze security -o <file>` - Security scan (save JSON)
 - `compare <s1> <s2>` - Compare dumps
 
 ### LLM (`help llm`)
-- `llm <prompt>` - Ask an OpenRouter-backed LLM using your CLI transcript as context
+- `llm <prompt>` - Ask a configured LLM (OpenRouter/OpenAI) using your CLI transcript as context
 - `llm set-agent <true|false>` - Enable/disable tool-using agent mode for `llm`
 - `llm reset` - Clear LLM context (conversation + transcript context) for the current session/dump
 - `llmagent` - Interactive agent mode (no `llm` prefix required)
@@ -116,10 +116,15 @@ export DEBUGGER_MCP_URL=http://localhost:5000
 export DEBUGGER_MCP_API_KEY=your-key
 export DEBUGGER_MCP_VERBOSE=true
 
-# LLM / OpenRouter (required for llm / llmagent, and for analyze ai when using the dbg-mcp CLI as the sampling client)
+# LLM provider (required for llm / llmagent, and for analyze ai when using the dbg-mcp CLI as the sampling client)
 export OPENROUTER_API_KEY="..."
+# Or:
+export OPENAI_API_KEY="..."
+
 # Optional:
+export DEBUGGER_MCP_LLM_PROVIDER="openrouter"   # or "openai"
 export OPENROUTER_MODEL="openrouter/auto"
+export OPENAI_MODEL="gpt-4o-mini"
 ```
 
 ### Config File (`~/.dbg-mcp/config.json`)

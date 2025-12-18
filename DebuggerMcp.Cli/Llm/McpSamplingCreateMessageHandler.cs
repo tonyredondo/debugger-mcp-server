@@ -5,7 +5,7 @@ using DebuggerMcp.Cli.Configuration;
 namespace DebuggerMcp.Cli.Llm;
 
 /// <summary>
-/// Handles server-initiated MCP sampling requests by calling the configured OpenRouter model.
+/// Handles server-initiated MCP sampling requests by calling the configured LLM provider.
 /// </summary>
 internal sealed class McpSamplingCreateMessageHandler(
     LlmSettings settings,
@@ -46,7 +46,7 @@ internal sealed class McpSamplingCreateMessageHandler(
         return new SamplingCreateMessageResult
         {
             Role = "assistant",
-            Model = response.Model ?? _settings.OpenRouterModel,
+            Model = response.Model ?? _settings.GetEffectiveModel(),
             Content = BuildSamplingContentBlocks(response)
         };
     }

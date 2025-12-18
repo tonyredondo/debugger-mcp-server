@@ -148,9 +148,9 @@ Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
 ### Prerequisites
 
 - The connected MCP client must support sampling with tools enabled.
-  - The Debugger MCP CLI supports this when OpenRouter is configured.
-    - Set `OPENROUTER_API_KEY` (recommended) or `DEBUGGER_MCP_OPENROUTER_API_KEY`.
-    - Optionally set `OPENROUTER_MODEL` / `DEBUGGER_MCP_OPENROUTER_MODEL`.
+  - The Debugger MCP CLI supports this when an LLM provider is configured.
+    - OpenRouter: set `OPENROUTER_API_KEY` (recommended) or `DEBUGGER_MCP_OPENROUTER_API_KEY`.
+    - OpenAI: set `OPENAI_API_KEY` (recommended) or `DEBUGGER_MCP_OPENAI_API_KEY`, then `llm provider openai`.
 
 ### Usage
 

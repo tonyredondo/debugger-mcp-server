@@ -40,7 +40,7 @@ public class AutoComplete
         ["watch"] = ["add", "list", "eval", "remove", "clear"],
         ["report"] = ["--format", "--output", "--summary", "markdown", "html", "json"],
         ["sourcelink"] = ["resolve", "info"],
-        ["llm"] = ["model", "set-key", "reset"],
+        ["llm"] = ["provider", "model", "set-key", "set-agent", "set-agent-confirm", "reset"],
         ["set"] = ["verbose", "output", "timeout", "user"],
         ["history"] = ["clear", "search"]
     };

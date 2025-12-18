@@ -1,12 +1,21 @@
 using System.Text.Json.Serialization;
+using DebuggerMcp.Cli.Llm;
 
 namespace DebuggerMcp.Cli.Configuration;
 
 /// <summary>
-/// Settings for the CLI-integrated LLM client (OpenRouter).
+/// Settings for the CLI-integrated LLM client (OpenRouter/OpenAI).
 /// </summary>
 public sealed class LlmSettings
 {
+    /// <summary>
+    /// Gets or sets the LLM provider.
+    /// </summary>
+    /// <remarks>
+    /// Supported values: <c>openrouter</c>, <c>openai</c>.
+    /// </remarks>
+    public string Provider { get; set; } = "openrouter";
+
     /// <summary>
     /// Gets or sets the OpenRouter API key.
     /// </summary>
@@ -32,6 +41,36 @@ public sealed class LlmSettings
     public string OpenRouterBaseUrl { get; set; } = "https://openrouter.ai/api/v1";
 
     /// <summary>
+    /// Gets or sets the OpenAI API key.
+    /// </summary>
+    public string? OpenAiApiKey { get; set; }
+
+    /// <summary>
+    /// Gets the OpenAI API key provided via environment variables (not persisted).
+    /// </summary>
+    [JsonIgnore]
+    public string? OpenAiApiKeyFromEnvironment { get; private set; }
+
+    /// <summary>
+    /// Gets the OpenAI API key loaded from <c>~/.codex/auth.json</c> when available (not persisted).
+    /// </summary>
+    [JsonIgnore]
+    public string? OpenAiApiKeyFromCodexAuth { get; private set; }
+
+    /// <summary>
+    /// Gets or sets the OpenAI model identifier.
+    /// </summary>
+    /// <remarks>
+    /// Example: <c>gpt-4o-mini</c>, <c>gpt-4.1-mini</c>.
+    /// </remarks>
+    public string OpenAiModel { get; set; } = "gpt-4o-mini";
+
+    /// <summary>
+    /// Gets or sets the OpenAI base URL.
+    /// </summary>
+    public string OpenAiBaseUrl { get; set; } = "https://api.openai.com/v1";
+
+    /// <summary>
     /// Gets or sets the LLM request timeout in seconds.
     /// </summary>
     public int TimeoutSeconds { get; set; } = 120;
@@ -54,6 +93,16 @@ public sealed class LlmSettings
     {
         // Reset ephemeral env-derived fields each time this runs.
         OpenRouterApiKeyFromEnvironment = null;
+        OpenAiApiKeyFromEnvironment = null;
+        OpenAiApiKeyFromCodexAuth = null;
+
+        var provider =
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_PROVIDER") ??
+            Environment.GetEnvironmentVariable("LLM_PROVIDER");
+        if (!string.IsNullOrWhiteSpace(provider))
+        {
+            Provider = provider.Trim();
+        }
 
         // Support both OpenRouter-standard and DebuggerMcp-prefixed env vars.
         var apiKey =
@@ -80,9 +129,37 @@ public sealed class LlmSettings
             OpenRouterBaseUrl = baseUrl.Trim().TrimEnd('/');
         }
 
+        var openAiApiKey =
+            Environment.GetEnvironmentVariable("OPENAI_API_KEY") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_API_KEY");
+        if (!string.IsNullOrWhiteSpace(openAiApiKey))
+        {
+            OpenAiApiKeyFromEnvironment = openAiApiKey;
+        }
+
+        var openAiModel =
+            Environment.GetEnvironmentVariable("OPENAI_MODEL") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_MODEL");
+        if (!string.IsNullOrWhiteSpace(openAiModel))
+        {
+            OpenAiModel = openAiModel.Trim();
+        }
+
+        var openAiBaseUrl =
+            Environment.GetEnvironmentVariable("OPENAI_BASE_URL") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_BASE_URL");
+        if (!string.IsNullOrWhiteSpace(openAiBaseUrl))
+        {
+            OpenAiBaseUrl = openAiBaseUrl.Trim().TrimEnd('/');
+        }
+
         var timeoutSeconds =
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_TIMEOUT_SECONDS") ??
+            Environment.GetEnvironmentVariable("LLM_TIMEOUT_SECONDS") ??
             Environment.GetEnvironmentVariable("OPENROUTER_TIMEOUT_SECONDS") ??
-            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENROUTER_TIMEOUT_SECONDS");
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENROUTER_TIMEOUT_SECONDS") ??
+            Environment.GetEnvironmentVariable("OPENAI_TIMEOUT_SECONDS") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_TIMEOUT_SECONDS");
         if (!string.IsNullOrWhiteSpace(timeoutSeconds) && int.TryParse(timeoutSeconds, out var seconds) && seconds > 0)
         {
             TimeoutSeconds = seconds;
@@ -103,6 +180,14 @@ public sealed class LlmSettings
         {
             AgentModeConfirmToolCalls = confirmEnabled;
         }
+
+        if (GetProviderKind() == LlmProviderKind.OpenAi &&
+            string.IsNullOrWhiteSpace(OpenAiApiKeyFromEnvironment) &&
+            string.IsNullOrWhiteSpace(OpenAiApiKey))
+        {
+            var overridePath = Environment.GetEnvironmentVariable("DEBUGGER_MCP_CODEX_AUTH_PATH");
+            OpenAiApiKeyFromCodexAuth = CodexAuthReader.TryReadOpenAiApiKey(overridePath);
+        }
     }
 
     /// <summary>
@@ -110,4 +195,52 @@ public sealed class LlmSettings
     /// </summary>
     public string? GetEffectiveOpenRouterApiKey()
         => OpenRouterApiKeyFromEnvironment ?? OpenRouterApiKey;
+
+    /// <summary>
+    /// Gets the effective OpenAI API key (environment overrides config; falls back to <c>~/.codex/auth.json</c> when available).
+    /// </summary>
+    public string? GetEffectiveOpenAiApiKey()
+        => OpenAiApiKeyFromEnvironment ?? OpenAiApiKey ?? OpenAiApiKeyFromCodexAuth;
+
+    public string? GetEffectiveApiKey()
+        => GetProviderKind() == LlmProviderKind.OpenAi
+            ? GetEffectiveOpenAiApiKey()
+            : GetEffectiveOpenRouterApiKey();
+
+    public string GetEffectiveApiKeySource()
+    {
+        if (GetProviderKind() == LlmProviderKind.OpenAi)
+        {
+            if (!string.IsNullOrWhiteSpace(OpenAiApiKeyFromEnvironment)) return "env";
+            if (!string.IsNullOrWhiteSpace(OpenAiApiKey)) return "config";
+            if (!string.IsNullOrWhiteSpace(OpenAiApiKeyFromCodexAuth)) return "~/.codex/auth.json";
+            return "(not set)";
+        }
+
+        if (!string.IsNullOrWhiteSpace(OpenRouterApiKeyFromEnvironment)) return "env";
+        if (!string.IsNullOrWhiteSpace(OpenRouterApiKey)) return "config";
+        return "(not set)";
+    }
+
+    public LlmProviderKind GetProviderKind()
+        => NormalizeProvider(Provider) switch
+        {
+            "openai" => LlmProviderKind.OpenAi,
+            _ => LlmProviderKind.OpenRouter
+        };
+
+    public string GetEffectiveModel()
+        => GetProviderKind() == LlmProviderKind.OpenAi ? OpenAiModel : OpenRouterModel;
+
+    public string GetProviderDisplayName()
+        => GetProviderKind() == LlmProviderKind.OpenAi ? "OpenAI" : "OpenRouter";
+
+    internal static string NormalizeProvider(string? provider)
+        => string.IsNullOrWhiteSpace(provider) ? "openrouter" : provider.Trim().ToLowerInvariant();
+}
+
+public enum LlmProviderKind
+{
+    OpenRouter = 0,
+    OpenAi = 1
 }

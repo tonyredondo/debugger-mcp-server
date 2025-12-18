@@ -9,7 +9,7 @@ A powerful command-line interface for the Debugger MCP Server, enabling remote c
 - 🔍 **Interactive Debugging**: Execute debugger commands in real-time
 - 📊 **Crash Analysis**: Automated crash analysis for native and .NET applications
 - 🤖 **AI Crash Analysis**: Deep, tool-driven analysis via MCP sampling (`analyze ai`)
-- 🧠 **LLM + Agent Mode**: OpenRouter-backed chat and tool-using agent (`llm`, `llmagent`)
+- 🧠 **LLM + Agent Mode**: OpenRouter/OpenAI chat and tool-using agent (`llm`, `llmagent`)
 - ⚡ **Performance Profiling**: CPU, memory, GC, and thread contention analysis
 - 🔐 **Security Scanning**: Detect potential vulnerabilities in crash dumps
 - 📝 **Report Generation**: Generate comprehensive reports in Markdown, HTML, and JSON
@@ -89,6 +89,23 @@ dbg-mcp> exit
 | `DEBUGGER_MCP_OPENROUTER_MODEL` | Alternate model env var | - |
 | `DEBUGGER_MCP_LLM_AGENT_MODE` | Enable agent mode by default | false |
 | `DEBUGGER_MCP_LLM_AGENT_CONFIRM` | Confirm each tool call in agent mode | true |
+| `DEBUGGER_MCP_LLM_PROVIDER` | Provider selector (`openrouter` or `openai`) | openrouter |
+| `LLM_PROVIDER` | Provider selector (alias) | - |
+
+#### LLM / OpenAI
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OPENAI_API_KEY` | OpenAI API key (recommended) | - |
+| `OPENAI_MODEL` | OpenAI model id | gpt-4o-mini |
+| `OPENAI_BASE_URL` | OpenAI base URL | https://api.openai.com/v1 |
+| `OPENAI_TIMEOUT_SECONDS` | LLM request timeout (alias) | - |
+| `DEBUGGER_MCP_OPENAI_API_KEY` | Alternate API key env var | - |
+| `DEBUGGER_MCP_OPENAI_MODEL` | Alternate model env var | - |
+| `DEBUGGER_MCP_OPENAI_BASE_URL` | Alternate base URL env var | - |
+
+Notes:
+- When provider is `openai` and no API key is configured, the CLI will try to fall back to `~/.codex/auth.json` (expects a JSON field `OPENAI_API_KEY`).
 
 ### Configuration File
 
@@ -267,15 +284,16 @@ analyze perf -o ./perf.json
 analyze security
 ```
 
-**AI analysis note**: `analyze ai` uses MCP sampling (`sampling/createMessage`). When using `dbg-mcp` as the connected MCP client, configure OpenRouter first (e.g., `OPENROUTER_API_KEY=...`).
+**AI analysis note**: `analyze ai` uses MCP sampling (`sampling/createMessage`). When using `dbg-mcp` as the connected MCP client, configure an LLM provider first (e.g., `OPENROUTER_API_KEY=...` or `OPENAI_API_KEY=...` + `llm provider openai`).
 
 ### LLM Commands
 
 | Command | Description |
 |---------|-------------|
-| `llm <prompt>` | Ask an OpenRouter-backed LLM using your CLI transcript as context |
-| `llm set-key <key>` | Persist an OpenRouter API key to `~/.dbg-mcp/config.json` |
-| `llm model <openrouter-model-id>` | Set the model |
+| `llm <prompt>` | Ask a configured LLM (OpenRouter/OpenAI) using your CLI transcript as context |
+| `llm provider <openrouter|openai>` | Switch providers |
+| `llm set-key <key>` | Persist an API key for the current provider to `~/.dbg-mcp/config.json` |
+| `llm model <model-id>` | Set the model for the current provider |
 | `llm set-agent <true|false>` | Enable/disable tool-using agent mode for `llm` |
 | `llm set-agent-confirm <true|false>` | Confirm each tool call in agent mode |
 | `llm reset` | Clear LLM context (conversation + transcript context) for the current session/dump |
