@@ -56,6 +56,7 @@ public class TranscriptContextBuilderTests
         Assert.Contains("Agent mode is enabled", messages[0].Content);
         Assert.Contains("confirm", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Tooling:", messages[0].Content);
+        Assert.Contains("primary objective", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("CALL THE TOOL", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do not format tool commands as bash", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("prefer this over exec \"sos dumpobj\"", messages[0].Content, StringComparison.OrdinalIgnoreCase);
