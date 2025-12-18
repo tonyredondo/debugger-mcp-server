@@ -623,48 +623,6 @@ public class MarkdownReportGeneratorTests
     }
 
     // ============================================================
-    // Raw Output Section Tests
-    // ============================================================
-
-    [Fact]
-    public void Generate_WithRawOutput_IncludesRawOutput()
-    {
-        // Arrange
-        var analysis = CreateMinimalAnalysis();
-        analysis.RawCommands = new Dictionary<string, string>
-        {
-            ["k"] = "Stack trace output here"
-        };
-        var options = new ReportOptions { IncludeRawOutput = true };
-
-        // Act
-        var result = _generator.Generate(analysis, options, _metadata);
-
-        // Assert
-        Assert.Contains("Raw Debugger Output", result);
-        Assert.Contains("Stack trace output here", result);
-    }
-
-    [Fact]
-    public void Generate_WithLongRawOutput_TruncatesOutput()
-    {
-        // Arrange
-        var analysis = CreateMinimalAnalysis();
-        var longOutput = new string('x', 10000);
-        analysis.RawCommands = new Dictionary<string, string>
-        {
-            ["test"] = longOutput
-        };
-        var options = new ReportOptions { IncludeRawOutput = true };
-
-        // Act
-        var result = _generator.Generate(analysis, options, _metadata);
-
-        // Assert
-        Assert.Contains("truncated", result);
-    }
-
-    // ============================================================
     // Helper Methods
     // ============================================================
 
@@ -674,8 +632,7 @@ public class MarkdownReportGeneratorTests
         {
             Summary = new AnalysisSummary { Description = "Test crash analysis" },
             Threads = new ThreadsInfo { All = new List<ThreadInfo>() },
-            Modules = new List<ModuleInfo>(),
-            RawCommands = new Dictionary<string, string>()
+            Modules = new List<ModuleInfo>()
         };
     }
 }

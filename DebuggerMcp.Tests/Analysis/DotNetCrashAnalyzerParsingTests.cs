@@ -71,7 +71,6 @@ public class DotNetCrashAnalyzerParsingTests
             Threads = new ThreadsInfo { All = new List<ThreadInfo>(), Summary = new ThreadSummary() },
             Memory = new MemoryInfo { LeakAnalysis = new LeakAnalysis(), HeapStats = new Dictionary<string, long>() },
             Async = new AsyncInfo(),
-            RawCommands = new Dictionary<string, string>()
         };
     }
 

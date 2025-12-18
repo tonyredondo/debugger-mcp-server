@@ -48,8 +48,8 @@ public class CrashAnalyzerParsingTests
         public Task TestAnalyzeMemoryLeaksLldbAsync(CrashAnalysisResult result)
             => AnalyzeMemoryLeaksLldbAsync(result);
 
-        public Task TestAnalyzeDeadlocksLldbAsync(CrashAnalysisResult result)
-            => AnalyzeDeadlocksLldbAsync(result);
+        public Task TestAnalyzeDeadlocksLldbAsync(CrashAnalysisResult result, string threadBacktraces)
+            => AnalyzeDeadlocksLldbAsync(result, threadBacktraces);
 
         public void TestDetectPlatformInfo(string modulesOutput, CrashAnalysisResult result)
             => DetectPlatformInfo(modulesOutput, result);
@@ -74,8 +74,7 @@ public class CrashAnalyzerParsingTests
             Environment = new EnvironmentInfo(),
             Threads = new ThreadsInfo { All = new List<ThreadInfo>(), Summary = new ThreadSummary() },
             Memory = new MemoryInfo(),
-            Modules = new List<ModuleInfo>(),
-            RawCommands = new Dictionary<string, string>()
+            Modules = new List<ModuleInfo>()
         };
     }
 
@@ -209,14 +208,14 @@ arm64
         var analyzer = new TestableCrashAnalyzer(mockManager.Object);
 
         var result = CreateInitializedResult();
-        result.RawCommands!["bt all"] =
+        var btAll =
             "* thread #1\n" +
             "  frame #0: 0x00000000 0xDEADBEEF pthread_mutex_lock\n" +
             "  frame #1: 0x00000000 something\n" +
             "thread #2\n" +
             "  frame #0: 0x00000000 0xCAFEBABE semaphore_wait\n";
 
-        await analyzer.TestAnalyzeDeadlocksLldbAsync(result);
+        await analyzer.TestAnalyzeDeadlocksLldbAsync(result, btAll);
 
         Assert.NotNull(result.Threads!.Deadlock);
         Assert.True(result.Threads.Deadlock!.Detected);

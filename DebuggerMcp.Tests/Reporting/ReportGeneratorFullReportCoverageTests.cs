@@ -55,7 +55,6 @@ public class ReportGeneratorFullReportCoverageTests
         Assert.Contains("Top Memory Consumers", report);
         Assert.Contains("String Duplicate Analysis", report);
         Assert.Contains("Security", report);
-        Assert.Contains("Raw Debugger Output", report);
     }
 
     [Fact]
@@ -100,7 +99,6 @@ public class ReportGeneratorFullReportCoverageTests
         Assert.Contains("Top Memory Consumers", report);
         Assert.Contains("String Duplicate Analysis", report);
         Assert.Contains("Security", report);
-        Assert.Contains("Raw Debugger Output", report);
     }
 
     private static ReportMetadata CreateMetadata()
@@ -474,11 +472,6 @@ public class ReportGeneratorFullReportCoverageTests
                 },
                 Recommendations = new List<string> { "Upgrade vulnerable dependencies" }
             },
-            RawCommands = new Dictionary<string, string>
-            {
-                ["!clrstack"] = "<raw output>",
-                ["!dumpheap -stat"] = "<raw output>"
-            }
         };
     }
 

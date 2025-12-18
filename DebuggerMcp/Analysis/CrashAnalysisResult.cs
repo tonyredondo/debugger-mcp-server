@@ -96,13 +96,6 @@ public class CrashAnalysisResult
     public WatchEvaluationReport? Watches { get; set; }
 
     /// <summary>
-    /// Raw debugger command outputs.
-    /// </summary>
-    [JsonPropertyName("rawCommands")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.Always)]
-    public Dictionary<string, string>? RawCommands { get; set; }
-
-    /// <summary>
     /// Deterministic signature for deduplicating similar reports.
     /// </summary>
     [JsonPropertyName("signature")]

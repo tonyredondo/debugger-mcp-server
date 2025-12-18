@@ -109,11 +109,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 return;
             }
 
-            // Store raw result for debugging
-            result.RawCommands ??= new Dictionary<string, string>();
-            result.RawCommands["clrmd_clrstack"] = System.Text.Json.JsonSerializer.Serialize(clrStackResult,
-                new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-
             // Ensure thread containers exist
             result.Threads ??= new ThreadsInfo();
             result.Threads.All ??= new List<ThreadInfo>();
@@ -942,7 +937,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Continue with .NET specific analysis
             // Get CLR version
             var clrVersionOutput = await ExecuteCommandAsync("!eeversion");
-            result.RawCommands!["!eeversion"] = clrVersionOutput;
             ParseClrVersion(clrVersionOutput, result);
 
             // Native stacks from bt all are already parsed by base AnalyzeCrashAsync()
@@ -973,7 +967,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // -all: all threads
             // -a: include arguments and locals
                 var clrStackFullOutput = await ExecuteCommandAsync("clrstack -a -r -all");
-                result.RawCommands!["clrstack -a -r -all"] = clrStackFullOutput;
                 
                 // Parse managed frames and append to existing native frames
                 ParseFullCallStacksAllThreads(clrStackFullOutput, result, appendToExisting: true);
@@ -989,7 +982,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             // Get managed exception with nested exceptions for full exception chain
             // Use !pe -nested which works on WinDbg as-is and gets transformed for LLDB
             var exceptionOutput = await ExecuteCommandAsync("!pe -nested");
-            result.RawCommands!["!pe -nested"] = exceptionOutput;
             ParseManagedException(exceptionOutput, result);
             
             // Deep analysis of the exception object (gets Source, Data, FusionLog, etc.)
@@ -1007,7 +999,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
             // Get heap statistics
             var heapStatsOutput = await ExecuteCommandAsync("!dumpheap -stat");
-            result.RawCommands!["!dumpheap -stat"] = heapStatsOutput;
             ParseHeapStats(heapStatsOutput, result);
 
             // Enhanced memory leak detection for .NET
@@ -1015,7 +1006,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
             // Get detailed CLR thread information
             var clrThreadsOutput = await ExecuteCommandAsync("!clrthreads");
-            result.RawCommands!["!clrthreads"] = clrThreadsOutput;
             ParseClrThreads(clrThreadsOutput, result);
 
             // Check for async deadlocks (use clrthreads output)
@@ -1023,35 +1013,29 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
             // Get finalizer queue
             var finalizerOutput = await ExecuteCommandAsync("!finalizequeue");
-            result.RawCommands!["!finalizequeue"] = finalizerOutput;
             ParseFinalizerQueue(finalizerOutput, result);
 
             // Enhanced deadlock detection using !syncblk
-            await AnalyzeDotNetDeadlocksAsync(result);
+            await AnalyzeDotNetDeadlocksAsync(result, clrThreadsOutput);
             
             // Get thread pool information
             var threadPoolOutput = await ExecuteCommandAsync("!threadpool");
-            result.RawCommands!["!threadpool"] = threadPoolOutput;
             ParseThreadPool(threadPoolOutput, result);
             
             // Get timer information
             var timerInfoOutput = await ExecuteCommandAsync("!ti");
-            result.RawCommands!["!ti"] = timerInfoOutput;
             ParseTimerInfo(timerInfoOutput, result);
 
             // Analyze OOM (Out of Memory) conditions
             var analyzeOomOutput = await ExecuteCommandAsync("!analyzeoom");
-            result.RawCommands!["!analyzeoom"] = analyzeOomOutput;
             ParseAnalyzeOom(analyzeOomOutput, result);
 
             // Get crash diagnostic info (signals, exception records)
             var crashInfoOutput = await ExecuteCommandAsync("!crashinfo");
-            result.RawCommands!["!crashinfo"] = crashInfoOutput;
             ParseCrashInfo(crashInfoOutput, result);
 
             // Get loaded assemblies with version info (helps diagnose MissingMethodException, etc.)
             var dumpDomainOutput = await ExecuteCommandAsync("!dumpdomain");
-            result.RawCommands!["!dumpdomain"] = dumpDomainOutput;
             ParseAssemblyVersions(dumpDomainOutput, result);
             EnrichAssemblyInfo(result);
             
@@ -1353,7 +1337,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             // Use ClrMD-based dumpobj to inspect the exception object
             var dumpOutput = await DumpObjectViaClrMdAsync(address);
-            result.RawCommands![$"ClrMD:InspectObject({address})"] = dumpOutput;
             
             if (IsSosErrorOutput(dumpOutput)) return;
             
@@ -1453,7 +1436,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// Gets a string value from an object address using ClrMD-based dumpobj.
     /// Handles both single-line and multi-line string values.
     /// </summary>
-    private async Task<string?> GetStringValueAsync(string address, Dictionary<string, string>? rawCommands = null)
+    private async Task<string?> GetStringValueAsync(string address)
     {
         if (IsNullAddress(address))
         {
@@ -1463,12 +1446,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         try
         {
             var output = await DumpObjectViaClrMdAsync(address);
-            
-            // Store command output if rawCommands provided
-            if (rawCommands != null)
-            {
-                rawCommands[$"ClrMD:InspectObject({address})"] = output;
-            }
             
             // Look for the String: line which contains the actual string value
             // Format: String:          Method not found: '...'
@@ -1896,7 +1873,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             // Get the exception object details (using ClrMD-based dumpobj)
             var dumpOutput = await DumpObjectViaClrMdAsync(analysis.ExceptionAddress);
-            result.RawCommands![$"ClrMD:InspectObject({analysis.ExceptionAddress})"] = dumpOutput;
             if (IsSosErrorOutput(dumpOutput)) return;
             
             // FileNotFoundException / FileLoadException
@@ -3178,7 +3154,8 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// Analyzes for .NET-specific deadlocks using !syncblk.
     /// </summary>
     /// <param name="result">The result to populate.</param>
-    protected async Task AnalyzeDotNetDeadlocksAsync(CrashAnalysisResult result)
+    /// <param name="clrThreadsOutput">Optional cached output from <c>!clrthreads</c>.</param>
+    protected async Task AnalyzeDotNetDeadlocksAsync(CrashAnalysisResult result, string? clrThreadsOutput)
     {
         // Initialize if not already done by base class
         result.Threads ??= new ThreadsInfo { All = new List<ThreadInfo>(), Summary = new ThreadSummary() };
@@ -3186,7 +3163,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
         // Get sync block information (monitors/locks)
         var syncBlkOutput = await ExecuteCommandAsync("!syncblk");
-        result.RawCommands!["!syncblk"] = syncBlkOutput;
 
         // Parse sync blocks
         // Format: "Index SyncBlock MonitorHeld Recursion Owning Thread Info  SyncBlock Owner"
@@ -3220,7 +3196,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
         // Look for threads waiting to enter monitors
         // Check !threads output for "Lock" or "Wait" state
-        var threadsOutput = result.RawCommands?.GetValueOrDefault("!clrthreads", "") ?? "";
+        var threadsOutput = !string.IsNullOrWhiteSpace(clrThreadsOutput)
+            ? clrThreadsOutput
+            : await ExecuteCommandAsync("!clrthreads");
         var waitingThreadMatches = Regex.Matches(threadsOutput, 
             @"(\d+)\s+(\d+)\s+([0-9a-f]+).*?(Wait|Lock|Preemptive)",
             RegexOptions.IgnoreCase);
@@ -4362,7 +4340,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Fourth pass: resolve string values using ClrMD
         if (stringAddresses.Count > 0)
         {
-            var stringValues = await ResolveStringValuesAsync(stringAddresses, result.RawCommands);
+            var stringValues = await ResolveStringValuesAsync(stringAddresses);
             
             // Apply resolved string values to variables (updates value to actual string content)
             foreach (var thread in result.Threads.All)
@@ -5107,8 +5085,7 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
     /// Resolves string values by calling ClrMD InspectObject on each address.
     /// </summary>
     private async Task<Dictionary<string, string>> ResolveStringValuesAsync(
-        HashSet<string> addresses, 
-        Dictionary<string, string>? rawCommands = null)
+        HashSet<string> addresses)
     {
         var results = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         
@@ -5117,12 +5094,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             try
             {
                 var output = await DumpObjectViaClrMdAsync(address);
-                
-                // Store the command output
-                if (rawCommands != null)
-                {
-                    rawCommands[$"ClrMD:InspectObject({address})"] = output;
-                }
                 
                 // Parse the string value from ClrMD output
                 var stringValue = ExtractStringFromDumpObj(output);
@@ -5927,16 +5898,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 _logger?.LogInformation("Datadog symbols prepared: {Message}", prepResult.Message);
 
-                // Add metadata to the result indicating symbols were loaded
-                result.RawCommands ??= new Dictionary<string, string>();
-                result.RawCommands["__datadog_symbols_status"] = prepResult.Message ?? "Datadog symbols loaded";
-
-                // Add build URL if available
-                if (prepResult.DownloadResult?.BuildUrl != null)
-                {
-                    result.RawCommands["__datadog_build_url"] = prepResult.DownloadResult.BuildUrl;
-                }
-
                 // Mark Datadog assemblies with symbol download info
                 EnrichDatadogAssembliesWithSymbolInfo(result, prepResult);
             }
@@ -6119,8 +6080,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             if (_clrMdAnalyzer?.IsOpen == true)
             {
                 var name2eeResult = _clrMdAnalyzer.Name2EE(sanitizedTypeName);
-                result.RawCommands![$"ClrMD:Name2EE({sanitizedTypeName})"] = 
-                    System.Text.Json.JsonSerializer.Serialize(name2eeResult, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
                 
                 if (name2eeResult.FoundType != null)
                 {
@@ -6146,7 +6105,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Get all methods from the MethodTable
                 var dumpmtCmd = $"!dumpmt -md {analysis.MethodTable}";
                 var dumpmtOutput = await ExecuteCommandAsync(dumpmtCmd);
-                result.RawCommands![dumpmtCmd] = dumpmtOutput;
                 
                 // Parse method descriptors
                 var allMethods = ParseMethodDescriptors(dumpmtOutput);
@@ -6285,7 +6243,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         // Search for any instantiation of this generic type
         var heapCmd = $"!dumpheap -stat -type {shortTypeName}";
         var heapOutput = await ExecuteCommandAsync(heapCmd);
-        result.RawCommands![heapCmd] = heapOutput;
         
         // Parse the heap output to find a MethodTable for any instantiation
         // Format: MT    Count    TotalSize Class Name
@@ -6309,7 +6266,6 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 // Get methods from this concrete instantiation
                 var dumpmtHeapCmd = $"!dumpmt -md {foundMt}";
                 var dumpmtOutput = await ExecuteCommandAsync(dumpmtHeapCmd);
-                result.RawCommands![dumpmtHeapCmd] = dumpmtOutput;
                 
                 var allMethods = ParseMethodDescriptors(dumpmtOutput);
                 var totalMethodCount = allMethods.Count;
@@ -6734,18 +6690,17 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         };
         
         // 1. Check for JIT compiler presence (NativeAOT apps don't have clrjit)
-        // Try both LLDB and WinDbg key formats
-        var modulesOutput = result.RawCommands?.TryGetValue("image list", out var mod) == true ? mod 
-                          : result.RawCommands?.TryGetValue("lm", out mod) == true ? mod 
-                          : null;
+        var modulesOutput = (result.Modules != null && result.Modules.Count > 0)
+            ? string.Join('\n', result.Modules.Select(m => m.Name))
+            : null;
+
         if (string.IsNullOrEmpty(modulesOutput))
         {
-            // Try to get modules list
-            modulesOutput = await ExecuteCommandAsync("image list");
-            if (!string.IsNullOrEmpty(modulesOutput))
-            {
-                result.RawCommands!["image list"] = modulesOutput;
-            }
+            // Fall back to querying the debugger if the parsed module list is unavailable.
+            var cmd = string.Equals(_debuggerManager.DebuggerType, "WinDbg", StringComparison.OrdinalIgnoreCase)
+                ? "lm"
+                : "image list";
+            modulesOutput = await ExecuteCommandAsync(cmd);
         }
         
         analysis.HasJitCompiler = HasJitCompiler(modulesOutput ?? string.Empty);

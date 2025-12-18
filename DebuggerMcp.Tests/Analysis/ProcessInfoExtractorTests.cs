@@ -556,10 +556,8 @@ public class ProcessInfoExtractorTests
         mockDebugger.Setup(d => d.ExecuteCommand("expr -- (char*)0x0000ffffefcb1110"))
             .Returns("(char *) $4 = 0x0000ffffefcb1110 \"PATH=/usr/bin\"");
 
-        var rawCommands = new Dictionary<string, string>();
-
         // Act
-        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null, backtraceOutput: null, rawCommands);
+        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null, backtraceOutput: null);
 
         // Assert
         Assert.NotNull(result);
@@ -570,8 +568,8 @@ public class ProcessInfoExtractorTests
         Assert.Contains("DD_API_KEY=<redacted>", result.EnvironmentVariables);
         Assert.Contains("PATH=/usr/bin", result.EnvironmentVariables);
 
-        Assert.Contains("memory region --all (for stack scan)", rawCommands.Keys);
-        Assert.Contains("memory read (pointer scan)", rawCommands.Keys);
+        mockDebugger.Verify(d => d.ExecuteCommand("memory region --all"), Times.Once);
+        mockDebugger.Verify(d => d.ExecuteCommand(It.Is<string>(s => s.StartsWith("memory read --force -fx", StringComparison.Ordinal))), Times.AtLeastOnce);
     }
 
     [Fact]
@@ -605,10 +603,8 @@ public class ProcessInfoExtractorTests
                 "44 44 5f 41 50 49 5f 4b 45 59 3d 73 65 63 72 65 74 00 " + // DD_API_KEY=secret\0
                 "50 41 54 48 3d 2f 75 73 72 2f 62 69 6e 00 \n"); // PATH=/usr/bin\0 (note trailing space for regex)
 
-        var rawCommands = new Dictionary<string, string>();
-
         // Act
-        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null, backtraceOutput: null, rawCommands);
+        var result = await _extractor.ExtractProcessInfoAsync(mockDebugger.Object, platformInfo: null, backtraceOutput: null);
 
         // Assert
         Assert.NotNull(result);
@@ -619,7 +615,7 @@ public class ProcessInfoExtractorTests
         Assert.Contains("DD_API_KEY=<redacted>", result.EnvironmentVariables);
         Assert.Contains("PATH=/usr/bin", result.EnvironmentVariables);
 
-        Assert.Contains("memory read (string scan)", rawCommands.Keys);
+        mockDebugger.Verify(d => d.ExecuteCommand(It.Is<string>(s => s.StartsWith("memory read --force -c", StringComparison.Ordinal))), Times.AtLeastOnce);
     }
 
     [Fact]

@@ -200,7 +200,6 @@ public class DotNetCrashAnalyzerEndToEndTests
             Assert.NotNull(result.Environment);
             Assert.NotNull(result.Threads);
             Assert.NotNull(result.Memory);
-            Assert.NotNull(result.RawCommands);
 
             // Process info extraction should run and redact sensitive env vars.
             Assert.NotNull(result.Environment.Process);
@@ -297,8 +296,8 @@ public class DotNetCrashAnalyzerEndToEndTests
             Assert.Equal("System.Collections.Concurrent.ConcurrentDictionary`2", result.Exception.Analysis.TypeResolution!.FailedType);
             Assert.True(result.Exception.Analysis.TypeResolution.MethodFound);
 
-            Assert.Contains(heapCmd, result.RawCommands!.Keys);
-            Assert.Contains(dumpmtCmd, result.RawCommands!.Keys);
+            Assert.Contains(heapCmd, manager.ExecutedCommands);
+            Assert.Contains(dumpmtCmd, manager.ExecutedCommands);
 
             CrashAnalysisResultContract.AssertValid(result);
 

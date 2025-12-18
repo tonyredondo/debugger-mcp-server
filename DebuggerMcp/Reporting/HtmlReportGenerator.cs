@@ -173,13 +173,6 @@ public class HtmlReportGenerator : IReportGenerator
             AppendRecommendations(sb, analysis);
         }
 
-        // Raw Output - use new structure if available
-        var rawOutput = analysis.RawCommands ?? new Dictionary<string, string>();
-        if (options.IncludeRawOutput && rawOutput.Any())
-        {
-            AppendRawOutput(sb, analysis);
-        }
-
         // Footer
         AppendFooter(sb, metadata);
 
@@ -1835,23 +1828,6 @@ footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border
         {
             sb.AppendLine($"<div class=\"recommendation\">{HttpUtility.HtmlEncode(rec)}</div>");
         }
-        sb.AppendLine("</div>");
-    }
-
-    private static void AppendRawOutput(StringBuilder sb, CrashAnalysisResult analysis)
-    {
-        sb.AppendLine("<h2>📝 Raw Debugger Output</h2>");
-        sb.AppendLine("<div class=\"card\">");
-        sb.AppendLine("<p class=\"dim\">Raw output from debugger commands (for advanced troubleshooting)</p>");
-
-        // Use new structure if available
-        var rawOutput = analysis.RawCommands ?? new Dictionary<string, string>();
-        foreach (var (command, output) in rawOutput)
-        {
-            sb.AppendLine($"<h3><code>{HttpUtility.HtmlEncode(command)}</code></h3>");
-            sb.AppendLine($"<pre class=\"code-block\">{HttpUtility.HtmlEncode(output)}</pre>");
-        }
-
         sb.AppendLine("</div>");
     }
 

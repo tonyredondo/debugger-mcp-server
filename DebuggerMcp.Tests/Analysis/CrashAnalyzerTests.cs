@@ -31,7 +31,6 @@ public class CrashAnalyzerTests
         // Assert
         Assert.NotNull(result);
         Assert.NotNull(result.Summary);
-        Assert.NotNull(result.RawCommands);
     }
 
     /// <summary>
@@ -144,7 +143,6 @@ public class CrashAnalyzerTests
 
         // Act
         var result = await analyzer.AnalyzeCrashAsync();
-        result.RawCommands = new Dictionary<string, string> { ["bt all"] = "output" };
         var json = System.Text.Json.JsonSerializer.Serialize(result);
 
         // Assert
@@ -290,7 +288,6 @@ CritSec module!SomeLock at 0000000077c8c440
         var result = await analyzer.AnalyzeCrashAsync();
 
         // Assert
-        mockManager.Verify(m => m.ExecuteCommand("process status"), Times.Once);
         // memory region --all is called at least once (CrashAnalyzer), and possibly twice
         // if ProcessInfoExtractor uses stack scan fallback
         mockManager.Verify(m => m.ExecuteCommand("memory region --all"), Times.AtLeastOnce);

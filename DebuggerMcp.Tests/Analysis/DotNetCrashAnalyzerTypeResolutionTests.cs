@@ -58,8 +58,7 @@ Entry       MethodDesc    JIT     Slot      Name
             {
                 Type = "System.MissingMethodException",
                 Message = "Method not found: 'System.Boolean System.Collections.Concurrent.ConcurrentDictionary`2.TryGetValue(!0, !1 ByRef)'"
-            },
-            RawCommands = new Dictionary<string, string>()
+            }
         };
 
         // Act
@@ -77,8 +76,7 @@ Entry       MethodDesc    JIT     Slot      Name
         Assert.NotNull(analysis.ActualMethods);
         Assert.Contains(analysis.ActualMethods!, m => m.Name == "TryGetValue");
 
-        Assert.Contains(result.RawCommands!, kvp => kvp.Key == heapCmd);
-        Assert.Contains(result.RawCommands!, kvp => kvp.Key == dumpmtCmd);
+        mockManager.Verify(m => m.ExecuteCommand(heapCmd), Times.Once);
+        mockManager.Verify(m => m.ExecuteCommand(dumpmtCmd), Times.Once);
     }
 }
-

@@ -106,7 +106,6 @@ public class CrashAnalyzer
         result.Threads = new ThreadsInfo { All = new List<ThreadInfo>(), Summary = new ThreadSummary() };
         result.Memory = new MemoryInfo();
         result.Modules = new List<ModuleInfo>();
-        result.RawCommands = new Dictionary<string, string>();
     }
 
     /// <summary>
@@ -117,22 +116,18 @@ public class CrashAnalyzer
     {
         // Get exception information
         var exceptionOutput = await ExecuteCommandAsync("!analyze -v");
-        result.RawCommands!["!analyze -v"] = exceptionOutput;
         ParseWinDbgException(exceptionOutput, result);
 
         // Get thread information first (so we know which thread is current)
         var threadsOutput = await ExecuteCommandAsync("~");
-        result.RawCommands!["~"] = threadsOutput;
         ParseWinDbgThreads(threadsOutput, result);
 
         // Get all threads' backtraces
         var allBacktraces = await ExecuteCommandAsync("~*k");
-        result.RawCommands!["~*k"] = allBacktraces;
         ParseWinDbgBacktraceAll(allBacktraces, result);
 
         // Get module information
         var modulesOutput = await ExecuteCommandAsync("lm");
-        result.RawCommands!["lm"] = modulesOutput;
         ParseWinDbgModules(modulesOutput, result);
 
         // Analyze for memory leaks
@@ -156,18 +151,15 @@ public class CrashAnalyzer
     {
         // Get thread information
         var threadsOutput = await ExecuteCommandAsync("thread list");
-        result.RawCommands!["thread list"] = threadsOutput;
         ParseLldbThreads(threadsOutput, result);
 
         // Get all threads' backtraces
         var backtraceAllOutput = await ExecuteCommandAsync("bt all");
         var cleanedBacktrace = CleanLldbOutput(backtraceAllOutput);
-        result.RawCommands!["bt all"] = cleanedBacktrace;
         ParseLldbBacktraceAll(backtraceAllOutput, result);
 
         // Get module information
         var modulesOutput = await ExecuteCommandAsync("image list");
-        result.RawCommands!["image list"] = modulesOutput;
         ParseLldbModules(modulesOutput, result);
 
         // Detect platform info from modules
@@ -181,7 +173,7 @@ public class CrashAnalyzer
         await AnalyzeMemoryLeaksLldbAsync(result);
 
         // Analyze for deadlocks
-        await AnalyzeDeadlocksLldbAsync(result);
+        await AnalyzeDeadlocksLldbAsync(result, backtraceAllOutput);
 
         // Resolve Source Link URLs for stack frames
         ResolveSourceLinks(result);
@@ -1261,8 +1253,7 @@ public class CrashAnalyzer
             var processInfo = await extractor.ExtractProcessInfoAsync(
                 _debuggerManager,
                 result.Environment?.Platform,
-                backtraceOutput,
-                result.RawCommands);
+                backtraceOutput);
             
             if (processInfo != null)
             {
@@ -1280,11 +1271,6 @@ public class CrashAnalyzer
         {
             _crashAnalyzerLogger?.LogError(ex, "ProcessInfoExtractor: Exception during extraction");
             // Don't fail the entire analysis - this is optional enrichment.
-            // Store the error in raw commands for debugging
-            if (result.RawCommands != null)
-            {
-                result.RawCommands["[ProcessInfoExtractor.Error]"] = ex.Message;
-            }
         }
     }
 
@@ -1296,7 +1282,6 @@ public class CrashAnalyzer
     {
         // Get heap summary using !heap -s
         var heapOutput = await ExecuteCommandAsync("!heap -s");
-        result.RawCommands!["!heap -s"] = heapOutput;
 
         // Initialize leak analysis in the new structure
         result.Memory!.LeakAnalysis = new LeakAnalysis();
@@ -1336,7 +1321,6 @@ public class CrashAnalyzer
 
         // Get heap statistics for top consumers
         var heapStatOutput = await ExecuteCommandAsync("!heap -stat -h 0");
-        result.RawCommands!["!heap -stat -h 0"] = heapStatOutput;
 
         // Parse top allocators - format varies, look for size/count patterns
         result.Memory.LeakAnalysis.TopConsumers ??= new List<MemoryConsumer>();
@@ -1364,7 +1348,6 @@ public class CrashAnalyzer
     {
         // Get lock information using !locks
         var locksOutput = await ExecuteCommandAsync("!locks");
-        result.RawCommands!["!locks"] = locksOutput;
 
         // Initialize deadlock info in the new structure
         result.Threads!.Deadlock = new DeadlockInfo();
@@ -1407,7 +1390,6 @@ public class CrashAnalyzer
         {
             // Multiple threads holding locks - potential for deadlock
             var waitingOutput = await ExecuteCommandAsync("!runaway");
-            result.RawCommands!["!runaway"] = waitingOutput;
 
             // Look for threads with high wait times
             var waitMatches = Regex.Matches(waitingOutput, @"(\d+):([0-9a-f]+)\s+(\d+)\s+days?\s+(\d+):(\d+):(\d+)", RegexOptions.IgnoreCase);
@@ -1449,13 +1431,8 @@ public class CrashAnalyzer
         // Initialize leak analysis in the new structure
         result.Memory!.LeakAnalysis = new LeakAnalysis();
 
-        // Get process memory info
-        var processInfoOutput = await ExecuteCommandAsync("process status");
-        result.RawCommands!["process status"] = processInfoOutput;
-
         // Try to get memory regions (may not be available in all dumps)
         var memoryOutput = await ExecuteCommandAsync("memory region --all");
-        result.RawCommands!["memory region --all"] = memoryOutput;
 
         // Parse memory regions for total allocated
         // Format: "[0x00000000-0x00001000) r-x ..."
@@ -1498,17 +1475,12 @@ public class CrashAnalyzer
     /// Analyzes for deadlocks using LLDB commands.
     /// </summary>
     /// <param name="result">The result object to populate.</param>
-    protected virtual async Task AnalyzeDeadlocksLldbAsync(CrashAnalysisResult result)
+    /// <param name="threadBacktraces">The output from an all-threads backtrace command (e.g., <c>bt all</c>).</param>
+    protected virtual async Task AnalyzeDeadlocksLldbAsync(CrashAnalysisResult result, string threadBacktraces)
     {
         // Initialize deadlock info in the new structure
         result.Threads!.Deadlock = new DeadlockInfo();
         var deadlockInfo = result.Threads.Deadlock;
-
-        // Get detailed thread info with backtraces (all threads)
-        // Use actual command as key: "bt all" for LLDB, "~*k" for WinDbg
-        var rawCommands = result.RawCommands ?? new Dictionary<string, string>();
-        var threadBacktraces = rawCommands.GetValueOrDefault("bt all",
-                               rawCommands.GetValueOrDefault("~*k", ""));
 
         // Look for threads waiting on locks
         // Common patterns: pthread_mutex_lock, __psynch_mutexwait, semaphore_wait

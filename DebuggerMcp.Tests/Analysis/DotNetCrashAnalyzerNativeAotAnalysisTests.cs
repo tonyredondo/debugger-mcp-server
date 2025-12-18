@@ -23,6 +23,7 @@ public class DotNetCrashAnalyzerNativeAotAnalysisTests
         public string DebuggerType { get; } = debuggerType;
         public bool IsSosLoaded { get; private set; }
         public bool IsDotNetDump { get; private set; }
+        public List<string> ExecutedCommands { get; } = new();
 
         public Task InitializeAsync()
         {
@@ -45,6 +46,7 @@ public class DotNetCrashAnalyzerNativeAotAnalysisTests
 
         public string ExecuteCommand(string command)
         {
+            ExecutedCommands.Add(command);
             return outputs.TryGetValue(command, out var output) ? output : string.Empty;
         }
 
@@ -68,7 +70,7 @@ public class DotNetCrashAnalyzerNativeAotAnalysisTests
 
         var result = new CrashAnalysisResult
         {
-            RawCommands = new Dictionary<string, string>(),
+            Modules = new List<ModuleInfo>(),
             Threads = new ThreadsInfo
             {
                 All = new List<ThreadInfo>
@@ -97,7 +99,7 @@ public class DotNetCrashAnalyzerNativeAotAnalysisTests
 
         await analyzer.RunAnalyzeNativeAotAsync(result);
 
-        Assert.True(result.RawCommands!.ContainsKey("image list"));
+        Assert.Contains("image list", manager.ExecutedCommands);
         Assert.NotNull(result.Environment);
         Assert.NotNull(result.Environment!.NativeAot);
         Assert.True(result.Environment.NativeAot!.IsNativeAot);
@@ -116,10 +118,11 @@ public class DotNetCrashAnalyzerNativeAotAnalysisTests
 
         var result = new CrashAnalysisResult
         {
-            RawCommands = new Dictionary<string, string>
+            Modules = new List<ModuleInfo>
             {
                 // Missing coreclr triggers an absence indicator that should be filtered when JIT is present.
-                ["image list"] = "clrjit\nRuntime.WorkstationGC\n"
+                new() { Name = "clrjit" },
+                new() { Name = "Runtime.WorkstationGC" }
             },
             Threads = new ThreadsInfo
             {
@@ -159,4 +162,3 @@ public class DotNetCrashAnalyzerNativeAotAnalysisTests
         Assert.DoesNotContain(nativeAot.Indicators!, i => i.Source == "module:absence");
     }
 }
-

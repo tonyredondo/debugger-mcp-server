@@ -120,13 +120,11 @@ public class ProcessInfoExtractor
     /// <param name="debuggerManager">The debugger manager (must be LLDB).</param>
     /// <param name="platformInfo">Platform info for pointer size detection.</param>
     /// <param name="backtraceOutput">Optional pre-fetched backtrace output (to avoid re-executing if cached).</param>
-    /// <param name="rawCommands">Optional dictionary to store executed commands and their output.</param>
     /// <returns>ProcessInfo if extraction succeeded, null otherwise.</returns>
     public async Task<ProcessInfo?> ExtractProcessInfoAsync(
         IDebuggerManager debuggerManager,
         PlatformInfo? platformInfo,
-        string? backtraceOutput = null,
-        Dictionary<string, string>? rawCommands = null)
+        string? backtraceOutput = null)
     {
         // Only works with LLDB on Linux/macOS
         if (debuggerManager.DebuggerType != "LLDB")
@@ -147,7 +145,7 @@ public class ProcessInfoExtractor
             {
                 _logger?.LogDebug("ProcessInfoExtractor: Could not find main frame with argv address, trying stack scan fallback");
                 // Fallback: scan the stack directly for environment variables
-                return await ExtractFromStackScanAsync(debuggerManager, platformInfo, rawCommands);
+                return await ExtractFromStackScanAsync(debuggerManager, platformInfo);
             }
 
             // Guard against null pointer values (0x0, 0x0000000000000000, etc.)
@@ -155,7 +153,7 @@ public class ProcessInfoExtractor
             if (string.IsNullOrEmpty(trimmedAddress) || trimmedAddress.All(c => c == '0'))
             {
                 _logger?.LogDebug("ProcessInfoExtractor: argv address is null pointer ({ArgvAddress}), trying stack scan fallback", argvAddress);
-                return await ExtractFromStackScanAsync(debuggerManager, platformInfo, rawCommands);
+                return await ExtractFromStackScanAsync(debuggerManager, platformInfo);
             }
 
             _logger?.LogDebug("ProcessInfoExtractor: Found main frame - argc={Argc}, argv={ArgvAddress}",
@@ -168,12 +166,6 @@ public class ProcessInfoExtractor
             // Add --force to override LLDB's default 1024 byte read limit
             var memoryCmd = $"memory read --force -fx -s{pointerBytes} -c{DefaultPointerCount} {argvAddress}";
             var memoryOutput = await Task.Run(() => debuggerManager.ExecuteCommand(memoryCmd));
-
-            // Store the command in rawCommands if provided
-            if (rawCommands != null && !string.IsNullOrWhiteSpace(memoryOutput))
-            {
-                rawCommands[memoryCmd] = memoryOutput;
-            }
 
             if (string.IsNullOrWhiteSpace(memoryOutput))
             {
@@ -207,7 +199,7 @@ public class ProcessInfoExtractor
             // Read argv strings
             foreach (var ptr in argvPointers.Take(MaxArguments))
             {
-                var value = await ReadStringAtAddressAsync(debuggerManager, ptr, rawCommands);
+                var value = await ReadStringAtAddressAsync(debuggerManager, ptr);
                 if (value != null)
                 {
                     result.Arguments.Add(value);
@@ -219,7 +211,7 @@ public class ProcessInfoExtractor
             var sensitiveCount = 0;
             foreach (var ptr in envpPointers.Take(MaxEnvironmentVariables))
             {
-                var value = await ReadStringAtAddressAsync(debuggerManager, ptr, rawCommands);
+                var value = await ReadStringAtAddressAsync(debuggerManager, ptr);
                 if (value != null)
                 {
                     // Validate: environment variables must contain '=' and start with a valid key
@@ -584,12 +576,10 @@ public class ProcessInfoExtractor
     /// </summary>
     /// <param name="debuggerManager">The debugger manager.</param>
     /// <param name="address">Memory address as hex string.</param>
-    /// <param name="rawCommands">Optional dictionary to store executed commands.</param>
     /// <returns>The string value, or null if reading failed.</returns>
     private async Task<string?> ReadStringAtAddressAsync(
         IDebuggerManager debuggerManager,
-        string address,
-        Dictionary<string, string>? rawCommands = null)
+        string address)
     {
         try
         {
@@ -683,12 +673,10 @@ public class ProcessInfoExtractor
     /// </summary>
     /// <param name="debuggerManager">The debugger manager.</param>
     /// <param name="platformInfo">Platform info for pointer size detection.</param>
-    /// <param name="rawCommands">Optional dictionary to store executed commands.</param>
     /// <returns>ProcessInfo if extraction succeeded, null otherwise.</returns>
     private async Task<ProcessInfo?> ExtractFromStackScanAsync(
         IDebuggerManager debuggerManager,
-        PlatformInfo? platformInfo,
-        Dictionary<string, string>? rawCommands = null)
+        PlatformInfo? platformInfo)
     {
         try
         {
@@ -697,11 +685,6 @@ public class ProcessInfoExtractor
             // Step 1: Get memory regions to find the stack
             var regionCmd = "memory region --all";
             var regionOutput = await Task.Run(() => debuggerManager.ExecuteCommand(regionCmd));
-
-            if (rawCommands != null && !string.IsNullOrWhiteSpace(regionOutput))
-            {
-                rawCommands["memory region --all (for stack scan)"] = regionOutput;
-            }
 
             if (string.IsNullOrWhiteSpace(regionOutput))
             {
@@ -734,11 +717,6 @@ public class ProcessInfoExtractor
             var memoryCmd = $"memory read --force -fx -s{pointerBytes} -c{maxPointers} 0x{scanStart:X}";
             var memoryOutput = await Task.Run(() => debuggerManager.ExecuteCommand(memoryCmd));
 
-            if (rawCommands != null && !string.IsNullOrWhiteSpace(memoryOutput))
-            {
-                rawCommands["memory read (pointer scan)"] = $"Read {maxPointers} pointers from 0x{scanStart:X}";
-            }
-
             if (string.IsNullOrWhiteSpace(memoryOutput))
             {
                 _logger?.LogWarning("ProcessInfoExtractor: Stack scan - memory read returned empty");
@@ -762,13 +740,13 @@ public class ProcessInfoExtractor
             var stackStart = stackRegion.Value.start;
             var stackEnd = stackRegion.Value.end;
             
-            var argvResult = await FindArgvArrayAsync(debuggerManager, pointers, stackStart, stackEnd, pointerSize, rawCommands);
+            var argvResult = await FindArgvArrayAsync(debuggerManager, pointers, stackStart, stackEnd, pointerSize);
             
             if (argvResult == null)
             {
                 _logger?.LogWarning("ProcessInfoExtractor: Stack scan - could not find argv array pattern");
                 // Fall back to legacy string scanning
-                return await ExtractFromStringScanAsync(debuggerManager, stackRegion.Value, rawCommands);
+                return await ExtractFromStringScanAsync(debuggerManager, stackRegion.Value);
             }
 
             var (argvStartIndex, argvPointers, envpPointers) = argvResult.Value;
@@ -781,7 +759,7 @@ public class ProcessInfoExtractor
             
             foreach (var ptr in argvPointers.Take(MaxArguments))
             {
-                var value = await ReadStringAtAddressAsync(debuggerManager, ptr, rawCommands);
+                var value = await ReadStringAtAddressAsync(debuggerManager, ptr);
                 if (value != null)
                 {
                     result.Arguments.Add(value);
@@ -792,7 +770,7 @@ public class ProcessInfoExtractor
             var sensitiveCount = 0;
             foreach (var ptr in envpPointers.Take(MaxEnvironmentVariables))
             {
-                var value = await ReadStringAtAddressAsync(debuggerManager, ptr, rawCommands);
+                var value = await ReadStringAtAddressAsync(debuggerManager, ptr);
                 if (value != null)
                 {
                     // Validate: environment variables must contain '=' and have valid key
@@ -847,8 +825,7 @@ public class ProcessInfoExtractor
         List<string> pointers,
         ulong stackStart,
         ulong stackEnd,
-        int pointerSize,
-        Dictionary<string, string>? rawCommands)
+        int pointerSize)
     {
         // The string data area is near the end of the stack region
         // Valid string pointers should point to addresses within the stack
@@ -867,7 +844,7 @@ public class ProcessInfoExtractor
                 continue;
             
             // Try reading the string at this address to see if it looks like argv[0]
-            var firstString = await ReadStringAtAddressAsync(debuggerManager, pointers[i], rawCommands);
+            var firstString = await ReadStringAtAddressAsync(debuggerManager, pointers[i]);
             if (firstString == null)
                 continue;
                 
@@ -1001,8 +978,7 @@ public class ProcessInfoExtractor
     /// </summary>
     private async Task<ProcessInfo?> ExtractFromStringScanAsync(
         IDebuggerManager debuggerManager,
-        (ulong start, ulong end) stackRegion,
-        Dictionary<string, string>? rawCommands)
+        (ulong start, ulong end) stackRegion)
     {
         _logger?.LogDebug("ProcessInfoExtractor: Falling back to legacy string scan");
         
@@ -1014,11 +990,6 @@ public class ProcessInfoExtractor
 
         var memoryCmd = $"memory read --force -c{scanSize} 0x{scanStart:X}";
         var memoryOutput = await Task.Run(() => debuggerManager.ExecuteCommand(memoryCmd));
-
-        if (rawCommands != null && !string.IsNullOrWhiteSpace(memoryOutput))
-        {
-            rawCommands["memory read (string scan)"] = $"Read {scanSize} bytes from 0x{scanStart:X}";
-        }
 
         if (string.IsNullOrWhiteSpace(memoryOutput))
             return null;

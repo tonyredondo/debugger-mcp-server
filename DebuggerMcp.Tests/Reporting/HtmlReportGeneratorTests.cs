@@ -760,8 +760,7 @@ public class HtmlReportGeneratorTests
         {
             Summary = new AnalysisSummary { Description = "Test crash analysis" },
             Threads = new ThreadsInfo { All = new List<ThreadInfo>() },
-            Modules = new List<ModuleInfo>(),
-            RawCommands = new Dictionary<string, string>()
+            Modules = new List<ModuleInfo>()
         };
     }
 }

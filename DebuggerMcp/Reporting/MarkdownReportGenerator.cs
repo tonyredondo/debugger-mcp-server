@@ -165,13 +165,6 @@ public class MarkdownReportGenerator : IReportGenerator
             AppendRecommendations(sb, analysis);
         }
 
-        // Raw Output - use new structure if available
-        var rawOutput = analysis.RawCommands ?? new Dictionary<string, string>();
-        if (options.IncludeRawOutput && rawOutput.Any())
-        {
-            AppendRawOutput(sb, analysis);
-        }
-
         // Footer
         AppendFooter(sb, metadata);
 
@@ -1720,30 +1713,6 @@ public class MarkdownReportGenerator : IReportGenerator
         {
             sb.AppendLine($"- {rec}");
         }
-        sb.AppendLine();
-    }
-
-    private static void AppendRawOutput(StringBuilder sb, CrashAnalysisResult analysis)
-    {
-        sb.AppendLine("## 📝 Raw Debugger Output");
-        sb.AppendLine();
-        sb.AppendLine("<details>");
-        sb.AppendLine("<summary>Click to expand raw output</summary>");
-        sb.AppendLine();
-
-        // Use new structure if available
-        var rawOutput = analysis.RawCommands ?? new Dictionary<string, string>();
-        foreach (var (command, output) in rawOutput)
-        {
-            sb.AppendLine($"### `{command}`");
-            sb.AppendLine();
-            sb.AppendLine("```");
-            sb.AppendLine(output.Length > 5000 ? output.Substring(0, 5000) + "\n... (truncated)" : output);
-            sb.AppendLine("```");
-            sb.AppendLine();
-        }
-
-        sb.AppendLine("</details>");
         sb.AppendLine();
     }
 

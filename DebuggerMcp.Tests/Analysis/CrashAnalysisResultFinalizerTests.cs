@@ -118,39 +118,4 @@ public class CrashAnalysisResultFinalizerTests
         Assert.NotNull(result.Threads.FaultingThread);
         Assert.Equal("t1", result.Threads.FaultingThread!.ThreadId);
     }
-
-    [Fact]
-    public void Finalize_WhenRawCommandsContainLowValueEntries_RemovesThem()
-    {
-        var result = new CrashAnalysisResult
-        {
-            Summary = new AnalysisSummary { Description = "Found 1 threads (0 total frames, 0 in faulting thread), 0 modules." },
-            Modules = new List<ModuleInfo>(),
-            Threads = new ThreadsInfo
-            {
-                All = new List<ThreadInfo>
-                {
-                    new()
-                    {
-                        ThreadId = "t1",
-                        CallStack = new List<StackFrame>()
-                    }
-                }
-            },
-            RawCommands = new Dictionary<string, string>
-            {
-                ["expr -- (char*)0x123"] = "(char *) $1 = 0x123 \"secret\"",
-                ["ClrMD:InspectModule(0xabc)"] = "{ \"huge\": true }",
-                ["bt all"] = "frame #0 ...",
-                ["!clrthreads"] = "ThreadCount: 1"
-            }
-        };
-
-        CrashAnalysisResultFinalizer.Finalize(result);
-
-        Assert.DoesNotContain(result.RawCommands!.Keys, k => k.StartsWith("expr -- (char*)"));
-        Assert.DoesNotContain(result.RawCommands!.Keys, k => k.StartsWith("ClrMD:InspectModule("));
-        Assert.Contains("bt all", result.RawCommands.Keys);
-        Assert.Contains("!clrthreads", result.RawCommands.Keys);
-    }
 }
