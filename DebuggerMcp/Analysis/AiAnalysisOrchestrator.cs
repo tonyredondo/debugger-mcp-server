@@ -36,6 +36,15 @@ public sealed class AiAnalysisOrchestrator(
     public int MaxToolCalls { get; set; } = 50;
 
     /// <summary>
+    /// Gets or sets a value indicating whether to emit verbose sampling trace logs (prompts/messages previews).
+    /// </summary>
+    /// <remarks>
+    /// This is intended for debugging the AI sampling loop. It can produce large logs and may include
+    /// sensitive data from debugger outputs. Keep it off unless you explicitly need it.
+    /// </remarks>
+    public bool EnableVerboseSamplingTrace { get; set; }
+
+    /// <summary>
     /// Gets a value indicating whether AI analysis is available for the connected client.
     /// </summary>
     public bool IsSamplingAvailable => _samplingClient.IsSamplingSupported;
@@ -375,6 +384,16 @@ public sealed class AiAnalysisOrchestrator(
             toolNames,
             request.ToolChoice?.Mode ?? "(none)",
             request.SystemPrompt?.Length ?? 0);
+
+        if (EnableVerboseSamplingTrace)
+        {
+            _logger.LogDebug("[AI] Sampling system prompt preview: {Preview}",
+                MakePreview(request.SystemPrompt ?? string.Empty, headChars: 800, tailChars: 200));
+
+            _logger.LogDebug("[AI] Sampling messages tail preview:{NewLine}{Preview}",
+                Environment.NewLine,
+                BuildMessagesTailPreview(request.Messages, tailCount: 4));
+        }
     }
 
     private void LogSamplingResponseSummary(int iteration, CreateMessageResult response, string? assistantText)
@@ -395,6 +414,12 @@ public sealed class AiAnalysisOrchestrator(
             blocks,
             toolUses,
             textChars);
+
+        if (EnableVerboseSamplingTrace && !string.IsNullOrWhiteSpace(assistantText))
+        {
+            _logger.LogDebug("[AI] Sampling assistant text preview: {Preview}",
+                MakePreview(assistantText, headChars: 400, tailChars: 0));
+        }
     }
 
     private void LogRequestedToolSummary(int iteration, ToolUseContentBlock toolUse)
@@ -476,6 +501,86 @@ public sealed class AiAnalysisOrchestrator(
         }
 
         return s;
+    }
+
+    private static string MakePreview(string text, int headChars, int tailChars)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return "(empty)";
+        }
+
+        var clean = text.Replace("\r", "", StringComparison.Ordinal);
+        if (headChars < 0) headChars = 0;
+        if (tailChars < 0) tailChars = 0;
+
+        if (clean.Length <= headChars + tailChars + 64)
+        {
+            return $"{clean}\n[chars={clean.Length}]";
+        }
+
+        var head = headChars == 0 ? string.Empty : clean.Substring(0, Math.Min(headChars, clean.Length));
+        var tail = tailChars == 0 ? string.Empty : clean.Substring(Math.Max(0, clean.Length - tailChars));
+        return $"{head}\n... [truncated]\n{tail}\n[chars={clean.Length}]";
+    }
+
+    private static string BuildMessagesTailPreview(IList<SamplingMessage>? messages, int tailCount)
+    {
+        if (messages == null || messages.Count == 0)
+        {
+            return "(no messages)";
+        }
+
+        if (tailCount <= 0)
+        {
+            tailCount = 1;
+        }
+
+        var start = Math.Max(0, messages.Count - tailCount);
+        var sb = new StringBuilder();
+
+        for (var i = start; i < messages.Count; i++)
+        {
+            var m = messages[i];
+            sb.Append("  [").Append(i).Append("] role=").Append(m.Role).Append(" ");
+            sb.Append(SummarizeMessageContent(m.Content));
+            sb.AppendLine();
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string SummarizeMessageContent(IList<ContentBlock>? blocks)
+    {
+        if (blocks == null || blocks.Count == 0)
+        {
+            return "content=(empty)";
+        }
+
+        var parts = new List<string>();
+        foreach (var b in blocks)
+        {
+            switch (b)
+            {
+                case TextContentBlock t:
+                    parts.Add($"text[{t.Text?.Length ?? 0}]={CompactOneLine(t.Text ?? string.Empty, 160)}");
+                    break;
+                case ToolUseContentBlock tu:
+                    parts.Add($"tool_use name={tu.Name} id={tu.Id} input={SummarizeToolInput(tu.Name ?? string.Empty, tu.Input)}");
+                    break;
+                case ToolResultContentBlock tr:
+                {
+                    var text = tr.Content?.OfType<TextContentBlock>().Select(x => x.Text).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x)) ?? string.Empty;
+                    parts.Add($"tool_result id={tr.ToolUseId} isError={tr.IsError} text[{text.Length}]={CompactOneLine(text, 160)}");
+                    break;
+                }
+                default:
+                    parts.Add($"block={b.GetType().Name}");
+                    break;
+            }
+        }
+
+        return string.Join(" | ", parts);
     }
 
     private static string BuildInitialPrompt(string initialReportJson)
