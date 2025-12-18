@@ -92,41 +92,151 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         }
 
         var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
-
-        OpenRouterChatResponse? parsed;
         try
         {
-            parsed = JsonSerializer.Deserialize<OpenRouterChatResponse>(responseBody, JsonOptions);
+            using var doc = JsonDocument.Parse(responseBody);
+            var root = doc.RootElement;
+            var model = root.TryGetProperty("model", out var modelProp) && modelProp.ValueKind == JsonValueKind.String
+                ? modelProp.GetString()
+                : null;
+
+            if (!root.TryGetProperty("choices", out var choices) || choices.ValueKind != JsonValueKind.Array || choices.GetArrayLength() == 0)
+            {
+                return new ChatCompletionResult
+                {
+                    Model = model ?? _settings.OpenRouterModel,
+                    Text = null,
+                    ToolCalls = []
+                };
+            }
+
+            var choice0 = choices[0];
+            if (!choice0.TryGetProperty("message", out var message) || message.ValueKind != JsonValueKind.Object)
+            {
+                return new ChatCompletionResult
+                {
+                    Model = model ?? _settings.OpenRouterModel,
+                    Text = null,
+                    ToolCalls = []
+                };
+            }
+
+            var toolCalls = new List<ChatToolCall>();
+            if (message.TryGetProperty("tool_calls", out var toolCallsProp) && toolCallsProp.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var call in toolCallsProp.EnumerateArray())
+                {
+                    if (call.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var id = call.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String
+                        ? idProp.GetString() ?? string.Empty
+                        : string.Empty;
+
+                    if (!call.TryGetProperty("function", out var fn) || fn.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var name = fn.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String
+                        ? nameProp.GetString() ?? string.Empty
+                        : string.Empty;
+
+                    var args = fn.TryGetProperty("arguments", out var argsProp)
+                        ? argsProp.ValueKind == JsonValueKind.String
+                            ? argsProp.GetString() ?? string.Empty
+                            : argsProp.GetRawText()
+                        : string.Empty;
+
+                    if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                    {
+                        toolCalls.Add(new ChatToolCall(id, name, args));
+                    }
+                }
+            }
+
+            JsonElement? rawContent = null;
+            string? text = null;
+            if (message.TryGetProperty("content", out var contentProp))
+            {
+                rawContent = contentProp.Clone();
+                text = ExtractText(contentProp);
+            }
+
+            var providerFields = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var prop in message.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, "content", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(prop.Name, "tool_calls", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(prop.Name, "role", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                providerFields[prop.Name] = prop.Value.Clone();
+            }
+
+            return new ChatCompletionResult
+            {
+                Model = model ?? _settings.OpenRouterModel,
+                Text = text,
+                RawMessageContent = rawContent,
+                ProviderMessageFields = providerFields.Count == 0 ? null : providerFields,
+                ToolCalls = toolCalls
+            };
         }
         catch (JsonException ex)
         {
             throw new InvalidOperationException("Failed to parse OpenRouter response JSON.", ex);
         }
+    }
 
-        var message = parsed?.Choices?.FirstOrDefault()?.Message;
-        var content = message?.Content;
-
-        var toolCalls = new List<ChatToolCall>();
-        if (message?.ToolCalls != null)
+    private static string? ExtractText(JsonElement content)
+    {
+        if (content.ValueKind == JsonValueKind.String)
         {
-            foreach (var call in message.ToolCalls)
-            {
-                var id = call.Id ?? string.Empty;
-                var name = call.Function?.Name ?? string.Empty;
-                var args = call.Function?.Arguments ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
-                {
-                    toolCalls.Add(new ChatToolCall(id, name, args));
-                }
-            }
+            return content.GetString();
         }
 
-        return new ChatCompletionResult
+        if (content.ValueKind == JsonValueKind.Null || content.ValueKind == JsonValueKind.Undefined)
         {
-            Model = parsed?.Model ?? _settings.OpenRouterModel,
-            Text = content,
-            ToolCalls = toolCalls
-        };
+            return null;
+        }
+
+        if (content.ValueKind == JsonValueKind.Array)
+        {
+            var sb = new StringBuilder();
+            foreach (var item in content.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                if (item.TryGetProperty("type", out var typeProp) &&
+                    typeProp.ValueKind == JsonValueKind.String &&
+                    string.Equals(typeProp.GetString(), "text", StringComparison.OrdinalIgnoreCase) &&
+                    item.TryGetProperty("text", out var textProp) &&
+                    textProp.ValueKind == JsonValueKind.String)
+                {
+                    var t = textProp.GetString();
+                    if (!string.IsNullOrWhiteSpace(t))
+                    {
+                        if (sb.Length > 0) sb.AppendLine();
+                        sb.Append(t.TrimEnd());
+                    }
+                }
+            }
+
+            var combined = sb.ToString().Trim();
+            return string.IsNullOrWhiteSpace(combined) ? null : combined;
+        }
+
+        // Unknown shape: preserve as JSON text.
+        var raw = content.GetRawText();
+        return string.IsNullOrWhiteSpace(raw) ? null : raw;
     }
 
     private static async Task<(string Text, bool Truncated)> ReadContentCappedAsync(
@@ -197,7 +307,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         var msg = new OpenRouterChatMessage
         {
             Role = message.Role,
-            Content = message.Content
+            Content = message.ContentJson.HasValue ? message.ContentJson.Value : message.Content
         };
 
         if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
@@ -210,7 +320,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             message.ToolCalls is { Count: > 0 })
         {
             // OpenAI-style: assistant messages with tool_calls may omit content or set it to null.
-            if (string.IsNullOrWhiteSpace(message.Content))
+            if (!message.ContentJson.HasValue && string.IsNullOrWhiteSpace(message.Content))
             {
                 msg.Content = null;
             }
@@ -227,6 +337,29 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
                     }
                 })
                 .ToList();
+        }
+
+        if (message.ProviderMessageFields is { Count: > 0 })
+        {
+            msg.ExtensionData = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in message.ProviderMessageFields)
+            {
+                // Avoid colliding with known OpenAI fields we already set.
+                if (string.Equals(kvp.Key, "role", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "content", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "tool_calls", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(kvp.Key, "tool_call_id", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                msg.ExtensionData[kvp.Key] = kvp.Value;
+            }
+
+            if (msg.ExtensionData.Count == 0)
+            {
+                msg.ExtensionData = null;
+            }
         }
 
         return msg;
@@ -295,13 +428,16 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         public string Role { get; set; } = "user";
 
         [JsonPropertyName("content")]
-        public string? Content { get; set; }
+        public object? Content { get; set; }
 
         [JsonPropertyName("tool_call_id")]
         public string? ToolCallId { get; set; }
 
         [JsonPropertyName("tool_calls")]
         public List<OpenRouterToolCall>? ToolCalls { get; set; }
+
+        [JsonExtensionData]
+        public Dictionary<string, JsonElement>? ExtensionData { get; set; }
     }
 
     private sealed class OpenRouterTool
@@ -346,27 +482,5 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         public string? Arguments { get; set; }
     }
 
-    private sealed class OpenRouterChatResponse
-    {
-        [JsonPropertyName("model")]
-        public string? Model { get; set; }
-
-        [JsonPropertyName("choices")]
-        public List<OpenRouterChoice>? Choices { get; set; }
-    }
-
-    private sealed class OpenRouterChoice
-    {
-        [JsonPropertyName("message")]
-        public OpenRouterChoiceMessage? Message { get; set; }
-    }
-
-    private sealed class OpenRouterChoiceMessage
-    {
-        [JsonPropertyName("content")]
-        public string? Content { get; set; }
-
-        [JsonPropertyName("tool_calls")]
-        public List<OpenRouterToolCall>? ToolCalls { get; set; }
-    }
+    // Response parsing uses JsonDocument to preserve provider-specific fields.
 }

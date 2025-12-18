@@ -10,6 +10,8 @@ public class LlmAgentRunnerTests
     {
         var calls = new List<ChatToolCall>();
         var completions = 0;
+        using var contentDoc = System.Text.Json.JsonDocument.Parse("""[{ "type":"thought", "thought_signature":"sig1", "text":"x" }]""");
+        using var providerDoc = System.Text.Json.JsonDocument.Parse("""{ "thought_signature":"sig1", "text":"x" }""");
 
         Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> messages, CancellationToken _)
         {
@@ -19,12 +21,22 @@ public class LlmAgentRunnerTests
                 return Task.FromResult(new ChatCompletionResult
                 {
                     Text = "Investigating...",
+                    RawMessageContent = contentDoc.RootElement.Clone(),
+                    ProviderMessageFields = new Dictionary<string, System.Text.Json.JsonElement>
+                    {
+                        ["reasoning"] = providerDoc.RootElement.Clone()
+                    },
                     ToolCalls = [new ChatToolCall("c1", "exec", "{\"command\":\"bt\"}")]
                 });
             }
 
             // After tool result is injected, stop.
             Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c1" && m.Content.Contains("apiKey=***", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(messages, m =>
+                m.Role == "assistant" &&
+                m.ProviderMessageFields != null &&
+                m.ProviderMessageFields.ContainsKey("reasoning") &&
+                m.ContentJson.HasValue);
             return Task.FromResult(new ChatCompletionResult { Text = "Done", ToolCalls = [] });
         }
 

@@ -72,6 +72,16 @@ internal sealed class ChatCompletionResult
 
     public string? Text { get; init; }
 
+    /// <summary>
+    /// Raw OpenAI/OpenRouter "message.content" value (can be string, array, or object depending on provider).
+    /// Used to preserve provider-specific reasoning/thought signatures across tool-call iterations.
+    /// </summary>
+    public JsonElement? RawMessageContent { get; init; }
+
+    /// <summary>
+    /// Provider-specific fields on the assistant message (e.g., reasoning details) that must be preserved in subsequent requests.
+    /// </summary>
+    public IReadOnlyDictionary<string, JsonElement>? ProviderMessageFields { get; init; }
+
     public IReadOnlyList<ChatToolCall> ToolCalls { get; init; } = [];
 }
-

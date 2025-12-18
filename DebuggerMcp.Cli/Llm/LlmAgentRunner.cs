@@ -46,7 +46,13 @@ internal sealed class LlmAgentRunner(
                     ToolCallsExecuted: toolCallsExecuted);
             }
 
-            messages.Add(new ChatMessage("assistant", completion.Text ?? string.Empty, toolCallId: null, toolCalls: completion.ToolCalls));
+            messages.Add(new ChatMessage(
+                "assistant",
+                completion.Text ?? string.Empty,
+                toolCallId: null,
+                toolCalls: completion.ToolCalls,
+                contentJson: completion.RawMessageContent,
+                providerMessageFields: completion.ProviderMessageFields));
 
             foreach (var toolCall in completion.ToolCalls)
             {
