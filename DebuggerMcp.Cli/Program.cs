@@ -1088,6 +1088,10 @@ public class Program
                 await HandleLlmAsync(args, output, state, mcpClient);
                 break;
 
+            case "llmagent":
+                await HandleLlmAgentInteractiveAsync(args, console, output, state, mcpClient);
+                break;
+
             // Session operations (via MCP)
             case "session":
                 await HandleSessionAsync(args, console, output, state, mcpClient);
@@ -4676,6 +4680,140 @@ public class Program
             return;
         }
 
+        try
+        {
+            await ExecuteLlmPromptAsync(rawPrompt, output, state, mcpClient, llmSettings, transcript, cancellationToken: default);
+        }
+        catch (Exception ex)
+        {
+            output.Error(ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// Handles the llmagent command (interactive agent mode).
+    /// </summary>
+    // Separate command history for llmagent mode
+    private static CommandHistory? _llmAgentHistory;
+
+    private static async Task HandleLlmAgentInteractiveAsync(
+        string[] args,
+        IAnsiConsole console,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        var llmSettings = state.Settings.Llm;
+        llmSettings.ApplyEnvironmentOverrides();
+
+        // Match `llm set-agent true` behavior.
+        llmSettings.AgentModeEnabled = true;
+        state.Settings.Save();
+
+        state.Transcript ??= new CliTranscriptStore(Path.Combine(ConnectionSettings.DefaultConfigDirectory, "cli_transcript.jsonl"));
+        var transcript = state.Transcript;
+
+        // Initialize llmagent history if needed (stored next to CLI binary)
+        if (_llmAgentHistory == null)
+        {
+            var exePath = Path.GetDirectoryName(Environment.ProcessPath) ?? ".";
+            var historyPath = Path.Combine(exePath, "llmagent_history.txt");
+            _llmAgentHistory = new CommandHistory(historyPath, maxSize: 500);
+        }
+
+        output.Header("LLM Agent Mode");
+        output.WriteLine();
+        output.KeyValue("Provider", "OpenRouter");
+        output.KeyValue("Model", llmSettings.OpenRouterModel);
+        output.KeyValue("API Key", string.IsNullOrWhiteSpace(llmSettings.GetEffectiveOpenRouterApiKey()) ? "(not set)" : "(configured)");
+        output.KeyValue("Agent Mode", "enabled");
+        output.KeyValue("Agent Confirm", llmSettings.AgentModeConfirmToolCalls ? "enabled" : "disabled");
+        output.WriteLine();
+
+        output.Dim("Enter prompts directly. The agent can request tools and the CLI will execute them.");
+        output.Dim("Use ↑/↓ arrows for history. Type 'exit' or press Ctrl+C to return.");
+        output.Dim("Type '/help' for commands available in this mode (e.g., /reset).");
+        output.WriteLine();
+
+        LlmAgentInteractiveCommands.WriteToolsList(output, LlmAgentTools.GetDefaultTools());
+        output.WriteLine();
+
+        if (args.Length > 0)
+        {
+            var initial = string.Join(" ", args).Trim();
+            if (!string.IsNullOrWhiteSpace(initial))
+            {
+                await ExecuteLlmPromptAsync(initial, output, state, mcpClient, llmSettings, transcript, cancellationToken: default);
+            }
+        }
+
+        var systemConsole = new SystemConsole();
+        const string prompt = "llmagent>";
+
+        while (true)
+        {
+            try
+            {
+                var line = ReadCmdLineWithHistory(console, systemConsole, prompt, _llmAgentHistory);
+                if (line == null)
+                {
+                    output.Info("Exiting LLM agent mode.");
+                    break;
+                }
+
+                line = line.Trim();
+                if (string.IsNullOrEmpty(line))
+                {
+                    continue;
+                }
+
+                if (LlmAgentInteractiveCommands.TryHandle(line, output, state, transcript, out var shouldExit))
+                {
+                    if (shouldExit)
+                    {
+                        output.Info("Exiting LLM agent mode.");
+                        break;
+                    }
+
+                    output.WriteLine();
+                    continue;
+                }
+
+                if (line.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
+                    line.Equals("quit", StringComparison.OrdinalIgnoreCase) ||
+                    line.Equals("q", StringComparison.OrdinalIgnoreCase))
+                {
+                    output.Info("Exiting LLM agent mode.");
+                    break;
+                }
+
+                _llmAgentHistory.Add(line);
+                await ExecuteLlmPromptAsync(line, output, state, mcpClient, llmSettings, transcript, cancellationToken: default);
+            }
+            catch (OperationCanceledException)
+            {
+                output.Info("Exiting LLM agent mode.");
+                break;
+            }
+            catch (Exception ex)
+            {
+                output.Error(ex.Message);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Executes a single LLM prompt using the current transcript scope as context.
+    /// </summary>
+    private static async Task ExecuteLlmPromptAsync(
+        string rawPrompt,
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient,
+        LlmSettings llmSettings,
+        CliTranscriptStore transcript,
+        CancellationToken cancellationToken)
+    {
         var (prompt, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
             rawPrompt,
             baseDirectory: Environment.CurrentDirectory,
@@ -4692,54 +4830,47 @@ public class Program
             DumpId = state.DumpId
         });
 
-        try
+        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
+        var client = new OpenRouterClient(http, llmSettings);
+
+        var history = transcript.ReadTailForScope(80, state.Settings.ServerUrl, state.SessionId, state.DumpId);
+        var messages = TranscriptContextBuilder.BuildMessages(
+            userPrompt: prompt,
+            serverUrl: state.Settings.ServerUrl,
+            sessionId: state.SessionId,
+            dumpId: state.DumpId,
+            transcriptTail: history,
+            maxContextChars: 30_000,
+            agentModeEnabled: llmSettings.AgentModeEnabled,
+            agentConfirmationEnabled: llmSettings.AgentModeConfirmToolCalls);
+
+        var attachmentMessages = attachments.Select(a => a.MessageForModel).ToList();
+        var reportMessages = reports.Select(r => r.MessageForModel).ToList();
+        var combinedMessages = attachmentMessages.Count == 0 && reportMessages.Count == 0
+            ? messages
+            : LlmPromptComposer.InsertUserAttachmentsBeforeLastUserMessage(
+                messages,
+                attachmentMessages.Concat(reportMessages).ToList());
+        messages = combinedMessages;
+
+        var response = llmSettings.AgentModeEnabled
+            ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, reports, transcript, cancellationToken)
+            : await output.WithSpinnerAsync(
+                "Calling LLM...",
+                () => client.ChatAsync(messages, cancellationToken));
+
+        transcript.Append(new CliTranscriptEntry
         {
-            using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
-            var client = new OpenRouterClient(http, llmSettings);
+            TimestampUtc = DateTimeOffset.UtcNow,
+            Kind = "llm_assistant",
+            Text = TranscriptRedactor.RedactText(response),
+            ServerUrl = state.Settings.ServerUrl,
+            SessionId = state.SessionId,
+            DumpId = state.DumpId
+        });
 
-            var history = transcript.ReadTailForScope(80, state.Settings.ServerUrl, state.SessionId, state.DumpId);
-            var messages = TranscriptContextBuilder.BuildMessages(
-                userPrompt: prompt,
-                serverUrl: state.Settings.ServerUrl,
-                sessionId: state.SessionId,
-                dumpId: state.DumpId,
-                transcriptTail: history,
-                maxContextChars: 30_000,
-                agentModeEnabled: llmSettings.AgentModeEnabled,
-                agentConfirmationEnabled: llmSettings.AgentModeConfirmToolCalls);
-
-            var attachmentMessages = attachments.Select(a => a.MessageForModel).ToList();
-            var reportMessages = reports.Select(r => r.MessageForModel).ToList();
-            var combinedMessages = attachmentMessages.Count == 0 && reportMessages.Count == 0
-                ? messages
-                : LlmPromptComposer.InsertUserAttachmentsBeforeLastUserMessage(
-                    messages,
-                    attachmentMessages.Concat(reportMessages).ToList());
-            messages = combinedMessages;
-
-            var response = llmSettings.AgentModeEnabled
-                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client, messages, reports, transcript, cancellationToken: default)
-                : await output.WithSpinnerAsync(
-                    "Calling LLM...",
-                    () => client.ChatAsync(messages, cancellationToken: default));
-
-            transcript.Append(new CliTranscriptEntry
-            {
-                TimestampUtc = DateTimeOffset.UtcNow,
-                Kind = "llm_assistant",
-                Text = TranscriptRedactor.RedactText(response),
-                ServerUrl = state.Settings.ServerUrl,
-                SessionId = state.SessionId,
-                DumpId = state.DumpId
-            });
-
-            output.WriteLine();
-            output.WriteLine(response);
-        }
-        catch (Exception ex)
-        {
-            output.Error(ex.Message);
-        }
+        output.WriteLine();
+        output.WriteLine(response);
     }
 
     private static async Task<string> RunLlmAgentLoopAsync(

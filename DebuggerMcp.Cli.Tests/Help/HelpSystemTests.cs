@@ -49,6 +49,7 @@ public class HelpSystemTests
     [InlineData("analysis", "analyze")]
     [InlineData("analysis", "compare")]
     [InlineData("llm", "llm")]
+    [InlineData("llm", "llmagent")]
     [InlineData("advanced", "watch")]
     [InlineData("advanced", "report")]
     [InlineData("advanced", "sourcelink")]
@@ -70,6 +71,7 @@ public class HelpSystemTests
     [InlineData("open")]
     [InlineData("exec")]
     [InlineData("analyze")]
+    [InlineData("llmagent")]
     [InlineData("watch")]
     [InlineData("report")]
     public void CommandInfo_HasExamples(string commandName)

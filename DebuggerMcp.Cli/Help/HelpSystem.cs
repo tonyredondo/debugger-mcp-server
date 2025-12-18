@@ -83,6 +83,11 @@ public static class HelpSystem
                 "llm model openai/gpt-4o-mini",
                 "llm reset",
                 "llm reset conversation"
+            ]),
+            new("llmagent", "", "Enter interactive LLM agent mode (no 'llm' prefix required)", [
+                "llmagent",
+                "llmagent Explain the crash and run needed commands",
+                "llmagent Analyze @./report.json and summarize the root cause"
             ])
         ],
         ["advanced"] = [

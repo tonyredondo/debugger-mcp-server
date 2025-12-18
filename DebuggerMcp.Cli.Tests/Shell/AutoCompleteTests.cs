@@ -20,6 +20,7 @@ public class AutoCompleteTests
         // Assert
         Assert.True(result.HasCompletions);
         Assert.Contains("connect", result.Completions);
+        Assert.Contains("llmagent", result.Completions);
         Assert.Contains("help", result.Completions);
         Assert.Contains("exit", result.Completions);
     }
@@ -123,6 +124,7 @@ public class AutoCompleteTests
         Assert.Contains("dumps", result.Completions);
         Assert.Contains("session", result.Completions);
         Assert.Contains("disconnect", result.Completions);
+        Assert.Contains("llmagent", result.Completions);
     }
 
     [Fact]

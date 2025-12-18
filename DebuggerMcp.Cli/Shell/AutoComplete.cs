@@ -21,7 +21,7 @@ public class AutoComplete
     [
         "connect", "disconnect", "status", "health", "server",
         "dumps", "symbols", "stats",
-        "llm",
+        "llm", "llmagent",
         "session", "open", "close", "exec", "cmd", "showobj", "so",
         "analyze", "compare", "watch", "report", "sourcelink",
         "help", "history", "clear", "set", "version", "exit", "quit", "tools"
@@ -200,7 +200,7 @@ public class AutoComplete
         {
             case ShellStateLevel.Initial:
                 // Only connection-related commands
-                commands.AddRange(["connect", "llm", "help", "set", "version", "exit"]);
+                commands.AddRange(["connect", "llm", "llmagent", "help", "set", "version", "exit"]);
                 break;
 
             case ShellStateLevel.Connected:
@@ -208,7 +208,7 @@ public class AutoComplete
                 commands.AddRange([
                     "disconnect", "status", "health",
                     "dumps", "symbols", "stats",
-                    "llm",
+                    "llm", "llmagent",
                     "session", "open",
                     "help", "clear", "set", "version", "exit", "tools"
                 ]);
@@ -219,7 +219,7 @@ public class AutoComplete
                 commands.AddRange([
                     "disconnect", "status", "health",
                     "dumps", "symbols", "stats",
-                    "llm",
+                    "llm", "llmagent",
                     "session", "open", "close",
                     "help", "clear", "set", "version", "exit", "tools"
                 ]);
