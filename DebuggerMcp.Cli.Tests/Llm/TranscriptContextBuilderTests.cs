@@ -82,4 +82,41 @@ public class TranscriptContextBuilderTests
         Assert.Equal("apiKey=secret", messages[^1].Content);
         Assert.DoesNotContain(messages, m => m.Role == "user" && m.Content == "apiKey=***");
     }
+
+    [Fact]
+    public void BuildMessages_WhenResetMarkerPresent_IgnoresEarlierTranscriptContext()
+    {
+        var tail = new List<CliTranscriptEntry>
+        {
+            new() { Kind = "cli_command", Text = "exec sos dumpasync -all", Output = "old-output" },
+            new() { Kind = "llm_user", Text = "old question" },
+            new() { Kind = "llm_assistant", Text = "old answer" },
+            new() { Kind = "llm_reset", Text = "reset" },
+            new() { Kind = "cli_command", Text = "exec sos dumpexceptions", Output = "new-output" },
+            new() { Kind = "llm_user", Text = "new question" },
+            new() { Kind = "llm_assistant", Text = "new answer" }
+        };
+
+        var messages = TranscriptContextBuilder.BuildMessages(
+            userPrompt: "current prompt",
+            serverUrl: "http://localhost:5000",
+            sessionId: "s1",
+            dumpId: "d1",
+            transcriptTail: tail,
+            maxContextChars: 10_000,
+            agentModeEnabled: false,
+            agentConfirmationEnabled: true);
+
+        // CLI context should contain only the command after reset.
+        Assert.Contains("dumpexceptions", messages[1].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("dumpasync", messages[1].Content, StringComparison.OrdinalIgnoreCase);
+
+        // Prior conversation should be dropped.
+        Assert.DoesNotContain(messages, m => m.Role == "user" && m.Content == "old question");
+        Assert.DoesNotContain(messages, m => m.Role == "assistant" && m.Content == "old answer");
+
+        // New conversation should remain.
+        Assert.Contains(messages, m => m.Role == "user" && m.Content == "new question");
+        Assert.Contains(messages, m => m.Role == "assistant" && m.Content == "new answer");
+    }
 }

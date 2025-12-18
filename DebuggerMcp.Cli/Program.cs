@@ -4571,7 +4571,8 @@ public class Program
             output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json)");
             output.Dim("  llm set-agent <true|false>       (toggles tool-using agent mode)");
             output.Dim("  llm set-agent-confirm <true|false> (confirm each tool call in agent mode)");
-            output.Dim("  llm reset                        (clears only LLM conversation)");
+            output.Dim("  llm reset                        (clears LLM conversation + transcript context)");
+            output.Dim("  llm reset conversation            (clears only LLM conversation; keeps CLI context)");
             output.Dim("Tip: Prefer env var OPENROUTER_API_KEY to avoid persisting keys.");
             return;
         }
@@ -4603,11 +4604,35 @@ public class Program
                 return;
 
             case "reset":
-                transcript.FilterInPlace(e =>
-                    e.Kind is not ("llm_user" or "llm_assistant" or "llm_tool") ||
-                    !TranscriptScope.Matches(e, state.Settings.ServerUrl, state.SessionId, state.DumpId));
-                output.Success("Cleared LLM conversation history for the current session/dump (kept other sessions and CLI transcript).");
+            {
+                var conversationOnly = args.Length >= 2 &&
+                                       string.Equals(args[1], "conversation", StringComparison.OrdinalIgnoreCase);
+
+                if (conversationOnly)
+                {
+                    transcript.FilterInPlace(e =>
+                        e.Kind is not ("llm_user" or "llm_assistant" or "llm_tool") ||
+                        !TranscriptScope.Matches(e, state.Settings.ServerUrl, state.SessionId, state.DumpId));
+                    output.Success("Cleared LLM conversation history for the current session/dump (kept CLI transcript context).");
+                    return;
+                }
+
+                // Soft-reset: keep the transcript file, but add a marker so future prompts ignore earlier CLI context and LLM conversation
+                // for this specific server/session/dump scope.
+                transcript.Append(new CliTranscriptEntry
+                {
+                    TimestampUtc = DateTimeOffset.UtcNow,
+                    Kind = "llm_reset",
+                    Text = "reset",
+                    ServerUrl = state.Settings.ServerUrl,
+                    SessionId = state.SessionId,
+                    DumpId = state.DumpId
+                });
+
+                output.Success("Cleared LLM context for the current session/dump (conversation + transcript context).");
+                output.Dim("Tip: Use `llm reset conversation` to keep CLI context.");
                 return;
+            }
 
             case "set-agent":
             case "agent":

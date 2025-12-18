@@ -8,6 +8,8 @@ namespace DebuggerMcp.Cli.Llm;
 /// </summary>
 internal static class TranscriptContextBuilder
 {
+    private const string ResetMarkerKind = "llm_reset";
+
     internal static IReadOnlyList<ChatMessage> BuildMessages(
         string userPrompt,
         string? serverUrl,
@@ -27,6 +29,8 @@ internal static class TranscriptContextBuilder
         {
             maxContextChars = 20_000;
         }
+
+        transcriptTail = ApplyResetMarkers(transcriptTail);
 
         var messages = new List<ChatMessage>();
 
@@ -87,6 +91,31 @@ internal static class TranscriptContextBuilder
 
         messages.Add(new ChatMessage("user", userPrompt));
         return messages;
+    }
+
+    private static IReadOnlyList<CliTranscriptEntry> ApplyResetMarkers(IReadOnlyList<CliTranscriptEntry> transcriptTail)
+    {
+        if (transcriptTail.Count == 0)
+        {
+            return transcriptTail;
+        }
+
+        var lastResetIndex = -1;
+        for (var i = transcriptTail.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(transcriptTail[i].Kind, ResetMarkerKind, StringComparison.OrdinalIgnoreCase))
+            {
+                lastResetIndex = i;
+                break;
+            }
+        }
+
+        if (lastResetIndex < 0 || lastResetIndex >= transcriptTail.Count - 1)
+        {
+            return transcriptTail;
+        }
+
+        return transcriptTail.Skip(lastResetIndex + 1).ToList();
     }
 
     private static string NormalizeForComparison(string? text)

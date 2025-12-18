@@ -81,7 +81,8 @@ public static class HelpSystem
             new("llm", "[[prompt]]", "Ask an OpenRouter-backed LLM using your CLI history as context", [
                 "llm Explain the faulting thread in the last report",
                 "llm model openai/gpt-4o-mini",
-                "llm reset"
+                "llm reset",
+                "llm reset conversation"
             ])
         ],
         ["advanced"] = [
