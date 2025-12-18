@@ -67,6 +67,16 @@ dbg-mcp> report -o ./report.md
 - `analyze security` - Security scan
 - `compare <s1> <s2>` - Compare dumps
 
+### LLM (`help llm`)
+- `llm <prompt>` - Ask an OpenRouter-backed LLM using your CLI transcript as context
+- `llm set-agent <true|false>` - Enable/disable tool-using agent mode for `llm`
+- `llm reset` - Clear LLM context (conversation + transcript context) for the current session/dump
+- `llmagent` - Interactive agent mode (no `llm` prefix required)
+
+In `llmagent` mode:
+- Exit with `exit`/Ctrl+C or `/exit`
+- Use `/help`, `/tools`, `/reset`, `/reset conversation`
+
 ### Advanced (`help advanced`)
 - `watch add/list/eval/remove/clear` - Watch expressions
 - `report -o <file> [--format html|json]` - Generate reports (output file required)
@@ -105,6 +115,11 @@ compare heap d03 a8b    # Partial session IDs
 export DEBUGGER_MCP_URL=http://localhost:5000
 export DEBUGGER_MCP_API_KEY=your-key
 export DEBUGGER_MCP_VERBOSE=true
+
+# LLM / OpenRouter (required for llm / llmagent, and for analyze ai when using the dbg-mcp CLI as the sampling client)
+export OPENROUTER_API_KEY="..."
+# Optional:
+export OPENROUTER_MODEL="openrouter/auto"
 ```
 
 ### Config File (`~/.dbg-mcp/config.json`)

@@ -399,7 +399,9 @@ analyze(kind="crash", sessionId, userId) → Returns JSON with:
 # AI-assisted crash analysis (requires MCP sampling support in the connected client)
 analyze(kind="ai", sessionId, userId) → Returns the same report enriched with:
   - aiAnalysis.rootCause / confidence / reasoning
-  - aiAnalysis.commandsExecuted (debugger commands the AI requested)
+  - aiAnalysis.commandsExecuted (tools/commands the AI requested; prefer `inspect` over raw `dumpobj` when possible)
+
+Tip: To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
 
 # .NET specific analysis (SOS auto-loaded when opening .NET dumps)
 analyze(kind="dotnet_crash", sessionId, userId) → Returns JSON with:
@@ -690,6 +692,8 @@ dbg-mcp> report -o ./crash-report.md
 | **Report Generation** | Markdown, HTML, JSON formats |
 | **Source Link** | Resolve source files to repository URLs |
 | **Multi-Server** | Manage multiple servers for cross-platform dump analysis |
+| **LLM + Agent Mode** | OpenRouter-backed chat + tool-using agent (`llm`, `llmagent`) |
+| **AI Crash Analysis** | `analyze ai` via MCP sampling (LLM-driven evidence gathering) |
 
 ### Command Categories
 
@@ -699,9 +703,34 @@ help files         # dumps, symbols, stats
 help session       # session create/list/use/close
 help debugging     # open, close, exec, sos, threads, stack
 help analysis      # analyze, compare
+help llm           # llm, llmagent
 help advanced      # watch, report, sourcelink
 help general       # help, history, set, exit
 ```
+
+### LLM + Agent Mode (OpenRouter)
+
+The CLI can chat with an OpenRouter-backed LLM and (optionally) run as a tool-using agent against the currently connected server/session/dump.
+
+Configure an API key (recommended via env var):
+```bash
+export OPENROUTER_API_KEY="..."
+# Optional:
+export OPENROUTER_MODEL="openai/gpt-4o-mini"
+```
+
+Examples:
+```bash
+llm Explain the faulting thread in the last report
+llm set-agent true
+llmagent
+llmagent> /help
+llmagent> Analyze the current dump and run whatever commands you need
+```
+
+Notes:
+- `llmagent` supports `/help`, `/reset`, `/reset conversation`, `/tools`, `/exit`.
+- `llm reset` clears LLM context for the current server/session/dump scope.
 
 ### Configuration
 
@@ -769,6 +798,13 @@ export SKIP_DUMP_ANALYSIS="true"
 
 # Optional: symbol download timeout for dotnet-symbol
 export SYMBOL_DOWNLOAD_TIMEOUT_MINUTES=10
+
+# Optional: AI sampling trace (for analyze ai / MCP sampling debugging)
+# WARNING: may contain sensitive data from debugger outputs.
+# Note: docker-compose.yml enables these by default for debugging; set to false in production.
+export DEBUGGER_MCP_AI_SAMPLING_TRACE=true
+export DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
+export DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
 ```
 
 ### Security Configuration

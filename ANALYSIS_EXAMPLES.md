@@ -255,6 +255,8 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
 
 **Notes**:
 - Requires an MCP client that supports sampling (`sampling/createMessage`) with tools enabled.
+- When the AI needs object details, prefer the first-class inspection tool (`inspect(kind="object", ...)`) over raw SOS `dumpobj` commands.
+- To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
 - Output matches `analyze(kind="crash")` plus an `aiAnalysis` section.
 
 **Example Output (excerpt)**:

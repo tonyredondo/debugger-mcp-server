@@ -259,6 +259,27 @@ exec(sessionId, userId, command: "!dumpasync")
 
 ---
 
+### Step 8 (Optional): AI Crash Analysis (MCP Sampling)
+
+Use AI-assisted analysis to drive additional evidence gathering via tools.
+
+**Tool**: `analyze` (`kind: "ai"`)
+
+```
+analyze(kind: "ai", sessionId: "session-xyz-789", userId: "your-user-id")
+```
+
+Notes:
+- Requires an MCP client that supports sampling (`sampling/createMessage`) with tools enabled.
+  - The `dbg-mcp` CLI supports this when OpenRouter is configured (`OPENROUTER_API_KEY`).
+- For managed object inspection, prefer `inspect(kind: "object", ...)` over `exec "sos dumpobj ..."` when the AI requests object details.
+
+Debugging:
+- Enable `DEBUGGER_MCP_AI_SAMPLING_TRACE=true` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true`.
+- Trace files are written under `LOG_STORAGE_PATH/ai-sampling`.
+
+---
+
 ### Step 9: Close the Dump (MCP)
 
 When done analyzing the current dump, close it.

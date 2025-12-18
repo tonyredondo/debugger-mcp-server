@@ -149,12 +149,31 @@ Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
 
 - The connected MCP client must support sampling with tools enabled.
   - The Debugger MCP CLI supports this when OpenRouter is configured.
+    - Set `OPENROUTER_API_KEY` (recommended) or `DEBUGGER_MCP_OPENROUTER_API_KEY`.
+    - Optionally set `OPENROUTER_MODEL` / `DEBUGGER_MCP_OPENROUTER_MODEL`.
 
 ### Usage
 
 ```
 analyze(kind: "ai", sessionId: "your-session-id", userId: "your-user-id")
 ```
+
+### Tool Guidance (for the LLM)
+
+When the AI asks for more evidence, prefer:
+- `inspect(kind: "object", address: "0x...")` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
+  - For value types, provide `methodTable` if needed.
+- `inspect(kind: "clr_stack")` for fast managed stacks (ClrMD).
+- `exec` only for debugger/SOS commands that don’t have a first-class inspect helper.
+
+### Debugging Sampling Issues
+
+Enable server-side tracing (may include sensitive debugger output):
+- `DEBUGGER_MCP_AI_SAMPLING_TRACE=true` (log previews)
+- `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true` (write full payloads)
+- `DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000` (per-file cap)
+
+Trace files are written under `LOG_STORAGE_PATH/ai-sampling` (in Docker: `/app/logs/ai-sampling`).
 
 ---
 

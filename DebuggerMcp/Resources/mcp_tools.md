@@ -26,6 +26,10 @@ Execute a raw debugger command (WinDbg/LLDB syntax). Use as a last resort.
 
 - `exec(sessionId: "...", userId: "...", command: "image list")`
 
+Notes:
+- If you have a managed object address, prefer `inspect(kind: "object", ...)` over `exec "sos dumpobj ..."` (the inspect path is more complete and safer).
+- For managed stacks, prefer `inspect(kind: "clr_stack", ...)` over `exec "sos clrstack ..."` when possible.
+
 ### 4) `report`
 Generate reports (returns report content).
 
@@ -94,6 +98,10 @@ ClrMD/SOS helpers for inspection.
 - **lookup_method**: `inspect(kind: "lookup_method", sessionId: "...", userId: "...", typeName: "Namespace.Type", methodName: "Method")`
 - **clr_stack**: `inspect(kind: "clr_stack", sessionId: "...", userId: "...", includeArguments: true, includeLocals: true)`
 - **load_sos**: `inspect(kind: "load_sos", sessionId: "...", userId: "...")`
+
+Notes:
+- `inspect(kind: "object")` is the recommended way to inspect managed objects and value types (it replaces ad-hoc `dumpobj`/`dumpvc` usage).
+- Use `methodTable` when inspecting value types at an address (or when SOS output is incomplete).
 
 ### 11) `datadog_symbols`
 Datadog symbol workflows.

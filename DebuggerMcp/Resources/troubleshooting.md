@@ -236,6 +236,38 @@ xcode-select --install
 
 ---
 
+## 🤖 AI / LLM Sampling Issues
+
+### "AI analysis failed: empty sampling response."
+
+**Cause**: The connected MCP client returned no assistant content/tool calls during sampling (often due to an upstream LLM/provider error).
+
+**Solutions**:
+- Ensure your MCP client supports sampling (`sampling/createMessage`) with tools enabled.
+  - The `dbg-mcp` CLI supports sampling when OpenRouter is configured (`OPENROUTER_API_KEY`).
+- Try a different OpenRouter model (some providers have stricter tool-call requirements).
+
+### "I can't see what was sent to the LLM" / "Sampling is truncated"
+
+Enable server-side sampling traces (may include sensitive debugger output):
+```bash
+export DEBUGGER_MCP_AI_SAMPLING_TRACE=true
+export DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
+export DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
+```
+
+Trace files are written under:
+- `LOG_STORAGE_PATH/ai-sampling` (default `./logs/ai-sampling` in Docker Compose)
+
+### "The AI keeps using dumpobj instead of inspect"
+
+**Cause**: The model defaults to familiar SOS commands.
+
+**Solution**: Prefer the first-class MCP tool:
+- Use `inspect(kind: "object", ...)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
+
+---
+
 ## 💾 Memory Issues
 
 ### Out of Memory During Analysis
