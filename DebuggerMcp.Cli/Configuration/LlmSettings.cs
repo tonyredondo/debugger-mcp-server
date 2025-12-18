@@ -28,6 +28,12 @@ public sealed class LlmSettings
     public string? OpenRouterApiKeyFromEnvironment { get; private set; }
 
     /// <summary>
+    /// Gets the environment variable name that supplied <see cref="OpenRouterApiKeyFromEnvironment"/> (not persisted).
+    /// </summary>
+    [JsonIgnore]
+    public string? OpenRouterApiKeyEnvironmentVariableName { get; private set; }
+
+    /// <summary>
     /// Gets or sets the OpenRouter model identifier.
     /// </summary>
     /// <remarks>
@@ -59,6 +65,12 @@ public sealed class LlmSettings
     /// </summary>
     [JsonIgnore]
     public string? OpenAiApiKeyFromEnvironment { get; private set; }
+
+    /// <summary>
+    /// Gets the environment variable name that supplied <see cref="OpenAiApiKeyFromEnvironment"/> (not persisted).
+    /// </summary>
+    [JsonIgnore]
+    public string? OpenAiApiKeyEnvironmentVariableName { get; private set; }
 
     /// <summary>
     /// Gets the OpenAI API key loaded from <c>~/.codex/auth.json</c> when available (not persisted).
@@ -117,7 +129,9 @@ public sealed class LlmSettings
     {
         // Reset ephemeral env-derived fields each time this runs.
         OpenRouterApiKeyFromEnvironment = null;
+        OpenRouterApiKeyEnvironmentVariableName = null;
         OpenAiApiKeyFromEnvironment = null;
+        OpenAiApiKeyEnvironmentVariableName = null;
         OpenAiApiKeyFromCodexAuth = null;
         OpenAiApiKeyFromCodexAuthUsedOverridePath = false;
 
@@ -134,9 +148,10 @@ public sealed class LlmSettings
         }
 
         // Support both OpenRouter-standard and DebuggerMcp-prefixed env vars.
-        var apiKey =
-            Environment.GetEnvironmentVariable("OPENROUTER_API_KEY") ??
-            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENROUTER_API_KEY");
+        var apiKey = Environment.GetEnvironmentVariable("OPENROUTER_API_KEY");
+        OpenRouterApiKeyEnvironmentVariableName = !string.IsNullOrWhiteSpace(apiKey) ? "OPENROUTER_API_KEY" : null;
+        apiKey ??= Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENROUTER_API_KEY");
+        OpenRouterApiKeyEnvironmentVariableName ??= !string.IsNullOrWhiteSpace(apiKey) ? "DEBUGGER_MCP_OPENROUTER_API_KEY" : null;
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
             OpenRouterApiKeyFromEnvironment = apiKey.Trim();
@@ -158,9 +173,10 @@ public sealed class LlmSettings
             OpenRouterBaseUrl = baseUrl.Trim().TrimEnd('/');
         }
 
-        var openAiApiKey =
-            Environment.GetEnvironmentVariable("OPENAI_API_KEY") ??
-            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_API_KEY");
+        var openAiApiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
+        OpenAiApiKeyEnvironmentVariableName = !string.IsNullOrWhiteSpace(openAiApiKey) ? "OPENAI_API_KEY" : null;
+        openAiApiKey ??= Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_API_KEY");
+        OpenAiApiKeyEnvironmentVariableName ??= !string.IsNullOrWhiteSpace(openAiApiKey) ? "DEBUGGER_MCP_OPENAI_API_KEY" : null;
         if (!string.IsNullOrWhiteSpace(openAiApiKey))
         {
             OpenAiApiKeyFromEnvironment = openAiApiKey.Trim();
@@ -265,18 +281,24 @@ public sealed class LlmSettings
     {
         if (GetProviderKind() == LlmProviderKind.OpenAi)
         {
-            if (!string.IsNullOrWhiteSpace(OpenAiApiKeyFromEnvironment)) return "env";
+            if (!string.IsNullOrWhiteSpace(OpenAiApiKeyFromEnvironment))
+            {
+                return OpenAiApiKeyEnvironmentVariableName == null ? "env" : $"env:{OpenAiApiKeyEnvironmentVariableName}";
+            }
             if (!string.IsNullOrWhiteSpace(OpenAiApiKey)) return "config";
             if (!string.IsNullOrWhiteSpace(OpenAiApiKeyFromCodexAuth))
             {
                 return OpenAiApiKeyFromCodexAuthUsedOverridePath
-                    ? "codex auth (override path)"
-                    : "~/.codex/auth.json";
+                    ? "codex-auth (override)"
+                    : "codex-auth (default)";
             }
             return "(not set)";
         }
 
-        if (!string.IsNullOrWhiteSpace(OpenRouterApiKeyFromEnvironment)) return "env";
+        if (!string.IsNullOrWhiteSpace(OpenRouterApiKeyFromEnvironment))
+        {
+            return OpenRouterApiKeyEnvironmentVariableName == null ? "env" : $"env:{OpenRouterApiKeyEnvironmentVariableName}";
+        }
         if (!string.IsNullOrWhiteSpace(OpenRouterApiKey)) return "config";
         return "(not set)";
     }

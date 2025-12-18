@@ -88,6 +88,7 @@ public class LlmSettingsTests
             var settings = new LlmSettings { Provider = "openai" };
             settings.ApplyEnvironmentOverrides();
             Assert.Equal("k2", settings.GetEffectiveOpenAiApiKey());
+            Assert.Equal("env:OPENAI_API_KEY", settings.GetEffectiveApiKeySource());
         }
         finally
         {
@@ -118,7 +119,7 @@ public class LlmSettingsTests
             settings.ApplyEnvironmentOverrides();
 
             Assert.Equal("k-codex", settings.GetEffectiveOpenAiApiKey());
-            Assert.Equal("codex auth (override path)", settings.GetEffectiveApiKeySource());
+            Assert.Equal("codex-auth (override)", settings.GetEffectiveApiKeySource());
         }
         finally
         {
@@ -152,7 +153,7 @@ public class LlmSettingsTests
             settings.ApplyEnvironmentOverrides();
 
             Assert.Equal("k-env", settings.GetEffectiveOpenAiApiKey());
-            Assert.Equal("env", settings.GetEffectiveApiKeySource());
+            Assert.Equal("env:OPENAI_API_KEY", settings.GetEffectiveApiKeySource());
         }
         finally
         {
