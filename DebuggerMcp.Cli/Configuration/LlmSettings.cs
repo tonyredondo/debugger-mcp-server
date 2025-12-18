@@ -108,7 +108,11 @@ public sealed class LlmSettings
             Environment.GetEnvironmentVariable("LLM_PROVIDER");
         if (!string.IsNullOrWhiteSpace(provider))
         {
-            Provider = NormalizeProvider(provider);
+            var normalized = NormalizeProvider(provider);
+            if (normalized is "openrouter" or "openai")
+            {
+                Provider = normalized;
+            }
         }
 
         // Support both OpenRouter-standard and DebuggerMcp-prefixed env vars.

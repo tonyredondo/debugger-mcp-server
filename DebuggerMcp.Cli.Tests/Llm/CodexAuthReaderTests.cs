@@ -81,5 +81,22 @@ public class CodexAuthReaderTests
             try { Directory.Delete(Path.Combine(home, ".dbg-mcp-test"), recursive: true); } catch { }
         }
     }
-}
 
+    [Fact]
+    public void TryReadOpenAiApiKey_SkipsEmptyKeysAndUsesNextMatch()
+    {
+        var dir = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", nameof(CodexAuthReaderTests), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        var path = Path.Combine(dir, "auth.json");
+
+        try
+        {
+            File.WriteAllText(path, "{\"OPENAI_API_KEY\":\"\",\"openai_api_key\":\"k5\"}");
+            Assert.Equal("k5", CodexAuthReader.TryReadOpenAiApiKey(path));
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+    }
+}

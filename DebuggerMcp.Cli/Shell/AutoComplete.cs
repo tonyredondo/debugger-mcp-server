@@ -40,7 +40,7 @@ public class AutoComplete
         ["watch"] = ["add", "list", "eval", "remove", "clear"],
         ["report"] = ["--format", "--output", "--summary", "markdown", "html", "json"],
         ["sourcelink"] = ["resolve", "info"],
-        ["llm"] = ["provider", "model", "set-key", "set-agent", "set-agent-confirm", "reset"],
+        ["llm"] = ["provider", "set-provider", "model", "set-key", "set-agent", "agent", "set-agent-confirm", "agent-confirm", "reset"],
         ["set"] = ["verbose", "output", "timeout", "user"],
         ["history"] = ["clear", "search"]
     };
@@ -244,7 +244,8 @@ public class AutoComplete
         // LLM provider selector values
         if (command == "llm" &&
             parts.Length >= 2 &&
-            parts[1].Equals("provider", StringComparison.OrdinalIgnoreCase))
+            (parts[1].Equals("provider", StringComparison.OrdinalIgnoreCase) ||
+             parts[1].Equals("set-provider", StringComparison.OrdinalIgnoreCase)))
         {
             completions.AddRange(new[] { "openrouter", "openai" }.Where(p =>
                 string.IsNullOrEmpty(prefix) ||
@@ -260,6 +261,16 @@ public class AutoComplete
              parts[1].Equals("agent-confirm", StringComparison.OrdinalIgnoreCase)))
         {
             completions.AddRange(new[] { "true", "false" }.Where(v =>
+                string.IsNullOrEmpty(prefix) ||
+                v.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        // LLM reset mode
+        if (command == "llm" &&
+            parts.Length >= 2 &&
+            parts[1].Equals("reset", StringComparison.OrdinalIgnoreCase))
+        {
+            completions.AddRange(new[] { "conversation" }.Where(v =>
                 string.IsNullOrEmpty(prefix) ||
                 v.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
         }

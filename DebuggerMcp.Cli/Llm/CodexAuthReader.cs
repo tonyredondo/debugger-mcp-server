@@ -134,7 +134,7 @@ internal static class CodexAuthReader
             var s = prop.Value.GetString();
             if (string.IsNullOrWhiteSpace(s))
             {
-                return false;
+                continue;
             }
 
             value = s.Trim();
