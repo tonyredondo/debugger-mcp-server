@@ -62,6 +62,8 @@ public class TranscriptContextBuilderTests
         Assert.Contains("CALL THE TOOL", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do not format tool commands as bash", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("prefer this over exec \"sos dumpobj\"", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("cumulative summary", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Do not repeat the same tool call", messages[0].Content, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

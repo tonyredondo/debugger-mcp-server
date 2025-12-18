@@ -58,6 +58,10 @@ internal static class LlmSystemPrompts
         sb.AppendLine();
         sb.AppendLine("Response format:");
         sb.AppendLine("- While you still need evidence, focus on calling tools (minimal text).");
+        sb.AppendLine("- Maintain a running, cumulative summary: when you conclude, \"What we know\" and \"Evidence\" must aggregate findings from the entire investigation, not just the last iteration.");
+        sb.AppendLine("- Keep those sections updated as new information arrives: add new confirmed facts/evidence, reconcile contradictions, and avoid duplicating items.");
+        sb.AppendLine("- Do not repeat the same tool call with identical arguments unless you explain what changed and what new evidence you expect to gain.");
+        sb.AppendLine("- Keep \"What we know\" and \"Evidence\" concise (aim for <= 10 bullets each); merge older items instead of growing unbounded.");
         sb.AppendLine("- Once you are ready to conclude, respond with:");
         sb.AppendLine("1) What we know (bullets)");
         sb.AppendLine("2) Hypothesis");

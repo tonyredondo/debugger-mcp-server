@@ -5052,7 +5052,7 @@ public class Program
                 AppendLlmToolTranscript(transcript, state, toolCall, toolResult);
                 return toolResult;
             },
-            maxIterations: 10);
+            maxIterations: 20);
 
         try
         {

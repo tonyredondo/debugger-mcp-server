@@ -8,7 +8,7 @@ namespace DebuggerMcp.Cli.Llm;
 internal sealed class LlmAgentRunner(
     Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<ChatCompletionResult>> completeAsync,
     Func<ChatToolCall, CancellationToken, Task<string>> executeToolAsync,
-    int maxIterations = 10)
+    int maxIterations = 20)
 {
     private readonly Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<ChatCompletionResult>> _completeAsync =
         completeAsync ?? throw new ArgumentNullException(nameof(completeAsync));
@@ -16,7 +16,7 @@ internal sealed class LlmAgentRunner(
     private readonly Func<ChatToolCall, CancellationToken, Task<string>> _executeToolAsync =
         executeToolAsync ?? throw new ArgumentNullException(nameof(executeToolAsync));
 
-    private readonly int _maxIterations = maxIterations <= 0 ? 10 : maxIterations;
+    private readonly int _maxIterations = maxIterations <= 0 ? 20 : maxIterations;
 
     public async Task<LlmAgentRunResult> RunAsync(IReadOnlyList<ChatMessage> seedMessages, CancellationToken cancellationToken)
     {
