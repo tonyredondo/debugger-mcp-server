@@ -356,7 +356,7 @@ Before generating URLs, restrict to known dotnet build-agent paths to avoid inco
 Many threads have `topFunction` values like `[Runtime]` or a header-derived value that does not match the most meaningful frame in the final merged `callStack`.
 
 ### Evidence
-In the regenerated `6239b1aa.json`, some threads have:
+In the regenerated local JSON report, some threads have:
 - `topFunction = [Runtime]` while `callStack` includes meaningful frames such as `libcoreclr.so!...` or `System.*` managed methods.
 - `topFunction` pointing at the pre-merge header/function while the merged stack starts with placeholder frames like `[JIT Code @ ...]`.
 
@@ -385,7 +385,7 @@ and was not re-selected after late-stage SP-based stack merging reorders frames.
   - `MergeNativeAndManagedFramesBySP_RecomputesTopFunctionAfterReordering`
 
 ### Notes / Discussion
-- Verification step: regenerate `DebuggerMcp.Cli/6239b1aa.json` and confirm `topFunction` equals the first non-placeholder frame in `callStack` for each thread.
+- Verification step: regenerate the local JSON report and confirm `topFunction` equals the first non-placeholder frame in `callStack` for each thread.
 
 ---
 
