@@ -47,9 +47,9 @@ public class PerformanceTools(
     /// - GC behavior (generations, fragmentation)
     /// - Thread contention (lock waits, potential deadlocks)
     /// 
-    /// IMPORTANT: A dump file must be open before calling this tool (use OpenDump first).
-    /// SOS is auto-loaded for .NET dumps, enabling .NET specific analysis automatically.
-    /// </remarks>
+	    /// IMPORTANT: A dump file must be open before calling this tool (use <c>dump(action="open")</c> first; CLI: <c>open &lt;dumpId&gt;</c>).
+	    /// SOS is auto-loaded for .NET dumps, enabling .NET specific analysis automatically.
+	    /// </remarks>
     public async Task<string> AnalyzePerformance(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,

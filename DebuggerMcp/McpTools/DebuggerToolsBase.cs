@@ -121,7 +121,7 @@ public abstract class DebuggerToolsBase(
     {
         if (!manager.IsDumpOpen)
         {
-            throw new InvalidOperationException("No dump file is open. Use OpenDump first.");
+            throw new InvalidOperationException("No dump file is open. Use dump(action=\"open\") first (CLI: open <dumpId>).");
         }
     }
 
@@ -135,7 +135,7 @@ public abstract class DebuggerToolsBase(
     {
         if (!manager.IsDumpOpen)
         {
-            throw new InvalidOperationException($"Session {sessionId} does not have a dump file open. Use OpenDump first.");
+            throw new InvalidOperationException($"Session {sessionId} does not have a dump file open. Use dump(action=\"open\") first (CLI: open <dumpId>).");
         }
     }
 

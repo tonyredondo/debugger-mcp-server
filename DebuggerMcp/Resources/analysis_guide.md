@@ -587,14 +587,15 @@ session(action: "create", userId: "user1") → comparisonSessionId
 dump(action: "open", sessionId: baselineSessionId, userId: "user1", dumpId: "dump-before-leak")
 
 # Open comparison dump (e.g., from today)
-OpenDump(comparisonSessionId, "user1", "dump-after-leak")
+dump(action: "open", sessionId: comparisonSessionId, userId: "user1", dumpId: "dump-after-leak")
 
 # Compare
-CompareDumps(
+compare(
+    kind: "dumps",
     baselineSessionId: "baseline-session",
     baselineUserId: "user1",
-    comparisonSessionId: "comparison-session",
-    comparisonUserId: "user1"
+    targetSessionId: "comparison-session",
+    targetUserId: "user1"
 )
 ```
 

@@ -50,7 +50,7 @@ public class SecurityTools(
     /// - Memory protection analysis (ASLR, DEP/NX, Stack Canaries, SafeSEH)
     /// - Exploit pattern detection
     /// 
-    /// IMPORTANT: A dump file must be open before calling this tool (use OpenDump first).
+    /// IMPORTANT: A dump file must be open before calling this tool (use <c>dump(action="open")</c> first; CLI: <c>open &lt;dumpId&gt;</c>).
     /// </remarks>
     public async Task<string> AnalyzeSecurity(
         [Description("Session ID from CreateSession")] string sessionId,

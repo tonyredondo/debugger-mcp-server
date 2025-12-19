@@ -68,7 +68,7 @@ public sealed class AiAnalysisTools(
         {
             throw new InvalidOperationException(
                 "This server is configured for .NET crash analysis only. SOS and/or ClrMD must be available. " +
-                "Ensure the dump is a .NET dump and that it was opened via OpenDump.");
+                "Ensure the dump is a .NET dump and that it was opened via dump(action=\"open\") (CLI: open <dumpId>).");
         }
 
         Logger.LogInformation("[AI] Using DotNetCrashAnalyzer for initial report (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",

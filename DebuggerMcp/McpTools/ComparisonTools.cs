@@ -50,11 +50,11 @@ public class ComparisonTools(
     /// 
     /// Both sessions must have dump files open before calling this tool.
     /// 
-    /// Example workflow:
-    /// 1. Create two sessions: CreateSession("user1") → sessionA, CreateSession("user1") → sessionB
-    /// 2. Open baseline dump: OpenDump(sessionA, "user1", "baseline-dump-id")
-    /// 3. Open comparison dump: OpenDump(sessionB, "user1", "comparison-dump-id")
-    /// 4. Compare: CompareDumps(sessionA, "user1", sessionB, "user1")
+    /// Example workflow (compact tools):
+    /// 1. Create two sessions: session(action="create", userId="user1") → sessionA and sessionB
+    /// 2. Open baseline dump: dump(action="open", sessionId=sessionA, userId="user1", dumpId="baseline-dump-id")
+    /// 3. Open comparison dump: dump(action="open", sessionId=sessionB, userId="user1", dumpId="comparison-dump-id")
+    /// 4. Compare: compare(kind="dumps", baselineSessionId=sessionA, baselineUserId="user1", targetSessionId=sessionB, targetUserId="user1")
     /// </remarks>
     public async Task<string> CompareDumps(
         [Description("Session ID for the baseline (older/before) dump")] string baselineSessionId,

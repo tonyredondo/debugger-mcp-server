@@ -14,7 +14,7 @@ namespace DebuggerMcp.McpTools;
 /// <item><description>Getting information about available symbol servers</description></item>
 /// </list>
 /// 
-/// Note: Symbol configuration is done automatically when you call OpenDump.
+/// Note: Symbol configuration is done automatically when you open a dump (<c>dump(action="open")</c> / CLI: <c>open &lt;dumpId&gt;</c>).
 /// These tools are for advanced scenarios where additional symbol servers are needed.
 /// </remarks>
 public class SymbolTools(
@@ -32,8 +32,8 @@ public class SymbolTools(
     /// <param name="additionalPaths">Comma-separated list of additional symbol paths (directories or symbol servers).</param>
     /// <returns>Success message.</returns>
     /// <remarks>
-    /// <para>NOTE: Symbol configuration is done automatically when you call OpenDump. This tool is only needed if you want to add extra symbol servers.</para>
-    /// <para>By default, OpenDump configures:</para>
+    /// <para>NOTE: Symbol configuration is done automatically when you open a dump (<c>dump(action="open")</c> / CLI: <c>open &lt;dumpId&gt;</c>). This tool is only needed if you want to add extra symbol servers.</para>
+    /// <para>By default, opening a dump configures:</para>
     /// <list type="bullet">
     /// <item><description>Microsoft Symbol Server (for Windows/Microsoft symbols)</description></item>
     /// <item><description>Dump-specific symbols (if you uploaded any via the HTTP API)</description></item>
@@ -45,7 +45,7 @@ public class SymbolTools(
     /// <item><description>Local directory: "C:\\MySymbols" or "/path/to/symbols"</description></item>
     /// </list>
     /// <para>Multiple paths should be separated by commas.</para>
-    /// <para>Call this BEFORE OpenDump if you want the additional paths configured from the start.</para>
+    /// <para>Call this BEFORE opening a dump if you want the additional paths configured from the start.</para>
     /// </remarks>
     public string ConfigureAdditionalSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
@@ -97,7 +97,7 @@ public class SymbolTools(
     /// <returns>List of symbol server URLs and descriptions.</returns>
     /// <remarks>
     /// Returns information about commonly used symbol servers:
-    /// - Microsoft Symbol Server (automatically configured by OpenDump)
+    /// - Microsoft Symbol Server (automatically configured when opening a dump)
     /// - NuGet Symbol Server
     /// </remarks>
     public string GetSymbolServers()
@@ -106,7 +106,7 @@ public class SymbolTools(
                $"1. Microsoft Symbol Server (AUTO-CONFIGURED)\n" +
                $"   URL: {SymbolManager.MicrosoftSymbolServer}\n" +
                $"   Description: Official Microsoft public symbol server for Windows and .NET symbols\n" +
-               $"   NOTE: This is automatically configured when you call OpenDump\n\n" +
+               $"   NOTE: This is automatically configured when you open a dump\n\n" +
                $"2. NuGet Symbol Server\n" +
                $"   URL: {SymbolManager.NuGetSymbolServer}\n" +
                $"   Description: Symbol server for NuGet packages\n" +
@@ -114,7 +114,7 @@ public class SymbolTools(
                $"Custom Symbols:\n" +
                $"   Upload via HTTP API: POST /api/symbols/upload (with dumpId)\n" +
                $"   Batch upload: POST /api/symbols/upload-batch (with dumpId)\n" +
-               $"   These are automatically configured when you call OpenDump";
+               $"   These are automatically configured when you open a dump";
     }
 
     /// <summary>
@@ -130,7 +130,7 @@ public class SymbolTools(
     /// <item><description>You want to force a fresh symbol download on next open</description></item>
     /// <item><description>You want to reclaim disk space</description></item>
     /// </list>
-    /// <para>After clearing, the next OpenDump call will re-download symbols from the server.</para>
+    /// <para>After clearing, the next dump open will re-download symbols from the server.</para>
     /// </remarks>
     public string ClearSymbolCache(
         [Description("User ID that owns the dump")] string userId,

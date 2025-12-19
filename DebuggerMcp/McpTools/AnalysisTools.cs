@@ -47,7 +47,7 @@ public class AnalysisTools(
     /// - Thread information
     /// - Summary and recommendations
     /// 
-    /// IMPORTANT: A dump file must be open before calling this tool (use OpenDump first).
+    /// IMPORTANT: A dump file must be open before calling this tool (use <c>dump(action="open")</c> first; CLI: <c>open &lt;dumpId&gt;</c>).
     /// </remarks>
     public async Task<string> AnalyzeCrash(
         [Description("Session ID from CreateSession")] string sessionId,
@@ -74,7 +74,7 @@ public class AnalysisTools(
         {
             throw new InvalidOperationException(
                 "This server is configured for .NET crash analysis only. SOS and/or ClrMD must be available. " +
-                "Ensure the dump is a .NET dump and that it was opened via OpenDump.");
+                "Ensure the dump is a .NET dump and that it was opened via dump(action=\"open\") (CLI: open <dumpId>).");
         }
 
         // .NET-specific analysis using SOS and ClrMD enrichment (when available).
