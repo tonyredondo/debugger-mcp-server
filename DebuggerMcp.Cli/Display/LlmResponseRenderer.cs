@@ -323,8 +323,13 @@ internal sealed class LlmResponseRenderer
 
         var budget = Math.Max(40, consoleWidth - 4);
 
-        var sampleRows = Math.Min(rows.Count, _options.MaxTableRows);
-        var cappedRows = rows.Take(sampleRows).ToList();
+        // MaxTableRows refers to body rows; always keep the header row if present.
+        var cappedRows = new List<List<string>>(capacity: Math.Min(rows.Count, 1 + _options.MaxTableRows));
+        cappedRows.Add(rows[0]);
+        var bodyRowsAvailable = Math.Max(0, rows.Count - 1);
+        var bodyRowsToTake = Math.Min(bodyRowsAvailable, _options.MaxTableRows);
+        cappedRows.AddRange(rows.Skip(1).Take(bodyRowsToTake));
+        var remainingBodyRows = bodyRowsAvailable - bodyRowsToTake;
 
         var estimated = EstimateTableWidth(cappedRows, columns, maxCellWidth: _options.MaxTableCellWidth);
         var canUseSpectreTable = columns <= _options.MaxTableColumns && estimated <= budget;
@@ -340,9 +345,9 @@ internal sealed class LlmResponseRenderer
                 Padding = new Padding(1, 0)
             });
 
-            if (rows.Count > sampleRows)
+            if (remainingBodyRows > 0)
             {
-                output.Add(new Markup($"[dim]... ({rows.Count - sampleRows} more rows)[/]"));
+                output.Add(new Markup($"[dim]... ({remainingBodyRows} more rows)[/]"));
             }
 
             return;
@@ -356,7 +361,8 @@ internal sealed class LlmResponseRenderer
         for (var c = 0; c < columns; c++)
         {
             var headerText = c < header.Count ? header[c] : string.Empty;
-            spectre.AddColumn(new TableColumn($"[bold]{headerText}[/]"));
+            // Avoid wrapping in extra markup tags; headerText may already contain markup spans.
+            spectre.AddColumn(new TableColumn(new Markup(headerText)));
         }
 
         foreach (var row in cappedRows.Skip(1))
@@ -373,9 +379,9 @@ internal sealed class LlmResponseRenderer
 
         output.Add(spectre);
 
-        if (rows.Count > sampleRows)
+        if (remainingBodyRows > 0)
         {
-            output.Add(new Markup($"[dim]... ({rows.Count - sampleRows} more rows)[/]"));
+            output.Add(new Markup($"[dim]... ({remainingBodyRows} more rows)[/]"));
         }
     }
 

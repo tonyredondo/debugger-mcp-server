@@ -93,6 +93,34 @@ public class LlmResponseRendererTests
         Assert.Equal(1, CountOccurrences(output, "B"));
     }
 
+    [Fact]
+    public void Render_Table_TruncatesBodyRowsAndShowsMoreRowsMarker()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("| A |");
+        sb.AppendLine("|---|");
+        for (var i = 0; i < 60; i++)
+        {
+            sb.AppendLine($"| row{i} |");
+        }
+
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxTableRows = 10 });
+        var blocks = renderer.Render(sb.ToString(), consoleWidth: 120);
+
+        using var console = new TestConsole().Width(120);
+        foreach (var block in blocks)
+        {
+            console.Write(block);
+            console.WriteLine();
+        }
+
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("row0", output, StringComparison.Ordinal);
+        Assert.Contains("row9", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("row10", output, StringComparison.Ordinal);
+        Assert.Contains("more rows", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         if (needle.Length == 0)
