@@ -83,13 +83,7 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
             }
         }
 
-        var (statusCode, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
-        if (statusCode is null)
-        {
-            throw new HttpRequestException("OpenAI request failed: no HTTP status code.");
-        }
-
-        var status = statusCode.Value;
+        var (status, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
 
         // Some OpenAI models do not accept max_tokens and require max_completion_tokens.
         if (status == 400 &&
@@ -100,8 +94,7 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         {
             payload.MaxTokens = null;
             payload.MaxCompletionTokens = maxTokens;
-            (statusCode, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
-            status = statusCode ?? 0;
+            (status, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
         }
 
         // Some models may accept max_tokens but not max_completion_tokens; retry the other direction too.
@@ -113,13 +106,12 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         {
             payload.MaxCompletionTokens = null;
             payload.MaxTokens = maxTokens;
-            (statusCode, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
-            status = statusCode ?? 0;
+            (status, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
         }
 
         if (status < 200 || status >= 300)
         {
-            var redacted = TranscriptRedactor.RedactText(errorBody ?? string.Empty);
+            var redacted = TranscriptRedactor.RedactText(errorBody);
             throw new HttpRequestException($"OpenAI request failed ({status}): {redacted}");
         }
 
@@ -259,7 +251,7 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         return errorBody.Contains(parameterName, StringComparison.OrdinalIgnoreCase);
     }
 
-    private async Task<(int? StatusCode, string ResponseBody, string ErrorBody)> SendOnceAsync(
+    private async Task<(int StatusCode, string ResponseBody, string ErrorBody)> SendOnceAsync(
         string url,
         string apiKey,
         OpenAiChatRequest payload,
@@ -435,8 +427,8 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         return Encoding.UTF8.GetString(buffer, 0, safeCount);
     }
 
-	    private sealed class OpenAiChatRequest
-	    {
+    private sealed class OpenAiChatRequest
+    {
         [JsonPropertyName("model")]
         public string Model { get; set; } = string.Empty;
 
@@ -457,7 +449,7 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
 
         [JsonPropertyName("reasoning_effort")]
         public string? ReasoningEffort { get; set; }
-	    }
+    }
 
     private sealed class OpenAiChatMessage
     {
