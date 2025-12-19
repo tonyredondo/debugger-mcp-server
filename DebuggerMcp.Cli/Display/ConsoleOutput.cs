@@ -19,6 +19,7 @@ public class ConsoleOutput
     private OutputFormat _format;
     private bool _verbose;
     private static readonly AsyncLocal<Action<string>?> TranscriptSink = new();
+    private static readonly LlmResponseRenderer DefaultLlmRenderer = new();
 
     /// <summary>
     /// Gets or sets the output format.
@@ -173,6 +174,23 @@ public class ConsoleOutput
     {
         EmitToTranscript(message);
         _console.WriteLine(message);
+    }
+
+    /// <summary>
+    /// Writes an LLM response, rendering Markdown (best-effort) and ANSI colors (SGR only).
+    /// </summary>
+    /// <param name="response">The raw response text.</param>
+    public void WriteLlmResponse(string response)
+    {
+        response ??= string.Empty;
+        EmitToTranscript(response);
+
+        var blocks = DefaultLlmRenderer.Render(response, consoleWidth: _console.Profile.Width);
+        foreach (var block in blocks)
+        {
+            _console.Write(block);
+            _console.WriteLine();
+        }
     }
 
     /// <summary>

@@ -5027,7 +5027,7 @@ public class Program
         });
 
         output.WriteLine();
-        output.WriteLine(response);
+        output.WriteLlmResponse(response);
     }
 
     private static async Task<string> RunLlmAgentLoopAsync(

@@ -44,6 +44,9 @@
     <!-- Rich Console UI -->
     <PackageReference Include="Spectre.Console" Version="0.49.1" />
     <PackageReference Include="Spectre.Console.Json" Version="0.49.1" />
+
+    <!-- Markdown rendering for LLM output -->
+    <PackageReference Include="Markdig" Version="0.44.0" />
     
     <!-- Clipboard support -->
     <PackageReference Include="TextCopy" Version="6.2.1" />
