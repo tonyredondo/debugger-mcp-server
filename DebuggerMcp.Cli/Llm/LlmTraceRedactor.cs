@@ -23,7 +23,7 @@ internal static class LlmTraceRedactor
         // JSON-style pairs: "apiKey": "..."
         text = Regex.Replace(
             text,
-            @"(?i)""(openrouter_api_key|openai_api_key|anthropic_api_key|api[_-]?key|password|secret)""\s*:\s*""[^""]*""",
+            @"(?i)""(openrouter_api_key|openai_api_key|anthropic_api_key|debugger_mcp_openrouter_api_key|debugger_mcp_openai_api_key|debugger_mcp_anthropic_api_key|api[_-]?key|password|secret)""\s*:\s*""[^""]*""",
             "\"$1\":\"***\"",
             RegexOptions.CultureInvariant);
 
@@ -44,7 +44,7 @@ internal static class LlmTraceRedactor
         // Key=value or key: value pairs (exclude bare "token" to avoid wiping method tokens, etc.)
         text = Regex.Replace(
             text,
-            @"(?i)\b(openrouter_api_key|openai_api_key|anthropic_api_key|api[_-]?key|password|secret)\b\s*[:=]\s*([^\s]+)",
+            @"(?i)\b(openrouter_api_key|openai_api_key|anthropic_api_key|debugger_mcp_openrouter_api_key|debugger_mcp_openai_api_key|debugger_mcp_anthropic_api_key|api[_-]?key|password|secret)\b\s*[:=]\s*([^\s]+)",
             "$1=***",
             RegexOptions.CultureInvariant);
 
