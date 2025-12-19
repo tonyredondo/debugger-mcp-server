@@ -159,8 +159,6 @@ public sealed class CompactTools
         return NormalizeRequired(kind, nameof(kind)) switch
         {
             "crash" => _analysisTools.AnalyzeCrash(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
-            // Back-compat: `dotnet_crash` was renamed to `crash` (the server now assumes .NET dumps).
-            "dotnet_crash" => _analysisTools.AnalyzeCrash(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
             "ai" => _aiAnalysisTools.AnalyzeCrashWithAiAsync(
                 server,
                 Require(sessionId, nameof(sessionId)),
