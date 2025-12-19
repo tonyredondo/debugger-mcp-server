@@ -1233,6 +1233,7 @@ IMPORTANT: Do not repeat identical tool calls with the same arguments; reuse pri
 IMPORTANT: Do not assume assembly versions from file paths. Treat paths as hints and verify versions using assembly metadata from the report (prefer report_get for analysis.assemblies/items and analysis.modules where available).
 IMPORTANT: If you suspect a profiler/tracer rewrote IL, VERIFY it: check whether the executing code is IL/JIT vs R2R/NGen, whether the method is JITted, and (when possible) inspect/dump the current IL to confirm rewriting rather than assuming.
 IMPORTANT: Maintain a running, cumulative set of confirmed facts and evidence across iterations; do not “reset” what you know each step.
+IMPORTANT: The report metadata indicates whether SOS is loaded (metadata.sosLoaded). If SOS is already loaded, use SOS commands directly and do NOT attempt to load SOS plugins/libraries.
 
 Available tools:
 - exec: Run any debugger command (LLDB/WinDbg/SOS)
@@ -1242,7 +1243,7 @@ Available tools:
 - analysis_complete: Call when you've determined the root cause
 
 SOS/.NET debugger command notes:
-- If SOS is loaded, prefer running SOS commands via: exec "sos <command> <args>".
+- If SOS is loaded (metadata.sosLoaded=true), prefer running SOS commands via: exec "sos <command> <args>".
 - Do not guess flags. When unsure, run: exec "sos help <command>" (or exec "sos help") and use the documented arguments.
 - Common SOS commands (examples only): sos clrstack -a, sos printexception, sos dumpheap -stat, sos dumpobj <addr>, sos dumpmt -md <mt>, sos dumpmodule <addr>, sos name2ee <assembly> <type>.
 - If a command errors with "Unrecognized command or argument" or "Unknown option", adapt based on "sos help <command>" instead of retrying randomly.

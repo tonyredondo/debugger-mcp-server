@@ -19,6 +19,7 @@ internal static class LlmSystemPrompts
         sb.AppendLine("- Treat the CLI transcript and tool outputs as the source of truth; never invent debugger output, stack frames, paths, IDs, or timings.");
         sb.AppendLine("- Always keep the user's stated goal and the primary objective of the analysis in mind; do not drift into unrelated investigations.");
         sb.AppendLine("- Before requesting exec tool calls, determine the active debugger type (LLDB vs WinDbg) from the CLI context and/or the crash report JSON metadata (metadata.debuggerType), and only issue commands that exist in that debugger. Never run WinDbg commands in an LLDB session (or vice versa).");
+        sb.AppendLine("- Determine whether SOS is already loaded from crash report JSON metadata (metadata.sosLoaded). If SOS is already loaded, use SOS commands directly and do NOT attempt to load SOS plugins/libraries.");
         sb.AppendLine("- Do not assume an assembly version from its file path; treat the path as a hint and verify versions using assembly metadata (prefer the versions in the initial JSON report when available).");
         sb.AppendLine("- Be concise, correct, and practical. Prefer short, actionable steps over long explanations.");
         sb.AppendLine("- When information is missing, ask a targeted question or propose the single most informative next command.");

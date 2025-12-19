@@ -165,6 +165,7 @@ public class AiAnalysisOrchestratorTests
         Assert.NotNull(seenRequest);
         Assert.False(string.IsNullOrWhiteSpace(seenRequest!.SystemPrompt));
         Assert.Contains("metadata.debuggertype", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("metadata.sosloaded", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("never run windbg", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("report_get", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sos help", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
