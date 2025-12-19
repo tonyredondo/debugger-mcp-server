@@ -81,14 +81,20 @@ public class TopMemoryConsumersInstanceDetailsTests
                     Type = "OwnerType",
                     FieldName = "_field",
                     IsStatic = false
+                },
+                new ObjectReferenceOwner
+                {
+                    Address = "0x0000000000000003",
+                    Type = "OwnerType2",
+                    FieldName = "_other",
+                    IsStatic = false
                 }
             ]
         };
 
         Assert.Equal("0x0000000000000001", instance.Address);
-        Assert.Single(instance.Owners);
+        Assert.Equal(2, instance.Owners.Count);
         Assert.Equal("OwnerType", instance.Owners[0].Type);
         Assert.Equal("_field", instance.Owners[0].FieldName);
     }
 }
-

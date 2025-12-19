@@ -3253,7 +3253,7 @@ public class ClrMdAnalyzer : IDisposable
 
         // Only enrich when the type count is small (otherwise instance listing would be noisy and expensive).
         const int maxInstancesPerType = 5;
-        const int maxOwnersPerInstance = 1;
+        const int maxOwnersPerInstance = 3;
 
         var typesToCollect = GetTypesToCollectInstancesFor(topConsumers, maxInstancesPerType);
         if (typesToCollect.Count == 0)
