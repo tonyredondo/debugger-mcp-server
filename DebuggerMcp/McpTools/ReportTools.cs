@@ -326,6 +326,26 @@ public class ReportTools(
         };
 
         var reportService = new ReportService();
+        if (reportFormat == ReportFormat.Json)
+        {
+            // For summary JSON, return a pruned variant of the canonical JSON report document
+            // so the output stays brief and aligned with the summary semantics.
+            var canonicalJson = reportService.GenerateReport(
+                result,
+                new ReportOptions { Format = ReportFormat.Json },
+                new ReportMetadata
+                {
+                    DumpId = metadata.DumpId,
+                    UserId = metadata.UserId,
+                    GeneratedAt = metadata.GeneratedAt,
+                    DebuggerType = metadata.DebuggerType,
+                    ServerVersion = metadata.ServerVersion,
+                    Format = ReportFormat.Json
+                });
+
+            return JsonReportPruner.BuildSummaryJson(canonicalJson, options);
+        }
+
         return reportService.GenerateReport(result, options, metadata);
     }
 }
