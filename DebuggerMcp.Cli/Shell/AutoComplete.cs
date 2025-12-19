@@ -52,9 +52,6 @@ public class AutoComplete
     {
         ["dumps"] = ["--description"],
         ["symbols"] = ["--dump-id"],
-        ["analyze"] = ["--session-id"],
-        ["compare"] = ["--dump1", "--dump2", "--session-id"],
-        ["profile"] = ["--session-id", "--top"],
         ["report"] = ["--format", "--output", "--include-watches", "--include-comparison"],
         ["set"] = ["true", "false", "text", "json"]
     };
