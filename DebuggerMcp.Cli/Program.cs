@@ -4828,6 +4828,24 @@ public class Program
         output.KeyValue("Agent Confirm", llmSettings.AgentModeConfirmToolCalls ? "enabled" : "disabled");
         output.WriteLine();
 
+        var trace = LlmTraceStore.TryCreate($"{llmSettings.GetProviderDisplayName()}-{llmSettings.GetEffectiveModel()}");
+        if (trace != null)
+        {
+            trace.AppendEvent(new
+            {
+                kind = "llmagent_session_start",
+                timestampUtc = DateTime.UtcNow,
+                provider = llmSettings.GetProviderDisplayName(),
+                model = llmSettings.GetEffectiveModel(),
+                serverUrl = state.Settings.ServerUrl,
+                sessionId = state.SessionId,
+                dumpId = state.DumpId
+            });
+            output.KeyValue("Trace Folder", trace.DirectoryPath);
+            output.Dim("Note: trace files may contain sensitive data; delete when done.");
+            output.WriteLine();
+        }
+
         output.Dim("Enter prompts directly. The agent can request tools and the CLI will execute them.");
         output.Dim("Use ↑/↓ arrows for history. Type 'exit' or press Ctrl+C to return.");
         output.Dim("Type '/help' for commands available in this mode (e.g., /reset).");
@@ -4841,7 +4859,7 @@ public class Program
             var initial = string.Join(" ", args).Trim();
             if (!string.IsNullOrWhiteSpace(initial))
             {
-                await ExecuteLlmPromptAsync(initial, output, state, mcpClient, llmSettings, transcript, cancellationToken: default);
+                await ExecuteLlmPromptAsync(initial, output, state, mcpClient, llmSettings, transcript, cancellationToken: default, traceStore: trace);
             }
         }
 
@@ -4886,7 +4904,7 @@ public class Program
                 }
 
                 _llmAgentHistory.Add(line);
-                await ExecuteLlmPromptAsync(line, output, state, mcpClient, llmSettings, transcript, cancellationToken: default);
+                await ExecuteLlmPromptAsync(line, output, state, mcpClient, llmSettings, transcript, cancellationToken: default, traceStore: trace);
             }
             catch (OperationCanceledException)
             {
@@ -4898,6 +4916,15 @@ public class Program
                 output.Error(ex.Message);
                 WriteLlmErrorContext(output, llmSettings);
             }
+        }
+
+        try
+        {
+            trace?.AppendEvent(new { kind = "llmagent_session_end", timestampUtc = DateTime.UtcNow });
+        }
+        catch
+        {
+            // ignore
         }
     }
 
@@ -4947,7 +4974,8 @@ public class Program
         McpClient mcpClient,
         LlmSettings llmSettings,
         CliTranscriptStore transcript,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        LlmTraceStore? traceStore = null)
     {
         var (prompt, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
             rawPrompt,
@@ -4965,7 +4993,7 @@ public class Program
             DumpId = state.DumpId
         });
 
-        using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
+        using var http = CreateLlmHttpClient(llmSettings, traceStore);
 
         var history = transcript.ReadTailForScope(80, state.Settings.ServerUrl, state.SessionId, state.DumpId);
         var messages = TranscriptContextBuilder.BuildMessages(
@@ -5028,6 +5056,22 @@ public class Program
 
         output.WriteLine();
         output.WriteLlmResponse(response);
+    }
+
+    private static HttpClient CreateLlmHttpClient(LlmSettings llmSettings, LlmTraceStore? traceStore)
+    {
+        var timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds));
+        if (traceStore == null)
+        {
+            return new HttpClient { Timeout = timeout };
+        }
+
+        var provider = llmSettings.GetProviderDisplayName().Trim();
+        var handler = new LlmHttpTraceHandler(traceStore, provider)
+        {
+            InnerHandler = new HttpClientHandler()
+        };
+        return new HttpClient(handler) { Timeout = timeout };
     }
 
     private static async Task<string> RunLlmAgentLoopAsync(
