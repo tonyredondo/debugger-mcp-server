@@ -155,6 +155,11 @@ public class ReportService
             // Prefer including faulting threads first, then fill remaining slots in original order.
             foreach (var t in all)
             {
+                if (limited.Count >= options.MaxThreadsToShow)
+                {
+                    break;
+                }
+
                 if (t is not JsonObject obj)
                 {
                     continue;

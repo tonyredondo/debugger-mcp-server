@@ -422,6 +422,51 @@ public class ReportGeneratorTests
     }
 
     [Fact]
+    public void ReportService_GenerateReport_WhenMaxThreadsToShowSet_RespectsLimitEvenIfMultipleFaultingThreads()
+    {
+        // Arrange
+        var service = new ReportService();
+        var analysis = new CrashAnalysisResult
+        {
+            Summary = new AnalysisSummary { CrashType = "X" },
+            Threads = new ThreadsInfo
+            {
+                All = new List<ThreadInfo>
+                {
+                    new() { ThreadId = "t1", State = "Running", TopFunction = "f1", IsFaulting = true },
+                    new() { ThreadId = "t2", State = "Running", TopFunction = "f2", IsFaulting = true },
+                    new() { ThreadId = "t3", State = "Running", TopFunction = "f3", IsFaulting = true }
+                }
+            }
+        };
+
+        var options = ReportOptions.FullReport;
+        options.Format = ReportFormat.Markdown;
+        options.IncludeThreadInfo = true;
+        options.IncludeCallStacks = false;
+        options.IncludeDotNetInfo = false;
+        options.IncludeProcessInfo = false;
+        options.IncludeSecurityAnalysis = false;
+        options.IncludeHeapStats = false;
+        options.IncludeMemoryLeakInfo = false;
+        options.IncludeDeadlockInfo = false;
+        options.IncludeModules = false;
+        options.IncludeRawJsonDetails = false;
+        options.MaxThreadsToShow = 2;
+
+        var metadata = CreateSampleMetadata();
+
+        // Act
+        var report = service.GenerateReport(analysis, options, metadata);
+
+        // Assert
+        Assert.Contains("## Threads", report);
+        Assert.Contains("t1", report);
+        Assert.Contains("t2", report);
+        Assert.DoesNotContain("t3", report);
+    }
+
+    [Fact]
     public void ReportService_GenerateReport_SelectsJsonGenerator()
     {
         // Arrange
