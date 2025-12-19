@@ -43,7 +43,7 @@ internal static class LlmSystemPrompts
 
         sb.AppendLine();
         sb.AppendLine("Agent mode is enabled: you may call tools to gather evidence and iterate.");
-        sb.AppendLine("In this mode your primary objective is to investigate the root cause of the crash.");
+        sb.AppendLine("In this mode your primary objective is to investigate the root cause of the crash. If you need to go deeper in the analysis, don't hesitate to call tools to gather more evidence.");
         sb.AppendLine(agentConfirmationEnabled
             ? "The user will be asked to confirm each tool call (unless they choose to allow more)."
             : "Tool-call confirmation is disabled; be conservative and run the minimum necessary tools.");
