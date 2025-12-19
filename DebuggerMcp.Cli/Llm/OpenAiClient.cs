@@ -61,39 +61,68 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
 
         var url = $"{baseUrl}/chat/completions";
 
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        httpRequest.Headers.UserAgent.ParseAdd("DebuggerMcp.Cli/1.0");
-        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
-
         var payload = new OpenAiChatRequest
         {
             Model = _settings.OpenAiModel,
             Messages = completionRequest.Messages.Select(ToOpenAiMessage).ToList(),
             Tools = completionRequest.Tools?.Select(ToOpenAiTool).ToList(),
             ToolChoice = ToOpenAiToolChoice(completionRequest.ToolChoice),
-            MaxTokens = completionRequest.MaxTokens,
             ReasoningEffort = completionRequest.ReasoningEffort
         };
 
-        var json = JsonSerializer.Serialize(payload, JsonOptions);
-        httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
-
-        using var response = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-
-        if (!response.IsSuccessStatusCode)
+        var maxTokens = completionRequest.MaxTokens;
+        if (maxTokens.HasValue)
         {
-            var (errorBody, truncated) = await ReadContentCappedAsync(response.Content, MaxErrorBodyBytes, cancellationToken).ConfigureAwait(false);
-            errorBody = TranscriptRedactor.RedactText(errorBody);
-            if (truncated)
+            if (PreferMaxCompletionTokens(_settings.OpenAiModel))
             {
-                errorBody += $"{Environment.NewLine}... (truncated) ...";
+                payload.MaxCompletionTokens = maxTokens;
             }
-
-            throw new HttpRequestException($"OpenAI request failed ({(int)response.StatusCode}): {errorBody}");
+            else
+            {
+                payload.MaxTokens = maxTokens;
+            }
         }
 
-        var responseBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+        var (statusCode, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
+        if (statusCode is null)
+        {
+            throw new HttpRequestException("OpenAI request failed: no HTTP status code.");
+        }
+
+        var status = statusCode.Value;
+
+        // Some OpenAI models do not accept max_tokens and require max_completion_tokens.
+        if (status == 400 &&
+            maxTokens.HasValue &&
+            payload.MaxTokens.HasValue &&
+            MentionsUnsupportedParameter(errorBody, "max_tokens") &&
+            MentionsParameter(errorBody, "max_completion_tokens"))
+        {
+            payload.MaxTokens = null;
+            payload.MaxCompletionTokens = maxTokens;
+            (statusCode, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
+            status = statusCode ?? 0;
+        }
+
+        // Some models may accept max_tokens but not max_completion_tokens; retry the other direction too.
+        if (status == 400 &&
+            maxTokens.HasValue &&
+            payload.MaxCompletionTokens.HasValue &&
+            MentionsUnsupportedParameter(errorBody, "max_completion_tokens") &&
+            MentionsParameter(errorBody, "max_tokens"))
+        {
+            payload.MaxCompletionTokens = null;
+            payload.MaxTokens = maxTokens;
+            (statusCode, responseBody, errorBody) = await SendOnceAsync(url, apiKey, payload, cancellationToken).ConfigureAwait(false);
+            status = statusCode ?? 0;
+        }
+
+        if (status < 200 || status >= 300)
+        {
+            var redacted = TranscriptRedactor.RedactText(errorBody ?? string.Empty);
+            throw new HttpRequestException($"OpenAI request failed ({status}): {redacted}");
+        }
+
         try
         {
             using var doc = JsonDocument.Parse(responseBody);
@@ -193,6 +222,70 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         {
             throw new InvalidOperationException("Failed to parse OpenAI response JSON.", ex);
         }
+    }
+
+    private static bool PreferMaxCompletionTokens(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return false;
+        }
+
+        var m = model.Trim().ToLowerInvariant();
+        return m.StartsWith("gpt-5", StringComparison.Ordinal) ||
+               m.StartsWith("o1", StringComparison.Ordinal) ||
+               m.StartsWith("o3", StringComparison.Ordinal);
+    }
+
+    private static bool MentionsUnsupportedParameter(string? errorBody, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(errorBody) || string.IsNullOrWhiteSpace(parameterName))
+        {
+            return false;
+        }
+
+        // Example: Unsupported parameter: 'max_tokens' ...
+        return errorBody.Contains("unsupported parameter", StringComparison.OrdinalIgnoreCase) &&
+               errorBody.Contains(parameterName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool MentionsParameter(string? errorBody, string parameterName)
+    {
+        if (string.IsNullOrWhiteSpace(errorBody) || string.IsNullOrWhiteSpace(parameterName))
+        {
+            return false;
+        }
+
+        return errorBody.Contains(parameterName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private async Task<(int? StatusCode, string ResponseBody, string ErrorBody)> SendOnceAsync(
+        string url,
+        string apiKey,
+        OpenAiChatRequest payload,
+        CancellationToken cancellationToken)
+    {
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url);
+        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+        httpRequest.Headers.UserAgent.ParseAdd("DebuggerMcp.Cli/1.0");
+        httpRequest.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+
+        var json = JsonSerializer.Serialize(payload, JsonOptions);
+        httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        using var response = await _httpClient.SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        if (response.IsSuccessStatusCode)
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            return ((int)response.StatusCode, body, string.Empty);
+        }
+
+        var (errorBody, truncated) = await ReadContentCappedAsync(response.Content, MaxErrorBodyBytes, cancellationToken).ConfigureAwait(false);
+        if (truncated)
+        {
+            errorBody += $"{Environment.NewLine}... (truncated) ...";
+        }
+        return ((int)response.StatusCode, string.Empty, errorBody);
     }
 
     private static OpenAiChatMessage ToOpenAiMessage(ChatMessage msg)
@@ -342,8 +435,8 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         return Encoding.UTF8.GetString(buffer, 0, safeCount);
     }
 
-    private sealed class OpenAiChatRequest
-    {
+	    private sealed class OpenAiChatRequest
+	    {
         [JsonPropertyName("model")]
         public string Model { get; set; } = string.Empty;
 
@@ -359,9 +452,12 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         [JsonPropertyName("max_tokens")]
         public int? MaxTokens { get; set; }
 
+        [JsonPropertyName("max_completion_tokens")]
+        public int? MaxCompletionTokens { get; set; }
+
         [JsonPropertyName("reasoning_effort")]
         public string? ReasoningEffort { get; set; }
-    }
+	    }
 
     private sealed class OpenAiChatMessage
     {

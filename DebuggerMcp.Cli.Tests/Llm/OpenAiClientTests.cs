@@ -23,6 +23,26 @@ public class OpenAiClientTests
         }
     }
 
+    private sealed class SequenceHandler(IReadOnlyList<HttpResponseMessage> responses) : HttpMessageHandler
+    {
+        private int _index;
+
+        public List<string?> RequestBodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            RequestBodies.Add(request.Content == null ? null : await request.Content.ReadAsStringAsync(cancellationToken));
+
+            var i = _index++;
+            if (i >= responses.Count)
+            {
+                throw new InvalidOperationException($"No configured response at index {i}.");
+            }
+
+            return responses[i];
+        }
+    }
+
     [Fact]
     public async Task ChatAsync_SendsOpenAiRequestAndParsesResponse()
     {
@@ -66,6 +86,101 @@ public class OpenAiClientTests
         Assert.Equal(1, messages.GetArrayLength());
         Assert.Equal("user", messages[0].GetProperty("role").GetString());
         Assert.Equal("hi", messages[0].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_MaxTokens_WithGpt5Model_UsesMaxCompletionTokens()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-5.2",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = "{\"choices\":[{\"message\":{\"content\":\"hello\"}}]}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        _ = await client.ChatCompletionAsync(
+            new ChatCompletionRequest
+            {
+                Messages = [new ChatMessage("user", "hi")],
+                MaxTokens = 123
+            });
+
+        using var doc = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.False(doc.RootElement.TryGetProperty("max_tokens", out _));
+        Assert.Equal(123, doc.RootElement.GetProperty("max_completion_tokens").GetInt32());
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_MaxTokens_WhenServerRejectsMaxTokens_RetriesWithMaxCompletionTokens()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-4o-mini",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        var errorBody = """
+                        {
+                          "error": {
+                            "message": "Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.",
+                            "type": "invalid_request_error",
+                            "param": "max_tokens",
+                            "code": "unsupported_parameter"
+                          }
+                        }
+                        """;
+
+        var okBody = "{\"choices\":[{\"message\":{\"content\":\"hello\"}}]}";
+
+        var handler = new SequenceHandler(
+        [
+            new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent(errorBody, Encoding.UTF8, "application/json")
+            },
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(okBody, Encoding.UTF8, "application/json")
+            }
+        ]);
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        var result = await client.ChatCompletionAsync(
+            new ChatCompletionRequest
+            {
+                Messages = [new ChatMessage("user", "hi")],
+                MaxTokens = 321
+            });
+
+        Assert.Equal("hello", result.Text);
+        Assert.Equal(2, handler.RequestBodies.Count);
+
+        using var request1 = JsonDocument.Parse(handler.RequestBodies[0]!);
+        Assert.Equal(321, request1.RootElement.GetProperty("max_tokens").GetInt32());
+        Assert.False(request1.RootElement.TryGetProperty("max_completion_tokens", out _));
+
+        using var request2 = JsonDocument.Parse(handler.RequestBodies[1]!);
+        Assert.False(request2.RootElement.TryGetProperty("max_tokens", out _));
+        Assert.Equal(321, request2.RootElement.GetProperty("max_completion_tokens").GetInt32());
     }
 
     [Fact]
