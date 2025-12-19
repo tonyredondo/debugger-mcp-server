@@ -137,6 +137,44 @@ public sealed class LlmHttpTraceHandlerTests
     }
 
     [Fact]
+    public async Task SendAsync_RedactsNonHexTokenValues()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "dbg-mcp-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+
+        try
+        {
+            var store = new LlmTraceStore(temp, maxFileBytes: 0);
+
+            var inner = new StubHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"token\":\"abc\"}", Encoding.UTF8, "application/json")
+                });
+
+            var trace = new LlmHttpTraceHandler(store, "openai") { InnerHandler = inner };
+            using var http = new HttpClient(trace);
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://example.test/chat/completions")
+            {
+                Content = new StringContent("{\"x\":1}", Encoding.UTF8, "application/json")
+            };
+
+            var resp = await http.SendAsync(req);
+            _ = await resp.Content.ReadAsStringAsync();
+
+            var responseFile = Directory.GetFiles(temp).Single(f => f.EndsWith(".openai.response.json", StringComparison.OrdinalIgnoreCase));
+            var responseText = await File.ReadAllTextAsync(responseFile);
+            Assert.Contains("\"token\": \"***\"", responseText, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("\"token\": \"abc\"", responseText, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(temp, recursive: true); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
     public async Task SendAsync_PreservesNonUtf8ResponseBody()
     {
         var temp = Path.Combine(Path.GetTempPath(), "dbg-mcp-tests", Guid.NewGuid().ToString("N"));
