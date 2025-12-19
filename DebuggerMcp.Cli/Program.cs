@@ -4804,6 +4804,8 @@ public class Program
         llmSettings.AgentModeEnabled = true;
         state.Settings.Save();
 
+        using var confirmOverride = new LlmAgentConfirmOverride(llmSettings, confirmToolCalls: false);
+
         state.Transcript ??= new CliTranscriptStore(Path.Combine(ConnectionSettings.DefaultConfigDirectory, "cli_transcript.jsonl"));
         var transcript = state.Transcript;
 
