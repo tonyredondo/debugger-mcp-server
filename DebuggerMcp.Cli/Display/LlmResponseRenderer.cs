@@ -199,15 +199,15 @@ internal sealed class LlmResponseRenderer
 
         if (heading.Level <= 2)
         {
-            Add(output, new Rule($"[bold cyan]{title}[/]")
+            Add(output, new Rule($"[bold yellow]{title}[/]")
             {
                 Justification = Justify.Left,
-                Style = Style.Parse("cyan")
+                Style = Style.Parse("yellow")
             }, state, applyMaxBlocks);
             return;
         }
 
-        Add(output, new Markup($"[bold]{title}[/]"), state, applyMaxBlocks);
+        Add(output, new Markup($"[bold yellow]{title}[/]"), state, applyMaxBlocks);
     }
 
     private static void RenderParagraph(ParagraphBlock paragraph, List<IRenderable> output, RenderState state, bool applyMaxBlocks, int indent)

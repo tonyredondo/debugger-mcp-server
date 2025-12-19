@@ -128,6 +128,17 @@ public class LlmResponseRendererTests
     }
 
     [Fact]
+    public void Render_Heading_UsesYellowAccent()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("# Title\n", consoleWidth: 80);
+
+        var rule = Assert.IsType<Rule>(blocks[0]);
+        Assert.Contains("yellow", rule.Title, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(Color.Yellow, rule.Style?.Foreground);
+    }
+
+    [Fact]
     public void Render_Table_TruncatesBodyRowsAndShowsMoreRowsMarker()
     {
         var sb = new System.Text.StringBuilder();
