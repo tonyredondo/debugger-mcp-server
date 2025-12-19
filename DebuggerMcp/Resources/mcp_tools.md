@@ -43,6 +43,7 @@ Note: `format: "json"` returns the canonical report document shape: `{ "metadata
 Run analysis on the currently open dump.
 
 - **crash**: `analyze(kind: "crash", sessionId: "...", userId: "...")`
+- **dotnet_crash** (legacy alias): `analyze(kind: "dotnet_crash", sessionId: "...", userId: "...")` (same as `crash`)
 - **ai**: `analyze(kind: "ai", sessionId: "...", userId: "...", maxIterations: 10, maxTokens: 4096, includeWatches: true, includeSecurity: true)`
 - **performance**: `analyze(kind: "performance", sessionId: "...", userId: "...")`
 - **cpu**: `analyze(kind: "cpu", sessionId: "...", userId: "...")`
