@@ -1234,6 +1234,8 @@ IMPORTANT: Do not assume assembly versions from file paths. Treat paths as hints
 IMPORTANT: If you suspect a profiler/tracer rewrote IL, VERIFY it: check whether the executing code is IL/JIT vs R2R/NGen, whether the method is JITted, and (when possible) inspect/dump the current IL to confirm rewriting rather than assuming.
 IMPORTANT: Maintain a running, cumulative set of confirmed facts and evidence across iterations; do not “reset” what you know each step.
 IMPORTANT: The report metadata indicates whether SOS is loaded (metadata.sosLoaded). If SOS is already loaded, use SOS commands directly and do NOT attempt to load SOS plugins/libraries.
+IMPORTANT: Do NOT recommend disabling profilers/tracers/monitoring (e.g., Datadog) as a mitigation or “fix”; the goal is to find the root cause without turning off features. If instrumentation looks suspicious, gather in-dump evidence and propose corrective actions (version alignment, configuration, or a targeted upstream bug report).
+IMPORTANT: Do not present speculation as fact. Every hypothesis must be backed by explicit evidence from tool outputs/report sections; if evidence is insufficient, call tools to gather it before concluding.
 
 Available tools:
 - exec: Run any debugger command (LLDB/WinDbg/SOS)

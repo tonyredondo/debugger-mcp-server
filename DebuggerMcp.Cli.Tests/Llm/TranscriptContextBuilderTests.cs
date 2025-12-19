@@ -60,6 +60,8 @@ public class TranscriptContextBuilderTests
         Assert.Contains("active debugger type", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("metadata.debuggertype", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("metadata.sosloaded", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Do NOT recommend disabling profilers", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Do not present speculation as fact", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do not assume an assembly version", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("rewrote il", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("CALL THE TOOL", messages[0].Content, StringComparison.OrdinalIgnoreCase);
