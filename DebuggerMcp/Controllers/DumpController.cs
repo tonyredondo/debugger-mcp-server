@@ -955,6 +955,7 @@ public class DumpController : ControllerBase
         [FromQuery] string format = "markdown")
     {
         IDebuggerManager? manager = null;
+        ClrMdAnalyzer? clrMdAnalyzer = null;
 
         try
         {
@@ -1001,6 +1002,31 @@ public class DumpController : ControllerBase
             await manager.InitializeAsync();
             manager.OpenDumpFile(dumpPath);
 
+            // Attach ClrMD for metadata enrichment (optional but strongly recommended for .NET reports)
+            try
+            {
+                clrMdAnalyzer = new ClrMdAnalyzer(_logger);
+                if (!clrMdAnalyzer.OpenDump(dumpPath))
+                {
+                    clrMdAnalyzer.Dispose();
+                    clrMdAnalyzer = null;
+                }
+            }
+            catch (Exception clrMdEx)
+            {
+                _logger.LogDebug(clrMdEx, "[DumpController] ClrMD initialization failed, continuing without metadata enrichment");
+                clrMdAnalyzer?.Dispose();
+                clrMdAnalyzer = null;
+            }
+
+            if (!manager.IsSosLoaded && clrMdAnalyzer?.IsOpen != true)
+            {
+                return BadRequest(new
+                {
+                    error = "This endpoint generates .NET crash reports only. SOS and/or ClrMD must be available. Ensure the dump is a .NET dump."
+                });
+            }
+
             // Create Source Link resolver with symbol paths
             var sourceLinkResolver = new SourceLinkResolver(_logger);
             // Symbol path is .symbols_{dumpId} folder where dotnet-symbol downloads PDBs
@@ -1016,9 +1042,9 @@ public class DumpController : ControllerBase
                 _logger.LogWarning("[DumpController] Symbol path does not exist: {SymbolPath}", symbolPath);
             }
 
-            // Run crash analysis
-            var analyzer = new CrashAnalyzer(manager, sourceLinkResolver);
-            var analysisResult = await analyzer.AnalyzeCrashAsync();
+            // Run .NET crash analysis
+            var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, clrMdAnalyzer, _logger);
+            var analysisResult = await analyzer.AnalyzeDotNetCrashAsync();
 
             // Run security analysis and include in results
             var securityAnalyzer = new SecurityAnalyzer(manager);
@@ -1067,6 +1093,8 @@ public class DumpController : ControllerBase
         }
         finally
         {
+            clrMdAnalyzer?.Dispose();
+
             // Clean up debugger manager
             if (manager != null)
             {

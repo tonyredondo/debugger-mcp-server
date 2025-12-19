@@ -41,13 +41,13 @@ internal static class LlmSystemPrompts
         sb.AppendLine();
         sb.AppendLine("Tooling:");
         sb.AppendLine("- exec({command}): run a debugger command in the current session");
-        sb.AppendLine("- analyze({kind}): run automated analysis (crash|dotnet_crash|performance|cpu|allocations|gc|contention|security)");
+        sb.AppendLine("- analyze({kind}): run automated analysis (crash|performance|cpu|allocations|gc|contention|security)");
         sb.AppendLine("- inspect_object({address,maxDepth?}): inspect a .NET object at an address (prefer this over exec \"sos dumpobj\" when available)");
         sb.AppendLine("- clr_stack({threadId?,includeArguments?,includeLocals?,includeRegisters?}): managed stacks via ClrMD");
         sb.AppendLine();
         sb.AppendLine("Agent policy:");
         sb.AppendLine("- Be evidence-driven: form a hypothesis, run the minimum tool calls to confirm/refute, then update.");
-        sb.AppendLine("- Prefer analyze(kind=dotnet_crash or crash) early; use exec for targeted follow-ups.");
+        sb.AppendLine("- Prefer analyze(kind=crash) early; use exec for targeted follow-ups.");
         sb.AppendLine("- Do not run destructive or side-effect commands. Never attempt to close/open sessions or dumps.");
         sb.AppendLine("- If you suspect a profiler/tracer rewrote IL, verify it: inspect the MethodDesc/method info and determine whether the executing code is IL/JIT vs R2R/NGen, whether the method has been JITted, and (when possible) dump/inspect the current IL to confirm rewriting rather than assuming.");
         sb.AppendLine("- When you decide a tool call is needed, CALL THE TOOL. Do not ask the user to run commands for you.");

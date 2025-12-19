@@ -973,17 +973,6 @@ public class McpClient : IMcpClient
     }
 
     /// <inheritdoc/>
-    public async Task<string> AnalyzeDotNetAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
-    {
-        return await CallToolAsync("analyze", new Dictionary<string, object?>
-        {
-            ["kind"] = "dotnet_crash",
-            ["sessionId"] = sessionId,
-            ["userId"] = userId
-        }, cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task<string> AnalyzeAiAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
     {
         return await CallToolAsync("analyze", new Dictionary<string, object?>

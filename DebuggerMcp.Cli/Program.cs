@@ -5212,7 +5212,7 @@ public class Program
                     var kind = args.TryGetProperty("kind", out var kindProp) ? kindProp.GetString() : null;
                     if (string.IsNullOrWhiteSpace(kind))
                     {
-                        return "ERROR: analyze requires {\"kind\":\"crash|dotnet_crash|performance|cpu|allocations|gc|contention|security\"}.";
+                        return "ERROR: analyze requires {\"kind\":\"crash|performance|cpu|allocations|gc|contention|security\"}.";
                     }
 
                     output.WriteLine();
@@ -5271,7 +5271,7 @@ public class Program
         return kind.Trim().ToLowerInvariant() switch
         {
             "crash" => mcpClient.AnalyzeCrashAsync(sessionId, userId, cancellationToken),
-            "dotnet_crash" or "dotnet" => mcpClient.AnalyzeDotNetAsync(sessionId, userId, cancellationToken),
+            "dotnet" or ".net" or "net" => mcpClient.AnalyzeCrashAsync(sessionId, userId, cancellationToken),
             "performance" or "perf" => mcpClient.AnalyzePerformanceAsync(sessionId, userId, cancellationToken),
             "cpu" => mcpClient.AnalyzeCpuUsageAsync(sessionId, userId, cancellationToken),
             "allocations" or "memory" => mcpClient.AnalyzeAllocationsAsync(sessionId, userId, cancellationToken),
@@ -7619,8 +7619,8 @@ public class Program
                 case "dotnet":
                 case ".net":
                 case "net":
-                    await RunAnalysisAsync(output, ".NET Analysis",
-                        () => mcpClient.AnalyzeDotNetAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
+                    await RunAnalysisAsync(output, "Crash Analysis",
+                        () => mcpClient.AnalyzeCrashAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
                 case "ai":

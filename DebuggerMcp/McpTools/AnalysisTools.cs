@@ -14,8 +14,7 @@ namespace DebuggerMcp.McpTools;
 /// <remarks>
 /// Provides tools for:
 /// <list type="bullet">
-/// <item><description>General crash analysis</description></item>
-/// <item><description>.NET-specific crash analysis</description></item>
+/// <item><description>.NET crash analysis (SOS/ClrMD)</description></item>
 /// </list>
 /// 
 /// These tools provide AI-friendly structured output with crash type, exception details,
@@ -71,85 +70,14 @@ public class AnalysisTools(
         // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
-        CrashAnalysisResult result;
-        if (DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(manager.IsSosLoaded, session.ClrMdAnalyzer?.IsOpen == true))
+        if (!manager.IsSosLoaded && session.ClrMdAnalyzer?.IsOpen != true)
         {
-            // Prefer the .NET analyzer when SOS or ClrMD is available for richer evidence.
-            var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
-            result = await analyzer.AnalyzeDotNetCrashAsync();
-        }
-        else
-        {
-            var analyzer = new CrashAnalyzer(manager, sourceLinkResolver);
-            result = await analyzer.AnalyzeCrashAsync();
+            throw new InvalidOperationException(
+                "This server is configured for .NET crash analysis only. SOS and/or ClrMD must be available. " +
+                "Ensure the dump is a .NET dump and that it was opened via OpenDump.");
         }
 
-        // Run security analysis and include in results
-        var securityAnalyzer = new SecurityAnalyzer(manager);
-        var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
-        ReportEnrichment.ApplySecurity(result, securityResult);
-
-        // Include watch evaluations if enabled and dump has watches
-        if (includeWatches && !string.IsNullOrEmpty(session.CurrentDumpId))
-        {
-            var hasWatches = await WatchStore.HasWatchesAsync(sanitizedUserId, session.CurrentDumpId);
-            if (hasWatches)
-            {
-                var evaluator = new WatchEvaluator(manager, WatchStore);
-                result.Watches = await evaluator.EvaluateAllAsync(sanitizedUserId, session.CurrentDumpId);
-
-                // Add watch insights to recommendations for actionable guidance
-                if (result.Watches?.Insights?.Count > 0)
-                {
-                    result.Summary?.Recommendations?.AddRange(result.Watches.Insights);
-                }
-            }
-        }
-
-        return GenerateCanonicalJsonReport(result, session, sanitizedUserId, manager.DebuggerType);
-    }
-
-    /// <summary>
-    /// Performs .NET specific crash analysis on the currently open dump.
-    /// </summary>
-    /// <param name="sessionId">The session ID.</param>
-    /// <param name="userId">The user ID that owns the session (for security validation).</param>
-    /// <param name="includeWatches">Include watch expression evaluations in the report.</param>
-    /// <returns>Canonical JSON report document (same schema as <c>report --format json</c>).</returns>
-    /// <remarks>
-    /// This tool provides .NET specific analysis including:
-    /// - CLR version information
-    /// - Managed exception details
-    /// - Heap statistics and memory usage
-    /// - Async/await deadlock detection
-    /// - Finalizer queue analysis
-    /// 
-    /// IMPORTANT: 
-    /// - A dump file must be open (use OpenDump first - SOS is auto-loaded for .NET dumps)
-    /// - The dump must be from a .NET application
-    /// </remarks>
-    public async Task<string> AnalyzeDotNetCrash(
-        [Description("Session ID from CreateSession")] string sessionId,
-        [Description("User ID that owns the session")] string userId,
-        [Description("Include watch expression evaluations in the report (default: true)")] bool includeWatches = true)
-    {
-        // Validate input parameters
-        ValidateSessionId(sessionId);
-
-        // Sanitize userId to prevent path traversal attacks
-        var sanitizedUserId = SanitizeUserId(userId);
-
-        // Get the session with user ownership validation
-        var manager = GetSessionManager(sessionId, sanitizedUserId);
-        var session = GetSessionInfo(sessionId, sanitizedUserId);
-
-        // Check if a dump is open
-        ValidateDumpIsOpen(manager);
-
-        // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
-        var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
-
-        // Create .NET analyzer and perform analysis
+        // .NET-specific analysis using SOS and ClrMD enrichment (when available).
         var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
         var result = await analyzer.AnalyzeDotNetCrashAsync();
 
@@ -167,7 +95,7 @@ public class AnalysisTools(
                 var evaluator = new WatchEvaluator(manager, WatchStore);
                 result.Watches = await evaluator.EvaluateAllAsync(sanitizedUserId, session.CurrentDumpId);
 
-                // Add watch insights to recommendations for actionable guidance (if available)
+                // Add watch insights to recommendations for actionable guidance
                 if (result.Watches?.Insights?.Count > 0)
                 {
                     result.Summary?.Recommendations?.AddRange(result.Watches.Insights);

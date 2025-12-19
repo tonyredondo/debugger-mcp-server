@@ -12,7 +12,7 @@ The Debugger MCP Server includes automated analysis tools that execute relevant 
 
 | Tool | Description | Key parameters |
 |------|-------------|----------------|
-| `analyze` | Automated analysis (crash/.NET/AI/perf/security) | `kind`, `sessionId`, `userId`, `includeWatches?` |
+| `analyze` | Automated analysis (crash/AI/perf/security) | `kind`, `sessionId`, `userId`, `includeWatches?` |
 | `compare` | Compare two sessions/dumps | `kind`, `sessionId`, `userId`, `targetSessionId`, `targetUserId` |
 | `inspect` | Object/module/SOS helpers | `kind`, `sessionId`, `userId` (+ kind-specific args) |
 | `dump` | Open/close a dump in a session | `action`, `sessionId`, `userId`, `dumpId` |
@@ -21,7 +21,7 @@ The Debugger MCP Server includes automated analysis tools that execute relevant 
 
 ## JSON Structure Overview
 
-Crash analysis outputs (`analyze` kind `crash`/`dotnet_crash`/`ai` and `report` with `format: "json"`) return a canonical JSON report document:
+Crash analysis outputs (`analyze` kind `crash`/`ai` and `report` with `format: "json"`) return a canonical JSON report document:
 
 ```json
 {
@@ -46,7 +46,7 @@ Crash analysis outputs (`analyze` kind `crash`/`dotnet_crash`/`ai` and `report` 
 
 ## 1. analyze(kind="crash")
 
-**Purpose**: General crash analysis for any type of crash dump (native or managed). Includes security analysis and watch expression evaluations.
+**Purpose**: .NET crash analysis (SOS + ClrMD enrichment where available). Includes security analysis and watch expression evaluations.
 
 **Usage**:
 ```
@@ -54,12 +54,11 @@ analyze(kind="crash", sessionId="session-123", userId="user1", includeWatches=tr
 ```
 
 **What it does**:
-- Executes `!analyze -v` (WinDbg) or equivalent LLDB commands
-- Extracts exception information
-- Analyzes call stacks for all threads
-- **Extracts process arguments (argv) and environment variables (Linux/macOS only)**
-- Detects memory leak indicators
-- Detects deadlock conditions
+- Extracts managed exception information (including inner exception chains when available)
+- Analyzes managed stacks and thread state
+- Collects heap statistics and large object allocations
+- Detects common deadlock patterns (Tasks, locks, sync blocks, etc.)
+- Detects .NET memory leak indicators from heap data
 - Runs security vulnerability analysis
 - Evaluates watch expressions
 - Provides recommendations based on crash type
@@ -165,9 +164,9 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
 
 ---
 
-## 2. analyze(kind="dotnet_crash")
+## 2. analyze(kind="crash") (managed details)
 
-**Purpose**: .NET specific crash analysis with managed code insights (SOS + ClrMD where available).
+**Purpose**: This section highlights the managed/.NET-specific evidence that `analyze(kind="crash")` collects.
 
 **Prerequisites**:
 - Dump must be opened with `dump(action="open", ...)` (SOS is **auto-loaded** for .NET dumps)
@@ -176,13 +175,12 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
 **Usage**:
 ```
 # SOS is auto-loaded by dump(action="open") for .NET dumps
-analyze(kind="dotnet_crash", sessionId="session-123", userId="user1")
+analyze(kind="crash", sessionId="session-123", userId="user1")
 ```
 
 > **Note**: If SOS auto-detection failed, you can manually call `inspect(kind=\"load_sos\", ...)` first.
 
 **What it does**:
-- Performs all general crash analysis (from `analyze(kind=\"crash\")`)
 - Extracts CLR version information
 - Analyzes managed exceptions with inner exception chain
 - Collects heap statistics
@@ -291,7 +289,7 @@ Properties that have no value are omitted from the JSON output (using `JsonIgnor
 
 ### Managed Enrichment
 
-`analyze(kind="dotnet_crash")` uses SOS and (when available) ClrMD automatically; there is no `deepAnalysis` parameter. For deeper, hypothesis-driven investigation, prefer targeted `inspect` calls (managed objects/stacks) or `exec` SOS commands.
+`analyze(kind="crash")` uses SOS and (when available) ClrMD automatically; there is no `deepAnalysis` parameter. For deeper, hypothesis-driven investigation, prefer targeted `inspect` calls (managed objects/stacks) or `exec` SOS commands.
 
 ### Source Link Integration
 

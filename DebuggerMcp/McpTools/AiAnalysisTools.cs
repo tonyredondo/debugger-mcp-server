@@ -64,23 +64,18 @@ public sealed class AiAnalysisTools(
 
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
-        CrashAnalysisResult initialReport;
-        if (DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(manager.IsSosLoaded, session.ClrMdAnalyzer?.IsOpen == true))
+        if (!manager.IsSosLoaded && session.ClrMdAnalyzer?.IsOpen != true)
         {
-            Logger.LogInformation("[AI] Using DotNetCrashAnalyzer for initial report (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
-                manager.IsSosLoaded,
-                session.ClrMdAnalyzer?.IsOpen == true);
-            var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
-            initialReport = await dotNetAnalyzer.AnalyzeDotNetCrashAsync().ConfigureAwait(false);
+            throw new InvalidOperationException(
+                "This server is configured for .NET crash analysis only. SOS and/or ClrMD must be available. " +
+                "Ensure the dump is a .NET dump and that it was opened via OpenDump.");
         }
-        else
-        {
-            Logger.LogInformation("[AI] Using CrashAnalyzer for initial report (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
-                manager.IsSosLoaded,
-                session.ClrMdAnalyzer?.IsOpen == true);
-            var basicAnalyzer = new CrashAnalyzer(manager, sourceLinkResolver);
-            initialReport = await basicAnalyzer.AnalyzeCrashAsync().ConfigureAwait(false);
-        }
+
+        Logger.LogInformation("[AI] Using DotNetCrashAnalyzer for initial report (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+            manager.IsSosLoaded,
+            session.ClrMdAnalyzer?.IsOpen == true);
+        var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
+        var initialReport = await dotNetAnalyzer.AnalyzeDotNetCrashAsync().ConfigureAwait(false);
 
         if (includeSecurity)
         {

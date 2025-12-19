@@ -385,7 +385,7 @@ Response (batch upload):
 
 **Automated Analysis:**
 ```
-# General crash analysis with memory leak and deadlock detection
+# .NET crash analysis (SOS auto-loaded when opening .NET dumps)
 analyze(kind="crash", sessionId, userId) → Returns the canonical JSON report document (same schema as `report(format="json")`):
   - metadata (dumpId/userId/generatedAt/debuggerType/serverVersion)
   - analysis (summary/exception/environment/threads/memory/assemblies/modules/async/security/watches/…)
@@ -396,15 +396,6 @@ analyze(kind="ai", sessionId, userId) → Returns the same report enriched with:
   - analysis.aiAnalysis.commandsExecuted (tools/commands the AI requested; prefer `inspect` over raw `dumpobj` when possible)
 
 Tip: To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
-
-# .NET specific analysis (SOS auto-loaded when opening .NET dumps)
-analyze(kind="dotnet_crash", sessionId, userId) → Returns the same canonical JSON report document, with additional .NET-focused evidence in `analysis`, including:
-  - CLR version and runtime info
-  - Managed exceptions with stack traces
-  - Heap statistics and large object allocations
-  - .NET-specific memory leak detection
-  - Async deadlock detection (Tasks, SemaphoreSlim, etc.)
-  - GC and finalization queue analysis
 ```
 
 📝 **See [ANALYSIS_EXAMPLES.md](ANALYSIS_EXAMPLES.md) for detailed examples and JSON output formats.**

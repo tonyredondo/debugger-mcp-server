@@ -43,7 +43,6 @@ Note: `format: "json"` returns the canonical report document shape: `{ "metadata
 Run analysis on the currently open dump.
 
 - **crash**: `analyze(kind: "crash", sessionId: "...", userId: "...")`
-- **dotnet_crash**: `analyze(kind: "dotnet_crash", sessionId: "...", userId: "...")`
 - **ai**: `analyze(kind: "ai", sessionId: "...", userId: "...", maxIterations: 10, maxTokens: 4096, includeWatches: true, includeSecurity: true)`
 - **performance**: `analyze(kind: "performance", sessionId: "...", userId: "...")`
 - **cpu**: `analyze(kind: "cpu", sessionId: "...", userId: "...")`
@@ -55,7 +54,8 @@ Run analysis on the currently open dump.
 
 Notes:
 - `kind: "ai"` requires the connected MCP client to support sampling (`sampling/createMessage`) with tools enabled.
-- `kind: "crash"`, `kind: "dotnet_crash"`, and `kind: "ai"` return the same canonical JSON report document schema as `report(format: "json")`. For AI runs, the result is enriched under `analysis.aiAnalysis`.
+- `kind: "crash"` and `kind: "ai"` return the same canonical JSON report document schema as `report(format: "json")`. For AI runs, the result is enriched under `analysis.aiAnalysis`.
+- `kind: "crash"` performs .NET crash analysis (SOS/ClrMD); non-.NET dumps are not supported by this tool.
 
 ### 6) `compare`
 Compare two sessions (each must have a dump open).

@@ -102,26 +102,19 @@ public class ReportTools(
         // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
-        // Use the .NET analyzer when SOS or ClrMD is available for richer evidence.
-        // Otherwise, fall back to basic native crash analysis.
-        CrashAnalysisResult result;
+        if (!manager.IsSosLoaded && session.ClrMdAnalyzer?.IsOpen != true)
+        {
+            throw new InvalidOperationException(
+                "This server is configured for .NET crash analysis only. SOS and/or ClrMD must be available. " +
+                "Ensure the dump is a .NET dump and that it was opened via OpenDump.");
+        }
+
         var isClrMdOpen = session.ClrMdAnalyzer?.IsOpen == true;
-        if (DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(manager.IsSosLoaded, isClrMdOpen))
-        {
-            Logger.LogInformation("[ReportTools] Using .NET crash analyzer (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
-                manager.IsSosLoaded,
-                isClrMdOpen);
-            var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
-            result = await dotNetAnalyzer.AnalyzeDotNetCrashAsync();
-        }
-        else
-        {
-            Logger.LogInformation("[ReportTools] Using basic crash analyzer (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
-                manager.IsSosLoaded,
-                isClrMdOpen);
-            var basicAnalyzer = new CrashAnalyzer(manager, sourceLinkResolver);
-            result = await basicAnalyzer.AnalyzeCrashAsync();
-        }
+        Logger.LogInformation("[ReportTools] Using .NET crash analyzer (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+            manager.IsSosLoaded,
+            isClrMdOpen);
+        var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
+        var result = await dotNetAnalyzer.AnalyzeDotNetCrashAsync();
 
         // Run security analysis if enabled
         if (includeSecurity)
@@ -204,25 +197,19 @@ public class ReportTools(
         // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
-        // Use the .NET analyzer when SOS or ClrMD is available for richer evidence.
-        CrashAnalysisResult result;
+        if (!manager.IsSosLoaded && session.ClrMdAnalyzer?.IsOpen != true)
+        {
+            throw new InvalidOperationException(
+                "This server is configured for .NET crash analysis only. SOS and/or ClrMD must be available. " +
+                "Ensure the dump is a .NET dump and that it was opened via OpenDump.");
+        }
+
         var isClrMdOpen = session.ClrMdAnalyzer?.IsOpen == true;
-        if (DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(manager.IsSosLoaded, isClrMdOpen))
-        {
-            Logger.LogInformation("[ReportTools] Using .NET crash analyzer for summary (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
-                manager.IsSosLoaded,
-                isClrMdOpen);
-            var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
-            result = await dotNetAnalyzer.AnalyzeDotNetCrashAsync();
-        }
-        else
-        {
-            Logger.LogInformation("[ReportTools] Using basic crash analyzer for summary (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
-                manager.IsSosLoaded,
-                isClrMdOpen);
-            var basicAnalyzer = new CrashAnalyzer(manager, sourceLinkResolver);
-            result = await basicAnalyzer.AnalyzeCrashAsync();
-        }
+        Logger.LogInformation("[ReportTools] Using .NET crash analyzer for summary (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+            manager.IsSosLoaded,
+            isClrMdOpen);
+        var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
+        var result = await dotNetAnalyzer.AnalyzeDotNetCrashAsync();
 
         // Run security analysis for critical findings
         var securityAnalyzer = new SecurityAnalyzer(manager);

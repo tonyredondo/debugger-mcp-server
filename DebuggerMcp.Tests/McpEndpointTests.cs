@@ -404,43 +404,6 @@ public class McpEndpointTests
     }
 
     /// <summary>
-    /// Verifies that AnalyzeDotNetCrash throws ArgumentException when userId is null or empty.
-    /// </summary>
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public async Task AnalyzeDotNetCrash_WithInvalidUserId_ThrowsArgumentException(string? userId)
-    {
-        // Arrange
-        var sessionManager = CreateIsolatedSessionManager();
-        var symbolManager = new SymbolManager(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
-        var watchStore = new WatchStore(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
-        var tools = new AnalysisTools(sessionManager, symbolManager, watchStore, NullLogger<AnalysisTools>.Instance);
-        var sessionId = sessionManager.CreateSession("owner-user");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<ArgumentException>(() => tools.AnalyzeDotNetCrash(sessionId, userId!));
-    }
-
-    /// <summary>
-    /// Verifies that AnalyzeDotNetCrash throws UnauthorizedAccessException when userId doesn't match session owner.
-    /// </summary>
-    [Fact]
-    public async Task AnalyzeDotNetCrash_WithWrongUserId_ThrowsUnauthorizedAccessException()
-    {
-        // Arrange
-        var sessionManager = CreateIsolatedSessionManager();
-        var symbolManager = new SymbolManager(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
-        var watchStore = new WatchStore(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
-        var tools = new AnalysisTools(sessionManager, symbolManager, watchStore, NullLogger<AnalysisTools>.Instance);
-        var sessionId = sessionManager.CreateSession("owner-user");
-
-        // Act & Assert
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => tools.AnalyzeDotNetCrash(sessionId, "wrong-user"));
-    }
-
-    /// <summary>
     /// Verifies that correct userId allows access to session operations.
     /// </summary>
     [Fact]

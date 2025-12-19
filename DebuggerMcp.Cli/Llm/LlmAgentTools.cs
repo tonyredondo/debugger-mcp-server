@@ -35,7 +35,7 @@ internal static class LlmAgentTools
                     "kind":{
                       "type":"string",
                       "description":"Analysis kind",
-                      "enum":["crash","dotnet_crash","performance","cpu","allocations","gc","contention","security"]
+                      "enum":["crash","performance","cpu","allocations","gc","contention","security"]
                     }
                   },
                   "required":["kind"]
@@ -75,4 +75,3 @@ internal static class LlmAgentTools
             }
         ];
 }
-

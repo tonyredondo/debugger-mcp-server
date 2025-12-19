@@ -288,7 +288,7 @@ showobj 0x7f8a2b3c4d50
 | Command | Description |
 |---------|-------------|
 | `analyze crash -o <file>` | Crash analysis (saves JSON) |
-| `analyze dotnet -o <file>` | .NET crash analysis (saves JSON) |
+| `analyze dotnet -o <file>` | Alias of `analyze crash` (saves JSON) |
 | `analyze ai -o <file>` | AI-assisted crash analysis via MCP sampling (saves JSON) |
 | `analyze perf -o <file>` | Comprehensive performance profiling (saves JSON) |
 | `analyze cpu -o <file>` | CPU usage and hot function analysis (saves JSON) |
@@ -300,7 +300,7 @@ showobj 0x7f8a2b3c4d50
 **Examples:**
 ```bash
 analyze crash -o ./crash.json
-analyze dotnet -o ./dotnet.json
+analyze dotnet -o ./dotnet.json   # alias of `analyze crash`
 analyze ai -o ./ai.json
 analyze perf -o ./perf.json
 analyze security

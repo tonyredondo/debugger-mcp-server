@@ -143,10 +143,10 @@ public sealed class CompactTools
     /// Runs analysis and diagnostics on the currently open dump.
     /// </summary>
     [McpServerTool(Name = "analyze")]
-    [Description("Analyze a dump: crash | dotnet_crash | ai | performance | cpu | allocations | gc | contention | security. For security capabilities: kind=security, action=capabilities.")]
+    [Description("Analyze a dump: crash | ai | performance | cpu | allocations | gc | contention | security. For security capabilities: kind=security, action=capabilities.")]
     public Task<string> Analyze(
         McpServer server,
-        [Description("Kind: crash | dotnet_crash | ai | performance | cpu | allocations | gc | contention | security")] string kind,
+        [Description("Kind: crash | ai | performance | cpu | allocations | gc | contention | security")] string kind,
         [Description("Session ID (required for all kinds except security capabilities)")] string? sessionId = null,
         [Description("User ID (required for all kinds except security capabilities)")] string? userId = null,
         [Description("Optional action (security only): capabilities")] string? action = null,
@@ -159,7 +159,6 @@ public sealed class CompactTools
         return NormalizeRequired(kind, nameof(kind)) switch
         {
             "crash" => _analysisTools.AnalyzeCrash(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
-            "dotnet_crash" => _analysisTools.AnalyzeDotNetCrash(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
             "ai" => _aiAnalysisTools.AnalyzeCrashWithAiAsync(
                 server,
                 Require(sessionId, nameof(sessionId)),

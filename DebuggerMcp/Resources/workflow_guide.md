@@ -221,14 +221,14 @@ analyze(kind: "crash", sessionId: "session-xyz-789", userId: "your-user-id")
 
 ---
 
-### Step 7: .NET-Specific Analysis (MCP)
+### Step 7: Managed/.NET Details (MCP)
 
 For .NET dumps, SOS is **automatically loaded** when `dump(action: "open")` detects a .NET runtime.
 If detection fails, you can load SOS manually with `inspect(kind: "load_sos", ...)`.
 
-Use .NET-specific analysis tools:
+Use the crash analysis tool (it performs .NET analysis via SOS/ClrMD):
 
-**Tool**: `analyze` (`kind: "dotnet_crash"`)
+**Tool**: `analyze` (`kind: "crash"`)
 
 Returns JSON with:
 - CLR version and runtime info
@@ -239,7 +239,7 @@ Returns JSON with:
 - GC and finalization queue analysis
 
 ```
-analyze(kind: "dotnet_crash", sessionId: "session-xyz-789", userId: "your-user-id")
+analyze(kind: "crash", sessionId: "session-xyz-789", userId: "your-user-id")
 ```
 
 **Common SOS Commands**:
@@ -326,10 +326,10 @@ session(action: "close", sessionId: "session-xyz-789", userId: "your-user-id")
 ```
 1. session(action="create")
 2. dump(action="open", baseline dump)  # SOS auto-loaded for .NET dumps
-3. analyze(kind="dotnet_crash") → Save heap statistics
+3. analyze(kind="crash") → Save heap statistics
 4. dump(action="close")
 5. dump(action="open", leak dump)  # SOS auto-loaded
-6. analyze(kind="dotnet_crash") → Compare heap statistics
+6. analyze(kind="crash") → Compare heap statistics
 7. session(action="close")
 ```
 

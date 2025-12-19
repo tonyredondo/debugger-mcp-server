@@ -12,8 +12,7 @@ Tool reference: the canonical MCP tool list is `debugger://mcp-tools`.
 
 | Feature | Tool (Compact) | Description |
 |---------|-----------------|-------------|
-| **Crash Analysis** | `analyze(kind="crash")` | General crash analysis with memory leak and deadlock detection |
-| **.NET Analysis** | `analyze(kind="dotnet_crash")` | .NET-specific analysis including managed exceptions, heap stats |
+| **Crash Analysis** | `analyze(kind="crash")` | .NET crash analysis (SOS/ClrMD) including managed exceptions, heap stats, deadlocks |
 | **AI Crash Analysis** | `analyze(kind="ai")` | AI-assisted root cause analysis via MCP sampling (iterative, tool-driven) |
 | **Dump Comparison** | `compare(kind="dumps")` | Compare two dumps for memory, threads, and modules |
 | **Heap Comparison** | `compare(kind="heaps")` | Memory allocation comparison for leak detection |
@@ -35,7 +34,7 @@ Tool reference: the canonical MCP tool list is `debugger://mcp-tools`.
 
 ### Overview
 
-Use `analyze(kind: "crash")` to perform automated crash analysis on an open dump file. It works with both WinDbg (Windows) and LLDB (macOS/Linux) and returns structured JSON output.
+Use `analyze(kind: "crash")` to perform automated .NET crash analysis on an open .NET dump file. It works with both WinDbg (Windows) and LLDB (macOS/Linux) and returns structured JSON output.
 
 ### Prerequisites
 
@@ -169,11 +168,11 @@ Trace files are written under `LOG_STORAGE_PATH/ai-sampling` (in Docker: `/app/l
 
 ---
 
-## 🟣 .NET Crash Analysis (`analyze` / kind=`dotnet_crash`)
+## 🟣 Managed/.NET Details (`analyze` / kind=`crash`)
 
 ### Overview
 
-Use `analyze(kind: "dotnet_crash")` for .NET-specific analysis using the SOS debugging extension. It includes managed exception analysis, heap statistics, and async deadlock detection.
+`analyze(kind: "crash")` performs .NET-specific analysis using the SOS debugging extension. It includes managed exception analysis, heap statistics, and async deadlock detection.
 
 ### Prerequisites
 
@@ -184,7 +183,7 @@ Use `analyze(kind: "dotnet_crash")` for .NET-specific analysis using the SOS deb
 
 ```
 # SOS is automatically loaded when dump(action="open") detects a .NET dump
-analyze(kind: "dotnet_crash", sessionId: "your-session-id", userId: "your-user-id")
+analyze(kind: "crash", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
 > If auto-detection fails, you can load SOS manually: `inspect(kind: "load_sos", sessionId: "...", userId: "...")`.
@@ -872,7 +871,7 @@ Day 2: After leak observed
 1. Upload .NET dump
 2. session(action="create", userId="user1") → session1
 3. dump(action="open", sessionId=session1, userId="user1", dumpId="dotnet-dump")  # SOS auto-loaded
-4. analyze(kind="dotnet_crash", sessionId=session1, userId="user1") → Get .NET-specific analysis
+4. analyze(kind="crash", sessionId=session1, userId="user1") → Get crash analysis
 5. Review:
    - analysis.memory.gc for GC heap/segment summary (when available)
    - analysis.memory.topConsumers for large managed types (when available)
@@ -989,7 +988,7 @@ watch(action: "evaluate_all", sessionId: "session-123", userId: "user1")
 
 ### Integration with Analysis
 
-When you run `analyze(kind="crash")`, `analyze(kind="dotnet_crash")`, or `analyze(kind="performance")`, watches are automatically evaluated and included in the report:
+When you run `analyze(kind="crash")` or `analyze(kind="performance")`, watches are automatically evaluated and included in the report:
 
 ```json
 {
