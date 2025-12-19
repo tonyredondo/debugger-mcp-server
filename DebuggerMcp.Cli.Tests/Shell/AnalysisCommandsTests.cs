@@ -23,7 +23,7 @@ public class AnalysisCommandsTests
         // Assert
         Assert.True(result.HasCompletions);
         Assert.Contains("crash", result.Completions);
-        Assert.Contains("dotnet", result.Completions);
+        Assert.Contains("ai", result.Completions);
         Assert.Contains("perf", result.Completions);
         Assert.Contains("cpu", result.Completions);
         Assert.Contains("memory", result.Completions);
@@ -90,4 +90,3 @@ public class AnalysisCommandsTests
         Assert.Contains("search", result.Completions);
     }
 }
-

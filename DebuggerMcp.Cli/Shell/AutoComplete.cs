@@ -30,16 +30,16 @@ public class AutoComplete
     /// <summary>
     /// Subcommands for each command.
     /// </summary>
-    private static readonly Dictionary<string, string[]> Subcommands = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["session"] = ["create", "list", "close", "info", "use"],
-        ["dumps"] = ["upload", "list", "info", "delete"],
-        ["symbols"] = ["upload", "list", "servers", "add", "clear"],
-        ["analyze"] = ["crash", "dotnet", "perf", "cpu", "memory", "gc", "contention", "security"],
-        ["compare"] = ["all", "heap", "threads", "modules"],
-        ["watch"] = ["add", "list", "eval", "remove", "clear"],
-        ["report"] = ["--format", "--output", "--summary", "markdown", "html", "json"],
-        ["sourcelink"] = ["resolve", "info"],
+	    private static readonly Dictionary<string, string[]> Subcommands = new(StringComparer.OrdinalIgnoreCase)
+	    {
+	        ["session"] = ["create", "list", "close", "info", "use"],
+	        ["dumps"] = ["upload", "list", "info", "delete"],
+	        ["symbols"] = ["upload", "list", "servers", "add", "clear"],
+	        ["analyze"] = ["crash", "ai", "perf", "cpu", "memory", "gc", "contention", "security"],
+	        ["compare"] = ["all", "heap", "threads", "modules"],
+	        ["watch"] = ["add", "list", "eval", "remove", "clear"],
+	        ["report"] = ["--format", "--output", "--summary", "markdown", "html", "json"],
+	        ["sourcelink"] = ["resolve", "info"],
         ["llm"] = ["provider", "set-provider", "model", "reasoning-effort", "effort", "set-key", "set-agent", "agent", "set-agent-confirm", "agent-confirm", "reset"],
         ["set"] = ["verbose", "output", "timeout", "user"],
         ["history"] = ["clear", "search"]
@@ -318,13 +318,13 @@ public class AutoComplete
             }
         }
 
-        // Analyze types
-        if (command == "analyze" && parts.Length == 1)
-        {
-            completions.AddRange(new[] { "crash", "dotnet" }.Where(t =>
-                string.IsNullOrEmpty(prefix) ||
-                t.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
-        }
+	        // Analyze types
+	        if (command == "analyze" && parts.Length == 1)
+	        {
+	            completions.AddRange(new[] { "crash", "ai" }.Where(t =>
+	                string.IsNullOrEmpty(prefix) ||
+	                t.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
+	        }
 
         // Report formats
         if (command == "report" && parts.Contains("--format"))

@@ -1484,32 +1484,30 @@ public class Program
                     output.Markup("  [yellow]exec !threads[/]");
                     break;
 
-	                case "analyze":
-	                    output.Header("ANALYZE Command");
-	                    output.WriteLine();
-	                    output.Markup("Run automated analysis on the current dump.");
-	                    output.WriteLine();
-	                    output.Markup("[bold]USAGE[/]");
-	                    output.Markup("  analyze <type> -o <file>");
-	                    output.WriteLine();
-	                    output.Markup("[bold]ANALYSIS TYPES[/]");
-	                    output.Markup("  [cyan]crash[/]         General crash analysis");
-	                    output.Markup("  [cyan]dotnet[/]        .NET-specific analysis");
-	                    output.Markup("  [cyan]ai[/]            AI-powered deep crash analysis (MCP sampling)");
-	                    output.Markup("  [cyan]perf[/]          Performance profiling summary");
-	                    output.Markup("  [cyan]cpu[/]           CPU usage analysis");
-	                    output.Markup("  [cyan]memory[/]        Memory allocation analysis");
-	                    output.Markup("  [cyan]gc[/]            Garbage collection analysis");
-	                    output.Markup("  [cyan]contention[/]    Thread contention analysis");
-	                    output.Markup("  [cyan]security[/]      Security vulnerability scan");
-	                    output.WriteLine();
-	                    output.Markup("[bold]EXAMPLES[/]");
-	                    output.Markup("  [yellow]analyze crash -o ./crash.json[/]");
-	                    output.Markup("  [yellow]analyze dotnet -o ./dotnet.json[/]");
-	                    output.Markup("  [yellow]analyze ai -o ./ai.json[/]");
-	                    output.Markup("  [yellow]analyze perf -o ./perf.json[/]");
-	                    output.Markup("  [yellow]analyze security -o ./security.json[/]");
-	                    break;
+		                case "analyze":
+		                    output.Header("ANALYZE Command");
+		                    output.WriteLine();
+		                    output.Markup("Run automated analysis on the current dump.");
+		                    output.WriteLine();
+		                    output.Markup("[bold]USAGE[/]");
+		                    output.Markup("  analyze <type> -o <file>");
+		                    output.WriteLine();
+		                    output.Markup("[bold]ANALYSIS TYPES[/]");
+		                    output.Markup("  [cyan]crash[/]         Crash analysis (.NET dumps)");
+		                    output.Markup("  [cyan]ai[/]            AI-powered deep crash analysis (MCP sampling)");
+		                    output.Markup("  [cyan]perf[/]          Performance profiling summary");
+		                    output.Markup("  [cyan]cpu[/]           CPU usage analysis");
+		                    output.Markup("  [cyan]memory[/]        Memory allocation analysis");
+		                    output.Markup("  [cyan]gc[/]            Garbage collection analysis");
+		                    output.Markup("  [cyan]contention[/]    Thread contention analysis");
+		                    output.Markup("  [cyan]security[/]      Security vulnerability scan");
+		                    output.WriteLine();
+		                    output.Markup("[bold]EXAMPLES[/]");
+		                    output.Markup("  [yellow]analyze crash -o ./crash.json[/]");
+		                    output.Markup("  [yellow]analyze ai -o ./ai.json[/]");
+		                    output.Markup("  [yellow]analyze perf -o ./perf.json[/]");
+		                    output.Markup("  [yellow]analyze security -o ./security.json[/]");
+		                    break;
 
                 case "compare":
                     output.Header("COMPARE Command");
@@ -5271,7 +5269,6 @@ public class Program
         return kind.Trim().ToLowerInvariant() switch
         {
             "crash" => mcpClient.AnalyzeCrashAsync(sessionId, userId, cancellationToken),
-            "dotnet" or ".net" or "net" => mcpClient.AnalyzeCrashAsync(sessionId, userId, cancellationToken),
             "performance" or "perf" => mcpClient.AnalyzePerformanceAsync(sessionId, userId, cancellationToken),
             "cpu" => mcpClient.AnalyzeCpuUsageAsync(sessionId, userId, cancellationToken),
             "allocations" or "memory" => mcpClient.AnalyzeAllocationsAsync(sessionId, userId, cancellationToken),
@@ -5757,11 +5754,11 @@ public class Program
             }
             else
             {
-	                output.Success("Dump opened successfully!");
-	                output.Markup(result);
-	                state.SetDumpLoaded(dumpId);
-	                state.Settings.SetLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, state.SessionId!);
-	                state.Settings.Save();
+                output.Success("Dump opened successfully!");
+                output.Markup(result);
+                state.SetDumpLoaded(dumpId);
+                state.Settings.SetLastSessionId(state.Settings.ServerUrl, state.Settings.UserId, state.SessionId!);
+                state.Settings.Save();
 	                
 	                // Get debugger type for proper command mapping
 	                try
@@ -5782,7 +5779,7 @@ public class Program
                 }
                 
                 output.WriteLine();
-                output.Dim("Tip: For .NET dumps, SOS is auto-loaded. Try 'analyze dotnet -o ./dotnet.json' or 'exec !threads'");
+                output.Dim("Tip: For .NET dumps, SOS is auto-loaded. Try 'analyze crash -o ./crash.json' or 'exec !threads'");
             }
         }
         catch (McpClientException ex) when (retryOnExpiredSession && IsSessionNotFoundError(ex))
@@ -7556,8 +7553,7 @@ public class Program
             output.Dim("Usage: analyze <type> -o <file>");
             output.WriteLine();
             output.Markup("[bold]Analysis Types:[/]");
-            output.Markup("  [cyan]crash[/]       General crash analysis");
-            output.Markup("  [cyan]dotnet[/]      .NET-specific analysis");
+            output.Markup("  [cyan]crash[/]       Crash analysis (.NET dumps)");
             output.Markup("  [cyan]ai[/]          AI-powered deep crash analysis (MCP sampling)");
             output.Markup("  [cyan]perf[/]        Performance profiling summary");
             output.Markup("  [cyan]cpu[/]         CPU usage analysis");
@@ -7616,13 +7612,6 @@ public class Program
                         () => mcpClient.AnalyzeCrashAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
                     break;
 
-                case "dotnet":
-                case ".net":
-                case "net":
-                    await RunAnalysisAsync(output, "Crash Analysis",
-                        () => mcpClient.AnalyzeCrashAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
-                    break;
-
                 case "ai":
                     await RunAnalysisAsync(output, "AI Crash Analysis",
                         () => mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
@@ -7668,7 +7657,7 @@ public class Program
 
                 default:
                     output.Error($"Unknown analysis type: {analysisType}");
-                    output.Dim("Available types: crash, dotnet, ai, perf, cpu, memory, gc, threads, security");
+                    output.Dim("Available types: crash, ai, perf, cpu, memory, gc, threads, security");
                     break;
             }
         }

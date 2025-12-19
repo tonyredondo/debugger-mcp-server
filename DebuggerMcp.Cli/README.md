@@ -288,7 +288,6 @@ showobj 0x7f8a2b3c4d50
 | Command | Description |
 |---------|-------------|
 | `analyze crash -o <file>` | Crash analysis (saves JSON) |
-| `analyze dotnet -o <file>` | Alias of `analyze crash` (saves JSON) |
 | `analyze ai -o <file>` | AI-assisted crash analysis via MCP sampling (saves JSON) |
 | `analyze perf -o <file>` | Comprehensive performance profiling (saves JSON) |
 | `analyze cpu -o <file>` | CPU usage and hot function analysis (saves JSON) |
@@ -300,14 +299,13 @@ showobj 0x7f8a2b3c4d50
 **Examples:**
 ```bash
 analyze crash -o ./crash.json
-analyze dotnet -o ./dotnet.json   # alias of `analyze crash`
 analyze ai -o ./ai.json
 analyze perf -o ./perf.json
 analyze security
 ```
 
 **AI analysis note**: `analyze ai` uses MCP sampling (`sampling/createMessage`). When using `dbg-mcp` as the connected MCP client, configure an LLM provider first (e.g., `OPENROUTER_API_KEY=...`, `OPENAI_API_KEY=...` + `llm provider openai`, or `ANTHROPIC_API_KEY=...` + `llm provider anthropic`).
-Note: `analyze crash`, `analyze dotnet`, `analyze ai`, and `report --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
+Note: `analyze crash`, `analyze ai`, and `report --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
 
 ### LLM Commands
 

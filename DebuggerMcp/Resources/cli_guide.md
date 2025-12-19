@@ -165,10 +165,9 @@ connect http://localhost:5000
 dumps upload ./crash.dmp
 open <dumpId>
 analyze crash -o ./crash.json
-analyze dotnet -o ./dotnet.json   # alias of `analyze crash`
 report -o ./crash-report.md
 ```
-Note: `analyze crash`, `analyze dotnet`, `analyze ai`, and `report --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
+Note: `analyze crash`, `analyze ai`, and `report --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
 
 ### Compare Two Dumps
 ```bash
