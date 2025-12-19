@@ -362,7 +362,7 @@ internal sealed class LlmResponseRenderer
         {
             var headerText = c < header.Count ? header[c] : string.Empty;
             // Avoid wrapping in extra markup tags; headerText may already contain markup spans.
-            spectre.AddColumn(new TableColumn(new Markup(headerText)));
+            spectre.AddColumn(new TableColumn(new Markup(headerText, new Style(decoration: Decoration.Bold))));
         }
 
         foreach (var row in cappedRows.Skip(1))

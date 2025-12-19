@@ -186,11 +186,8 @@ public class ConsoleOutput
         EmitToTranscript(response);
 
         var blocks = DefaultLlmRenderer.Render(response, consoleWidth: _console.Profile.Width);
-        foreach (var block in blocks)
-        {
-            _console.Write(block);
-            _console.WriteLine();
-        }
+        _console.Write(new Rows(blocks));
+        _console.WriteLine();
     }
 
     /// <summary>
