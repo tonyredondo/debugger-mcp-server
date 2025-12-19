@@ -60,6 +60,8 @@ public class TranscriptContextBuilderTests
         Assert.Contains("active debugger type", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("metadata.debuggertype", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("metadata.sosloaded", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("plugin load libsosplugin.so", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("NEVER attempt to load SOS", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do NOT recommend disabling profilers", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do not present speculation as fact", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do not assume the .NET runtime is bug-free", messages[0].Content, StringComparison.OrdinalIgnoreCase);
