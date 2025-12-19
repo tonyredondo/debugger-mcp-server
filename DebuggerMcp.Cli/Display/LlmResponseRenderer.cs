@@ -108,6 +108,13 @@ internal sealed class LlmResponseRenderer
             return;
         }
 
+        // Markdig's AutoIdentifiers extension can inject internal blocks that are not meant for display.
+        // If we render them via ToString() fallback, we end up printing the CLR type name.
+        if (block.GetType().FullName == "Markdig.Extensions.AutoIdentifiers.HeadingLinkReferenceDefinition")
+        {
+            return;
+        }
+
         switch (block)
         {
             case HeadingBlock heading:
@@ -179,6 +186,13 @@ internal sealed class LlmResponseRenderer
         if (title.Length == 0)
         {
             return;
+        }
+
+        // Add a visual separator before titles to improve readability.
+        if (output.Count > 0)
+        {
+            // Use an explicit newline so Spectre emits a blank line even when the caller prints via Rows.
+            Add(output, new Markup("\n"), state, applyMaxBlocks);
         }
 
         if (heading.Level <= 2)

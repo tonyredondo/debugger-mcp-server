@@ -94,6 +94,32 @@ public class LlmResponseRendererTests
     }
 
     [Fact]
+    public void Render_Heading_InsertsBlankLineBeforeTitle()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("para\n\n## Title\n\nafter\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("para", output, StringComparison.Ordinal);
+        Assert.Contains("Title", output, StringComparison.Ordinal);
+        Assert.Contains("para\n\n", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_DoesNotEmit_AutoIdentifiersHeadingLinkReferenceDefinition()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("# One\n\n## Two\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.DoesNotContain("HeadingLinkReferenceDefinition", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Render_Table_TruncatesBodyRowsAndShowsMoreRowsMarker()
     {
         var sb = new System.Text.StringBuilder();
