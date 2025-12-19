@@ -4828,7 +4828,7 @@ public class Program
         output.KeyValue("Agent Confirm", llmSettings.AgentModeConfirmToolCalls ? "enabled" : "disabled");
         output.WriteLine();
 
-        var trace = LlmTraceStore.TryCreate($"{llmSettings.GetProviderDisplayName()}-{llmSettings.GetEffectiveModel()}");
+        var trace = LlmTraceStore.TryCreate($"{llmSettings.GetProviderDisplayName()}-{llmSettings.GetEffectiveModel()}", maxFileBytes: 0);
         if (trace != null)
         {
             trace.AppendEvent(new
@@ -4843,6 +4843,7 @@ public class Program
             });
             output.KeyValue("Trace Folder", trace.DirectoryPath);
             output.Dim("Note: trace files may contain sensitive data; delete when done.");
+            output.Dim("Note: trace file size capping is disabled.");
             output.WriteLine();
         }
 

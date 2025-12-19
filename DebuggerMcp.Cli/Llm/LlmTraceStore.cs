@@ -17,7 +17,7 @@ namespace DebuggerMcp.Cli.Llm;
 internal sealed class LlmTraceStore
 {
     private readonly object _gate = new();
-    private readonly int _maxFileBytes;
+    private readonly int? _maxFileBytes;
     private int _counter;
 
     /// <summary>
@@ -39,16 +39,18 @@ internal sealed class LlmTraceStore
 
         DirectoryPath = directoryPath;
         EventsFilePath = Path.Combine(DirectoryPath, "events.jsonl");
-        _maxFileBytes = maxFileBytes <= 0 ? 2_000_000 : maxFileBytes;
+        _maxFileBytes = maxFileBytes <= 0 ? null : maxFileBytes;
     }
+
+    public bool IsFileSizeCapped => _maxFileBytes.HasValue;
 
     /// <summary>
     /// Creates a new trace store under the default CLI config directory.
     /// </summary>
     /// <param name="label">Human-readable label used in the folder name.</param>
-    /// <param name="maxFileBytes">Maximum bytes per file (default: 2,000,000).</param>
+    /// <param name="maxFileBytes">Maximum bytes per file (0 = no cap; default: 0).</param>
     /// <returns>The created store, or null if creation fails.</returns>
-    public static LlmTraceStore? TryCreate(string label, int maxFileBytes = 2_000_000)
+    public static LlmTraceStore? TryCreate(string label, int maxFileBytes = 0)
     {
         try
         {
@@ -155,9 +157,9 @@ internal sealed class LlmTraceStore
 
         var path = Path.Combine(DirectoryPath, fileName);
         var bytes = Encoding.UTF8.GetBytes(text ?? string.Empty);
-        if (bytes.Length > _maxFileBytes)
+        if (_maxFileBytes.HasValue && bytes.Length > _maxFileBytes.Value)
         {
-            var truncated = Encoding.UTF8.GetString(bytes, 0, _maxFileBytes);
+            var truncated = Encoding.UTF8.GetString(bytes, 0, _maxFileBytes.Value);
             truncated += $"{Environment.NewLine}... [truncated, totalBytes={bytes.Length}]";
             File.WriteAllText(path, truncated, Encoding.UTF8);
         }
