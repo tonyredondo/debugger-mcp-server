@@ -31,6 +31,7 @@ internal sealed class LlmResponseRenderer
         public int MaxTableColumns { get; init; } = 6;
         public int MaxTableCellWidth { get; init; } = 40;
         public int MaxBlocks { get; init; } = 500;
+        public int MaxQuoteBlocks { get; init; } = 200;
     }
 
     private readonly MarkdownPipeline _pipeline;
@@ -284,14 +285,20 @@ internal sealed class LlmResponseRenderer
 
     private void RenderQuote(QuoteBlock quote, List<IRenderable> output, int consoleWidth, int listItemBudget, RenderState state, bool applyMaxBlocks, int indent)
     {
+        var innerState = new RenderState { MaxBlocks = Math.Clamp(_options.MaxQuoteBlocks, 1, 50_000) };
         var inner = new List<IRenderable>();
         foreach (var child in quote)
         {
-            RenderBlock(child, inner, consoleWidth, listItemBudget, state, applyMaxBlocks: false, indent: 0);
-            if (state.Truncated)
+            RenderBlock(child, inner, consoleWidth, listItemBudget, innerState, applyMaxBlocks: true, indent: 0);
+            if (innerState.Truncated)
             {
                 break;
             }
+        }
+
+        if (innerState.Truncated)
+        {
+            EnsureTruncationMarker(inner);
         }
 
         IRenderable content;

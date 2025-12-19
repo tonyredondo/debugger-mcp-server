@@ -146,6 +146,31 @@ public class LlmResponseRendererTests
     }
 
     [Fact]
+    public void Render_Quote_RespectsMaxQuoteBlocksAndAddsTruncationMarker()
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < 20; i++)
+        {
+            sb.AppendLine($"> para{i}");
+            sb.AppendLine(">");
+        }
+        sb.AppendLine();
+
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxQuoteBlocks = 3 });
+        var blocks = renderer.Render(sb.ToString(), consoleWidth: 80);
+
+        Assert.Single(blocks);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("para0", output, StringComparison.Ordinal);
+        Assert.Contains("para2", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("para3", output, StringComparison.Ordinal);
+        Assert.Contains("output truncated", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Render_MaxBlocks_AddsTruncationMarker()
     {
         var sb = new System.Text.StringBuilder();
