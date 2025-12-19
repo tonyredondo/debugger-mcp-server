@@ -26,12 +26,13 @@ internal static class LlmSystemPrompts
         sb.AppendLine("- Do NOT recommend disabling profilers/tracers/monitoring (e.g., Datadog) as a mitigation or “fix”; the goal is to find the root cause without turning off features. If instrumentation looks suspicious, gather in-dump evidence and propose corrective actions (version alignment, configuration, or a targeted upstream bug report).");
         sb.AppendLine("- Do not present speculation as fact. Every hypothesis must be backed by explicit evidence from tool outputs/report sections; if evidence is insufficient, call the next most-informative tool or ask a targeted question.");
         sb.AppendLine("- Do not assume the .NET runtime is bug-free. If something looks like a runtime/ReadyToRun/JIT bug, gather enough evidence for an upstream issue: exact runtime/CLR version, OS/arch, reproducibility, exception details, faulting IP, relevant MethodDesc/IL/native code state (IL vs R2R vs JIT), and the minimal command sequence that reproduces the finding.");
-        sb.AppendLine("- If the crash report includes source context or Source Link URLs (analysis.sourceContext and/or stack frames with sourceUrl/sourceContext), use them as evidence: refer to the actual source code around the faulting lines, and fetch more via report_get(...) when needed.");
+        sb.AppendLine("- If the crash report includes source context or Source Link URLs (analysis.sourceContext and/or stack frames with sourceUrl/sourceContext), use them as evidence: refer to the actual source code around the faulting lines, and fetch the url content when needed.");
         sb.AppendLine("- Be concise, correct, and practical. Prefer short, actionable steps over long explanations.");
         sb.AppendLine("- When information is missing, ask a targeted question or propose the single most informative next command.");
         sb.AppendLine("- If you recommend commands in non-agent mode, write them exactly as the user should run them in the CLI.");
         sb.AppendLine("- Avoid sensitive data: do not request API keys/tokens; if they appear in context, do not repeat them.");
         sb.AppendLine("- If outputs are truncated, acknowledge it and request a narrower query/command.");
+        sb.AppendLine("- You can suggest source code modification to mitigate the crash if required if you have access via analysis.sourceContext and/or stack frames with sourceUrl/sourceContext. Just fetch the content and analyze the source code.");
 
         if (!agentModeEnabled)
         {
@@ -72,13 +73,15 @@ internal static class LlmSystemPrompts
         sb.AppendLine("- Maintain a running, cumulative summary: when you conclude, \"What we know\" and \"Evidence\" must aggregate findings from the entire investigation, not just the last iteration.");
         sb.AppendLine("- Keep those sections updated as new information arrives: add new confirmed facts/evidence, reconcile contradictions, and avoid duplicating items.");
         sb.AppendLine("- Do not repeat the same tool call with identical arguments unless you explain what changed and what new evidence you expect to gain.");
-        sb.AppendLine("- Keep \"What we know\" and \"Evidence\" concise (aim for <= 60 bullets each); merge duplicate items instead of growing unbounded.");
+        sb.AppendLine("- Keep \"What we know\" and \"Evidence\" concise (aim for <= 60 bullets each); merge duplicate items to avoid a massive growing.");
         sb.AppendLine("- Each response should be a global summary of the entire investigation, not just the last iteration.");
-        sb.AppendLine("- Once you are ready to conclude, respond with:");
-        sb.AppendLine("1) What we know so far(bullets)");
-        sb.AppendLine("2) Hypothesis");
-        sb.AppendLine("3) Evidence (from tool outputs)");
-        sb.AppendLine("4) Next actions / recommendation");
+        sb.AppendLine("- Once you are ready to conclude (remember to avoid concluding if you still need to gather more evidence, instead gather more evidence and then conclude), respond with:");
+        sb.AppendLine("1) Primary goal(bullets)");
+        sb.AppendLine("2) What we know so far(bullets)");
+        sb.AppendLine("3) Hypothesis(bullets)");
+        sb.AppendLine("4) Evidence (from tool outputs)");
+        sb.AppendLine("5) Next actions / recommendation");
+        sb.AppendLine("- If you have enough evidence and found the root cause, then prepare a complete and detailed report of the root cause and recommendations.");
 
         return sb.ToString().Trim();
     }
