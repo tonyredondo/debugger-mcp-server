@@ -110,7 +110,13 @@ internal sealed class LlmTraceStore
             try
             {
                 using var doc = JsonDocument.Parse(json);
-                output = JsonSerializer.Serialize(doc.RootElement, new JsonSerializerOptions { WriteIndented = true });
+                output = JsonSerializer.Serialize(
+                    doc.RootElement,
+                    new JsonSerializerOptions
+                    {
+                        WriteIndented = true,
+                        Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+                    });
             }
             catch
             {

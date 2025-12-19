@@ -80,6 +80,7 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
         }
 
         byte[] responseBytes = [];
+        var responseCharset = response.Content?.Headers.ContentType?.CharSet;
         try
         {
             if (response.Content != null)
@@ -96,7 +97,7 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
         try
         {
             var completedUtc = DateTime.UtcNow;
-            var responseText = responseBytes.Length == 0 ? string.Empty : Encoding.UTF8.GetString(responseBytes);
+            var responseText = responseBytes.Length == 0 ? string.Empty : DecodeText(responseBytes, responseCharset);
             _trace.AppendEvent(new
             {
                 kind = "llm_http_response",
@@ -115,6 +116,33 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
         }
 
         return response;
+    }
+
+    private static string DecodeText(byte[] bytes, string? charset)
+    {
+        if (bytes.Length == 0)
+        {
+            return string.Empty;
+        }
+
+        Encoding encoding;
+        try
+        {
+            encoding = string.IsNullOrWhiteSpace(charset) ? Encoding.UTF8 : Encoding.GetEncoding(charset);
+        }
+        catch
+        {
+            encoding = Encoding.UTF8;
+        }
+
+        try
+        {
+            return encoding.GetString(bytes);
+        }
+        catch
+        {
+            return Encoding.UTF8.GetString(bytes);
+        }
     }
 
     /// <summary>
