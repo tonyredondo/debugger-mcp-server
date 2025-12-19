@@ -389,6 +389,7 @@ public class DumpTools(
         {
             // Get the session with user ownership validation
             var manager = GetSessionManager(sessionId, sanitizedUserId);
+            var session = GetSessionInfo(sessionId, sanitizedUserId);
 
             // Check if SOS is already loaded (e.g., auto-loaded during OpenDump)
             if (manager.IsSosLoaded)
@@ -403,6 +404,10 @@ public class DumpTools(
 
             // Load SOS (user explicitly requested it)
             manager.LoadSosExtension();
+
+            // SOS availability can materially change .NET crash analysis output; invalidate cached report so
+            // subsequent report_index/report_get regenerates with the richer data set.
+            session.ClearCachedReport();
 
             return warning + "SOS extension loaded successfully. You can now use SOS commands like clrthreads, dumpheap, clrstack, etc.";
         }

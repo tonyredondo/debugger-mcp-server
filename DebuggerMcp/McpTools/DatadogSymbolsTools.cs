@@ -187,6 +187,10 @@ public class DatadogSymbolsTools(
 
             // Clear command cache after loading new symbols so subsequent commands
             // Note: ClrMD handles most operations now, no cache to clear
+
+            // Loading new symbols can change stacks/source resolution; invalidate cached report + resolver.
+            session.ClearSourceLinkResolver();
+            session.ClearCachedReport();
         }
 
         // Build response
@@ -324,6 +328,12 @@ public class DatadogSymbolsTools(
 
         // Clear command cache after loading new symbols so subsequent commands
         // Note: ClrMD handles most operations now, no cache to clear
+        if (loadIntoDebugger && prepResult.LoadResult != null)
+        {
+            // Loading new symbols can change stacks/source resolution; invalidate cached report + resolver.
+            session.ClearSourceLinkResolver();
+            session.ClearCachedReport();
+        }
 
         // Build response
         var response = new
@@ -623,6 +633,10 @@ public class DatadogSymbolsTools(
         {
             // Session not found or expired - that's okay, we still cleared the files
         }
+
+        // Removing symbols can change stack/source resolution; invalidate cached report + resolver.
+        session.ClearSourceLinkResolver();
+        session.ClearCachedReport();
 
         var response = new
         {

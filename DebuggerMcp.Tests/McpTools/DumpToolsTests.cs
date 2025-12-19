@@ -16,13 +16,14 @@ public class DumpToolsTests : IDisposable
     private readonly SymbolManager _symbolManager;
     private readonly WatchStore _watchStore;
     private readonly DumpTools _tools;
+    private const string DumpId = "dump-123";
 
     public DumpToolsTests()
     {
         _tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempPath);
 
-        _sessionManager = new DebuggerSessionManager(_tempPath);
+        _sessionManager = new DebuggerSessionManager(_tempPath, debuggerFactory: _ => new FakeSosDebuggerManager());
         _symbolManager = new SymbolManager(_tempPath);
         _watchStore = new WatchStore(_tempPath);
         _tools = new DumpTools(_sessionManager, _symbolManager, _watchStore, NullLogger<DumpTools>.Instance);
@@ -235,5 +236,51 @@ public class DumpToolsTests : IDisposable
         // Act & Assert
         Assert.Throws<UnauthorizedAccessException>(() => _tools.LoadSos(sessionId, "wrong-user"));
     }
-}
 
+    [Fact]
+    public void LoadSos_WhenReportIsCached_ClearsCachedReport()
+    {
+        // Arrange
+        var userId = "test-user";
+        var sessionId = _sessionManager.CreateSession(userId);
+
+        var manager = (FakeSosDebuggerManager)_sessionManager.GetSession(sessionId, userId);
+        manager.IsDumpOpen = true;
+        manager.IsDotNetDump = true;
+        manager.IsSosLoaded = false;
+
+        var session = _sessionManager.GetSessionInfo(sessionId, userId);
+        session.CurrentDumpId = DumpId;
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true);
+
+        // Act
+        var result = _tools.LoadSos(sessionId, userId);
+
+        // Assert
+        Assert.Contains("loaded successfully", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Null(session.CachedReportDumpId);
+        Assert.True(manager.IsSosLoaded);
+    }
+
+    private sealed class FakeSosDebuggerManager : IDebuggerManager
+    {
+        public bool IsInitialized => true;
+        public bool IsDumpOpen { get; set; }
+        public string? CurrentDumpPath { get; set; }
+        public string DebuggerType { get; set; } = "LLDB";
+        public bool IsSosLoaded { get; set; }
+        public bool IsDotNetDump { get; set; }
+
+        public Task InitializeAsync() => Task.CompletedTask;
+        public void OpenDumpFile(string dumpFilePath, string? executablePath = null) => throw new NotSupportedException();
+        public void CloseDump() => IsDumpOpen = false;
+        public string ExecuteCommand(string command) => throw new NotSupportedException();
+        public void LoadSosExtension() => IsSosLoaded = true;
+        public void ConfigureSymbolPath(string symbolPath) => throw new NotSupportedException();
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}

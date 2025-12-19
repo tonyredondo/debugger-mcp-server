@@ -3,6 +3,7 @@ using DebuggerMcp.McpTools;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging;
 
 namespace DebuggerMcp.Tests.McpTools;
 
@@ -134,6 +135,10 @@ public class DatadogSymbolsToolsTests
             var sessionId = sessionManager.CreateSession(userId);
             var session = sessionManager.GetSessionInfo(sessionId, userId);
             session.CurrentDumpId = "dump1.dmp";
+            session.SetCachedReport(session.CurrentDumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true);
+            _ = session.GetOrCreateSourceLinkResolver(Path.GetFileNameWithoutExtension(session.CurrentDumpId),
+                () => new SourceLinkResolver(NullLogger.Instance));
+            Assert.NotNull(session.SourceLinkResolver);
 
             var dumpName = Path.GetFileNameWithoutExtension(session.CurrentDumpId);
             var datadogSymbolsDir = Path.Combine(dumpStoragePath, userId, $".symbols_{dumpName}", ".datadog");
@@ -151,6 +156,9 @@ public class DatadogSymbolsToolsTests
             Assert.False(Directory.Exists(datadogSymbolsDir));
             Assert.False(File.Exists(Path.Combine(cacheDir, "azure_pipelines_cache.json")));
             Assert.False(File.Exists(Path.Combine(cacheDir, "github_releases_cache.json")));
+
+            Assert.Null(session.CachedReportDumpId);
+            Assert.Null(session.SourceLinkResolver);
         }
         finally
         {
