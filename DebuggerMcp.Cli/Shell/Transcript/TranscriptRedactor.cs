@@ -168,7 +168,9 @@ internal static class TranscriptRedactor
         }
 
         var s = value.Trim();
-        if (!s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || s.Length <= 2)
+        // SOS/metadata tokens are 32-bit values rendered as "0x" + 8 hex digits (e.g., 0x06000001).
+        // Restricting to this format avoids accidentally preserving arbitrary hex-ish secrets.
+        if (!s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || s.Length != 10)
         {
             return false;
         }
