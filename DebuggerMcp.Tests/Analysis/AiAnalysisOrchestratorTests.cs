@@ -173,6 +173,7 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains("Prefer using the inspect tool", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do NOT recommend disabling profilers", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do not present speculation as fact", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Do not assume the .NET runtime is bug-free", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

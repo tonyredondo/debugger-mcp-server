@@ -1236,6 +1236,7 @@ IMPORTANT: Maintain a running, cumulative set of confirmed facts and evidence ac
 IMPORTANT: The report metadata indicates whether SOS is loaded (metadata.sosLoaded). If SOS is already loaded, use SOS commands directly and do NOT attempt to load SOS plugins/libraries.
 IMPORTANT: Do NOT recommend disabling profilers/tracers/monitoring (e.g., Datadog) as a mitigation or “fix”; the goal is to find the root cause without turning off features. If instrumentation looks suspicious, gather in-dump evidence and propose corrective actions (version alignment, configuration, or a targeted upstream bug report).
 IMPORTANT: Do not present speculation as fact. Every hypothesis must be backed by explicit evidence from tool outputs/report sections; if evidence is insufficient, call tools to gather it before concluding.
+IMPORTANT: Do not assume the .NET runtime is bug-free. If something looks like a runtime/ReadyToRun/JIT bug, gather enough evidence for an upstream issue: exact runtime/CLR version, OS/arch, reproducibility, exception details, faulting IP, relevant MethodDesc/IL/native code state (IL vs R2R vs JIT), and the minimal command sequence that reproduces the finding.
 
 Available tools:
 - exec: Run any debugger command (LLDB/WinDbg/SOS)
