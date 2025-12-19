@@ -30,7 +30,7 @@ public sealed class LlmHttpTraceHandlerTests
 
             using var req = new HttpRequestMessage(HttpMethod.Post, "https://example.test/chat/completions")
             {
-                Content = new StringContent("{\"apiKey\":\"secret\",\"x\":1}", Encoding.UTF8, "application/json")
+                Content = new StringContent("{\"apiKey\":\"secret\",\"openai_api_key\":\"secret2\",\"x\":1}", Encoding.UTF8, "application/json")
             };
 
             var resp = await http.SendAsync(req);
@@ -45,6 +45,49 @@ public sealed class LlmHttpTraceHandlerTests
             var requestFile = Directory.GetFiles(temp).Single(f => f.EndsWith(".openai.request.json", StringComparison.OrdinalIgnoreCase));
             var requestText = await File.ReadAllTextAsync(requestFile);
             Assert.Contains("\"apiKey\": \"***\"", requestText, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("\"openai_api_key\": \"***\"", requestText, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(temp, recursive: true); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
+    public async Task SendAsync_RedactsOpenAiApiKeyEnvVarsAndRawKeyTokens()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "dbg-mcp-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+
+        try
+        {
+            var store = new LlmTraceStore(temp, maxFileBytes: 0);
+
+            var inner = new StubHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("Incorrect API key provided: sk-123", Encoding.UTF8, "text/plain")
+                });
+
+            var trace = new LlmHttpTraceHandler(store, "openai") { InnerHandler = inner };
+            using var http = new HttpClient(trace);
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://example.test/chat/completions")
+            {
+                Content = new StringContent("OPENAI_API_KEY=sk-123", Encoding.UTF8, "text/plain")
+            };
+
+            var resp = await http.SendAsync(req);
+            _ = await resp.Content.ReadAsStringAsync();
+
+            var requestFile = Directory.GetFiles(temp).Single(f => f.EndsWith(".openai.request.json", StringComparison.OrdinalIgnoreCase));
+            var requestText = await File.ReadAllTextAsync(requestFile);
+            Assert.Contains("OPENAI_API_KEY=***", requestText, StringComparison.OrdinalIgnoreCase);
+
+            var responseFile = Directory.GetFiles(temp).Single(f => f.EndsWith(".openai.response.json", StringComparison.OrdinalIgnoreCase));
+            var responseText = await File.ReadAllTextAsync(responseFile);
+            Assert.DoesNotContain("sk-123", responseText, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("sk-***", responseText, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {

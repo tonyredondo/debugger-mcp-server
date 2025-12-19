@@ -23,7 +23,7 @@ internal static class LlmTraceRedactor
         // JSON-style pairs: "apiKey": "..."
         text = Regex.Replace(
             text,
-            @"(?i)""(openrouter_api_key|api[_-]?key|password|secret)""\s*:\s*""[^""]*""",
+            @"(?i)""(openrouter_api_key|openai_api_key|api[_-]?key|password|secret)""\s*:\s*""[^""]*""",
             "\"$1\":\"***\"",
             RegexOptions.CultureInvariant);
 
@@ -44,11 +44,24 @@ internal static class LlmTraceRedactor
         // Key=value or key: value pairs (exclude bare "token" to avoid wiping method tokens, etc.)
         text = Regex.Replace(
             text,
-            @"(?i)\b(openrouter_api_key|api[_-]?key|password|secret)\b\s*[:=]\s*([^\s]+)",
+            @"(?i)\b(openrouter_api_key|openai_api_key|api[_-]?key|password|secret)\b\s*[:=]\s*([^\s]+)",
             "$1=***",
+            RegexOptions.CultureInvariant);
+
+        // Env-var style names (underscore-separated) don't match the generic apiKey/token patterns due to word-boundary behavior.
+        text = Regex.Replace(
+            text,
+            @"(?i)\b(openai_api_key|openrouter_api_key|openai[_-]?api[_-]?key|openrouter[_-]?api[_-]?key)\b\s*[:=]\s*([^\s]+)",
+            "$1=***",
+            RegexOptions.CultureInvariant);
+
+        // Raw key patterns (e.g., OpenAI/OpenRouter keys) sometimes appear outside key/value contexts.
+        text = Regex.Replace(
+            text,
+            @"\b(sk|rk)-[A-Za-z0-9_-]+\b",
+            "$1-***",
             RegexOptions.CultureInvariant);
 
         return text;
     }
 }
-
