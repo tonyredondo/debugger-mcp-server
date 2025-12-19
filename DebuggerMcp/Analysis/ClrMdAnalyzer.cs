@@ -3349,6 +3349,8 @@ public class ClrMdAnalyzer : IDisposable
             var targetAddresses = new HashSet<ulong>(instanceByAddress.Keys);
             var ownerCounts = new Dictionary<ulong, int>();
             var processedStaticTypes = new HashSet<string>(StringComparer.Ordinal);
+            var staticTypesScanned = 0;
+            const int maxStaticTypesToScan = 250;
 
             foreach (var obj in heap.EnumerateObjects())
             {
@@ -3378,7 +3380,25 @@ public class ClrMdAnalyzer : IDisposable
                 if (!processedStaticTypes.Contains(ownerTypeName))
                 {
                     processedStaticTypes.Add(ownerTypeName);
-                    TryAddStaticFieldOwners(objType, targetAddresses, instanceByAddress, ownerCounts, maxOwnersPerInstance, timeoutMs, sw);
+                    if (staticTypesScanned < maxStaticTypesToScan)
+                    {
+                        var hasObjectRefStatics = false;
+                        try
+                        {
+                            hasObjectRefStatics = objType.StaticFields.Any(sf => sf.IsObjectReference);
+                        }
+                        catch
+                        {
+                            // Best-effort; do not block owner enrichment.
+                        }
+
+                        if (hasObjectRefStatics)
+                        {
+                            // Static field scanning can be expensive (types * domains). Keep a hard cap for perf.
+                            staticTypesScanned++;
+                            TryAddStaticFieldOwners(objType, targetAddresses, instanceByAddress, ownerCounts, maxOwnersPerInstance, timeoutMs, sw);
+                        }
+                    }
                     if (targetAddresses.Count == 0)
                     {
                         break;
@@ -3463,69 +3483,76 @@ public class ClrMdAnalyzer : IDisposable
             return;
         }
 
-        var typeName = type.Name ?? "<unknown>";
-        foreach (var staticField in type.StaticFields)
+        try
         {
-            if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
-            {
-                return;
-            }
-
-            if (!staticField.IsObjectReference)
-            {
-                continue;
-            }
-
-            foreach (var domain in _runtime.AppDomains)
+            var typeName = type.Name ?? "<unknown>";
+            foreach (var staticField in type.StaticFields)
             {
                 if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
                 {
                     return;
                 }
 
-                if (targetAddresses.Count == 0)
+                if (!staticField.IsObjectReference)
                 {
-                    return;
+                    continue;
                 }
 
-                try
+                foreach (var domain in _runtime.AppDomains)
                 {
-                    var fieldValue = staticField.ReadObject(domain);
-                    if (!fieldValue.IsValid || fieldValue.IsNull)
+                    if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
                     {
-                        continue;
+                        return;
                     }
 
-                    var refAddr = fieldValue.Address;
-                    if (!targetAddresses.Contains(refAddr))
+                    if (targetAddresses.Count == 0)
                     {
-                        continue;
+                        return;
                     }
 
-                    if (!instanceByAddress.TryGetValue(refAddr, out var instance))
+                    try
                     {
-                        continue;
-                    }
-
-                    if (TryAddOwner(instance, ownerCounts, refAddr, maxOwnersPerInstance, new ObjectReferenceOwner
-                    {
-                        Address = null,
-                        Type = typeName,
-                        FieldName = staticField.Name ?? "<unknown>",
-                        IsStatic = true
-                    }))
-                    {
-                        if (ownerCounts.TryGetValue(refAddr, out var count) && count >= maxOwnersPerInstance)
+                        var fieldValue = staticField.ReadObject(domain);
+                        if (!fieldValue.IsValid || fieldValue.IsNull)
                         {
-                            targetAddresses.Remove(refAddr);
+                            continue;
+                        }
+
+                        var refAddr = fieldValue.Address;
+                        if (!targetAddresses.Contains(refAddr))
+                        {
+                            continue;
+                        }
+
+                        if (!instanceByAddress.TryGetValue(refAddr, out var instance))
+                        {
+                            continue;
+                        }
+
+                        if (TryAddOwner(instance, ownerCounts, refAddr, maxOwnersPerInstance, new ObjectReferenceOwner
+                        {
+                            Address = null,
+                            Type = typeName,
+                            FieldName = staticField.Name ?? "<unknown>",
+                            IsStatic = true
+                        }))
+                        {
+                            if (ownerCounts.TryGetValue(refAddr, out var count) && count >= maxOwnersPerInstance)
+                            {
+                                targetAddresses.Remove(refAddr);
+                            }
                         }
                     }
-                }
-                catch
-                {
-                    // Skip domains/fields that can't be read.
+                    catch
+                    {
+                        // Skip domains/fields that can't be read.
+                    }
                 }
             }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ClrMD] Failed to scan static field owners for top-consumer instances");
         }
     }
 
