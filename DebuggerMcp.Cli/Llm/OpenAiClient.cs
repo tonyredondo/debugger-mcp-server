@@ -224,9 +224,12 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         }
 
         var m = model.Trim().ToLowerInvariant();
-        return m.StartsWith("gpt-5", StringComparison.Ordinal) ||
-               m.StartsWith("o1", StringComparison.Ordinal) ||
-               m.StartsWith("o3", StringComparison.Ordinal);
+        var slash = m.LastIndexOf('/');
+        var normalized = slash >= 0 ? m[(slash + 1)..] : m;
+
+        return normalized.StartsWith("gpt-5", StringComparison.Ordinal) ||
+               normalized.StartsWith("o1", StringComparison.Ordinal) ||
+               normalized.StartsWith("o3", StringComparison.Ordinal);
     }
 
     private static bool MentionsUnsupportedParameter(string? errorBody, string parameterName)

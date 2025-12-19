@@ -125,6 +125,42 @@ public class OpenAiClientTests
     }
 
     [Fact]
+    public async Task ChatCompletionAsync_MaxTokens_WithOpenAiPrefixedGpt5Model_UsesMaxCompletionTokens()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "openai/gpt-5.2",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = "{\"choices\":[{\"message\":{\"content\":\"hello\"}}]}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        _ = await client.ChatCompletionAsync(
+            new ChatCompletionRequest
+            {
+                Messages = [new ChatMessage("user", "hi")],
+                MaxTokens = 123
+            });
+
+        using var doc = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.False(doc.RootElement.TryGetProperty("max_tokens", out _));
+        Assert.Equal(123, doc.RootElement.GetProperty("max_completion_tokens").GetInt32());
+    }
+
+    [Fact]
     public async Task ChatCompletionAsync_MaxTokens_WhenServerRejectsMaxTokens_RetriesWithMaxCompletionTokens()
     {
         var settings = new LlmSettings
