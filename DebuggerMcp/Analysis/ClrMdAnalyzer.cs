@@ -3348,7 +3348,8 @@ public class ClrMdAnalyzer : IDisposable
         {
             var targetAddresses = new HashSet<ulong>(instanceByAddress.Keys);
             var ownerCounts = new Dictionary<ulong, int>();
-            var processedStaticTypes = new HashSet<string>(StringComparer.Ordinal);
+            var processedStaticMethodTables = new HashSet<ulong>();
+            var processedStaticTypeNames = new HashSet<string>(StringComparer.Ordinal);
             var staticTypesScanned = 0;
             const int maxStaticTypesToScan = 250;
 
@@ -3377,9 +3378,8 @@ public class ClrMdAnalyzer : IDisposable
                 }
 
                 var ownerTypeName = objType.Name ?? "<unknown>";
-                if (!processedStaticTypes.Contains(ownerTypeName))
+                if (TryMarkStaticTypeProcessed(objType.MethodTable, ownerTypeName, processedStaticMethodTables, processedStaticTypeNames))
                 {
-                    processedStaticTypes.Add(ownerTypeName);
                     if (staticTypesScanned < maxStaticTypesToScan)
                     {
                         // Prefer skipping static scanning when we can cheaply prove there are no object refs,
@@ -3469,6 +3469,29 @@ public class ClrMdAnalyzer : IDisposable
         {
             _logger?.LogDebug(ex, "[ClrMD] Failed to enrich top-consumer instances with owners");
         }
+    }
+
+    internal static bool TryMarkStaticTypeProcessed(
+        ulong methodTable,
+        string typeName,
+        HashSet<ulong> processedMethodTables,
+        HashSet<string> processedTypeNames)
+    {
+        ArgumentNullException.ThrowIfNull(processedMethodTables);
+        ArgumentNullException.ThrowIfNull(processedTypeNames);
+
+        if (methodTable != 0)
+        {
+            return processedMethodTables.Add(methodTable);
+        }
+
+        typeName = typeName.Trim();
+        if (typeName.Length == 0)
+        {
+            return false;
+        }
+
+        return processedTypeNames.Add(typeName);
     }
 
     private void TryAddStaticFieldOwners(

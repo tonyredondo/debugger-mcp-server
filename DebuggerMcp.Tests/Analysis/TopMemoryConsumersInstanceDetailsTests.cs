@@ -5,6 +5,34 @@ namespace DebuggerMcp.Tests.Analysis;
 public class TopMemoryConsumersInstanceDetailsTests
 {
     [Fact]
+    public void TryMarkStaticTypeProcessed_DedupesByMethodTableWhenAvailable()
+    {
+        var processedMethodTables = new HashSet<ulong>();
+        var processedTypeNames = new HashSet<string>(StringComparer.Ordinal);
+
+        Assert.True(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0x1234, "TypeA", processedMethodTables, processedTypeNames));
+        Assert.False(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0x1234, "TypeA", processedMethodTables, processedTypeNames));
+
+        Assert.True(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0x5678, "TypeA", processedMethodTables, processedTypeNames));
+        Assert.False(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0x5678, "DifferentName", processedMethodTables, processedTypeNames));
+    }
+
+    [Fact]
+    public void TryMarkStaticTypeProcessed_FallsBackToTypeNameWhenMethodTableUnknown()
+    {
+        var processedMethodTables = new HashSet<ulong>();
+        var processedTypeNames = new HashSet<string>(StringComparer.Ordinal);
+
+        Assert.True(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0, "TypeA", processedMethodTables, processedTypeNames));
+        Assert.False(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0, "TypeA", processedMethodTables, processedTypeNames));
+
+        Assert.True(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0, " TypeB ", processedMethodTables, processedTypeNames));
+        Assert.False(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0, "TypeB", processedMethodTables, processedTypeNames));
+
+        Assert.False(ClrMdAnalyzer.TryMarkStaticTypeProcessed(0, "   ", processedMethodTables, processedTypeNames));
+    }
+
+    [Fact]
     public void GetTypesToCollectInstancesFor_OnlyIncludesSmallCounts()
     {
         var top = new TopMemoryConsumers
