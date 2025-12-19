@@ -1,8 +1,6 @@
 using System.ComponentModel;
-using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Reporting;
-using DebuggerMcp.Serialization;
 using DebuggerMcp.Security;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
@@ -31,17 +29,12 @@ public class AnalysisTools(
     : DebuggerToolsBase(sessionManager, symbolManager, watchStore, logger)
 {
     /// <summary>
-    /// JSON serialization options for analysis results.
-    /// </summary>
-    private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.Indented;
-
-    /// <summary>
     /// Performs automated crash analysis on the currently open dump.
     /// </summary>
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID that owns the session (for security validation).</param>
     /// <param name="includeWatches">Include watch expression evaluations in the report.</param>
-    /// <returns>JSON formatted crash analysis results.</returns>
+    /// <returns>Canonical JSON report document (same schema as <c>report --format json</c>).</returns>
     /// <remarks>
     /// This tool automatically:
     /// - Analyzes the crash dump to determine crash type
@@ -78,10 +71,18 @@ public class AnalysisTools(
         // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
-        // Use DotNetCrashAnalyzer for more complete analysis (CLR info, managed exceptions,
-        // heap stats, interleaved call stacks from clrstack -f -r -all, async deadlock detection)
-        var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
-        var result = await analyzer.AnalyzeDotNetCrashAsync();
+        CrashAnalysisResult result;
+        if (DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(manager.IsSosLoaded, session.ClrMdAnalyzer?.IsOpen == true))
+        {
+            // Prefer the .NET analyzer when SOS or ClrMD is available for richer evidence.
+            var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
+            result = await analyzer.AnalyzeDotNetCrashAsync();
+        }
+        else
+        {
+            var analyzer = new CrashAnalyzer(manager, sourceLinkResolver);
+            result = await analyzer.AnalyzeCrashAsync();
+        }
 
         // Run security analysis and include in results
         var securityAnalyzer = new SecurityAnalyzer(manager);
@@ -105,8 +106,7 @@ public class AnalysisTools(
             }
         }
 
-        // Return JSON formatted result
-        return JsonSerializer.Serialize(result, JsonOptions);
+        return GenerateCanonicalJsonReport(result, session, sanitizedUserId, manager.DebuggerType);
     }
 
     /// <summary>
@@ -115,7 +115,7 @@ public class AnalysisTools(
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID that owns the session (for security validation).</param>
     /// <param name="includeWatches">Include watch expression evaluations in the report.</param>
-    /// <returns>JSON formatted .NET crash analysis results.</returns>
+    /// <returns>Canonical JSON report document (same schema as <c>report --format json</c>).</returns>
     /// <remarks>
     /// This tool provides .NET specific analysis including:
     /// - CLR version information
@@ -156,25 +156,7 @@ public class AnalysisTools(
         // Run security analysis and include in results
         var securityAnalyzer = new SecurityAnalyzer(manager);
         var securityResult = await securityAnalyzer.AnalyzeSecurityAsync();
-        if (securityResult != null)
-        {
-            result.Security = new SecurityInfo
-            {
-                HasVulnerabilities = securityResult.Vulnerabilities?.Count > 0,
-                OverallRisk = securityResult.OverallRisk.ToString(),
-                Summary = securityResult.Summary,
-                AnalyzedAt = securityResult.AnalyzedAt.ToString("O"),
-                Findings = securityResult.Vulnerabilities?.Select(v => new SecurityFinding
-                {
-                    Type = v.Type.ToString(),
-                    Severity = v.Severity.ToString(),
-                    Description = v.Description,
-                    Location = v.Address,
-                    Recommendation = v.Details
-                }).ToList(),
-                Recommendations = securityResult.Recommendations
-            };
-        }
+        ReportEnrichment.ApplySecurity(result, securityResult);
 
         // Include watch evaluations if enabled and dump has watches
         if (includeWatches && !string.IsNullOrEmpty(session.CurrentDumpId))
@@ -193,7 +175,37 @@ public class AnalysisTools(
             }
         }
 
-        // Return JSON formatted result
-        return JsonSerializer.Serialize(result, JsonOptions);
+        return GenerateCanonicalJsonReport(result, session, sanitizedUserId, manager.DebuggerType);
+    }
+
+    private static string GenerateCanonicalJsonReport(
+        CrashAnalysisResult analysis,
+        DebuggerSession session,
+        string userId,
+        string debuggerType)
+    {
+        if (analysis == null)
+        {
+            throw new ArgumentNullException(nameof(analysis));
+        }
+
+        if (session == null)
+        {
+            throw new ArgumentNullException(nameof(session));
+        }
+
+        // Treat the JSON report document shape as the canonical representation of crash analysis.
+        // This ensures `analyze` and `report -f json` stay consistent and other formats can be derived from JSON.
+        var reportService = new ReportService();
+        var metadata = new ReportMetadata
+        {
+            DumpId = session.CurrentDumpId ?? string.Empty,
+            UserId = userId,
+            GeneratedAt = DateTime.UtcNow,
+            DebuggerType = debuggerType,
+            Format = ReportFormat.Json
+        };
+
+        return reportService.GenerateReport(analysis, new ReportOptions { Format = ReportFormat.Json }, metadata);
     }
 }

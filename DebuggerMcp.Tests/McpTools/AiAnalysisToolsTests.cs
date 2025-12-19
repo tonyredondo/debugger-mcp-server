@@ -1,3 +1,4 @@
+using DebuggerMcp.Analysis;
 using DebuggerMcp.McpTools;
 using Xunit;
 
@@ -12,8 +13,7 @@ public class AiAnalysisToolsTests
     [InlineData(false, false, false)]
     public void ShouldUseDotNetAnalyzer_UsesDotNetWhenSosOrClrMdAvailable(bool isSosLoaded, bool isClrMdOpen, bool expected)
     {
-        var actual = AiAnalysisTools.ShouldUseDotNetAnalyzer(isSosLoaded, isClrMdOpen);
+        var actual = DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(isSosLoaded, isClrMdOpen);
         Assert.Equal(expected, actual);
     }
 }
-

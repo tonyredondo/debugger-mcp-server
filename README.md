@@ -386,25 +386,19 @@ Response (batch upload):
 **Automated Analysis:**
 ```
 # General crash analysis with memory leak and deadlock detection
-analyze(kind="crash", sessionId, userId) → Returns JSON with:
-  - Crash type and exception info
-  - Call stack analysis
-  - Thread information
-  - Memory leak indicators
-  - Deadlock detection
-  - Security vulnerabilities
-  - Watch expression results
-  - Recommendations
+analyze(kind="crash", sessionId, userId) → Returns the canonical JSON report document (same schema as `report(format="json")`):
+  - metadata (dumpId/userId/generatedAt/debuggerType/serverVersion)
+  - analysis (summary/exception/environment/threads/memory/assemblies/modules/async/security/watches/…)
 
 # AI-assisted crash analysis (requires MCP sampling support in the connected client)
 analyze(kind="ai", sessionId, userId) → Returns the same report enriched with:
-  - aiAnalysis.rootCause / confidence / reasoning
-  - aiAnalysis.commandsExecuted (tools/commands the AI requested; prefer `inspect` over raw `dumpobj` when possible)
+  - analysis.aiAnalysis.rootCause / confidence / reasoning
+  - analysis.aiAnalysis.commandsExecuted (tools/commands the AI requested; prefer `inspect` over raw `dumpobj` when possible)
 
 Tip: To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
 
 # .NET specific analysis (SOS auto-loaded when opening .NET dumps)
-analyze(kind="dotnet_crash", sessionId, userId) → Returns JSON with:
+analyze(kind="dotnet_crash", sessionId, userId) → Returns the same canonical JSON report document, with additional .NET-focused evidence in `analysis`, including:
   - CLR version and runtime info
   - Managed exceptions with stack traces
   - Heap statistics and large object allocations

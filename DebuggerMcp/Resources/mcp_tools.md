@@ -37,6 +37,7 @@ Generate reports (returns report content).
 - **summary**: `report(action: "summary", sessionId: "...", userId: "...", format: "json")`
 
 Tip: For LLM consumption, prefer `format: "json"` (structured). Use `markdown` for human-readable output.
+Note: `format: "json"` returns the canonical report document shape: `{ "metadata": { ... }, "analysis": { ... } }`.
 
 ### 5) `analyze`
 Run analysis on the currently open dump.
@@ -54,6 +55,7 @@ Run analysis on the currently open dump.
 
 Notes:
 - `kind: "ai"` requires the connected MCP client to support sampling (`sampling/createMessage`) with tools enabled.
+- `kind: "crash"`, `kind: "dotnet_crash"`, and `kind: "ai"` return the same canonical JSON report document schema as `report(format: "json")`. For AI runs, the result is enriched under `analysis.aiAnalysis`.
 
 ### 6) `compare`
 Compare two sessions (each must have a dump open).

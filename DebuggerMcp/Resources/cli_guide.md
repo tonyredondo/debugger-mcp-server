@@ -168,6 +168,7 @@ analyze crash -o ./crash.json
 analyze dotnet -o ./dotnet.json
 report -o ./crash-report.md
 ```
+Note: `analyze crash`, `analyze dotnet`, `analyze ai`, and `report --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
 
 ### Compare Two Dumps
 ```bash

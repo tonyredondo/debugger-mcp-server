@@ -12,13 +12,6 @@ namespace DebuggerMcp.Analysis;
 public class CrashAnalysisResult
 {
     /// <summary>
-    /// Report metadata.
-    /// </summary>
-    [JsonPropertyName("metadata")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public CrashReportMetadata? Metadata { get; set; }
-
-    /// <summary>
     /// Analysis summary with crash type, severity, and recommendations.
     /// </summary>
     [JsonPropertyName("summary")]
@@ -2170,55 +2163,6 @@ public class CombinedHeapAnalysis
 // These classes will replace the flat structure incrementally
 // ============================================================================
 
-
-/// <summary>
-/// Report metadata information for the new hierarchical structure.
-/// Named CrashReportMetadata to avoid conflict with DebuggerMcp.Reporting.ReportMetadata.
-/// </summary>
-public class CrashReportMetadata
-{
-    /// <summary>
-    /// Unique identifier for the dump file.
-    /// </summary>
-    [JsonPropertyName("dumpId")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? DumpId { get; set; }
-
-    /// <summary>
-    /// User who uploaded/owns the dump.
-    /// </summary>
-    [JsonPropertyName("userId")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? UserId { get; set; }
-
-    /// <summary>
-    /// When the report was generated (ISO8601).
-    /// </summary>
-    [JsonPropertyName("generatedAt")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? GeneratedAt { get; set; }
-
-    /// <summary>
-    /// Report format (Json, Markdown, Html).
-    /// </summary>
-    [JsonPropertyName("format")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Format { get; set; }
-
-    /// <summary>
-    /// Debugger type used (WinDbg, LLDB).
-    /// </summary>
-    [JsonPropertyName("debuggerType")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? DebuggerType { get; set; }
-
-    /// <summary>
-    /// Server version that generated this report.
-    /// </summary>
-    [JsonPropertyName("serverVersion")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ServerVersion { get; set; }
-}
 
 /// <summary>
 /// High-level analysis summary for quick triage.

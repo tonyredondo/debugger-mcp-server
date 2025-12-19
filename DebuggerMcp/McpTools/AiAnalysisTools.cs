@@ -31,9 +31,6 @@ public sealed class AiAnalysisTools(
 {
     private readonly ILoggerFactory _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
 
-    internal static bool ShouldUseDotNetAnalyzer(bool isSosLoaded, bool isClrMdOpen)
-        => isSosLoaded || isClrMdOpen;
-
     /// <summary>
     /// Performs AI-powered deep crash analysis using a server-driven sampling loop.
     /// </summary>
@@ -45,7 +42,7 @@ public sealed class AiAnalysisTools(
     /// <param name="includeWatches">Include watch expression evaluations in the initial report.</param>
     /// <param name="includeSecurity">Include security analysis in the initial report.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    /// <returns>JSON crash report enriched with an <c>aiAnalysis</c> section.</returns>
+    /// <returns>Canonical JSON report document enriched with an <c>analysis.aiAnalysis</c> section.</returns>
     public async Task<string> AnalyzeCrashWithAiAsync(
         McpServer server,
         [Description("Session ID from CreateSession")] string sessionId,
@@ -68,7 +65,7 @@ public sealed class AiAnalysisTools(
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
         CrashAnalysisResult initialReport;
-        if (ShouldUseDotNetAnalyzer(manager.IsSosLoaded, session.ClrMdAnalyzer?.IsOpen == true))
+        if (DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(manager.IsSosLoaded, session.ClrMdAnalyzer?.IsOpen == true))
         {
             Logger.LogInformation("[AI] Using DotNetCrashAnalyzer for initial report (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
                 manager.IsSosLoaded,
@@ -133,6 +130,18 @@ public sealed class AiAnalysisTools(
 
         initialReport.AiAnalysis = aiResult;
 
-        return JsonSerializer.Serialize(initialReport, JsonSerializationDefaults.IndentedIgnoreNull);
+        // Return the canonical report document shape so `analyze(kind=ai)` matches `report -f json`.
+        // Other formats should be derived from this JSON document.
+        var reportService = new ReportService();
+        var metadata = new ReportMetadata
+        {
+            DumpId = session.CurrentDumpId ?? string.Empty,
+            UserId = sanitizedUserId,
+            GeneratedAt = DateTime.UtcNow,
+            DebuggerType = manager.DebuggerType,
+            Format = ReportFormat.Json
+        };
+
+        return reportService.GenerateReport(initialReport, new ReportOptions { Format = ReportFormat.Json }, metadata);
     }
 }

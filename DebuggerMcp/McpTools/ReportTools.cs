@@ -102,19 +102,23 @@ public class ReportTools(
         // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
-        // Use appropriate analyzer based on whether SOS is loaded
-        // If SOS is loaded: Use DotNetCrashAnalyzer for CLR info, managed exceptions, heap stats, etc.
-        // If SOS is not loaded: Use basic CrashAnalyzer for native analysis
+        // Use the .NET analyzer when SOS or ClrMD is available for richer evidence.
+        // Otherwise, fall back to basic native crash analysis.
         CrashAnalysisResult result;
-        if (manager.IsSosLoaded)
+        var isClrMdOpen = session.ClrMdAnalyzer?.IsOpen == true;
+        if (DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(manager.IsSosLoaded, isClrMdOpen))
         {
-            Logger.LogInformation("[ReportTools] SOS is loaded, using .NET crash analyzer");
+            Logger.LogInformation("[ReportTools] Using .NET crash analyzer (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+                manager.IsSosLoaded,
+                isClrMdOpen);
             var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
             result = await dotNetAnalyzer.AnalyzeDotNetCrashAsync();
         }
         else
         {
-            Logger.LogInformation("[ReportTools] SOS is not loaded, using basic crash analyzer");
+            Logger.LogInformation("[ReportTools] Using basic crash analyzer (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+                manager.IsSosLoaded,
+                isClrMdOpen);
             var basicAnalyzer = new CrashAnalyzer(manager, sourceLinkResolver);
             result = await basicAnalyzer.AnalyzeCrashAsync();
         }
@@ -200,17 +204,22 @@ public class ReportTools(
         // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
-        // Use appropriate analyzer based on whether SOS is loaded
+        // Use the .NET analyzer when SOS or ClrMD is available for richer evidence.
         CrashAnalysisResult result;
-        if (manager.IsSosLoaded)
+        var isClrMdOpen = session.ClrMdAnalyzer?.IsOpen == true;
+        if (DotNetAnalyzerAvailability.ShouldUseDotNetAnalyzer(manager.IsSosLoaded, isClrMdOpen))
         {
-            Logger.LogInformation("[ReportTools] SOS is loaded, using .NET crash analyzer for summary");
+            Logger.LogInformation("[ReportTools] Using .NET crash analyzer for summary (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+                manager.IsSosLoaded,
+                isClrMdOpen);
             var dotNetAnalyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver, session.ClrMdAnalyzer, Logger);
             result = await dotNetAnalyzer.AnalyzeDotNetCrashAsync();
         }
         else
         {
-            Logger.LogInformation("[ReportTools] SOS is not loaded, using basic crash analyzer for summary");
+            Logger.LogInformation("[ReportTools] Using basic crash analyzer for summary (SOS loaded: {IsSosLoaded}, ClrMD open: {IsClrMdOpen})",
+                manager.IsSosLoaded,
+                isClrMdOpen);
             var basicAnalyzer = new CrashAnalyzer(manager, sourceLinkResolver);
             result = await basicAnalyzer.AnalyzeCrashAsync();
         }

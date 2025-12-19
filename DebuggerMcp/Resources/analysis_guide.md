@@ -90,46 +90,36 @@ analyze(kind: "crash", sessionId: "your-session-id", userId: "your-user-id")
 
 ```json
 {
-  "crashType": "Access violation",
-  "exception": {
-    "type": "0xc0000005",
-    "message": "Access violation reading location 0x0000000000000000",
-    "address": "0x00007ff812345678"
+  "metadata": {
+    "dumpId": "crash-dump-001",
+    "userId": "user1",
+    "generatedAt": "2024-01-15T10:30:00Z",
+    "format": "Json",
+    "debuggerType": "LLDB",
+    "serverVersion": "1.0.0"
   },
-  "callStack": [
-    {
-      "frameNumber": 0,
-      "instructionPointer": "0x00007ff812345678",
-      "module": "MyApp",
-      "function": "ProcessData",
-      "source": "processor.cpp:42"
+  "analysis": {
+    "summary": {
+      "crashType": "Access violation (c0000005)",
+      "severity": "critical"
+    },
+    "exception": {
+      "type": "0xc0000005",
+      "message": "Access violation reading location 0x0000000000000000",
+      "address": "0x00007ff812345678"
+    },
+    "threads": {
+      "deadlock": {
+        "detected": false
+      }
+    },
+    "memory": {
+      "leakAnalysis": {
+        "detected": true,
+        "totalHeapBytes": 536870912
+      }
     }
-  ],
-  "threads": [
-    {
-      "threadId": "0 (1234)",
-      "state": "Unfrozen",
-      "isFaulting": true,
-      "topFunction": "ntdll!NtWaitForSingleObject"
-    }
-  ],
-  "memoryLeakInfo": {
-    "detected": true,
-    "totalHeapBytes": 536870912,
-    "topConsumers": [
-      {"typeName": "Allocation size 4096", "count": 50000, "totalSize": 204800000}
-    ]
-  },
-  "deadlockInfo": {
-    "detected": false,
-    "involvedThreads": [],
-    "locks": []
-  },
-  "summary": "Crash Type: Access violation. Found 12 threads, 25 stack frames, 45 modules. MEMORY LEAK DETECTED: ~536,870,912 bytes.",
-  "recommendations": [
-    "Large heap detected (536870912 bytes). This could indicate a memory leak.",
-    "Some modules are missing symbols. Upload symbol files for better analysis."
-  ]
+  }
 }
 ```
 
@@ -143,7 +133,7 @@ Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
 1. Build an initial structured crash report (JSON)
 2. Use MCP sampling (`sampling/createMessage`) to ask the connected client’s LLM to analyze it
 3. Allow the LLM to request additional evidence via tools (e.g., `exec`, `inspect`, `get_thread_stack`)
-4. Return the original report enriched with `aiAnalysis`
+4. Return the original report enriched with `analysis.aiAnalysis`
 
 ### Prerequisites
 
@@ -151,6 +141,7 @@ Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
   - The Debugger MCP CLI supports this when an LLM provider is configured.
     - OpenRouter: set `OPENROUTER_API_KEY` (recommended) or `DEBUGGER_MCP_OPENROUTER_API_KEY`.
     - OpenAI: set `OPENAI_API_KEY` (recommended) or `DEBUGGER_MCP_OPENAI_API_KEY`, then `llm provider openai`.
+    - Anthropic: set `ANTHROPIC_API_KEY` (recommended) or `DEBUGGER_MCP_ANTHROPIC_API_KEY`, then `llm provider anthropic`.
 
 ### Usage
 
@@ -237,32 +228,45 @@ analyze(kind: "dotnet_crash", sessionId: "your-session-id", userId: "your-user-i
 
 ```json
 {
-  "crashType": "System.NullReferenceException",
-  "exception": {
-    "type": "System.NullReferenceException",
-    "message": "Object reference not set to an instance of an object",
-    "address": "0x00007ff812345678"
+  "metadata": {
+    "dumpId": "dotnet-crash-001",
+    "userId": "user1",
+    "generatedAt": "2024-01-15T10:30:00Z",
+    "format": "Json",
+    "debuggerType": "LLDB",
+    "serverVersion": "1.0.0"
   },
-  "dotNetInfo": {
-    "clrVersion": "6.0.25",
-    "managedException": "System.NullReferenceException: Object reference not set to an instance of an object\n   at MyApp.Processor.Process() in processor.cs:line 42",
-    "heapStats": {
-      "gen0": 1048576,
-      "gen1": 5242880,
-      "gen2": 52428800,
-      "loh": 10485760
+  "analysis": {
+    "summary": {
+      "crashType": ".NET managed exception",
+      "severity": "high"
     },
-    "asyncDeadlock": false,
-    "finalizerQueueCount": 125
-  },
-  "memoryLeakInfo": {
-    "detected": true,
-    "topConsumers": [
-      {"typeName": "System.String", "count": 150000, "totalSize": 45000000},
-      {"typeName": "System.Byte[]", "count": 50000, "totalSize": 25000000}
-    ]
-  },
-  "summary": ".NET Crash Analysis: System.NullReferenceException. CLR: 6.0.25. MEMORY LEAK: 150000 String instances may indicate a leak."
+    "exception": {
+      "type": "System.NullReferenceException",
+      "message": "Object reference not set to an instance of an object"
+    },
+    "environment": {
+      "runtime": {
+        "clrVersion": "9.0.10"
+      }
+    },
+    "memory": {
+      "leakAnalysis": {
+        "detected": true
+      }
+    },
+    "assemblies": {
+      "count": 45,
+      "items": [
+        {
+          "name": "System.Private.CoreLib",
+          "assemblyVersion": "9.0.0.0",
+          "fileVersion": "9.0.10.0",
+          "path": "/usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Private.CoreLib.dll"
+        }
+      ]
+    }
+  }
 }
 ```
 
@@ -855,10 +859,10 @@ Day 2: After leak observed
 1. Upload dump with suspected deadlock
 2. session(action="create", userId="user1") → session1
 3. dump(action="open", sessionId=session1, userId="user1", dumpId="deadlock-dump")
-4. analyze(kind="crash", sessionId=session1, userId="user1") → Check deadlockInfo
+4. analyze(kind="crash", sessionId=session1, userId="user1") → Check analysis.threads.deadlock
 5. If deadlock detected, examine:
-   - involvedThreads: Which threads are stuck
-   - locks: What resources they're waiting for
+   - analysis.threads.deadlock.involvedThreads: Which threads are stuck
+   - analysis.threads.deadlock.locks: What resources they're waiting for
    - Use exec(sessionId, userId, command="~*k") for full thread stacks
 ```
 
@@ -870,9 +874,9 @@ Day 2: After leak observed
 3. dump(action="open", sessionId=session1, userId="user1", dumpId="dotnet-dump")  # SOS auto-loaded
 4. analyze(kind="dotnet_crash", sessionId=session1, userId="user1") → Get .NET-specific analysis
 5. Review:
-   - heapStats for GC generations
-   - topConsumers for memory hogs
-   - asyncDeadlock for async issues
+   - analysis.memory.gc for GC heap/segment summary (when available)
+   - analysis.memory.topConsumers for large managed types (when available)
+   - analysis.async.hasDeadlock for async issues (Task/Semaphore waits)
 ```
 
 ### Before/After Comparison
@@ -989,17 +993,21 @@ When you run `analyze(kind="crash")`, `analyze(kind="dotnet_crash")`, or `analyz
 
 ```json
 {
-  "crashType": "Access violation",
-  "exception": {...},
-  "watchResults": {
-    "totalWatches": 2,
-    "watches": [...],
-    "insights": ["⚠️ Watch 'g_DataManager' is NULL - may be relevant to crash"]
-  },
-  "recommendations": [
-    "⚠️ Watch 'g_DataManager' is NULL - may be relevant to crash",
-    "..."
-  ]
+  "metadata": { "...": "..." },
+  "analysis": {
+    "exception": { "...": "..." },
+    "watches": {
+      "totalWatches": 2,
+      "watches": [{ "watchId": "...", "expression": "...", "value": "..." }],
+      "insights": ["Watch 'g_DataManager' is NULL - may be relevant to crash"]
+    },
+    "summary": {
+      "recommendations": [
+        "Watch 'g_DataManager' is NULL - may be relevant to crash",
+        "..."
+      ]
+    }
+  }
 }
 ```
 
