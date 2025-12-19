@@ -67,6 +67,7 @@ public class SymbolTools(
 
         // Get the debugger manager for this session with user ownership validation
         var manager = GetSessionManager(sessionId, sanitizedUserId);
+        var session = GetSessionInfo(sessionId, sanitizedUserId);
 
         // Configure additional symbol paths (this will merge with existing paths)
         SymbolManager.ConfigureSessionSymbolPaths(sessionId, dumpId: null, additionalPaths: additionalPaths, includeMicrosoftSymbols: true);
@@ -83,6 +84,14 @@ public class SymbolTools(
         {
             manager.ConfigureSymbolPath(symbolPathString);
             // Note: ClrMD handles most operations now, no cache to clear
+        }
+
+        // Symbol paths can impact stack/source resolution; if a dump is already open, invalidate
+        // cached report and Source Link resolver so future report/analysis calls reflect the new symbol state.
+        if (manager.IsDumpOpen && !string.IsNullOrWhiteSpace(session.CurrentDumpId))
+        {
+            session.ClearSourceLinkResolver();
+            session.ClearCachedReport();
         }
 
         var pathCount = additionalPaths.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries).Length;
@@ -299,6 +308,11 @@ public class SymbolTools(
             // Defensive branch in case new debugger types are added without symbol support
             return $"Unknown debugger type: {manager.DebuggerType}";
         }
+
+        // Symbol availability can affect source resolution and managed stacks; invalidate cached report + resolver
+        // so subsequent report_index/report_get uses updated symbol information.
+        session.ClearSourceLinkResolver();
+        session.ClearCachedReport();
 
         // Clear command cache since symbols have changed - this ensures subsequent
         // Note: ClrMD handles most operations now, no cache to clear

@@ -189,6 +189,31 @@ public class SymbolToolsTests : IDisposable
         Assert.Empty(manager.ConfiguredSymbolPaths);
     }
 
+    [Fact]
+    public void ConfigureAdditionalSymbols_WhenDumpOpen_InvalidateCachedReportAndSourceLinkResolver()
+    {
+        // Arrange
+        var userId = "test-user";
+        var sessionId = _sessionManager.CreateSession(userId);
+
+        var manager = (FakeDebuggerManager)_sessionManager.GetSession(sessionId, userId);
+        manager.DebuggerType = "WinDbg";
+        manager.IsDumpOpen = true;
+
+        var session = _sessionManager.GetSessionInfo(sessionId, userId);
+        session.CurrentDumpId = "dump-123";
+        session.SetCachedReport("dump-123", DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true);
+        _ = session.GetOrCreateSourceLinkResolver("dump-123", () => new DebuggerMcp.SourceLink.SourceLinkResolver(NullLogger.Instance));
+        Assert.NotNull(session.SourceLinkResolver);
+
+        // Act
+        _ = _tools.ConfigureAdditionalSymbols(sessionId, userId, "/tmp/symbols");
+
+        // Assert
+        Assert.Null(session.CachedReportDumpId);
+        Assert.Null(session.SourceLinkResolver);
+    }
+
     // ============================================================
     // ClearSymbolCache Tests
     // ============================================================
@@ -296,6 +321,10 @@ public class SymbolToolsTests : IDisposable
         File.WriteAllText(Path.Combine(symbolDir, "sub", "b.debug"), "y");
         File.WriteAllText(Path.Combine(symbolDir, "ignored.pdb"), "z");
 
+        session.SetCachedReport("dump-123", DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true);
+        _ = session.GetOrCreateSourceLinkResolver("dump-123", () => new DebuggerMcp.SourceLink.SourceLinkResolver(NullLogger.Instance));
+        Assert.NotNull(session.SourceLinkResolver);
+
         // Act
         var result = _tools.ReloadSymbols(sessionId, userId);
 
@@ -307,6 +336,9 @@ public class SymbolToolsTests : IDisposable
         Assert.Contains(manager.ExecutedCommands, c => c.StartsWith("settings append target.debug-file-search-paths "));
         Assert.Contains(manager.ExecutedCommands, c => c.StartsWith("target symbols add "));
         Assert.DoesNotContain(manager.ExecutedCommands, c => c.Contains("ignored.pdb", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Null(session.CachedReportDumpId);
+        Assert.Null(session.SourceLinkResolver);
     }
 
     [Fact]
