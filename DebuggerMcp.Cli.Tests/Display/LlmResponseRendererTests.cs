@@ -121,6 +121,51 @@ public class LlmResponseRendererTests
         Assert.Contains("more rows", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Render_Quote_DoesNotCountInnerBlocksTowardMaxBlocks()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("> para0");
+        sb.AppendLine(">");
+        sb.AppendLine("> para1");
+        sb.AppendLine(">");
+        sb.AppendLine("> para2");
+        sb.AppendLine();
+
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxBlocks = 1 });
+        var blocks = renderer.Render(sb.ToString(), consoleWidth: 80);
+
+        Assert.Single(blocks);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("para0", output, StringComparison.Ordinal);
+        Assert.Contains("para2", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("output truncated", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Render_MaxBlocks_AddsTruncationMarker()
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < 50; i++)
+        {
+            sb.AppendLine($"para{i}");
+            sb.AppendLine();
+        }
+
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxBlocks = 5 });
+        var blocks = renderer.Render(sb.ToString(), consoleWidth: 120);
+
+        Assert.True(blocks.Count <= 5);
+
+        using var console = new TestConsole().Width(120);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("output truncated", output, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         if (needle.Length == 0)

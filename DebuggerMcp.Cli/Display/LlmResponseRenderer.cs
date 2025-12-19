@@ -15,6 +15,12 @@ namespace DebuggerMcp.Cli.Display;
 
 internal sealed class LlmResponseRenderer
 {
+    private sealed class RenderState
+    {
+        public bool Truncated { get; set; }
+        public int MaxBlocks { get; init; }
+    }
+
     internal sealed record Options
     {
         public int? ConsoleWidth { get; init; }
@@ -24,6 +30,7 @@ internal sealed class LlmResponseRenderer
         public int MaxTableRows { get; init; } = 40;
         public int MaxTableColumns { get; init; } = 6;
         public int MaxTableCellWidth { get; init; } = 40;
+        public int MaxBlocks { get; init; } = 500;
     }
 
     private readonly MarkdownPipeline _pipeline;
@@ -45,16 +52,17 @@ internal sealed class LlmResponseRenderer
         width = Math.Clamp(width, 40, 400);
 
         var result = new List<IRenderable>();
+        var state = new RenderState { MaxBlocks = Math.Clamp(_options.MaxBlocks, 1, 50_000) };
 
         if (text.Length == 0)
         {
-            result.Add(new Markup(string.Empty));
+            Add(result, new Markup(string.Empty), state, applyMaxBlocks: true);
             return result;
         }
 
         if (text.Length > _options.MaxMarkdownChars)
         {
-            result.Add(new Markup(AnsiToSpectreMarkup.Convert(text)));
+            Add(result, new Markup(AnsiToSpectreMarkup.Convert(text)), state, applyMaxBlocks: true);
             return result;
         }
 
@@ -65,57 +73,72 @@ internal sealed class LlmResponseRenderer
         }
         catch
         {
-            result.Add(new Markup(AnsiToSpectreMarkup.Convert(text)));
+            Add(result, new Markup(AnsiToSpectreMarkup.Convert(text)), state, applyMaxBlocks: true);
             return result;
         }
 
         foreach (var block in doc)
         {
-            RenderBlock(block, result, width, listItemBudget: _options.MaxListItems);
+            if (state.Truncated)
+            {
+                break;
+            }
+
+            RenderBlock(block, result, width, listItemBudget: _options.MaxListItems, state, applyMaxBlocks: true);
         }
 
         if (result.Count == 0)
         {
-            result.Add(new Markup(AnsiToSpectreMarkup.Convert(text)));
+            Add(result, new Markup(AnsiToSpectreMarkup.Convert(text)), state, applyMaxBlocks: true);
+        }
+
+        if (state.Truncated)
+        {
+            EnsureTruncationMarker(result);
         }
 
         return result;
     }
 
-    private void RenderBlock(Block block, List<IRenderable> output, int consoleWidth, int listItemBudget, int indent = 0)
+    private void RenderBlock(Block block, List<IRenderable> output, int consoleWidth, int listItemBudget, RenderState state, bool applyMaxBlocks, int indent = 0)
     {
+        if (state.Truncated)
+        {
+            return;
+        }
+
         switch (block)
         {
             case HeadingBlock heading:
-                RenderHeading(heading, output);
+                RenderHeading(heading, output, state, applyMaxBlocks);
                 return;
 
             case ParagraphBlock paragraph:
-                RenderParagraph(paragraph, output, indent);
+                RenderParagraph(paragraph, output, state, applyMaxBlocks, indent);
                 return;
 
             case ListBlock list:
-                RenderList(list, output, consoleWidth, listItemBudget, indent);
+                RenderList(list, output, consoleWidth, listItemBudget, state, applyMaxBlocks, indent);
                 return;
 
             case FencedCodeBlock fenced:
-                RenderCodeBlock(fenced, output);
+                RenderCodeBlock(fenced, output, state, applyMaxBlocks);
                 return;
 
             case CodeBlock code:
-                RenderCodeBlock(code, output);
+                RenderCodeBlock(code, output, state, applyMaxBlocks);
                 return;
 
             case QuoteBlock quote:
-                RenderQuote(quote, output, consoleWidth, listItemBudget, indent);
+                RenderQuote(quote, output, consoleWidth, listItemBudget, state, applyMaxBlocks, indent);
                 return;
 
             case ThematicBreakBlock:
-                output.Add(new Rule());
+                Add(output, new Rule(), state, applyMaxBlocks);
                 return;
 
             case MdTable table:
-                RenderTable(table, output, consoleWidth);
+                RenderTable(table, output, consoleWidth, state, applyMaxBlocks);
                 return;
 
             default:
@@ -124,7 +147,12 @@ internal sealed class LlmResponseRenderer
                 {
                     foreach (var child in container)
                     {
-                        RenderBlock(child, output, consoleWidth, listItemBudget, indent);
+                        if (state.Truncated)
+                        {
+                            break;
+                        }
+
+                        RenderBlock(child, output, consoleWidth, listItemBudget, state, applyMaxBlocks, indent);
                     }
 
                     return;
@@ -133,14 +161,14 @@ internal sealed class LlmResponseRenderer
                 var fallback = block.ToString() ?? string.Empty;
                 if (!string.IsNullOrWhiteSpace(fallback))
                 {
-                    output.Add(new Markup(IndentLines(AnsiToSpectreMarkup.Convert(fallback.TrimEnd()), indent)));
+                    Add(output, new Markup(IndentLines(AnsiToSpectreMarkup.Convert(fallback.TrimEnd()), indent)), state, applyMaxBlocks);
                 }
                 return;
             }
         }
     }
 
-    private static void RenderHeading(HeadingBlock heading, List<IRenderable> output)
+    private static void RenderHeading(HeadingBlock heading, List<IRenderable> output, RenderState state, bool applyMaxBlocks)
     {
         var title = heading.Inline == null
             ? string.Empty
@@ -154,18 +182,18 @@ internal sealed class LlmResponseRenderer
 
         if (heading.Level <= 2)
         {
-            output.Add(new Rule($"[bold cyan]{title}[/]")
+            Add(output, new Rule($"[bold cyan]{title}[/]")
             {
                 Justification = Justify.Left,
                 Style = Style.Parse("cyan")
-            });
+            }, state, applyMaxBlocks);
             return;
         }
 
-        output.Add(new Markup($"[bold]{title}[/]"));
+        Add(output, new Markup($"[bold]{title}[/]"), state, applyMaxBlocks);
     }
 
-    private static void RenderParagraph(ParagraphBlock paragraph, List<IRenderable> output, int indent)
+    private static void RenderParagraph(ParagraphBlock paragraph, List<IRenderable> output, RenderState state, bool applyMaxBlocks, int indent)
     {
         if (paragraph.Inline == null)
         {
@@ -178,10 +206,10 @@ internal sealed class LlmResponseRenderer
             return;
         }
 
-        output.Add(new Markup(IndentLines(markup, indent)));
+        Add(output, new Markup(IndentLines(markup, indent)), state, applyMaxBlocks);
     }
 
-    private void RenderList(ListBlock list, List<IRenderable> output, int consoleWidth, int listItemBudget, int indent)
+    private void RenderList(ListBlock list, List<IRenderable> output, int consoleWidth, int listItemBudget, RenderState state, bool applyMaxBlocks, int indent)
     {
         var ordered = list.IsOrdered;
         var index = ordered ? ParseOrderedStart(list) : 0;
@@ -191,7 +219,7 @@ internal sealed class LlmResponseRenderer
         {
             if (remaining-- <= 0)
             {
-                output.Add(new Markup($"[dim]{new string(' ', indent * 2)}... (list truncated)[/]"));
+                Add(output, new Markup($"[dim]{new string(' ', indent * 2)}... (list truncated)[/]"), state, applyMaxBlocks);
                 break;
             }
 
@@ -209,17 +237,21 @@ internal sealed class LlmResponseRenderer
                 if (!renderedFirst && child is ParagraphBlock p && p.Inline != null)
                 {
                     var itemText = RenderInlineToMarkup(p.Inline).TrimEnd();
-                    output.Add(new Markup($"{baseIndent}{prefix} {itemText}"));
+                    Add(output, new Markup($"{baseIndent}{prefix} {itemText}"), state, applyMaxBlocks);
                     renderedFirst = true;
                     continue;
                 }
 
-                RenderBlock(child, output, consoleWidth, listItemBudget: remaining, indent: indent + 1);
+                RenderBlock(child, output, consoleWidth, listItemBudget: remaining, state, applyMaxBlocks, indent: indent + 1);
+                if (state.Truncated)
+                {
+                    break;
+                }
             }
 
             if (!renderedFirst)
             {
-                output.Add(new Markup($"{baseIndent}{prefix}"));
+                Add(output, new Markup($"{baseIndent}{prefix}"), state, applyMaxBlocks);
             }
 
             if (ordered)
@@ -250,12 +282,16 @@ internal sealed class LlmResponseRenderer
         }
     }
 
-    private void RenderQuote(QuoteBlock quote, List<IRenderable> output, int consoleWidth, int listItemBudget, int indent)
+    private void RenderQuote(QuoteBlock quote, List<IRenderable> output, int consoleWidth, int listItemBudget, RenderState state, bool applyMaxBlocks, int indent)
     {
         var inner = new List<IRenderable>();
         foreach (var child in quote)
         {
-            RenderBlock(child, inner, consoleWidth, listItemBudget, indent: 0);
+            RenderBlock(child, inner, consoleWidth, listItemBudget, state, applyMaxBlocks: false, indent: 0);
+            if (state.Truncated)
+            {
+                break;
+            }
         }
 
         IRenderable content;
@@ -274,15 +310,15 @@ internal sealed class LlmResponseRenderer
             content = new Markup(AnsiToSpectreMarkup.Convert(fallback));
         }
 
-        output.Add(new Panel(content)
+        Add(output, new Panel(content)
         {
             Border = BoxBorder.Rounded,
             BorderStyle = new Style(Color.Grey),
             Padding = new Padding(1, 0)
-        });
+        }, state, applyMaxBlocks);
     }
 
-    private void RenderCodeBlock(CodeBlock codeBlock, List<IRenderable> output)
+    private void RenderCodeBlock(CodeBlock codeBlock, List<IRenderable> output, RenderState state, bool applyMaxBlocks)
     {
         var sb = new StringBuilder();
         foreach (var line in codeBlock.Lines.Lines)
@@ -309,15 +345,15 @@ internal sealed class LlmResponseRenderer
             Padding = new Padding(1, 0)
         };
 
-        output.Add(panel);
+        Add(output, panel, state, applyMaxBlocks);
     }
 
-    private void RenderTable(MdTable table, List<IRenderable> output, int consoleWidth)
+    private void RenderTable(MdTable table, List<IRenderable> output, int consoleWidth, RenderState state, bool applyMaxBlocks)
     {
         var (rows, columns) = ExtractTable(table);
         if (rows.Count == 0 || columns == 0)
         {
-            output.Add(new Markup(AnsiToSpectreMarkup.Convert(table.ToString() ?? string.Empty)));
+            Add(output, new Markup(AnsiToSpectreMarkup.Convert(table.ToString() ?? string.Empty)), state, applyMaxBlocks);
             return;
         }
 
@@ -337,17 +373,17 @@ internal sealed class LlmResponseRenderer
         if (!canUseSpectreTable)
         {
             // Fallback: simple panel with escaped markdown-ish table text.
-            output.Add(new Panel(new Markup(AnsiToSpectreMarkup.Convert(RenderTableAsPlainText(cappedRows, columns))))
+            Add(output, new Panel(new Markup(AnsiToSpectreMarkup.Convert(RenderTableAsPlainText(cappedRows, columns))))
             {
                 Header = new PanelHeader("table", Justify.Left),
                 Border = BoxBorder.Rounded,
                 BorderStyle = new Style(Color.Grey),
                 Padding = new Padding(1, 0)
-            });
+            }, state, applyMaxBlocks);
 
             if (remainingBodyRows > 0)
             {
-                output.Add(new Markup($"[dim]... ({remainingBodyRows} more rows)[/]"));
+                Add(output, new Markup($"[dim]... ({remainingBodyRows} more rows)[/]"), state, applyMaxBlocks);
             }
 
             return;
@@ -377,11 +413,11 @@ internal sealed class LlmResponseRenderer
             spectre.AddRow(cells);
         }
 
-        output.Add(spectre);
+        Add(output, spectre, state, applyMaxBlocks);
 
         if (remainingBodyRows > 0)
         {
-            output.Add(new Markup($"[dim]... ({remainingBodyRows} more rows)[/]"));
+            Add(output, new Markup($"[dim]... ({remainingBodyRows} more rows)[/]"), state, applyMaxBlocks);
         }
     }
 
@@ -650,6 +686,36 @@ internal sealed class LlmResponseRenderer
             .Replace(open, "[", StringComparison.Ordinal)
             .Replace(close, "]", StringComparison.Ordinal)
             .TrimEnd();
+    }
+
+    private static void Add(List<IRenderable> output, IRenderable renderable, RenderState state, bool applyMaxBlocks)
+    {
+        if (state.Truncated)
+        {
+            return;
+        }
+
+        if (applyMaxBlocks && output.Count >= state.MaxBlocks)
+        {
+            state.Truncated = true;
+            return;
+        }
+
+        output.Add(renderable);
+    }
+
+    private void EnsureTruncationMarker(List<IRenderable> output)
+    {
+        var marker = new Markup("[dim]... (output truncated)[/]");
+        if (output.Count == 0)
+        {
+            output.Add(marker);
+            return;
+        }
+
+        // Keep the renderable count bounded; replace the last item with the marker.
+        var last = output[^1];
+        output[^1] = new Rows(last, marker);
     }
 }
 
