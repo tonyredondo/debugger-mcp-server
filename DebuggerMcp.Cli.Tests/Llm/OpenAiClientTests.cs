@@ -156,6 +156,7 @@ public class OpenAiClientTests
             });
 
         using var doc = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal("gpt-5.2", doc.RootElement.GetProperty("model").GetString());
         Assert.False(doc.RootElement.TryGetProperty("max_tokens", out _));
         Assert.Equal(123, doc.RootElement.GetProperty("max_completion_tokens").GetInt32());
     }

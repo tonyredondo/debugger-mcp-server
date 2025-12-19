@@ -61,9 +61,10 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
 
         var url = $"{baseUrl}/chat/completions";
 
+        var requestModel = NormalizeOpenAiModelId(_settings.OpenAiModel);
         var payload = new OpenAiChatRequest
         {
-            Model = _settings.OpenAiModel,
+            Model = requestModel,
             Messages = completionRequest.Messages.Select(ToOpenAiMessage).ToList(),
             Tools = completionRequest.Tools?.Select(ToOpenAiTool).ToList(),
             ToolChoice = ToOpenAiToolChoice(completionRequest.ToolChoice),
@@ -73,7 +74,7 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         var maxTokens = completionRequest.MaxTokens;
         if (maxTokens.HasValue)
         {
-            if (PreferMaxCompletionTokens(_settings.OpenAiModel))
+            if (PreferMaxCompletionTokens(requestModel))
             {
                 payload.MaxCompletionTokens = maxTokens;
             }
@@ -224,12 +225,27 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         }
 
         var m = model.Trim().ToLowerInvariant();
-        var slash = m.LastIndexOf('/');
-        var normalized = slash >= 0 ? m[(slash + 1)..] : m;
+        var normalized = NormalizeOpenAiModelId(m);
 
         return normalized.StartsWith("gpt-5", StringComparison.Ordinal) ||
                normalized.StartsWith("o1", StringComparison.Ordinal) ||
                normalized.StartsWith("o3", StringComparison.Ordinal);
+    }
+
+    private static string NormalizeOpenAiModelId(string? model)
+    {
+        if (string.IsNullOrWhiteSpace(model))
+        {
+            return string.Empty;
+        }
+
+        var m = model.Trim();
+        if (!m.StartsWith("openai/", StringComparison.OrdinalIgnoreCase))
+        {
+            return m;
+        }
+
+        return m["openai/".Length..].Trim();
     }
 
     private static bool MentionsUnsupportedParameter(string? errorBody, string parameterName)
