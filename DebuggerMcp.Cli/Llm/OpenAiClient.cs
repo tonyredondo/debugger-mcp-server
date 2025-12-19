@@ -62,6 +62,10 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         var url = $"{baseUrl}/chat/completions";
 
         var requestModel = NormalizeOpenAiModelId(_settings.OpenAiModel);
+        if (string.IsNullOrWhiteSpace(requestModel))
+        {
+            throw new InvalidOperationException("OpenAI model is not configured.");
+        }
         var payload = new OpenAiChatRequest
         {
             Model = requestModel,

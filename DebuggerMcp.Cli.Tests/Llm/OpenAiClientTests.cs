@@ -23,6 +23,12 @@ public class OpenAiClientTests
         }
     }
 
+    private sealed class ThrowingHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+            => throw new InvalidOperationException("HTTP handler should not be called.");
+    }
+
     private sealed class SequenceHandler(IReadOnlyList<HttpResponseMessage> responses) : HttpMessageHandler
     {
         private int _index;
@@ -86,6 +92,27 @@ public class OpenAiClientTests
         Assert.Equal(1, messages.GetArrayLength());
         Assert.Equal("user", messages[0].GetProperty("role").GetString());
         Assert.Equal("hi", messages[0].GetProperty("content").GetString());
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_InvalidOpenAiModel_ThrowsBeforeSendingRequest()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "openai/",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        using var http = new HttpClient(new ThrowingHandler());
+        var client = new OpenAiClient(http, settings);
+
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.ChatCompletionAsync(new ChatCompletionRequest { Messages = [new ChatMessage("user", "hi")] }));
+
+        Assert.Contains("model", ex.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
