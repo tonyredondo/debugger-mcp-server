@@ -113,6 +113,13 @@ internal static class TranscriptRedactor
             "$1=***",
             RegexOptions.CultureInvariant);
 
+        // Raw key patterns (e.g., OpenAI keys) sometimes appear outside key/value contexts.
+        text = Regex.Replace(
+            text,
+            @"\b(sk|rk)-[A-Za-z0-9_-]+\b",
+            "$1-***",
+            RegexOptions.CultureInvariant);
+
         return text;
     }
 }
