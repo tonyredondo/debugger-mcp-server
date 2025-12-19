@@ -149,7 +149,14 @@ public class ReportTools(
         var report = reportService.GenerateReport(result, options, metadata);
         if (reportFormat == ReportFormat.Json && !string.IsNullOrWhiteSpace(metadata.DumpId))
         {
-            session.SetCachedReport(metadata.DumpId, metadata.GeneratedAt, report, includesWatches: includeWatches, includesSecurity: includeSecurity, maxStackFrames: maxStackFrames);
+            session.SetCachedReport(
+                metadata.DumpId,
+                metadata.GeneratedAt,
+                report,
+                includesWatches: includeWatches,
+                includesSecurity: includeSecurity,
+                maxStackFrames: maxStackFrames,
+                includesAiAnalysis: false);
         }
         return report;
     }

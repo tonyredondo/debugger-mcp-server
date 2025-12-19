@@ -135,7 +135,7 @@ public class DatadogSymbolsToolsTests
             var sessionId = sessionManager.CreateSession(userId);
             var session = sessionManager.GetSessionInfo(sessionId, userId);
             session.CurrentDumpId = "dump1.dmp";
-            session.SetCachedReport(session.CurrentDumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
+            session.SetCachedReport(session.CurrentDumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
             _ = session.GetOrCreateSourceLinkResolver(Path.GetFileNameWithoutExtension(session.CurrentDumpId),
                 () => new SourceLinkResolver(NullLogger.Instance));
             Assert.NotNull(session.SourceLinkResolver);

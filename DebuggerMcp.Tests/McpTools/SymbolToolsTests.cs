@@ -202,7 +202,7 @@ public class SymbolToolsTests : IDisposable
 
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
         session.CurrentDumpId = "dump-123";
-        session.SetCachedReport("dump-123", DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport("dump-123", DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
         _ = session.GetOrCreateSourceLinkResolver("dump-123", () => new DebuggerMcp.SourceLink.SourceLinkResolver(NullLogger.Instance));
         Assert.NotNull(session.SourceLinkResolver);
 
@@ -321,7 +321,7 @@ public class SymbolToolsTests : IDisposable
         File.WriteAllText(Path.Combine(symbolDir, "sub", "b.debug"), "y");
         File.WriteAllText(Path.Combine(symbolDir, "ignored.pdb"), "z");
 
-        session.SetCachedReport("dump-123", DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport("dump-123", DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
         _ = session.GetOrCreateSourceLinkResolver("dump-123", () => new DebuggerMcp.SourceLink.SourceLinkResolver(NullLogger.Instance));
         Assert.NotNull(session.SourceLinkResolver);
 

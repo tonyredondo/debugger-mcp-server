@@ -119,6 +119,11 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     /// </summary>
     public int CachedReportMaxStackFrames { get; private set; }
 
+    /// <summary>
+    /// Gets a value indicating whether the cached canonical JSON report document includes AI analysis results.
+    /// </summary>
+    public bool CachedReportIncludesAiAnalysis { get; private set; }
+
     private string? _cachedReportJson;
 
     /// <summary>
@@ -130,7 +135,15 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     /// <param name="includesWatches"><c>true</c> when watch evaluations were included/enabled during report generation.</param>
     /// <param name="includesSecurity"><c>true</c> when security analysis was included during report generation.</param>
     /// <param name="maxStackFrames">Maximum stack frames included (0 = all frames).</param>
-    public void SetCachedReport(string dumpId, DateTime generatedAtUtc, string reportJson, bool includesWatches, bool includesSecurity, int maxStackFrames)
+    /// <param name="includesAiAnalysis"><c>true</c> when AI analysis results were included in the report.</param>
+    public void SetCachedReport(
+        string dumpId,
+        DateTime generatedAtUtc,
+        string reportJson,
+        bool includesWatches,
+        bool includesSecurity,
+        int maxStackFrames,
+        bool includesAiAnalysis)
     {
         if (string.IsNullOrWhiteSpace(dumpId))
         {
@@ -153,8 +166,16 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
                 CachedReportDumpId != null &&
                 string.Equals(CachedReportDumpId, dumpId, StringComparison.OrdinalIgnoreCase))
             {
-                var existingScore = GetReportCompletenessScore(CachedReportIncludesWatches, CachedReportIncludesSecurity, CachedReportMaxStackFrames);
-                var incomingScore = GetReportCompletenessScore(includesWatches, includesSecurity, maxStackFrames);
+                var existingScore = GetReportCompletenessScore(
+                    CachedReportIncludesWatches,
+                    CachedReportIncludesSecurity,
+                    CachedReportMaxStackFrames,
+                    CachedReportIncludesAiAnalysis);
+                var incomingScore = GetReportCompletenessScore(
+                    includesWatches,
+                    includesSecurity,
+                    maxStackFrames,
+                    includesAiAnalysis);
 
                 // Prefer the most complete cached report. Only replace when the incoming report is more complete,
                 // or when completeness matches and the incoming report is newer.
@@ -170,6 +191,7 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
             CachedReportIncludesWatches = includesWatches;
             CachedReportIncludesSecurity = includesSecurity;
             CachedReportMaxStackFrames = maxStackFrames;
+            CachedReportIncludesAiAnalysis = includesAiAnalysis;
             _cachedReportJson = reportJson;
         }
     }
@@ -222,10 +244,11 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
             CachedReportIncludesWatches = false;
             CachedReportIncludesSecurity = false;
             CachedReportMaxStackFrames = 0;
+            CachedReportIncludesAiAnalysis = false;
         }
     }
 
-    private static int GetReportCompletenessScore(bool includesWatches, bool includesSecurity, int maxStackFrames)
+    private static int GetReportCompletenessScore(bool includesWatches, bool includesSecurity, int maxStackFrames, bool includesAiAnalysis)
     {
         var score = 0;
         if (includesWatches)
@@ -242,6 +265,12 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
         if (maxStackFrames == 0)
         {
             score += 4;
+        }
+
+        // AI analysis is a valuable enrichment; treat its inclusion as more complete than the base crash report alone.
+        if (includesAiAnalysis)
+        {
+            score += 8;
         }
 
         return score;

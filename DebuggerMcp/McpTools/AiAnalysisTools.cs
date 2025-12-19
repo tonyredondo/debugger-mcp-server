@@ -147,6 +147,20 @@ public sealed class AiAnalysisTools(
             Format = ReportFormat.Json
         };
 
-        return reportService.GenerateReport(initialReport, new ReportOptions { Format = ReportFormat.Json }, metadata);
+        var finalJson = reportService.GenerateReport(initialReport, new ReportOptions { Format = ReportFormat.Json }, metadata);
+
+        if (!string.IsNullOrWhiteSpace(metadata.DumpId))
+        {
+            session.SetCachedReport(
+                metadata.DumpId,
+                metadata.GeneratedAt,
+                finalJson,
+                includesWatches: includeWatches,
+                includesSecurity: includeSecurity,
+                maxStackFrames: 0,
+                includesAiAnalysis: true);
+        }
+
+        return finalJson;
     }
 }

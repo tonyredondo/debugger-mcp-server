@@ -251,7 +251,7 @@ public class DumpToolsTests : IDisposable
 
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
         session.CurrentDumpId = DumpId;
-        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
 
         // Act
         var result = _tools.LoadSos(sessionId, userId);

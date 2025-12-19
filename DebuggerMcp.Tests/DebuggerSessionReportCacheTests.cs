@@ -12,7 +12,7 @@ public class DebuggerSessionReportCacheTests
     {
         var session = CreateSession();
 
-        session.SetCachedReport("dump-1", DateTime.UtcNow, "{ \"ok\": true }", includesWatches: false, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport("dump-1", DateTime.UtcNow, "{ \"ok\": true }", includesWatches: false, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
 
         var ok = session.TryGetCachedReport("dump-1", requireWatches: true, requireSecurity: false, requireAllFrames: false, out _);
 
@@ -24,7 +24,7 @@ public class DebuggerSessionReportCacheTests
     {
         var session = CreateSession();
 
-        session.SetCachedReport("dump-1", DateTime.UtcNow, "{ \"ok\": true }", includesWatches: true, includesSecurity: false, maxStackFrames: 0);
+        session.SetCachedReport("dump-1", DateTime.UtcNow, "{ \"ok\": true }", includesWatches: true, includesSecurity: false, maxStackFrames: 0, includesAiAnalysis: false);
 
         var ok = session.TryGetCachedReport("dump-1", requireWatches: false, requireSecurity: true, requireAllFrames: false, out _);
 
@@ -36,7 +36,7 @@ public class DebuggerSessionReportCacheTests
     {
         var session = CreateSession();
 
-        session.SetCachedReport("dump-1", DateTime.UtcNow, "{ \"ok\": true }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport("dump-1", DateTime.UtcNow, "{ \"ok\": true }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
 
         Assert.True(session.TryGetCachedReport("dump-1", requireWatches: false, requireSecurity: false, requireAllFrames: false, out _));
         Assert.True(session.TryGetCachedReport("dump-1", requireWatches: true, requireSecurity: false, requireAllFrames: false, out _));
@@ -50,8 +50,8 @@ public class DebuggerSessionReportCacheTests
         var session = CreateSession();
         var firstGeneratedAt = DateTime.UtcNow;
 
-        session.SetCachedReport("dump-1", firstGeneratedAt, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
-        session.SetCachedReport("dump-1", firstGeneratedAt.AddMinutes(1), "{ \"report\": 2 }", includesWatches: false, includesSecurity: false, maxStackFrames: 0);
+        session.SetCachedReport("dump-1", firstGeneratedAt, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
+        session.SetCachedReport("dump-1", firstGeneratedAt.AddMinutes(1), "{ \"report\": 2 }", includesWatches: false, includesSecurity: false, maxStackFrames: 0, includesAiAnalysis: false);
 
         Assert.True(session.TryGetCachedReport("dump-1", requireWatches: true, requireSecurity: true, requireAllFrames: true, out var cached));
         Assert.Equal("{ \"report\": 1 }", cached);
@@ -65,8 +65,8 @@ public class DebuggerSessionReportCacheTests
         var session = CreateSession();
         var firstGeneratedAt = DateTime.UtcNow;
 
-        session.SetCachedReport("dump-1", firstGeneratedAt, "{ \"report\": 1 }", includesWatches: false, includesSecurity: false, maxStackFrames: 0);
-        session.SetCachedReport("dump-1", firstGeneratedAt.AddMinutes(1), "{ \"report\": 2 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport("dump-1", firstGeneratedAt, "{ \"report\": 1 }", includesWatches: false, includesSecurity: false, maxStackFrames: 0, includesAiAnalysis: false);
+        session.SetCachedReport("dump-1", firstGeneratedAt.AddMinutes(1), "{ \"report\": 2 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
 
         Assert.True(session.TryGetCachedReport("dump-1", requireWatches: true, requireSecurity: true, requireAllFrames: true, out var cached));
         Assert.Equal("{ \"report\": 2 }", cached);
@@ -80,12 +80,26 @@ public class DebuggerSessionReportCacheTests
         var session = CreateSession();
         var firstGeneratedAt = DateTime.UtcNow;
 
-        session.SetCachedReport("dump-1", firstGeneratedAt, "{ \"report\": \"full\" }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
-        session.SetCachedReport("dump-1", firstGeneratedAt.AddMinutes(1), "{ \"report\": \"capped\" }", includesWatches: true, includesSecurity: true, maxStackFrames: 10);
+        session.SetCachedReport("dump-1", firstGeneratedAt, "{ \"report\": \"full\" }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
+        session.SetCachedReport("dump-1", firstGeneratedAt.AddMinutes(1), "{ \"report\": \"capped\" }", includesWatches: true, includesSecurity: true, maxStackFrames: 10, includesAiAnalysis: false);
 
         Assert.True(session.TryGetCachedReport("dump-1", requireWatches: true, requireSecurity: true, requireAllFrames: true, out var cached));
         Assert.Equal("{ \"report\": \"full\" }", cached);
         Assert.Equal(0, session.CachedReportMaxStackFrames);
+    }
+
+    [Fact]
+    public void SetCachedReport_PrefersAiAnalysisOverNonAiReport()
+    {
+        var session = CreateSession();
+        var firstGeneratedAt = DateTime.UtcNow;
+
+        session.SetCachedReport("dump-1", firstGeneratedAt, "{ \"report\": \"base\" }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
+        session.SetCachedReport("dump-1", firstGeneratedAt.AddMinutes(1), "{ \"report\": \"ai\" }", includesWatches: false, includesSecurity: false, maxStackFrames: 0, includesAiAnalysis: true);
+
+        Assert.True(session.TryGetCachedReport("dump-1", requireWatches: false, requireSecurity: false, requireAllFrames: true, out var cached));
+        Assert.Equal("{ \"report\": \"ai\" }", cached);
+        Assert.True(session.CachedReportIncludesAiAnalysis);
     }
 
     private static DebuggerSession CreateSession()

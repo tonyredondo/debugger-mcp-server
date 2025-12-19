@@ -363,7 +363,7 @@ public class WatchToolsTests : IDisposable
         SetDumpOpen(sessionId, userId, DumpId);
 
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
-        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: false, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: false, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
 
         // Act
         await _tools.AddWatch(sessionId, userId, "0x12345678");
@@ -386,7 +386,7 @@ public class WatchToolsTests : IDisposable
         Assert.Single(existing);
 
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
-        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
 
         // Act
         await _tools.RemoveWatch(sessionId, userId, existing[0].Id);
@@ -408,7 +408,7 @@ public class WatchToolsTests : IDisposable
         Assert.True(await _watchStore.HasWatchesAsync(userId, DumpId));
 
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
-        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0, includesAiAnalysis: false);
 
         // Act
         await _tools.ClearWatches(sessionId, userId);
