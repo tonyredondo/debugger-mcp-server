@@ -4847,85 +4847,103 @@ public class Program
             output.WriteLine();
         }
 
-        output.Dim("Enter prompts directly. The agent can request tools and the CLI will execute them.");
-        output.Dim("Use ↑/↓ arrows for history. Type 'exit' or press Ctrl+C to return.");
-        output.Dim("Type '/help' for commands available in this mode (e.g., /reset).");
-        output.WriteLine();
-
-        LlmAgentInteractiveCommands.WriteToolsList(output, LlmAgentTools.GetDefaultTools());
-        output.WriteLine();
-
-        if (args.Length > 0)
+        try
         {
-            var initial = string.Join(" ", args).Trim();
-            if (!string.IsNullOrWhiteSpace(initial))
+            output.Dim("Enter prompts directly. The agent can request tools and the CLI will execute them.");
+            output.Dim("Use ↑/↓ arrows for history. Type 'exit' or press Ctrl+C to return.");
+            output.Dim("Type '/help' for commands available in this mode (e.g., /reset).");
+            output.WriteLine();
+
+            LlmAgentInteractiveCommands.WriteToolsList(output, LlmAgentTools.GetDefaultTools());
+            output.WriteLine();
+
+            if (args.Length > 0)
             {
-                await ExecuteLlmPromptAsync(initial, output, state, mcpClient, llmSettings, transcript, cancellationToken: default, traceStore: trace);
+                var initial = string.Join(" ", args).Trim();
+                if (!string.IsNullOrWhiteSpace(initial))
+                {
+                    await ExecuteLlmPromptAsync(initial, output, state, mcpClient, llmSettings, transcript, cancellationToken: default, traceStore: trace);
+                }
             }
-        }
 
-        var systemConsole = new SystemConsole();
-        const string prompt = "llmagent>";
+            var systemConsole = new SystemConsole();
+            const string prompt = "llmagent>";
 
-        while (true)
-        {
-            try
+            while (true)
             {
-                var line = ReadCmdLineWithHistory(console, systemConsole, prompt, _llmAgentHistory);
-                if (line == null)
+                try
                 {
-                    output.Info("Exiting LLM agent mode.");
-                    break;
-                }
-
-                line = line.Trim();
-                if (string.IsNullOrEmpty(line))
-                {
-                    continue;
-                }
-
-                if (LlmAgentInteractiveCommands.TryHandle(line, output, state, transcript, out var shouldExit))
-                {
-                    if (shouldExit)
+                    var line = ReadCmdLineWithHistory(console, systemConsole, prompt, _llmAgentHistory);
+                    if (line == null)
                     {
                         output.Info("Exiting LLM agent mode.");
                         break;
                     }
 
-                    output.WriteLine();
-                    continue;
-                }
+                    line = line.Trim();
+                    if (string.IsNullOrEmpty(line))
+                    {
+                        continue;
+                    }
 
-                if (line.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
-                    line.Equals("quit", StringComparison.OrdinalIgnoreCase) ||
-                    line.Equals("q", StringComparison.OrdinalIgnoreCase))
+                    if (LlmAgentInteractiveCommands.TryHandle(line, output, state, transcript, out var shouldExit))
+                    {
+                        if (shouldExit)
+                        {
+                            output.Info("Exiting LLM agent mode.");
+                            break;
+                        }
+
+                        output.WriteLine();
+                        continue;
+                    }
+
+                    if (line.Equals("exit", StringComparison.OrdinalIgnoreCase) ||
+                        line.Equals("quit", StringComparison.OrdinalIgnoreCase) ||
+                        line.Equals("q", StringComparison.OrdinalIgnoreCase))
+                    {
+                        output.Info("Exiting LLM agent mode.");
+                        break;
+                    }
+
+                    _llmAgentHistory.Add(line);
+                    await ExecuteLlmPromptAsync(line, output, state, mcpClient, llmSettings, transcript, cancellationToken: default, traceStore: trace);
+                }
+                catch (OperationCanceledException)
                 {
                     output.Info("Exiting LLM agent mode.");
                     break;
                 }
-
-                _llmAgentHistory.Add(line);
-                await ExecuteLlmPromptAsync(line, output, state, mcpClient, llmSettings, transcript, cancellationToken: default, traceStore: trace);
-            }
-            catch (OperationCanceledException)
-            {
-                output.Info("Exiting LLM agent mode.");
-                break;
-            }
-            catch (Exception ex)
-            {
-                output.Error(ex.Message);
-                WriteLlmErrorContext(output, llmSettings);
+                catch (Exception ex)
+                {
+                    output.Error(ex.Message);
+                    WriteLlmErrorContext(output, llmSettings);
+                }
             }
         }
+        catch (Exception ex)
+        {
+            try
+            {
+                trace?.AppendEvent(new { kind = "llmagent_session_unhandled_exception", timestampUtc = DateTime.UtcNow, message = ex.Message });
+            }
+            catch
+            {
+                // ignore
+            }
 
-        try
-        {
-            trace?.AppendEvent(new { kind = "llmagent_session_end", timestampUtc = DateTime.UtcNow });
+            throw;
         }
-        catch
+        finally
         {
-            // ignore
+            try
+            {
+                trace?.AppendEvent(new { kind = "llmagent_session_end", timestampUtc = DateTime.UtcNow });
+            }
+            catch
+            {
+                // ignore
+            }
         }
     }
 
