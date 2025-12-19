@@ -252,21 +252,34 @@ internal sealed class LlmResponseRenderer
 
     private void RenderQuote(QuoteBlock quote, List<IRenderable> output, int consoleWidth, int listItemBudget, int indent)
     {
-        var content = quote.ToString() ?? string.Empty;
-        content = content.Trim();
-        if (content.Length == 0)
+        var inner = new List<IRenderable>();
+        foreach (var child in quote)
         {
-            return;
+            RenderBlock(child, inner, consoleWidth, listItemBudget, indent: 0);
         }
 
-        var panel = new Panel(new Markup(AnsiToSpectreMarkup.Convert(content)))
+        IRenderable content;
+        if (inner.Count > 0)
+        {
+            content = new Rows(inner);
+        }
+        else
+        {
+            var fallback = quote.ToString() ?? string.Empty;
+            fallback = fallback.Trim();
+            if (fallback.Length == 0)
+            {
+                return;
+            }
+            content = new Markup(AnsiToSpectreMarkup.Convert(fallback));
+        }
+
+        output.Add(new Panel(content)
         {
             Border = BoxBorder.Rounded,
             BorderStyle = new Style(Color.Grey),
             Padding = new Padding(1, 0)
-        };
-
-        output.Add(panel);
+        });
     }
 
     private void RenderCodeBlock(CodeBlock codeBlock, List<IRenderable> output)
@@ -368,7 +381,8 @@ internal sealed class LlmResponseRenderer
 
     private static (List<List<string>> rows, int columns) ExtractTable(MdTable table)
     {
-        var rows = new List<List<string>>();
+        var header = new List<string>();
+        var body = new List<List<string>>();
         var columns = 0;
 
         foreach (var child in table)
@@ -415,15 +429,33 @@ internal sealed class LlmResponseRenderer
             }
 
             columns = Math.Max(columns, cells.Count);
-            rows.Add(cells);
+            if (row.IsHeader)
+            {
+                if (header.Count == 0)
+                {
+                    header = cells;
+                }
+            }
+            else
+            {
+                body.Add(cells);
+            }
         }
 
-        // Ensure there is at least a header row
-        if (rows.Count == 1)
+        // Ensure there is at least a header row, even if Markdig didn't mark it.
+        if (header.Count == 0 && body.Count > 0)
         {
-            rows.Insert(0, new List<string>(rows[0]));
+            header = body[0];
+            body.RemoveAt(0);
         }
 
+        if (header.Count == 0)
+        {
+            return ([], 0);
+        }
+
+        var rows = new List<List<string>>(capacity: 1 + body.Count) { header };
+        rows.AddRange(body);
         return (rows, columns);
     }
 
@@ -531,10 +563,15 @@ internal sealed class LlmResponseRenderer
 
                 if (link.IsImage)
                 {
-                    sb.Append("![");
+                    // Avoid literal '['/']' here; we're building Spectre markup, not Markdown.
+                    sb.Append("[dim]image[/] ");
                     sb.Append(label);
-                    sb.Append("] ");
-                    sb.Append(SpectreMarkup.Escape(url));
+                    if (url.Length > 0)
+                    {
+                        sb.Append(" (");
+                        sb.Append(SpectreMarkup.Escape(url));
+                        sb.Append(')');
+                    }
                     return;
                 }
 
