@@ -28,13 +28,20 @@ public class TranscriptRedactorTests
 
     [Theory]
     [InlineData("Authorization: Bearer abc.def", "Authorization: Bearer ***")]
+    [InlineData("x-api-key: abc.def", "x-api-key=***")]
     [InlineData("OPENROUTER_API_KEY=sk-123", "OPENROUTER_API_KEY=***")]
     [InlineData("OPENAI_API_KEY=sk-123", "OPENAI_API_KEY=***")]
+    [InlineData("ANTHROPIC_API_KEY=sk-ant-123", "ANTHROPIC_API_KEY=***")]
     [InlineData("apiKey: abc", "apiKey=***")]
     [InlineData("{\"apiKey\":\"abc\"}", "{\"apiKey\":\"***\"}")]
     [InlineData("{\"openai_api_key\":\"abc\"}", "{\"openai_api_key\":\"***\"}")]
+    [InlineData("{\"anthropic_api_key\":\"abc\"}", "{\"anthropic_api_key\":\"***\"}")]
     [InlineData("Incorrect API key provided: sk-123", "Incorrect API key provided: sk-***")]
     [InlineData("Invalid key: rk-live-abc123", "Invalid key: rk-***")]
+    [InlineData("token=0x06000001", "token=0x06000001")]
+    [InlineData("token=abc", "token=***")]
+    [InlineData("{\"token\":\"0x06000001\"}", "{\"token\":\"0x06000001\"}")]
+    [InlineData("{\"token\":\"abc\"}", "{\"token\":\"***\"}")]
     public void RedactText_RedactsKeyValueSecrets(string input, string expected)
     {
         var redacted = TranscriptRedactor.RedactText(input);

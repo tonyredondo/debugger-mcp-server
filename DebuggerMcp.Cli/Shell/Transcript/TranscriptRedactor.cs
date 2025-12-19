@@ -93,10 +93,34 @@ internal static class TranscriptRedactor
 
     private static string RedactKeyValuePairs(string text)
     {
+        // Preserve debugger-style hex tokens while still redacting typical secret tokens.
+        // Examples to preserve: token=0x06000001, "token":"0x06000001"
+        text = Regex.Replace(
+            text,
+            @"(?i)""(token)""\s*:\s*""([^""]*)""",
+            match =>
+            {
+                var value = match.Groups[2].Value;
+                return LooksLikeDebuggerHexToken(value) ? match.Value : $"\"{match.Groups[1].Value}\":\"***\"";
+            },
+            RegexOptions.CultureInvariant);
+
+        text = Regex.Replace(
+            text,
+            @"(?i)\b(token)\b\s*[:=]\s*([^\s]+)",
+            match =>
+            {
+                var key = match.Groups[1].Value;
+                var rawValue = match.Groups[2].Value;
+                var check = rawValue.TrimEnd('.', ',', ';', ')', ']', '}', '"', '\'');
+                return LooksLikeDebuggerHexToken(check) ? match.Value : $"{key}=***";
+            },
+            RegexOptions.CultureInvariant);
+
         // JSON-style pairs: "apiKey": "..."
         text = Regex.Replace(
             text,
-            @"(?i)""(openrouter_api_key|openai_api_key|api[_-]?key|token|password|secret)""\s*:\s*""[^""]*""",
+            @"(?i)""(openrouter_api_key|openai_api_key|anthropic_api_key|api[_-]?key|password|secret)""\s*:\s*""[^""]*""",
             "\"$1\":\"***\"",
             RegexOptions.CultureInvariant);
 
@@ -109,14 +133,20 @@ internal static class TranscriptRedactor
 
         text = Regex.Replace(
             text,
-            @"(?i)\b(openrouter_api_key|openai_api_key|api[_-]?key|token|password|secret)\b\s*[:=]\s*([^\s]+)",
+            @"(?i)(x-api-key\s*:)\s*([^\s]+)",
+            "$1 ***",
+            RegexOptions.CultureInvariant);
+
+        text = Regex.Replace(
+            text,
+            @"(?i)\b(openrouter_api_key|openai_api_key|anthropic_api_key|api[_-]?key|password|secret)\b\s*[:=]\s*([^\s]+)",
             "$1=***",
             RegexOptions.CultureInvariant);
 
         // Common env-var style names (underscore-separated) don't match the patterns above because "_" is a word character.
         text = Regex.Replace(
             text,
-            @"(?i)\b(openai_api_key|openrouter_api_key|openai[_-]?api[_-]?key|openrouter[_-]?api[_-]?key)\b\s*[:=]\s*([^\s]+)",
+            @"(?i)\b(openai_api_key|openrouter_api_key|anthropic_api_key|openai[_-]?api[_-]?key|openrouter[_-]?api[_-]?key|anthropic[_-]?api[_-]?key)\b\s*[:=]\s*([^\s]+)",
             "$1=***",
             RegexOptions.CultureInvariant);
 
@@ -128,5 +158,34 @@ internal static class TranscriptRedactor
             RegexOptions.CultureInvariant);
 
         return text;
+    }
+
+    private static bool LooksLikeDebuggerHexToken(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var s = value.Trim();
+        if (!s.StartsWith("0x", StringComparison.OrdinalIgnoreCase) || s.Length <= 2)
+        {
+            return false;
+        }
+
+        for (var i = 2; i < s.Length; i++)
+        {
+            var c = s[i];
+            var isHex =
+                (c >= '0' && c <= '9') ||
+                (c >= 'a' && c <= 'f') ||
+                (c >= 'A' && c <= 'F');
+            if (!isHex)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }
