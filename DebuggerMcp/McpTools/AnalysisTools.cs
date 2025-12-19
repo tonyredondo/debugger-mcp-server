@@ -103,14 +103,15 @@ public class AnalysisTools(
             }
         }
 
-        return GenerateCanonicalJsonReport(result, session, sanitizedUserId, manager.DebuggerType);
+        return GenerateCanonicalJsonReport(result, session, sanitizedUserId, manager.DebuggerType, includeWatches);
     }
 
     private static string GenerateCanonicalJsonReport(
         CrashAnalysisResult analysis,
         DebuggerSession session,
         string userId,
-        string debuggerType)
+        string debuggerType,
+        bool includeWatches)
     {
         if (analysis == null)
         {
@@ -134,6 +135,13 @@ public class AnalysisTools(
             Format = ReportFormat.Json
         };
 
-        return reportService.GenerateReport(analysis, new ReportOptions { Format = ReportFormat.Json }, metadata);
+        var json = reportService.GenerateReport(analysis, new ReportOptions { Format = ReportFormat.Json }, metadata);
+
+        if (!string.IsNullOrWhiteSpace(metadata.DumpId))
+        {
+            session.SetCachedReport(metadata.DumpId, metadata.GeneratedAt, json, includesWatches: includeWatches, includesSecurity: true);
+        }
+
+        return json;
     }
 }

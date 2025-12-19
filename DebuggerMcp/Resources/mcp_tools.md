@@ -35,6 +35,8 @@ Generate reports (returns report content).
 
 - **full**: `report(action: "full", sessionId: "...", userId: "...", format: "json", includeWatches: true)`
 - **summary**: `report(action: "summary", sessionId: "...", userId: "...", format: "json")`
+- **index**: `report(action: "index", sessionId: "...", userId: "...")` (small report index: summary + TOC)
+- **get**: `report(action: "get", sessionId: "...", userId: "...", path: "analysis.threads.all", limit: 25)` (fetch a specific report section; arrays are pageable via cursor)
 
 Tip: For LLM consumption, prefer `format: "json"` (structured). Use `markdown` for human-readable output.
 Note: `format: "json"` returns the canonical report document shape: `{ "metadata": { ... }, "analysis": { ... } }`.

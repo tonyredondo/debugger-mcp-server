@@ -57,6 +57,8 @@ public class TranscriptContextBuilderTests
         Assert.Contains("confirm", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Tooling:", messages[0].Content);
         Assert.Contains("primary objective", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("active debugger type", messages[0].Content, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("metadata.debuggertype", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Do not assume an assembly version", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("rewrote il", messages[0].Content, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("CALL THE TOOL", messages[0].Content, StringComparison.OrdinalIgnoreCase);

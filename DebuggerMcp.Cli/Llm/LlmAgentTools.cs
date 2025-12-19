@@ -12,6 +12,35 @@ internal static class LlmAgentTools
         [
             new ChatTool
             {
+                Name = "report_index",
+                Description = "Get a small crash report index (summary + table of contents) for the currently opened dump.",
+                Parameters = JsonDocument.Parse("""
+                {
+                  "type":"object",
+                  "properties":{},
+                  "additionalProperties":false
+                }
+                """).RootElement.Clone()
+            },
+            new ChatTool
+            {
+                Name = "report_get",
+                Description = "Fetch a section of the canonical crash report JSON by dot-path (e.g., analysis.exception, analysis.threads.all) with paging for arrays.",
+                Parameters = JsonDocument.Parse("""
+                {
+                  "type":"object",
+                  "properties":{
+                    "path":{"type":"string","description":"Dot-path under metadata/analysis"},
+                    "limit":{"type":"integer","description":"Array page size (default 50, max 200)"},
+                    "cursor":{"type":"string","description":"Paging cursor from a previous response"},
+                    "maxChars":{"type":"integer","description":"Optional response size guardrail; returns an error if exceeded"}
+                  },
+                  "required":["path"]
+                }
+                """).RootElement.Clone()
+            },
+            new ChatTool
+            {
                 Name = "exec",
                 Description = "Execute a debugger command in the current session (LLDB/WinDbg/SOS).",
                 Parameters = JsonDocument.Parse("""

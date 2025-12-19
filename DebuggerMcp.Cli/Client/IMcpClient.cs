@@ -253,6 +253,30 @@ public interface IMcpClient : IAsyncDisposable
     /// </summary>
     Task<string> GenerateSummaryReportAsync(string sessionId, string userId, string format = "markdown", CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Gets a small report index (summary + TOC) suitable for LLM context.
+    /// </summary>
+    Task<string> GetReportIndexAsync(
+        string sessionId,
+        string userId,
+        bool includeWatches = true,
+        bool includeSecurity = true,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Fetches a specific report section by dot-path, with paging for arrays.
+    /// </summary>
+    Task<string> GetReportSectionAsync(
+        string sessionId,
+        string userId,
+        string path,
+        int limit = 50,
+        string? cursor = null,
+        int? maxChars = null,
+        bool includeWatches = true,
+        bool includeSecurity = true,
+        CancellationToken cancellationToken = default);
+
 
 
     /// <summary>

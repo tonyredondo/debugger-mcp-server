@@ -1246,6 +1246,8 @@ Generate comprehensive, shareable reports from your crash analysis in multiple f
 |------|-------------|------------|
 | `report(action="full")` | Generate full analysis report | `sessionId`, `userId`, `format`, `includeWatches`, `includeSecurity`, `maxStackFrames` |
 | `report(action="summary")` | Generate brief summary report | `sessionId`, `userId`, `format` |
+| `report(action="index")` | Get a small report index (summary + TOC) | `sessionId`, `userId` |
+| `report(action="get")` | Fetch a specific report section by path (paged for arrays) | `sessionId`, `userId`, `path`, `limit?`, `cursor?`, `maxChars?` |
 
 ### Supported Formats
 
@@ -1266,6 +1268,12 @@ report(action: "full", sessionId: "abc", userId: "user1", format: "html")
 
 // Generate brief summary in JSON
 report(action: "summary", sessionId: "abc", userId: "user1", format: "json")
+
+// Get an LLM-friendly index (summary + TOC)
+report(action: "index", sessionId: "abc", userId: "user1")
+
+// Fetch a specific report section (paged for arrays)
+report(action: "get", sessionId: "abc", userId: "user1", path: "analysis.threads.all", limit: 25)
 ```
 
 ### HTTP Endpoint

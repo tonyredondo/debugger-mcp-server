@@ -1,4 +1,5 @@
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Sampling;
@@ -163,6 +164,9 @@ public class AiAnalysisOrchestratorTests
 
         Assert.NotNull(seenRequest);
         Assert.False(string.IsNullOrWhiteSpace(seenRequest!.SystemPrompt));
+        Assert.Contains("metadata.debuggertype", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("never run windbg", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("report_get", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sos help", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sos clrstack -a", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("Prefer using the inspect tool", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
@@ -260,6 +264,44 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains("!threads", debugger.ExecutedCommands);
         Assert.NotNull(result.CommandsExecuted);
         Assert.Contains(result.CommandsExecuted!, c => c.Tool == "exec" && c.Output.Contains("OUTPUT:!threads", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenExecToolCallRepeated_ReusesCachedToolResult()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "  !THREADS  " }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!threads" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            DebuggerType = "LLDB",
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Single(debugger.ExecutedCommands);
+        Assert.Contains("!THREADS", debugger.ExecutedCommands[0], StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(result.CommandsExecuted);
+        var execCalls = result.CommandsExecuted!.Where(c => c.Tool == "exec").ToList();
+        Assert.Equal(2, execCalls.Count);
+        Assert.Contains("cached tool result", execCalls[1].Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

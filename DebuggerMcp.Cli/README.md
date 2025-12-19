@@ -331,6 +331,10 @@ Note: `analyze crash`, `analyze ai`, and `report --format json` all use the same
 /exit
 ```
 
+In agent mode, the LLM can also call report tools to avoid re-running expensive analysis:
+- `report_index` (small report index: summary + TOC)
+- `report_get` (fetch a report section by path, with paging for arrays)
+
 ### Comparison Commands
 
 | Command | Description |

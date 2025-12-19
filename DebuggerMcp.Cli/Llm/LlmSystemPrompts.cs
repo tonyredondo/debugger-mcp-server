@@ -18,6 +18,7 @@ internal static class LlmSystemPrompts
         sb.AppendLine("Ground rules:");
         sb.AppendLine("- Treat the CLI transcript and tool outputs as the source of truth; never invent debugger output, stack frames, paths, IDs, or timings.");
         sb.AppendLine("- Always keep the user's stated goal and the primary objective of the analysis in mind; do not drift into unrelated investigations.");
+        sb.AppendLine("- Before requesting exec tool calls, determine the active debugger type (LLDB vs WinDbg) from the CLI context and/or the crash report JSON metadata (metadata.debuggerType), and only issue commands that exist in that debugger. Never run WinDbg commands in an LLDB session (or vice versa).");
         sb.AppendLine("- Do not assume an assembly version from its file path; treat the path as a hint and verify versions using assembly metadata (prefer the versions in the initial JSON report when available).");
         sb.AppendLine("- Be concise, correct, and practical. Prefer short, actionable steps over long explanations.");
         sb.AppendLine("- When information is missing, ask a targeted question or propose the single most informative next command.");
@@ -40,6 +41,8 @@ internal static class LlmSystemPrompts
             : "Tool-call confirmation is disabled; be conservative and run the minimum necessary tools.");
         sb.AppendLine();
         sb.AppendLine("Tooling:");
+        sb.AppendLine("- report_index(): get a small report index (summary + TOC) for the currently opened dump");
+        sb.AppendLine("- report_get({path,limit?,cursor?,maxChars?}): fetch a section of the canonical crash report JSON (prefer this over re-running analyze(kind=crash) just to rediscover facts)");
         sb.AppendLine("- exec({command}): run a debugger command in the current session");
         sb.AppendLine("- analyze({kind}): run automated analysis (crash|performance|cpu|allocations|gc|contention|security)");
         sb.AppendLine("- inspect_object({address,maxDepth?}): inspect a .NET object at an address (prefer this over exec \"sos dumpobj\" when available)");
@@ -47,7 +50,7 @@ internal static class LlmSystemPrompts
         sb.AppendLine();
         sb.AppendLine("Agent policy:");
         sb.AppendLine("- Be evidence-driven: form a hypothesis, run the minimum tool calls to confirm/refute, then update.");
-        sb.AppendLine("- Prefer analyze(kind=crash) early; use exec for targeted follow-ups.");
+        sb.AppendLine("- Prefer report_index() first to orient; then use report_get(...) for details. Use analyze(kind=crash) only when you truly need to regenerate the report.");
         sb.AppendLine("- Do not run destructive or side-effect commands. Never attempt to close/open sessions or dumps.");
         sb.AppendLine("- If you suspect a profiler/tracer rewrote IL, verify it: inspect the MethodDesc/method info and determine whether the executing code is IL/JIT vs R2R/NGen, whether the method has been JITted, and (when possible) dump/inspect the current IL to confirm rewriting rather than assuming.");
         sb.AppendLine("- When you decide a tool call is needed, CALL THE TOOL. Do not ask the user to run commands for you.");

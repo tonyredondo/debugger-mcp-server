@@ -1,10 +1,13 @@
 #nullable enable
 
 using System.Diagnostics;
+using System.Buffers;
+using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using DebuggerMcp.Configuration;
+using DebuggerMcp.Reporting;
 using DebuggerMcp.Sampling;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Protocol;
@@ -76,20 +79,20 @@ public sealed class AiAnalysisOrchestrator(
     /// Performs AI-powered crash analysis with an iterative investigation loop.
     /// </summary>
     /// <param name="initialReport">Initial structured crash report.</param>
-    /// <param name="initialReportJson">The JSON string used as the source-of-truth prompt for the initial report.</param>
+    /// <param name="fullReportJson">Canonical JSON report document (source of truth for report_get).</param>
     /// <param name="debugger">Debugger manager used to execute commands.</param>
     /// <param name="clrMdAnalyzer">Optional ClrMD analyzer for managed object inspection.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The AI analysis result.</returns>
     public async Task<AiAnalysisResult> AnalyzeCrashAsync(
         CrashAnalysisResult initialReport,
-        string initialReportJson,
+        string fullReportJson,
         IDebuggerManager debugger,
         IManagedObjectInspector? clrMdAnalyzer,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(initialReport);
-        ArgumentNullException.ThrowIfNull(initialReportJson);
+        ArgumentNullException.ThrowIfNull(fullReportJson);
         ArgumentNullException.ThrowIfNull(debugger);
 
         if (!_samplingClient.IsSamplingSupported)
@@ -126,7 +129,7 @@ public sealed class AiAnalysisOrchestrator(
                 [
                     new TextContentBlock
                     {
-                        Text = BuildInitialPrompt(initialReportJson)
+                        Text = BuildInitialPrompt(initialReport, fullReportJson)
                     }
                 ]
             }
@@ -141,6 +144,7 @@ public sealed class AiAnalysisOrchestrator(
         bool lastIterationHadToolCalls = false;
         string? lastModel = null;
         var toolIndexByIteration = new Dictionary<int, int>();
+        var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
 
         var traceRunDir = InitializeSamplingTraceDirectory();
 
@@ -288,11 +292,27 @@ public sealed class AiAnalysisOrchestrator(
 
                 try
                 {
-                    var output = await ExecuteToolAsync(toolName, toolInput, initialReport, debugger, clrMdAnalyzer, cancellationToken)
-                        .ConfigureAwait(false);
-                    var outputForModel = TruncateForModel(output);
+                    var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
+                    string outputForModel;
+                    var duration = sw.Elapsed;
+                    if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
+                    {
+                        sw.Stop();
+                        duration = TimeSpan.Zero;
+                        outputForModel = TruncateForModel(
+                            "[cached tool result] Duplicate tool call detected; reusing prior output. Do not repeat identical tool calls.\n\n" +
+                            cached);
+                    }
+                    else
+                    {
+                        var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, initialReport, debugger, clrMdAnalyzer, cancellationToken)
+                            .ConfigureAwait(false);
+                        outputForModel = TruncateForModel(output);
+                        toolResultCache[toolCacheKey] = outputForModel;
+                        sw.Stop();
+                        duration = sw.Elapsed;
+                    }
 
-                    sw.Stop();
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
                     toolIndexByIteration[iteration] = toolOrdinal;
                     commandsExecuted.Add(new ExecutedCommand
@@ -301,10 +321,10 @@ public sealed class AiAnalysisOrchestrator(
                         Input = toolInput,
                         Output = outputForModel,
                         Iteration = iteration,
-                        Duration = sw.Elapsed.ToString("c")
+                        Duration = duration.ToString("c")
                     });
                     WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
-                        new { tool = toolName, input = toolInput.ToString(), output = outputForModel, isError = false, duration = sw.Elapsed.ToString("c") });
+                        new { tool = toolName, input = toolInput.ToString(), output = outputForModel, isError = false, duration = duration.ToString("c") });
 
                     messages.Add(new SamplingMessage
                     {
@@ -808,15 +828,21 @@ public sealed class AiAnalysisOrchestrator(
         return string.Join(" | ", parts);
     }
 
-    private static string BuildInitialPrompt(string initialReportJson)
+    private static string BuildInitialPrompt(CrashAnalysisResult initialReport, string fullReportJson)
     {
         var sb = new StringBuilder();
-        sb.AppendLine("Analyze this crash report JSON.");
-        sb.AppendLine("If you need more data, call tools (exec/inspect/get_thread_stack).");
-        sb.AppendLine("Note: Very large sections may be omitted to keep the prompt bounded; use tools to fetch more evidence.");
+        sb.AppendLine("Analyze this crash report.");
+        sb.AppendLine("You are provided a small report index (summary + table of contents) and a bounded evidence snapshot.");
+        sb.AppendLine("If you need more data, call tools (report_get/exec/inspect/get_thread_stack).");
+        sb.AppendLine("Avoid rerunning the same tool calls; reuse prior evidence and expand only the specific sections you need.");
         sb.AppendLine();
-        sb.AppendLine(TruncateInitialPrompt(initialReportJson));
-        return sb.ToString();
+        sb.AppendLine("Report index (summary + TOC):");
+        sb.AppendLine(ReportSectionApi.BuildIndex(fullReportJson));
+        sb.AppendLine();
+        sb.AppendLine("Evidence snapshot (bounded):");
+        sb.AppendLine(AiSamplingPromptBuilder.Build(initialReport));
+
+        return TruncateInitialPrompt(sb.ToString());
     }
 
     private static AiAnalysisResult ParseAnalysisComplete(
@@ -896,6 +922,7 @@ public sealed class AiAnalysisOrchestrator(
     private static async Task<string> ExecuteToolAsync(
         string toolName,
         JsonElement toolInput,
+        string fullReportJson,
         CrashAnalysisResult initialReport,
         IDebuggerManager debugger,
         IManagedObjectInspector? clrMdAnalyzer,
@@ -906,9 +933,40 @@ public sealed class AiAnalysisOrchestrator(
         {
             "exec" => await ExecuteExecAsync(toolInput, debugger, cancellationToken).ConfigureAwait(false),
             "inspect" => ExecuteInspect(toolInput, clrMdAnalyzer),
+            "report_get" => ExecuteReportGet(toolInput, fullReportJson),
             "get_thread_stack" => ExecuteGetThreadStack(toolInput, initialReport),
             _ => throw new InvalidOperationException($"Unknown tool: {toolName}")
         };
+    }
+
+    private static string ExecuteReportGet(JsonElement toolInput, string fullReportJson)
+    {
+        if (toolInput.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("report_get input must be an object.");
+        }
+
+        var path = TryGetString(toolInput, "path");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            throw new ArgumentException("report_get.path is required.");
+        }
+
+        int? limit = null;
+        if (toolInput.TryGetProperty("limit", out var limitEl) && limitEl.ValueKind == JsonValueKind.Number && limitEl.TryGetInt32(out var l))
+        {
+            limit = l;
+        }
+
+        var cursor = TryGetString(toolInput, "cursor");
+
+        int? maxChars = null;
+        if (toolInput.TryGetProperty("maxChars", out var maxCharsEl) && maxCharsEl.ValueKind == JsonValueKind.Number && maxCharsEl.TryGetInt32(out var mc))
+        {
+            maxChars = mc;
+        }
+
+        return ReportSectionApi.GetSection(fullReportJson, path!, limit, cursor, maxChars);
     }
 
     private static Task<string> ExecuteExecAsync(JsonElement toolInput, IDebuggerManager debugger, CancellationToken cancellationToken)
@@ -1169,8 +1227,12 @@ You are an expert crash dump analyst. You've been given an initial crash analysi
 
 Your task is to determine the ROOT CAUSE of the crash through systematic investigation.
 
+IMPORTANT: Before using exec, determine the active debugger type from the initial report metadata (metadata.debuggerType, e.g. "LLDB" or "WinDbg") and only issue commands that exist in that debugger. Never run WinDbg-only commands in an LLDB session (or vice versa).
+IMPORTANT: Do not repeat identical tool calls with the same arguments; reuse prior tool outputs as evidence and move the investigation forward.
+
 Available tools:
 - exec: Run any debugger command (LLDB/WinDbg/SOS)
+- report_get: Fetch a section of the canonical report JSON by dot-path (e.g., analysis.exception, analysis.threads.all) with paging for arrays
 - inspect: Inspect .NET objects by address (when available)
 - get_thread_stack: Get a full stack trace for a specific thread from the report
 - analysis_complete: Call when you've determined the root cause
@@ -1198,4 +1260,94 @@ Investigation approach:
 
 Be thorough but efficient. Don't run unnecessary commands.
 """;
+
+    private static string BuildToolCacheKey(string toolName, JsonElement toolInput)
+    {
+        if (string.IsNullOrWhiteSpace(toolName))
+        {
+            return string.Empty;
+        }
+
+        if (string.Equals(toolName, "exec", StringComparison.OrdinalIgnoreCase) &&
+            toolInput.ValueKind == JsonValueKind.Object &&
+            toolInput.TryGetProperty("command", out var cmdEl) &&
+            cmdEl.ValueKind == JsonValueKind.String)
+        {
+            return $"exec:{NormalizeDebuggerCommand(cmdEl.GetString() ?? string.Empty)}";
+        }
+
+        return $"{toolName.Trim().ToLowerInvariant()}:{CanonicalizeJson(toolInput)}";
+    }
+
+    private static string NormalizeDebuggerCommand(string command)
+    {
+        if (string.IsNullOrWhiteSpace(command))
+        {
+            return string.Empty;
+        }
+
+        // Collapse whitespace and make casing stable for matching (debugger commands are case-insensitive).
+        var trimmed = command.Trim();
+        var sb = new StringBuilder(trimmed.Length);
+        var lastWasWhitespace = false;
+        foreach (var ch in trimmed)
+        {
+            if (char.IsWhiteSpace(ch))
+            {
+                if (!lastWasWhitespace)
+                {
+                    sb.Append(' ');
+                    lastWasWhitespace = true;
+                }
+                continue;
+            }
+
+            lastWasWhitespace = false;
+            sb.Append(char.ToLowerInvariant(ch));
+        }
+        return sb.ToString();
+    }
+
+    private static string CanonicalizeJson(JsonElement element)
+    {
+        try
+        {
+            var buffer = new ArrayBufferWriter<byte>(256);
+            using var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false });
+            WriteCanonicalJson(element, writer);
+            writer.Flush();
+            return Encoding.UTF8.GetString(buffer.WrittenSpan);
+        }
+        catch
+        {
+            return element.ToString() ?? string.Empty;
+        }
+    }
+
+    private static void WriteCanonicalJson(JsonElement element, Utf8JsonWriter writer)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in element.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonicalJson(property.Value, writer);
+                }
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in element.EnumerateArray())
+                {
+                    WriteCanonicalJson(item, writer);
+                }
+                writer.WriteEndArray();
+                break;
+            default:
+                element.WriteTo(writer);
+                break;
+        }
+    }
 }

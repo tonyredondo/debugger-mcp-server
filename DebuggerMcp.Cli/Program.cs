@@ -5254,6 +5254,46 @@ public class Program
                     return TruncateForTranscript(result, maxChars: 50_000);
                 }
 
+                case "report_index":
+                {
+                    output.WriteLine();
+                    output.Dim("(agent) report_index");
+                    var result = await mcpClient.GetReportIndexAsync(
+                        state.SessionId!,
+                        state.Settings.UserId,
+                        includeWatches: true,
+                        includeSecurity: true,
+                        cancellationToken: cancellationToken);
+                    return TruncateForTranscript(result, maxChars: 50_000);
+                }
+
+                case "report_get":
+                {
+                    var path = args.TryGetProperty("path", out var pProp) ? pProp.GetString() : null;
+                    var limit = args.TryGetProperty("limit", out var lProp) && lProp.TryGetInt32(out var l) ? l : 50;
+                    var cursor = args.TryGetProperty("cursor", out var cProp) ? cProp.GetString() : null;
+                    int? maxChars = args.TryGetProperty("maxChars", out var mProp) && mProp.TryGetInt32(out var mc) ? mc : null;
+
+                    if (string.IsNullOrWhiteSpace(path))
+                    {
+                        return "ERROR: report_get requires {\"path\":\"analysis...\"}.";
+                    }
+
+                    output.WriteLine();
+                    output.Dim($"(agent) report_get {TranscriptRedactor.RedactText(path)}");
+                    var result = await mcpClient.GetReportSectionAsync(
+                        state.SessionId!,
+                        state.Settings.UserId,
+                        path: path!,
+                        limit: limit,
+                        cursor: cursor,
+                        maxChars: maxChars,
+                        includeWatches: true,
+                        includeSecurity: true,
+                        cancellationToken: cancellationToken);
+                    return TruncateForTranscript(result, maxChars: 50_000);
+                }
+
                 default:
                     return $"ERROR: Unsupported tool '{name}'.";
             }

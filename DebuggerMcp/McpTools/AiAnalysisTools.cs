@@ -98,8 +98,18 @@ public sealed class AiAnalysisTools(
         maxIterations = Math.Clamp(maxIterations, 1, 100);
         maxTokens = Math.Clamp(maxTokens, 256, 8192);
 
-        // Build a bounded JSON prompt for the LLM to keep sampling payload sizes reasonable.
-        var promptJson = AiSamplingPromptBuilder.Build(initialReport);
+        // Build the canonical JSON report document (source of truth for report_get during sampling).
+        // The sampling prompt itself will remain bounded (index + evidence snapshot) inside the orchestrator.
+        var reportServiceForSampling = new ReportService();
+        var initialMetadata = new ReportMetadata
+        {
+            DumpId = session.CurrentDumpId ?? string.Empty,
+            UserId = sanitizedUserId,
+            GeneratedAt = DateTime.UtcNow,
+            DebuggerType = manager.DebuggerType,
+            Format = ReportFormat.Json
+        };
+        var fullReportJson = reportServiceForSampling.GenerateReport(initialReport, new ReportOptions { Format = ReportFormat.Json }, initialMetadata);
 
         var samplingClient = new McpSamplingClient(server);
         var orchestrator = new AiAnalysisOrchestrator(
@@ -117,7 +127,7 @@ public sealed class AiAnalysisTools(
 
         var aiResult = await orchestrator.AnalyzeCrashAsync(
                 initialReport,
-                promptJson,
+                fullReportJson,
                 manager,
                 session.ClrMdAnalyzer,
                 cancellationToken)

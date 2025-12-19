@@ -72,6 +72,74 @@ public class LlmAgentRunnerTests
 
         Assert.Contains("stopped after 2 steps", result.FinalText);
         Assert.Equal(2, result.Iterations);
-        Assert.Equal(2, result.ToolCallsExecuted);
+        Assert.Equal(1, result.ToolCallsExecuted);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenToolCallRepeated_ReusesCachedToolResult()
+    {
+        var executed = new List<ChatToolCall>();
+        var completions = 0;
+
+        Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> messages, CancellationToken _)
+        {
+            completions++;
+            if (completions == 1)
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "Investigating...",
+                    ToolCalls =
+                    [
+                        new ChatToolCall("c1", "exec", "{\"command\":\"  BT  \"}"),
+                        new ChatToolCall("c2", "exec", "{\"command\":\"bt\"}")
+                    ]
+                });
+            }
+
+            Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c1" && m.Content.Contains("bt-output", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c2" && m.Content.Contains("cached tool result", StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(new ChatCompletionResult { Text = "Done", ToolCalls = [] });
+        }
+
+        Task<string> ExecuteToolAsync(ChatToolCall call, CancellationToken _)
+        {
+            executed.Add(call);
+            return Task.FromResult("bt-output");
+        }
+
+        var runner = new LlmAgentRunner(CompleteAsync, ExecuteToolAsync, maxIterations: 5);
+        var result = await runner.RunAsync([new ChatMessage("user", "hi")], CancellationToken.None);
+
+        Assert.Equal("Done", result.FinalText);
+        Assert.Equal(2, result.Iterations);
+        Assert.Single(executed);
+        Assert.Equal(1, result.ToolCallsExecuted);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenAgentRepeatsOnlyCachedToolCalls_StopsEarly()
+    {
+        Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> _, CancellationToken __)
+            => Task.FromResult(new ChatCompletionResult
+            {
+                Text = "loop",
+                ToolCalls = [new ChatToolCall(Guid.NewGuid().ToString("N"), "exec", "{\"command\":\"bt\"}")]
+            });
+
+        var executed = 0;
+        Task<string> ExecuteToolAsync(ChatToolCall _, CancellationToken __)
+        {
+            executed++;
+            return Task.FromResult("bt-output");
+        }
+
+        var runner = new LlmAgentRunner(CompleteAsync, ExecuteToolAsync, maxIterations: 20);
+        var result = await runner.RunAsync([new ChatMessage("user", "hi")], CancellationToken.None);
+
+        Assert.Contains("stuck", result.FinalText, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(1, executed);
+        Assert.Equal(1, result.ToolCallsExecuted);
+        Assert.Equal(3, result.Iterations);
     }
 }

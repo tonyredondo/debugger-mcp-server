@@ -1375,6 +1375,60 @@ public class McpClient : IMcpClient
         }, cancellationToken);
     }
 
+    /// <inheritdoc/>
+    public async Task<string> GetReportIndexAsync(
+        string sessionId,
+        string userId,
+        bool includeWatches = true,
+        bool includeSecurity = true,
+        CancellationToken cancellationToken = default)
+    {
+        return await CallToolAsync("report", new Dictionary<string, object?>
+        {
+            ["action"] = "index",
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["includeWatches"] = includeWatches,
+            ["includeSecurity"] = includeSecurity
+        }, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<string> GetReportSectionAsync(
+        string sessionId,
+        string userId,
+        string path,
+        int limit = 50,
+        string? cursor = null,
+        int? maxChars = null,
+        bool includeWatches = true,
+        bool includeSecurity = true,
+        CancellationToken cancellationToken = default)
+    {
+        var args = new Dictionary<string, object?>
+        {
+            ["action"] = "get",
+            ["sessionId"] = sessionId,
+            ["userId"] = userId,
+            ["path"] = path,
+            ["limit"] = limit,
+            ["includeWatches"] = includeWatches,
+            ["includeSecurity"] = includeSecurity
+        };
+
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            args["cursor"] = cursor;
+        }
+
+        if (maxChars.HasValue)
+        {
+            args["maxChars"] = maxChars.Value;
+        }
+
+        return await CallToolAsync("report", args, cancellationToken);
+    }
+
 
 
     /// <inheritdoc/>

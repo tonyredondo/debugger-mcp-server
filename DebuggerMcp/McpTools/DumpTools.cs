@@ -188,6 +188,9 @@ public class DumpTools(
                 Logger.LogDebug(clrMdEx, "[OpenDump] ClrMD initialization failed, continuing without metadata enrichment");
             }
 
+            // Dump changed: clear any cached report from a prior dump.
+            session.ClearCachedReport();
+
             // Track which dump is open in this session and persist to disk
             session.CurrentDumpId = sanitizedDumpId;
             SessionManager.PersistSession(sessionId);
@@ -273,6 +276,7 @@ public class DumpTools(
         session.ClrMdAnalyzer?.Dispose();
         session.ClrMdAnalyzer = null;
         session.ClearSourceLinkResolver();
+        session.ClearCachedReport();
 
         // Clear the tracked dump ID and persist to disk
         session.CurrentDumpId = null;

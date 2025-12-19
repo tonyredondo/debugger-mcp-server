@@ -41,6 +41,19 @@ public static class SamplingTools
         }
         """);
 
+    private static readonly JsonElement ReportGetSchema = ParseSchema("""
+        {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string", "description": "Dot-path under metadata/analysis (e.g., analysis.exception, analysis.threads.all)." },
+            "limit": { "type": "integer", "description": "Array page size (default: 50, max: 200)." },
+            "cursor": { "type": "string", "description": "Paging cursor from a previous response (optional)." },
+            "maxChars": { "type": "integer", "description": "Optional response size guardrail; returns an error if exceeded." }
+          },
+          "required": ["path"]
+        }
+        """);
+
     private static readonly JsonElement AnalysisCompleteSchema = ParseSchema("""
         {
           "type": "object",
@@ -69,6 +82,12 @@ public static class SamplingTools
             },
             new()
             {
+                Name = "report_get",
+                Description = "Fetch a section of the canonical crash report JSON by dot-path (paged for arrays).",
+                InputSchema = ReportGetSchema
+            },
+            new()
+            {
                 Name = "inspect",
                 Description = "Inspect a .NET object at an address and return a JSON summary of fields/values (ClrMD-based when available).",
                 InputSchema = InspectSchema
@@ -93,4 +112,3 @@ public static class SamplingTools
         return doc.RootElement.Clone();
     }
 }
-

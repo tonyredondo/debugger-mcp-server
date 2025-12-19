@@ -1,6 +1,7 @@
 #nullable enable
 
 using System.ComponentModel;
+using DebuggerMcp.Reporting;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
 using ModelContextProtocol.Server;
@@ -123,19 +124,25 @@ public sealed class CompactTools
     /// Generates reports (full/summary) in json/markdown/html.
     /// </summary>
     [McpServerTool(Name = "report")]
-    [Description("Generate reports: full | summary (formats: json | markdown | html). Returns report content.")]
+    [Description("Generate reports: full | summary | index | get (formats: json | markdown | html). Returns report content or section JSON.")]
     public Task<string> Report(
-        [Description("Action: full | summary")] string action,
+        [Description("Action: full | summary | index | get")] string action,
         [Description("Session ID")] string sessionId,
         [Description("User ID (session owner)")] string userId,
         [Description("Format: json | markdown | html (default: json)")] string format = "json",
         [Description("Include watches (full only, default: true)")] bool includeWatches = true,
         [Description("Include security (full only, default: true)")] bool includeSecurity = true,
-        [Description("Maximum stack frames (full only, 0 = all)")] int maxStackFrames = 0)
+        [Description("Maximum stack frames (full only, 0 = all)")] int maxStackFrames = 0,
+        [Description("Section path (get only): dot-path under metadata/analysis")] string? path = null,
+        [Description("Array page size (get only, default: 50)")] int limit = ReportSectionApi.DefaultLimit,
+        [Description("Paging cursor (get only, optional)")] string? cursor = null,
+        [Description("Optional maximum response size (get only, guardrail)")] int? maxChars = null)
         => NormalizeRequired(action, nameof(action)) switch
         {
             "full" => _reportTools.GenerateReport(sessionId, userId, format, includeWatches, includeSecurity, maxStackFrames),
             "summary" => _reportTools.GenerateSummaryReport(sessionId, userId, format),
+            "index" => _reportTools.GetReportIndex(sessionId, userId, includeWatches, includeSecurity),
+            "get" => _reportTools.GetReportSection(sessionId, userId, Require(path, nameof(path)), limit, cursor, maxChars, includeWatches, includeSecurity),
             _ => throw new ArgumentException($"Unknown report action '{action}'", nameof(action)),
         };
 
