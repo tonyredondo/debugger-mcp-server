@@ -9,7 +9,7 @@ A powerful command-line interface for the Debugger MCP Server, enabling remote c
 - 🔍 **Interactive Debugging**: Execute debugger commands in real-time
 - 📊 **Crash Analysis**: Automated crash analysis for native and .NET applications
 - 🤖 **AI Crash Analysis**: Deep, tool-driven analysis via MCP sampling (`analyze ai`)
-- 🧠 **LLM + Agent Mode**: OpenRouter/OpenAI chat and tool-using agent (`llm`, `llmagent`)
+- 🧠 **LLM + Agent Mode**: OpenRouter/OpenAI/Anthropic chat and tool-using agent (`llm`, `llmagent`)
 - ⚡ **Performance Profiling**: CPU, memory, GC, and thread contention analysis
 - 🔐 **Security Scanning**: Detect potential vulnerabilities in crash dumps
 - 📝 **Report Generation**: Generate comprehensive reports in Markdown, HTML, and JSON
@@ -91,7 +91,7 @@ dbg-mcp> exit
 | `DEBUGGER_MCP_OPENROUTER_REASONING_EFFORT` | Alternate reasoning effort env var | - |
 | `DEBUGGER_MCP_LLM_AGENT_MODE` | Enable agent mode by default | false |
 | `DEBUGGER_MCP_LLM_AGENT_CONFIRM` | Confirm each tool call in agent mode | true |
-| `DEBUGGER_MCP_LLM_PROVIDER` | Provider selector (`openrouter` or `openai`) | openrouter |
+| `DEBUGGER_MCP_LLM_PROVIDER` | Provider selector (`openrouter`, `openai`, `anthropic`) | openrouter |
 | `LLM_PROVIDER` | Provider selector (alias) | - |
 | `DEBUGGER_MCP_LLM_REASONING_EFFORT` | Reasoning effort for current provider (`low|medium|high|unset`) | - |
 | `LLM_REASONING_EFFORT` | Reasoning effort (alias) | - |
@@ -109,6 +109,21 @@ dbg-mcp> exit
 | `DEBUGGER_MCP_OPENAI_MODEL` | Alternate model env var | - |
 | `DEBUGGER_MCP_OPENAI_BASE_URL` | Alternate base URL env var | - |
 | `DEBUGGER_MCP_OPENAI_REASONING_EFFORT` | Alternate reasoning effort env var | - |
+
+#### LLM / Anthropic
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ANTHROPIC_API_KEY` | Anthropic API key (recommended) | - |
+| `ANTHROPIC_MODEL` | Anthropic model id | claude-3-5-sonnet-20240620 |
+| `ANTHROPIC_BASE_URL` | Anthropic base URL | https://api.anthropic.com/v1 |
+| `ANTHROPIC_TIMEOUT_SECONDS` | LLM request timeout (alias) | - |
+| `ANTHROPIC_REASONING_EFFORT` | Reasoning effort (`low|medium|high|unset`) | - |
+| `DEBUGGER_MCP_ANTHROPIC_API_KEY` | Alternate API key env var | - |
+| `DEBUGGER_MCP_ANTHROPIC_MODEL` | Alternate model env var | - |
+| `DEBUGGER_MCP_ANTHROPIC_BASE_URL` | Alternate base URL env var | - |
+| `DEBUGGER_MCP_ANTHROPIC_TIMEOUT_SECONDS` | LLM request timeout (alias) | - |
+| `DEBUGGER_MCP_ANTHROPIC_REASONING_EFFORT` | Alternate reasoning effort env var | - |
 
 Notes:
 - When provider is `openai` and no API key is configured, the CLI will try to fall back to `~/.codex/auth.json` (expects a JSON field `OPENAI_API_KEY`).
@@ -291,14 +306,14 @@ analyze perf -o ./perf.json
 analyze security
 ```
 
-**AI analysis note**: `analyze ai` uses MCP sampling (`sampling/createMessage`). When using `dbg-mcp` as the connected MCP client, configure an LLM provider first (e.g., `OPENROUTER_API_KEY=...` or `OPENAI_API_KEY=...` + `llm provider openai`).
+**AI analysis note**: `analyze ai` uses MCP sampling (`sampling/createMessage`). When using `dbg-mcp` as the connected MCP client, configure an LLM provider first (e.g., `OPENROUTER_API_KEY=...`, `OPENAI_API_KEY=...` + `llm provider openai`, or `ANTHROPIC_API_KEY=...` + `llm provider anthropic`).
 
 ### LLM Commands
 
 | Command | Description |
 |---------|-------------|
-| `llm <prompt>` | Ask a configured LLM (OpenRouter/OpenAI) using your CLI transcript as context |
-| `llm provider <openrouter|openai>` | Switch providers |
+| `llm <prompt>` | Ask a configured LLM (OpenRouter/OpenAI/Anthropic) using your CLI transcript as context |
+| `llm provider <openrouter\|openai\|anthropic>` | Switch providers |
 | `llm set-key <key>` | Persist an API key for the current provider to `~/.dbg-mcp/config.json` |
 | `llm model <model-id>` | Set the model for the current provider |
 | `llm reasoning-effort <low|medium|high|unset>` | Set reasoning effort for the current provider/model |

@@ -97,6 +97,24 @@ public class LlmSettingsTests
     }
 
     [Fact]
+    public void ApplyEnvironmentOverrides_TrimsAnthropicEnvApiKeys()
+    {
+        var old = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        try
+        {
+            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", "  k3  ");
+            var settings = new LlmSettings { Provider = "anthropic" };
+            settings.ApplyEnvironmentOverrides();
+            Assert.Equal("k3", settings.GetEffectiveAnthropicApiKey());
+            Assert.Equal("env:ANTHROPIC_API_KEY", settings.GetEffectiveApiKeySource());
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("ANTHROPIC_API_KEY", old);
+        }
+    }
+
+    [Fact]
     public void ApplyEnvironmentOverrides_WhenProviderOpenAi_LoadsApiKeyFromCodexAuth()
     {
         var oldProvider = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_PROVIDER");

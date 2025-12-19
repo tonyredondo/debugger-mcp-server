@@ -76,6 +76,21 @@ public class AutoCompleteTests
     }
 
     [Fact]
+    public async Task GetCompletionsAsync_LlmProvider_ReturnsProviderChoicesIncludingAnthropic()
+    {
+        var state = new ShellState();
+        var autoComplete = new AutoComplete(state);
+
+        var input = "llm provider ";
+        var result = await autoComplete.GetCompletionsAsync(input, input.Length);
+
+        Assert.True(result.HasCompletions);
+        Assert.Contains("openrouter", result.Completions);
+        Assert.Contains("openai", result.Completions);
+        Assert.Contains("anthropic", result.Completions);
+    }
+
+    [Fact]
     public async Task GetCompletionsAsync_NoMatch_ReturnsEmpty()
     {
         // Arrange

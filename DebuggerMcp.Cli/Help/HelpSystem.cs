@@ -78,7 +78,7 @@ public static class HelpSystem
             new("compare", "<type>", "Compare two dumps (all, heap, threads, modules)", ["compare <dumpId>", "compare heap <dumpId>", "compare threads <dumpId>"])
         ],
         ["llm"] = [
-            new("llm", "[[prompt]]", "Ask a configured LLM (OpenRouter/OpenAI) using your CLI history as context", [
+            new("llm", "[[prompt]]", "Ask a configured LLM (OpenRouter/OpenAI/Anthropic) using your CLI history as context", [
                 "llm Explain the faulting thread in the last report",
                 "llm provider openai",
                 "llm model gpt-4o-mini",

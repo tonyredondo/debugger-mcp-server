@@ -247,7 +247,7 @@ public class AutoComplete
             (parts[1].Equals("provider", StringComparison.OrdinalIgnoreCase) ||
              parts[1].Equals("set-provider", StringComparison.OrdinalIgnoreCase)))
         {
-            completions.AddRange(new[] { "openrouter", "openai" }.Where(p =>
+            completions.AddRange(new[] { "openrouter", "openai", "anthropic" }.Where(p =>
                 string.IsNullOrEmpty(prefix) ||
                 p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)));
         }

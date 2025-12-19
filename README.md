@@ -692,7 +692,7 @@ dbg-mcp> report -o ./crash-report.md
 | **Report Generation** | Markdown, HTML, JSON formats |
 | **Source Link** | Resolve source files to repository URLs |
 | **Multi-Server** | Manage multiple servers for cross-platform dump analysis |
-| **LLM + Agent Mode** | OpenRouter/OpenAI chat + tool-using agent (`llm`, `llmagent`) |
+| **LLM + Agent Mode** | OpenRouter/OpenAI/Anthropic chat + tool-using agent (`llm`, `llmagent`) |
 | **AI Crash Analysis** | `analyze ai` via MCP sampling (LLM-driven evidence gathering) |
 
 ### Command Categories
@@ -708,9 +708,9 @@ help advanced      # watch, report, sourcelink
 help general       # help, history, set, exit
 ```
 
-### LLM + Agent Mode (OpenRouter / OpenAI)
+### LLM + Agent Mode (OpenRouter / OpenAI / Anthropic)
 
-The CLI can chat with a configured LLM provider (OpenRouter or OpenAI) and (optionally) run as a tool-using agent against the currently connected server/session/dump.
+The CLI can chat with a configured LLM provider (OpenRouter, OpenAI, or Anthropic) and (optionally) run as a tool-using agent against the currently connected server/session/dump.
 
 Configure an API key (recommended via env var):
 ```bash
@@ -724,6 +724,13 @@ To use OpenAI directly:
 export OPENAI_API_KEY="..."
 llm provider openai
 llm model gpt-4o-mini
+```
+
+To use Anthropic directly:
+```bash
+export ANTHROPIC_API_KEY="..."
+llm provider anthropic
+llm model claude-3-5-sonnet-20240620
 ```
 
 Examples:

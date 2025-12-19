@@ -4,7 +4,7 @@ using DebuggerMcp.Cli.Llm;
 namespace DebuggerMcp.Cli.Configuration;
 
 /// <summary>
-/// Settings for the CLI-integrated LLM client (OpenRouter/OpenAI).
+/// Settings for the CLI-integrated LLM client (OpenRouter/OpenAI/Anthropic).
 /// </summary>
 public sealed class LlmSettings
 {
@@ -12,7 +12,7 @@ public sealed class LlmSettings
     /// Gets or sets the LLM provider.
     /// </summary>
     /// <remarks>
-    /// Supported values: <c>openrouter</c>, <c>openai</c>.
+    /// Supported values: <c>openrouter</c>, <c>openai</c>, <c>anthropic</c>.
     /// </remarks>
     public string Provider { get; set; } = "openrouter";
 
@@ -107,6 +107,45 @@ public sealed class LlmSettings
     public string? OpenAiReasoningEffort { get; set; }
 
     /// <summary>
+    /// Gets or sets the Anthropic API key.
+    /// </summary>
+    public string? AnthropicApiKey { get; set; }
+
+    /// <summary>
+    /// Gets the Anthropic API key provided via environment variables (not persisted).
+    /// </summary>
+    [JsonIgnore]
+    public string? AnthropicApiKeyFromEnvironment { get; private set; }
+
+    /// <summary>
+    /// Gets the environment variable name that supplied <see cref="AnthropicApiKeyFromEnvironment"/> (not persisted).
+    /// </summary>
+    [JsonIgnore]
+    public string? AnthropicApiKeyEnvironmentVariableName { get; private set; }
+
+    /// <summary>
+    /// Gets or sets the Anthropic model identifier.
+    /// </summary>
+    /// <remarks>
+    /// Example: <c>claude-3-5-sonnet-20240620</c>, <c>claude-3-haiku-20240307</c>.
+    /// </remarks>
+    public string AnthropicModel { get; set; } = "claude-3-5-sonnet-20240620";
+
+    /// <summary>
+    /// Gets or sets the Anthropic base URL.
+    /// </summary>
+    public string AnthropicBaseUrl { get; set; } = "https://api.anthropic.com/v1";
+
+    /// <summary>
+    /// Gets or sets the Anthropic reasoning effort (mapped to provider-specific "thinking" settings when supported).
+    /// </summary>
+    /// <remarks>
+    /// Supported values: <c>low</c>, <c>medium</c>, <c>high</c>.
+    /// Use <c>null</c> to omit the field (provider default).
+    /// </remarks>
+    public string? AnthropicReasoningEffort { get; set; }
+
+    /// <summary>
     /// Gets or sets the LLM request timeout in seconds.
     /// </summary>
     public int TimeoutSeconds { get; set; } = 120;
@@ -134,6 +173,8 @@ public sealed class LlmSettings
         OpenAiApiKeyEnvironmentVariableName = null;
         OpenAiApiKeyFromCodexAuth = null;
         OpenAiApiKeyFromCodexAuthUsedOverridePath = false;
+        AnthropicApiKeyFromEnvironment = null;
+        AnthropicApiKeyEnvironmentVariableName = null;
 
         var provider =
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_PROVIDER") ??
@@ -141,7 +182,7 @@ public sealed class LlmSettings
         if (!string.IsNullOrWhiteSpace(provider))
         {
             var normalized = NormalizeProvider(provider);
-            if (normalized is "openrouter" or "openai")
+            if (normalized is "openrouter" or "openai" or "anthropic")
             {
                 Provider = normalized;
             }
@@ -222,13 +263,48 @@ public sealed class LlmSettings
             ApplyReasoningEffortOverride(openAiReasoningEffort, set: v => OpenAiReasoningEffort = v);
         }
 
+        var anthropicApiKey = Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY");
+        AnthropicApiKeyEnvironmentVariableName = !string.IsNullOrWhiteSpace(anthropicApiKey) ? "ANTHROPIC_API_KEY" : null;
+        anthropicApiKey ??= Environment.GetEnvironmentVariable("DEBUGGER_MCP_ANTHROPIC_API_KEY");
+        AnthropicApiKeyEnvironmentVariableName ??= !string.IsNullOrWhiteSpace(anthropicApiKey) ? "DEBUGGER_MCP_ANTHROPIC_API_KEY" : null;
+        if (!string.IsNullOrWhiteSpace(anthropicApiKey))
+        {
+            AnthropicApiKeyFromEnvironment = anthropicApiKey.Trim();
+        }
+
+        var anthropicModel =
+            Environment.GetEnvironmentVariable("ANTHROPIC_MODEL") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_ANTHROPIC_MODEL");
+        if (!string.IsNullOrWhiteSpace(anthropicModel))
+        {
+            AnthropicModel = anthropicModel.Trim();
+        }
+
+        var anthropicBaseUrl =
+            Environment.GetEnvironmentVariable("ANTHROPIC_BASE_URL") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_ANTHROPIC_BASE_URL");
+        if (!string.IsNullOrWhiteSpace(anthropicBaseUrl))
+        {
+            AnthropicBaseUrl = anthropicBaseUrl.Trim().TrimEnd('/');
+        }
+
+        var anthropicReasoningEffort =
+            Environment.GetEnvironmentVariable("ANTHROPIC_REASONING_EFFORT") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_ANTHROPIC_REASONING_EFFORT");
+        if (!string.IsNullOrWhiteSpace(anthropicReasoningEffort))
+        {
+            ApplyReasoningEffortOverride(anthropicReasoningEffort, set: v => AnthropicReasoningEffort = v);
+        }
+
         var timeoutSeconds =
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_TIMEOUT_SECONDS") ??
             Environment.GetEnvironmentVariable("LLM_TIMEOUT_SECONDS") ??
             Environment.GetEnvironmentVariable("OPENROUTER_TIMEOUT_SECONDS") ??
             Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENROUTER_TIMEOUT_SECONDS") ??
             Environment.GetEnvironmentVariable("OPENAI_TIMEOUT_SECONDS") ??
-            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_TIMEOUT_SECONDS");
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_OPENAI_TIMEOUT_SECONDS") ??
+            Environment.GetEnvironmentVariable("ANTHROPIC_TIMEOUT_SECONDS") ??
+            Environment.GetEnvironmentVariable("DEBUGGER_MCP_ANTHROPIC_TIMEOUT_SECONDS");
         if (!string.IsNullOrWhiteSpace(timeoutSeconds) && int.TryParse(timeoutSeconds, out var seconds) && seconds > 0)
         {
             TimeoutSeconds = seconds;
@@ -272,10 +348,19 @@ public sealed class LlmSettings
     public string? GetEffectiveOpenAiApiKey()
         => NormalizeApiKey(OpenAiApiKeyFromEnvironment) ?? NormalizeApiKey(OpenAiApiKey) ?? NormalizeApiKey(OpenAiApiKeyFromCodexAuth);
 
+    /// <summary>
+    /// Gets the effective Anthropic API key (environment overrides config).
+    /// </summary>
+    public string? GetEffectiveAnthropicApiKey()
+        => NormalizeApiKey(AnthropicApiKeyFromEnvironment) ?? NormalizeApiKey(AnthropicApiKey);
+
     public string? GetEffectiveApiKey()
-        => GetProviderKind() == LlmProviderKind.OpenAi
-            ? GetEffectiveOpenAiApiKey()
-            : GetEffectiveOpenRouterApiKey();
+        => GetProviderKind() switch
+        {
+            LlmProviderKind.OpenAi => GetEffectiveOpenAiApiKey(),
+            LlmProviderKind.Anthropic => GetEffectiveAnthropicApiKey(),
+            _ => GetEffectiveOpenRouterApiKey()
+        };
 
     public string GetEffectiveApiKeySource()
     {
@@ -295,6 +380,16 @@ public sealed class LlmSettings
             return "(not set)";
         }
 
+        if (GetProviderKind() == LlmProviderKind.Anthropic)
+        {
+            if (!string.IsNullOrWhiteSpace(AnthropicApiKeyFromEnvironment))
+            {
+                return AnthropicApiKeyEnvironmentVariableName == null ? "env" : $"env:{AnthropicApiKeyEnvironmentVariableName}";
+            }
+            if (!string.IsNullOrWhiteSpace(AnthropicApiKey)) return "config";
+            return "(not set)";
+        }
+
         if (!string.IsNullOrWhiteSpace(OpenRouterApiKeyFromEnvironment))
         {
             return OpenRouterApiKeyEnvironmentVariableName == null ? "env" : $"env:{OpenRouterApiKeyEnvironmentVariableName}";
@@ -307,17 +402,33 @@ public sealed class LlmSettings
         => NormalizeProvider(Provider) switch
         {
             "openai" => LlmProviderKind.OpenAi,
+            "anthropic" => LlmProviderKind.Anthropic,
             _ => LlmProviderKind.OpenRouter
         };
 
     public string GetEffectiveModel()
-        => GetProviderKind() == LlmProviderKind.OpenAi ? OpenAiModel : OpenRouterModel;
+        => GetProviderKind() switch
+        {
+            LlmProviderKind.OpenAi => OpenAiModel,
+            LlmProviderKind.Anthropic => AnthropicModel,
+            _ => OpenRouterModel
+        };
 
     public string? GetEffectiveReasoningEffort()
-        => GetProviderKind() == LlmProviderKind.OpenAi ? OpenAiReasoningEffort : OpenRouterReasoningEffort;
+        => GetProviderKind() switch
+        {
+            LlmProviderKind.OpenAi => OpenAiReasoningEffort,
+            LlmProviderKind.Anthropic => AnthropicReasoningEffort,
+            _ => OpenRouterReasoningEffort
+        };
 
     public string GetProviderDisplayName()
-        => GetProviderKind() == LlmProviderKind.OpenAi ? "OpenAI" : "OpenRouter";
+        => GetProviderKind() switch
+        {
+            LlmProviderKind.OpenAi => "OpenAI",
+            LlmProviderKind.Anthropic => "Anthropic",
+            _ => "OpenRouter"
+        };
 
     public void SetReasoningEffortForCurrentProvider(string? value)
     {
@@ -325,6 +436,10 @@ public sealed class LlmSettings
         if (GetProviderKind() == LlmProviderKind.OpenAi)
         {
             OpenAiReasoningEffort = normalized;
+        }
+        else if (GetProviderKind() == LlmProviderKind.Anthropic)
+        {
+            AnthropicReasoningEffort = normalized;
         }
         else
         {
@@ -399,5 +514,6 @@ public sealed class LlmSettings
 public enum LlmProviderKind
 {
     OpenRouter = 0,
-    OpenAi = 1
+    OpenAi = 1,
+    Anthropic = 2
 }

@@ -563,7 +563,7 @@ internal class ConfigFile
     public Dictionary<string, string>? LastSessions { get; set; }
 
     /// <summary>
-    /// LLM settings for the CLI (OpenRouter).
+    /// LLM settings for the CLI (OpenRouter/OpenAI/Anthropic).
     /// </summary>
     [JsonPropertyName("llm")]
     public LlmSettings? Llm { get; set; }

@@ -341,7 +341,7 @@ internal sealed class McpSamplingCreateMessageHandler(
     {
         // Prefer preserving raw provider content blocks when available, especially for providers that
         // require "reasoning/thought_signature" blocks to be echoed back verbatim across tool turns.
-        if (_settings.GetProviderKind() == LlmProviderKind.OpenRouter &&
+        if (_settings.GetProviderKind() is LlmProviderKind.OpenRouter or LlmProviderKind.Anthropic &&
             response.RawMessageContent.HasValue &&
             response.RawMessageContent.Value.ValueKind == JsonValueKind.Array)
         {
@@ -716,7 +716,7 @@ internal sealed class McpSamplingCreateMessageHandler(
 
     private ChatCompletionRequest BuildChatCompletionRequest(string? systemPrompt, JsonElement parameters)
     {
-        var preserveMcpContentBlocks = _settings.GetProviderKind() == LlmProviderKind.OpenRouter;
+        var preserveMcpContentBlocks = _settings.GetProviderKind() is LlmProviderKind.OpenRouter or LlmProviderKind.Anthropic;
         var messages = BuildChatMessages(systemPrompt, parameters, preserveMcpContentBlocks);
         var tools = ParseTools(parameters);
         var toolChoice = ParseToolChoice(parameters);

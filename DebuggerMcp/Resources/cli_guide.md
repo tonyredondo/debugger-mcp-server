@@ -68,7 +68,7 @@ dbg-mcp> report -o ./report.md
 - `compare <s1> <s2>` - Compare dumps
 
 ### LLM (`help llm`)
-- `llm <prompt>` - Ask a configured LLM (OpenRouter/OpenAI) using your CLI transcript as context
+- `llm <prompt>` - Ask a configured LLM (OpenRouter/OpenAI/Anthropic) using your CLI transcript as context
 - `llm set-agent <true|false>` - Enable/disable tool-using agent mode for `llm`
 - `llm reasoning-effort <low|medium|high|unset>` - Set reasoning effort for the current provider/model
 - `llm reset` - Clear LLM context (conversation + transcript context) for the current session/dump
@@ -121,11 +121,14 @@ export DEBUGGER_MCP_VERBOSE=true
 export OPENROUTER_API_KEY="..."
 # Or:
 export OPENAI_API_KEY="..."
+# Or:
+export ANTHROPIC_API_KEY="..."
 
 # Optional:
-export DEBUGGER_MCP_LLM_PROVIDER="openrouter"   # or "openai"
+export DEBUGGER_MCP_LLM_PROVIDER="openrouter"   # or "openai" or "anthropic"
 export OPENROUTER_MODEL="openrouter/auto"
 export OPENAI_MODEL="gpt-4o-mini"
+export ANTHROPIC_MODEL="claude-3-5-sonnet-20240620"
 export DEBUGGER_MCP_LLM_REASONING_EFFORT="medium"   # low|medium|high|unset
 
 # If provider is "openai" and no API key is configured, the CLI can fall back to ~/.codex/auth.json (expects OPENAI_API_KEY).

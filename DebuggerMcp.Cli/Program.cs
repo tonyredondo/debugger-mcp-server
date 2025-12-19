@@ -2056,15 +2056,23 @@ public class Program
                 async (request, ct) =>
                 {
                     using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
-                    if (llmSettings.GetProviderKind() == LlmProviderKind.OpenAi)
+                    switch (llmSettings.GetProviderKind())
                     {
-                        var client = new OpenAiClient(http, llmSettings);
-                        return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
-                    }
-                    else
-                    {
-                        var client = new OpenRouterClient(http, llmSettings);
-                        return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
+                        case LlmProviderKind.OpenAi:
+                        {
+                            var client = new OpenAiClient(http, llmSettings);
+                            return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
+                        }
+                        case LlmProviderKind.Anthropic:
+                        {
+                            var client = new AnthropicClient(http, llmSettings);
+                            return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
+                        }
+                        default:
+                        {
+                            var client = new OpenRouterClient(http, llmSettings);
+                            return await client.ChatCompletionAsync(request, ct).ConfigureAwait(false);
+                        }
                     }
                 },
                 progress: message =>
@@ -4581,7 +4589,7 @@ public class Program
             output.Dim("Usage:");
             output.Dim("  llm <prompt>");
             output.Dim("    Tip: Attach local files with @./path (e.g., llm Analyze @./report.json)");
-            output.Dim("  llm provider <openrouter|openai>");
+            output.Dim("  llm provider <openrouter|openai|anthropic>");
             output.Dim("  llm model <model-id>");
             output.Dim("  llm reasoning-effort <low|medium|high|unset>");
             output.Dim("  llm set-key <api-key>            (persists to ~/.dbg-mcp/config.json for current provider)");
@@ -4589,7 +4597,7 @@ public class Program
             output.Dim("  llm set-agent-confirm <true|false> (confirm each tool call in agent mode)");
             output.Dim("  llm reset                        (clears LLM conversation + transcript context)");
             output.Dim("  llm reset conversation            (clears only LLM conversation; keeps CLI context)");
-            output.Dim("Tip: Prefer env vars OPENROUTER_API_KEY / OPENAI_API_KEY to avoid persisting keys.");
+            output.Dim("Tip: Prefer env vars OPENROUTER_API_KEY / OPENAI_API_KEY / ANTHROPIC_API_KEY to avoid persisting keys.");
             return;
         }
 
@@ -4600,13 +4608,13 @@ public class Program
             case "set-provider":
                 if (args.Length < 2)
                 {
-                    output.Error("Usage: llm provider <openrouter|openai>");
+                    output.Error("Usage: llm provider <openrouter|openai|anthropic>");
                     return;
                 }
                 var provider = LlmSettings.NormalizeProvider(args[1]);
-                if (provider is not ("openrouter" or "openai"))
+                if (provider is not ("openrouter" or "openai" or "anthropic"))
                 {
-                    output.Error("Invalid provider. Use openrouter or openai.");
+                    output.Error("Invalid provider. Use openrouter, openai, or anthropic.");
                     return;
                 }
                 llmSettings.Provider = provider;
@@ -4623,6 +4631,10 @@ public class Program
                 if (llmSettings.GetProviderKind() == LlmProviderKind.OpenAi)
                 {
                     llmSettings.OpenAiModel = args[1].Trim();
+                }
+                else if (llmSettings.GetProviderKind() == LlmProviderKind.Anthropic)
+                {
+                    llmSettings.AnthropicModel = args[1].Trim();
                 }
                 else
                 {
@@ -4672,6 +4684,15 @@ public class Program
                     state.Settings.Save();
                     output.Success("OpenAI API key saved to config.");
                     output.Dim("Tip: Prefer env var OPENAI_API_KEY to avoid persisting keys.");
+                    return;
+                }
+
+                if (llmSettings.GetProviderKind() == LlmProviderKind.Anthropic)
+                {
+                    llmSettings.AnthropicApiKey = args[1].Trim();
+                    state.Settings.Save();
+                    output.Success("Anthropic API key saved to config.");
+                    output.Dim("Tip: Prefer env var ANTHROPIC_API_KEY to avoid persisting keys.");
                     return;
                 }
 
@@ -4901,6 +4922,10 @@ public class Program
             {
                 output.Dim($"LLM base URL: {settings.OpenAiBaseUrl}");
             }
+            else if (settings.GetProviderKind() == LlmProviderKind.Anthropic)
+            {
+                output.Dim($"LLM base URL: {settings.AnthropicBaseUrl}");
+            }
             else
             {
                 output.Dim($"LLM base URL: {settings.OpenRouterBaseUrl}");
@@ -4963,19 +4988,32 @@ public class Program
         messages = combinedMessages;
 
         string response;
-        if (llmSettings.GetProviderKind() == LlmProviderKind.OpenAi)
+        switch (llmSettings.GetProviderKind())
         {
-            var client = new OpenAiClient(http, llmSettings);
-            response = llmSettings.AgentModeEnabled
-                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client.ChatCompletionAsync, messages, reports, transcript, cancellationToken)
-                : await output.WithSpinnerAsync("Calling LLM...", () => client.ChatAsync(messages, cancellationToken));
-        }
-        else
-        {
-            var client = new OpenRouterClient(http, llmSettings);
-            response = llmSettings.AgentModeEnabled
-                ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client.ChatCompletionAsync, messages, reports, transcript, cancellationToken)
-                : await output.WithSpinnerAsync("Calling LLM...", () => client.ChatAsync(messages, cancellationToken));
+            case LlmProviderKind.OpenAi:
+            {
+                var client = new OpenAiClient(http, llmSettings);
+                response = llmSettings.AgentModeEnabled
+                    ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client.ChatCompletionAsync, messages, reports, transcript, cancellationToken)
+                    : await output.WithSpinnerAsync("Calling LLM...", () => client.ChatAsync(messages, cancellationToken));
+                break;
+            }
+            case LlmProviderKind.Anthropic:
+            {
+                var client = new AnthropicClient(http, llmSettings);
+                response = llmSettings.AgentModeEnabled
+                    ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client.ChatCompletionAsync, messages, reports, transcript, cancellationToken)
+                    : await output.WithSpinnerAsync("Calling LLM...", () => client.ChatAsync(messages, cancellationToken));
+                break;
+            }
+            default:
+            {
+                var client = new OpenRouterClient(http, llmSettings);
+                response = llmSettings.AgentModeEnabled
+                    ? await RunLlmAgentLoopAsync(output, state, mcpClient, llmSettings, client.ChatCompletionAsync, messages, reports, transcript, cancellationToken)
+                    : await output.WithSpinnerAsync("Calling LLM...", () => client.ChatAsync(messages, cancellationToken));
+                break;
+            }
         }
 
         transcript.Append(new CliTranscriptEntry

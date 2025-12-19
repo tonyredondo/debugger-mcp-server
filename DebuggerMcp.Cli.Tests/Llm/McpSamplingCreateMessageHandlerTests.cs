@@ -300,9 +300,99 @@ public class McpSamplingCreateMessageHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenAnthropicAndMessagesContainMcpBlocks_PreservesContentJson()
+    {
+        var settings = new LlmSettings { Provider = "anthropic", AnthropicModel = "claude-test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "ok"
+                });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                { "type": "tool_use", "id": "tc1", "name": "exec", "thought_signature": "sig1", "input": { "command": "sos dumpdomain" } }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                { "type": "tool_result", "tool_use_id": "tc1", "content": [ { "type": "text", "text": "OUTPUT" } ] }
+              ]
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal(2, seenRequest!.Messages.Count);
+        Assert.Equal("assistant", seenRequest.Messages[0].Role);
+        Assert.True(seenRequest.Messages[0].ContentJson.HasValue);
+        Assert.Equal(JsonValueKind.Array, seenRequest.Messages[0].ContentJson!.Value.ValueKind);
+        Assert.Contains("thought_signature", seenRequest.Messages[0].ContentJson!.Value.GetRawText(), StringComparison.OrdinalIgnoreCase);
+
+        Assert.Equal("user", seenRequest.Messages[1].Role);
+        Assert.True(seenRequest.Messages[1].ContentJson.HasValue);
+        Assert.Equal(JsonValueKind.Array, seenRequest.Messages[1].ContentJson!.Value.ValueKind);
+        Assert.Contains("tool_result", seenRequest.Messages[1].ContentJson!.Value.GetRawText(), StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenOpenRouterResponseHasToolUseBlock_PreservesExtensionFields()
     {
         var settings = new LlmSettings { Provider = "openrouter", OpenRouterModel = "openrouter/test" };
+
+        using var rawDoc = JsonDocument.Parse("""
+        [
+          { "type":"tool_use", "id":"tc1", "name":"exec", "thought_signature":"sig1", "input": { "command":"bt" } }
+        ]
+        """);
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = null,
+                    RawMessageContent = rawDoc.RootElement.Clone(),
+                    ToolCalls = [ new ChatToolCall("tc1", "exec", "{\"command\":\"bt\"}") ]
+                });
+            });
+
+        using var reqDoc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        var result = await handler.HandleAsync(reqDoc.RootElement, CancellationToken.None);
+
+        Assert.Contains(result.Content, b =>
+            string.Equals(b.Type, "tool_use", StringComparison.OrdinalIgnoreCase) &&
+            b.ExtensionData != null &&
+            b.ExtensionData.ContainsKey("thought_signature"));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenAnthropicResponseHasToolUseBlock_PreservesExtensionFields()
+    {
+        var settings = new LlmSettings { Provider = "anthropic", AnthropicModel = "claude-test" };
 
         using var rawDoc = JsonDocument.Parse("""
         [
