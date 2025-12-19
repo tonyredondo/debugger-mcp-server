@@ -3,8 +3,6 @@
 using System.Text;
 using System.Text.Json;
 using DebuggerMcp.Cli.Configuration;
-using DebuggerMcp.Cli.Shell.Transcript;
-
 namespace DebuggerMcp.Cli.Llm;
 
 /// <summary>
@@ -104,7 +102,7 @@ internal sealed class LlmTraceStore
         try
         {
             json ??= string.Empty;
-            json = TranscriptRedactor.RedactText(json);
+            json = LlmTraceRedactor.RedactText(json);
 
             string output;
             try
@@ -144,7 +142,7 @@ internal sealed class LlmTraceStore
         try
         {
             text ??= string.Empty;
-            text = TranscriptRedactor.RedactText(text);
+            text = LlmTraceRedactor.RedactText(text);
             WriteTextInternal(fileName, text);
         }
         catch
