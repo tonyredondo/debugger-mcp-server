@@ -2753,6 +2753,8 @@ public class ClrMdAnalyzer : IDisposable
                 {
                     result = GetCombinedHeapAnalysisSequential(heap, topN, maxStringLength, timeoutMs, sw);
                 }
+
+                TryEnrichTopMemoryConsumersWithSmallInstanceDetails(heap, result.TopMemoryConsumers, timeoutMs, sw);
                 
                 sw.Stop();
                 result.TotalAnalysisTimeMs = sw.ElapsedMilliseconds;
@@ -3146,6 +3148,418 @@ public class ClrMdAnalyzer : IDisposable
             asyncSummary, stringLengthDist,
             totalSize, freeSize, totalCount, stringTotalSize, stringTotalCount,
             wasAbortedFlag == 1, sw.ElapsedMilliseconds, topN);
+    }
+
+    internal static Dictionary<string, int> GetTypesToCollectInstancesFor(TopMemoryConsumers? topConsumers, int maxInstancesPerType)
+    {
+        var result = new Dictionary<string, int>(StringComparer.Ordinal);
+        if (topConsumers == null)
+        {
+            return result;
+        }
+
+        maxInstancesPerType = Math.Clamp(maxInstancesPerType, 1, 25);
+
+        void AddCandidates(List<TypeMemoryStats>? stats)
+        {
+            if (stats == null)
+            {
+                return;
+            }
+
+            foreach (var item in stats)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                var typeName = item.Type?.Trim();
+                if (string.IsNullOrWhiteSpace(typeName))
+                {
+                    continue;
+                }
+
+                if (item.Count <= 0 || item.Count > maxInstancesPerType)
+                {
+                    continue;
+                }
+
+                var desired = Math.Min(item.Count, maxInstancesPerType);
+                if (result.TryGetValue(typeName, out var existing))
+                {
+                    result[typeName] = Math.Max(existing, desired);
+                }
+                else
+                {
+                    result[typeName] = desired;
+                }
+            }
+        }
+
+        AddCandidates(topConsumers.BySize);
+        AddCandidates(topConsumers.ByCount);
+        return result;
+    }
+
+    internal static void AttachInstancesToTopConsumers(
+        TopMemoryConsumers topConsumers,
+        IReadOnlyDictionary<string, List<MemoryObjectInstance>> instancesByType)
+    {
+        ArgumentNullException.ThrowIfNull(topConsumers);
+        ArgumentNullException.ThrowIfNull(instancesByType);
+
+        static void Attach(List<TypeMemoryStats>? list, IReadOnlyDictionary<string, List<MemoryObjectInstance>> map)
+        {
+            if (list == null)
+            {
+                return;
+            }
+
+            foreach (var entry in list)
+            {
+                if (entry == null)
+                {
+                    continue;
+                }
+
+                var typeName = entry.Type?.Trim();
+                if (string.IsNullOrWhiteSpace(typeName))
+                {
+                    continue;
+                }
+
+                if (map.TryGetValue(typeName, out var instances) && instances.Count > 0)
+                {
+                    entry.Instances = instances;
+                }
+            }
+        }
+
+        Attach(topConsumers.BySize, instancesByType);
+        Attach(topConsumers.ByCount, instancesByType);
+    }
+
+    private void TryEnrichTopMemoryConsumersWithSmallInstanceDetails(
+        ClrHeap heap,
+        TopMemoryConsumers? topConsumers,
+        int timeoutMs,
+        System.Diagnostics.Stopwatch sw)
+    {
+        if (topConsumers == null)
+        {
+            return;
+        }
+
+        // Only enrich when the type count is small (otherwise instance listing would be noisy and expensive).
+        const int maxInstancesPerType = 5;
+        const int maxOwnersPerInstance = 1;
+
+        var typesToCollect = GetTypesToCollectInstancesFor(topConsumers, maxInstancesPerType);
+        if (typesToCollect.Count == 0)
+        {
+            return;
+        }
+
+        if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
+        {
+            return;
+        }
+
+        var instancesByType = new Dictionary<string, List<MemoryObjectInstance>>(StringComparer.Ordinal);
+        var remainingPerType = new Dictionary<string, int>(typesToCollect, StringComparer.Ordinal);
+        var instanceByAddress = new Dictionary<ulong, MemoryObjectInstance>();
+
+        try
+        {
+            foreach (var obj in heap.EnumerateObjects())
+            {
+                if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
+                {
+                    _logger?.LogDebug("[ClrMD] Skipping top-consumer instance enrichment due to timeout");
+                    break;
+                }
+
+                if (!obj.IsValid || obj.IsFree)
+                {
+                    continue;
+                }
+
+                var typeName = obj.Type?.Name;
+                if (typeName == null)
+                {
+                    continue;
+                }
+
+                if (!remainingPerType.TryGetValue(typeName, out var remaining) || remaining <= 0)
+                {
+                    continue;
+                }
+
+                var size = (long)obj.Size;
+                var segment = heap.GetSegmentByAddress(obj.Address);
+                var generation = segment?.Kind.ToString();
+
+                var instance = new MemoryObjectInstance
+                {
+                    Address = $"0x{obj.Address:X16}",
+                    Size = size,
+                    Generation = string.IsNullOrWhiteSpace(generation) ? null : generation
+                };
+
+                if (!instancesByType.TryGetValue(typeName, out var list))
+                {
+                    list = new List<MemoryObjectInstance>(capacity: Math.Min(remaining, maxInstancesPerType));
+                    instancesByType[typeName] = list;
+                }
+
+                list.Add(instance);
+                instanceByAddress[obj.Address] = instance;
+                remainingPerType[typeName] = remaining - 1;
+                if (remainingPerType.Values.All(v => v <= 0))
+                {
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ClrMD] Failed to collect top-consumer instance addresses");
+        }
+
+        foreach (var kvp in instancesByType)
+        {
+            kvp.Value.Sort((a, b) => b.Size.CompareTo(a.Size));
+        }
+
+        AttachInstancesToTopConsumers(topConsumers, instancesByType);
+
+        if (instanceByAddress.Count == 0)
+        {
+            return;
+        }
+
+        if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
+        {
+            return;
+        }
+
+        try
+        {
+            var targetAddresses = new HashSet<ulong>(instanceByAddress.Keys);
+            var ownerCounts = new Dictionary<ulong, int>();
+            var processedStaticTypes = new HashSet<string>(StringComparer.Ordinal);
+
+            foreach (var obj in heap.EnumerateObjects())
+            {
+                if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
+                {
+                    _logger?.LogDebug("[ClrMD] Skipping top-consumer owner enrichment due to timeout");
+                    break;
+                }
+
+                if (targetAddresses.Count == 0)
+                {
+                    break;
+                }
+
+                if (!obj.IsValid || obj.IsFree)
+                {
+                    continue;
+                }
+
+                var objType = obj.Type;
+                if (objType == null)
+                {
+                    continue;
+                }
+
+                var ownerTypeName = objType.Name ?? "<unknown>";
+                if (!processedStaticTypes.Contains(ownerTypeName))
+                {
+                    processedStaticTypes.Add(ownerTypeName);
+                    TryAddStaticFieldOwners(objType, targetAddresses, instanceByAddress, ownerCounts, maxOwnersPerInstance, timeoutMs, sw);
+                    if (targetAddresses.Count == 0)
+                    {
+                        break;
+                    }
+                }
+
+                foreach (var field in objType.Fields)
+                {
+                    if (!field.IsObjectReference)
+                    {
+                        continue;
+                    }
+
+                    var fieldName = field.Name;
+                    if (string.IsNullOrEmpty(fieldName))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        var fieldValue = obj.ReadObjectField(fieldName);
+                        if (!fieldValue.IsValid || fieldValue.IsNull)
+                        {
+                            continue;
+                        }
+
+                        var refAddr = fieldValue.Address;
+                        if (!targetAddresses.Contains(refAddr))
+                        {
+                            continue;
+                        }
+
+                        if (obj.Address == refAddr)
+                        {
+                            continue;
+                        }
+
+                        var instance = instanceByAddress[refAddr];
+                        if (TryAddOwner(instance, ownerCounts, refAddr, maxOwnersPerInstance, new ObjectReferenceOwner
+                        {
+                            Address = $"0x{obj.Address:X16}",
+                            Type = ownerTypeName,
+                            FieldName = fieldName,
+                            IsStatic = false
+                        }))
+                        {
+                            if (ownerCounts.TryGetValue(refAddr, out var count) && count >= maxOwnersPerInstance)
+                            {
+                                targetAddresses.Remove(refAddr);
+                                if (targetAddresses.Count == 0)
+                                {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Skip fields that can't be read.
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[ClrMD] Failed to enrich top-consumer instances with owners");
+        }
+    }
+
+    private void TryAddStaticFieldOwners(
+        ClrType type,
+        HashSet<ulong> targetAddresses,
+        Dictionary<ulong, MemoryObjectInstance> instanceByAddress,
+        Dictionary<ulong, int> ownerCounts,
+        int maxOwnersPerInstance,
+        int timeoutMs,
+        System.Diagnostics.Stopwatch sw)
+    {
+        if (_runtime == null)
+        {
+            return;
+        }
+
+        var typeName = type.Name ?? "<unknown>";
+        foreach (var staticField in type.StaticFields)
+        {
+            if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
+            {
+                return;
+            }
+
+            if (!staticField.IsObjectReference)
+            {
+                continue;
+            }
+
+            foreach (var domain in _runtime.AppDomains)
+            {
+                if (timeoutMs > 0 && sw.ElapsedMilliseconds >= timeoutMs)
+                {
+                    return;
+                }
+
+                if (targetAddresses.Count == 0)
+                {
+                    return;
+                }
+
+                try
+                {
+                    var fieldValue = staticField.ReadObject(domain);
+                    if (!fieldValue.IsValid || fieldValue.IsNull)
+                    {
+                        continue;
+                    }
+
+                    var refAddr = fieldValue.Address;
+                    if (!targetAddresses.Contains(refAddr))
+                    {
+                        continue;
+                    }
+
+                    if (!instanceByAddress.TryGetValue(refAddr, out var instance))
+                    {
+                        continue;
+                    }
+
+                    if (TryAddOwner(instance, ownerCounts, refAddr, maxOwnersPerInstance, new ObjectReferenceOwner
+                    {
+                        Address = null,
+                        Type = typeName,
+                        FieldName = staticField.Name ?? "<unknown>",
+                        IsStatic = true
+                    }))
+                    {
+                        if (ownerCounts.TryGetValue(refAddr, out var count) && count >= maxOwnersPerInstance)
+                        {
+                            targetAddresses.Remove(refAddr);
+                        }
+                    }
+                }
+                catch
+                {
+                    // Skip domains/fields that can't be read.
+                }
+            }
+        }
+    }
+
+    private static bool TryAddOwner(
+        MemoryObjectInstance instance,
+        Dictionary<ulong, int> ownerCounts,
+        ulong targetAddress,
+        int maxOwnersPerInstance,
+        ObjectReferenceOwner owner)
+    {
+        if (maxOwnersPerInstance <= 0)
+        {
+            return false;
+        }
+
+        var currentCount = ownerCounts.TryGetValue(targetAddress, out var c) ? c : 0;
+        if (currentCount >= maxOwnersPerInstance)
+        {
+            return false;
+        }
+
+        instance.Owners ??= new List<ObjectReferenceOwner>(capacity: Math.Min(2, maxOwnersPerInstance));
+        if (instance.Owners.Any(o =>
+                string.Equals(o.Address, owner.Address, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(o.Type, owner.Type, StringComparison.Ordinal) &&
+                string.Equals(o.FieldName, owner.FieldName, StringComparison.Ordinal) &&
+                o.IsStatic == owner.IsStatic))
+        {
+            return false;
+        }
+
+        instance.Owners.Add(owner);
+        ownerCounts[targetAddress] = currentCount + 1;
+        return true;
     }
     
     internal static CombinedHeapAnalysis BuildCombinedResult(

@@ -1877,6 +1877,76 @@ public class TypeMemoryStats
 
     [JsonPropertyName("percentage")]
     public double Percentage { get; set; }
+
+    /// <summary>
+    /// Instance-level details for this type when the count is small enough to list.
+    /// </summary>
+    [JsonPropertyName("instances")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<MemoryObjectInstance>? Instances { get; set; }
+}
+
+/// <summary>
+/// Instance-level details for a managed heap object.
+/// </summary>
+public class MemoryObjectInstance
+{
+    /// <summary>
+    /// Object address.
+    /// </summary>
+    [JsonPropertyName("address")]
+    public string Address { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Object size in bytes.
+    /// </summary>
+    [JsonPropertyName("size")]
+    public long Size { get; set; }
+
+    /// <summary>
+    /// Heap segment/generation label (best-effort; e.g. "Large", "Gen2").
+    /// </summary>
+    [JsonPropertyName("generation")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Generation { get; set; }
+
+    /// <summary>
+    /// Best-effort owners (objects/static fields) that reference this object.
+    /// </summary>
+    [JsonPropertyName("owners")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ObjectReferenceOwner>? Owners { get; set; }
+}
+
+/// <summary>
+/// Best-effort "owner" information for an object reference.
+/// </summary>
+public class ObjectReferenceOwner
+{
+    /// <summary>
+    /// Address of the owner object (null for static fields).
+    /// </summary>
+    [JsonPropertyName("address")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Address { get; set; }
+
+    /// <summary>
+    /// Type name of the owner object or declaring type for static fields.
+    /// </summary>
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Name of the field that holds the reference.
+    /// </summary>
+    [JsonPropertyName("fieldName")]
+    public string FieldName { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Whether this is a static field reference.
+    /// </summary>
+    [JsonPropertyName("isStatic")]
+    public bool IsStatic { get; set; }
 }
 
 /// <summary>
