@@ -363,6 +363,27 @@ public class ReportGeneratorTests
     }
 
     [Fact]
+    public void ReportService_GenerateReport_WhenRawJsonDetailsDisabled_OmitsJsonDetailBlocks()
+    {
+        // Arrange
+        var service = new ReportService();
+        var analysis = CreateSampleAnalysis();
+        var options = ReportOptions.SummaryReport; // IncludeRawJsonDetails=false
+        var metadata = CreateSampleMetadata();
+
+        // Act
+        var report = service.GenerateReport(analysis, options, metadata);
+
+        // Assert
+        Assert.Contains("## Faulting thread", report);
+        Assert.DoesNotContain("## Threads", report);
+        Assert.DoesNotContain("Threads JSON", report);
+        Assert.DoesNotContain("Faulting thread JSON", report);
+        Assert.DoesNotContain("Thread JSON", report);
+        Assert.DoesNotContain("Frame JSON", report);
+    }
+
+    [Fact]
     public void ReportService_GenerateReport_SelectsJsonGenerator()
     {
         // Arrange
@@ -587,6 +608,7 @@ public class ReportGeneratorTests
         Assert.False(options.IncludeThreadInfo);
         Assert.False(options.IncludeModules);
         Assert.Equal(10, options.MaxCallStackFrames);
+        Assert.False(options.IncludeRawJsonDetails);
     }
 
     // ============================================================

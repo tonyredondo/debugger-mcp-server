@@ -14,14 +14,17 @@ namespace DebuggerMcp.Reporting;
 /// </summary>
 /// <remarks>
 /// The JSON report is treated as the source of truth; this renderer renders from JSON to avoid drift.
-/// The output is intentionally verbose and includes the full JSON payload (no truncation).
+/// The output may include raw JSON detail blocks when <see cref="ReportOptions.IncludeRawJsonDetails"/> is enabled.
 /// </remarks>
 internal static class JsonHtmlReportRenderer
 {
-    internal static string Render(string reportJson, ReportFormat requestedFormat)
+    internal static string Render(string reportJson, ReportOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         using var doc = JsonDocument.Parse(reportJson);
         var root = doc.RootElement;
+        var includeJsonDetails = options.IncludeRawJsonDetails;
 
         var sb = new StringBuilder();
         sb.AppendLine("<!DOCTYPE html>");
@@ -46,26 +49,70 @@ internal static class JsonHtmlReportRenderer
 
         sb.AppendLine("<div class=\"layout\">");
         sb.AppendLine("<aside class=\"sidebar\">");
-        RenderSidebar(sb, root, requestedFormat);
+        RenderSidebar(sb, root, options);
         sb.AppendLine("</aside>");
         sb.AppendLine("<main class=\"main\">");
 
-        RenderHeader(sb, root, requestedFormat);
+        RenderHeader(sb, root, options);
         RenderAtAGlance(sb, root);
-        RenderRootCause(sb, root);
-        RenderFindings(sb, root);
-        RenderFaultingThread(sb, root);
-        RenderThreads(sb, root);
-        RenderEnvironment(sb, root);
-        RenderMemory(sb, root);
-        RenderSynchronization(sb, root);
-        RenderSecurity(sb, root);
-        RenderAssemblies(sb, root);
-        RenderModules(sb, root);
-        RenderSymbols(sb, root);
-        RenderTimeline(sb, root);
-        RenderSourceContextIndex(sb, root);
-        RenderSignatureAndSelection(sb, root);
+        RenderRootCause(sb, root, includeJsonDetails);
+        RenderFindings(sb, root, includeJsonDetails);
+
+        if (options.IncludeCallStacks)
+        {
+            RenderFaultingThread(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeThreadInfo)
+        {
+            RenderThreads(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeProcessInfo || options.IncludeDotNetInfo)
+        {
+            RenderEnvironment(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeHeapStats || options.IncludeMemoryLeakInfo)
+        {
+            RenderMemory(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeDeadlockInfo)
+        {
+            RenderSynchronization(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeSecurityAnalysis)
+        {
+            RenderSecurity(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeDotNetInfo)
+        {
+            RenderAssemblies(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeModules)
+        {
+            RenderModules(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeModules || options.IncludeDotNetInfo)
+        {
+            RenderSymbols(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeThreadInfo)
+        {
+            RenderTimeline(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeCallStacks && options.IncludeDotNetInfo)
+        {
+            RenderSourceContextIndex(sb, root, includeJsonDetails);
+            RenderSignatureAndSelection(sb, root, includeJsonDetails);
+        }
 
         sb.AppendLine("</main>");
         sb.AppendLine("</div>");
@@ -75,7 +122,7 @@ internal static class JsonHtmlReportRenderer
         return sb.ToString();
     }
 
-    private static void RenderSidebar(StringBuilder sb, JsonElement root, ReportFormat requestedFormat)
+    private static void RenderSidebar(StringBuilder sb, JsonElement root, ReportOptions options)
     {
         sb.AppendLine("<div class=\"brand\">Debugger MCP</div>");
         sb.AppendLine("<div class=\"brand-sub\">Report</div>");
@@ -85,18 +132,51 @@ internal static class JsonHtmlReportRenderer
         AppendNavLink(sb, "At a glance", "#at-a-glance");
         AppendNavLink(sb, "Root cause", "#root-cause");
         AppendNavLink(sb, "Findings", "#findings");
-        AppendNavLink(sb, "Faulting thread", "#faulting-thread");
-        AppendNavLink(sb, "Threads", "#threads");
-        AppendNavLink(sb, "Environment", "#environment");
-        AppendNavLink(sb, "Memory & GC", "#memory-gc");
-        AppendNavLink(sb, "Synchronization", "#synchronization");
-        AppendNavLink(sb, "Security", "#security");
-        AppendNavLink(sb, "Assemblies", "#assemblies");
-        AppendNavLink(sb, "Modules", "#modules");
-        AppendNavLink(sb, "Symbols", "#symbols");
-        AppendNavLink(sb, "Timeline", "#timeline");
-        AppendNavLink(sb, "Source context index", "#source-context-index");
-        AppendNavLink(sb, "Signature & selection", "#signature-selection");
+        if (options.IncludeCallStacks)
+        {
+            AppendNavLink(sb, "Faulting thread", "#faulting-thread");
+        }
+        if (options.IncludeThreadInfo)
+        {
+            AppendNavLink(sb, "Threads", "#threads");
+        }
+        if (options.IncludeProcessInfo || options.IncludeDotNetInfo)
+        {
+            AppendNavLink(sb, "Environment", "#environment");
+        }
+        if (options.IncludeHeapStats || options.IncludeMemoryLeakInfo)
+        {
+            AppendNavLink(sb, "Memory & GC", "#memory-gc");
+        }
+        if (options.IncludeDeadlockInfo)
+        {
+            AppendNavLink(sb, "Synchronization", "#synchronization");
+        }
+        if (options.IncludeSecurityAnalysis)
+        {
+            AppendNavLink(sb, "Security", "#security");
+        }
+        if (options.IncludeDotNetInfo)
+        {
+            AppendNavLink(sb, "Assemblies", "#assemblies");
+        }
+        if (options.IncludeModules)
+        {
+            AppendNavLink(sb, "Modules", "#modules");
+        }
+        if (options.IncludeModules || options.IncludeDotNetInfo)
+        {
+            AppendNavLink(sb, "Symbols", "#symbols");
+        }
+        if (options.IncludeThreadInfo)
+        {
+            AppendNavLink(sb, "Timeline", "#timeline");
+        }
+        if (options.IncludeCallStacks && options.IncludeDotNetInfo)
+        {
+            AppendNavLink(sb, "Source context index", "#source-context-index");
+            AppendNavLink(sb, "Signature & selection", "#signature-selection");
+        }
         sb.AppendLine("</nav>");
 
         if (root.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object)
@@ -107,17 +187,17 @@ internal static class JsonHtmlReportRenderer
             WriteMini(sb, "Generated", GetString(metadata, "generatedAt"));
             WriteMini(sb, "Debugger", GetString(metadata, "debuggerType"));
             WriteMini(sb, "Server", GetString(metadata, "serverVersion"));
-            WriteMini(sb, "Requested", requestedFormat.ToString());
+            WriteMini(sb, "Requested", options.Format.ToString());
             sb.AppendLine("</div>");
             sb.AppendLine("</div>");
         }
     }
 
-    private static void RenderHeader(StringBuilder sb, JsonElement root, ReportFormat requestedFormat)
+    private static void RenderHeader(StringBuilder sb, JsonElement root, ReportOptions options)
     {
         sb.AppendLine("<header class=\"header\">");
         sb.AppendLine("<div class=\"header-title\">Debugger MCP Report</div>");
-        sb.AppendLine("<div class=\"header-subtitle\">Requested format: <code>" + HttpUtility.HtmlEncode(requestedFormat.ToString()) + "</code></div>");
+        sb.AppendLine("<div class=\"header-subtitle\">Requested format: <code>" + HttpUtility.HtmlEncode(options.Format.ToString()) + "</code></div>");
         sb.AppendLine("</header>");
     }
 
@@ -183,7 +263,7 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("</section>");
     }
 
-    private static void RenderRootCause(StringBuilder sb, JsonElement root)
+    private static void RenderRootCause(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"root-cause\">");
         sb.AppendLine("<h2>Root cause</h2>");
@@ -239,15 +319,15 @@ internal static class JsonHtmlReportRenderer
                 sb.AppendLine("</details>");
             }
 
-            RenderJsonDetails(sb, "Hypothesis JSON", h);
+            MaybeRenderJsonDetails(sb, "Hypothesis JSON", h, includeJsonDetails);
             sb.AppendLine("</div>");
         }
 
-        RenderJsonDetails(sb, "Root cause JSON", rootCause);
+        MaybeRenderJsonDetails(sb, "Root cause JSON", rootCause, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderFindings(StringBuilder sb, JsonElement root)
+    private static void RenderFindings(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"findings\">");
         sb.AppendLine("<h2>Findings</h2>");
@@ -317,14 +397,14 @@ internal static class JsonHtmlReportRenderer
                 sb.AppendLine("</details>");
             }
 
-            RenderJsonDetails(sb, "Finding JSON", finding);
+            MaybeRenderJsonDetails(sb, "Finding JSON", finding, includeJsonDetails);
             sb.AppendLine("</div>");
         }
 
         sb.AppendLine("</section>");
     }
 
-    private static void RenderFaultingThread(StringBuilder sb, JsonElement root)
+    private static void RenderFaultingThread(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"faulting-thread\">");
         sb.AppendLine("<h2>Faulting thread</h2>");
@@ -369,7 +449,7 @@ internal static class JsonHtmlReportRenderer
             sb.AppendLine("<ol class=\"stack\">");
             foreach (var frame in callStack.EnumerateArray())
             {
-                RenderFrame(sb, frame, includeSourceContext: true, includeFrameJson: true);
+                RenderFrame(sb, frame, includeSourceContext: true, includeFrameJson: includeJsonDetails);
             }
             sb.AppendLine("</ol>");
         }
@@ -378,11 +458,11 @@ internal static class JsonHtmlReportRenderer
             sb.AppendLine("<div class=\"muted\">No call stack available.</div>");
         }
 
-        RenderJsonDetails(sb, "Faulting thread JSON", faultingThread);
+        MaybeRenderJsonDetails(sb, "Faulting thread JSON", faultingThread, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderThreads(StringBuilder sb, JsonElement root)
+    private static void RenderThreads(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"threads\">");
         sb.AppendLine("<h2>Threads</h2>");
@@ -418,7 +498,7 @@ internal static class JsonHtmlReportRenderer
             sb.AppendLine("<table class=\"kv\">");
             WriteKvRow(sb, "Detected", deadlock, "detected");
             sb.AppendLine("</table>");
-            RenderJsonDetails(sb, "Deadlock JSON", deadlock);
+            MaybeRenderJsonDetails(sb, "Deadlock JSON", deadlock, includeJsonDetails);
             sb.AppendLine("</div>");
         }
 
@@ -426,7 +506,7 @@ internal static class JsonHtmlReportRenderer
         {
             sb.AppendLine("<div class=\"panel\">");
             sb.AppendLine("<div class=\"panel-title\">ThreadPool</div>");
-            RenderJsonDetails(sb, "ThreadPool JSON", threadPool);
+            MaybeRenderJsonDetails(sb, "ThreadPool JSON", threadPool, includeJsonDetails);
             sb.AppendLine("</div>");
         }
 
@@ -465,7 +545,7 @@ internal static class JsonHtmlReportRenderer
 
                 sb.AppendLine("<details class=\"details\">");
                 sb.AppendLine("<summary><code>" + HttpUtility.HtmlEncode(GetString(t, "threadId")) + "</code> • " + HttpUtility.HtmlEncode(GetString(t, "state")) + "</summary>");
-                RenderJsonDetails(sb, "Thread JSON", t);
+                MaybeRenderJsonDetails(sb, "Thread JSON", t, includeJsonDetails);
                 if (t.TryGetProperty("callStack", out var cs) && cs.ValueKind == JsonValueKind.Array)
                 {
                     sb.AppendLine("<ol class=\"stack\">");
@@ -479,7 +559,7 @@ internal static class JsonHtmlReportRenderer
             }
         }
 
-        RenderJsonDetails(sb, "Threads JSON", threads);
+        MaybeRenderJsonDetails(sb, "Threads JSON", threads, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
@@ -561,7 +641,7 @@ internal static class JsonHtmlReportRenderer
                     sb.AppendLine("<div class=\"alert\">" + HttpUtility.HtmlEncode(err.GetString() ?? string.Empty) + "</div>");
                 }
 
-                RenderJsonDetails(sb, "Source context JSON", sc);
+                MaybeRenderJsonDetails(sb, "Source context JSON", sc, includeFrameJson);
                 sb.AppendLine("</details>");
             }
         }
@@ -573,7 +653,7 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("</li>");
     }
 
-    private static void RenderEnvironment(StringBuilder sb, JsonElement root)
+    private static void RenderEnvironment(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"environment\">");
         sb.AppendLine("<h2>Environment</h2>");
@@ -651,11 +731,11 @@ internal static class JsonHtmlReportRenderer
             }
         }
 
-        RenderJsonDetails(sb, "Environment JSON", env);
+        MaybeRenderJsonDetails(sb, "Environment JSON", env, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderMemory(StringBuilder sb, JsonElement root)
+    private static void RenderMemory(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"memory-gc\">");
         sb.AppendLine("<h2>Memory &amp; GC</h2>");
@@ -695,11 +775,11 @@ internal static class JsonHtmlReportRenderer
             sb.AppendLine("</div>");
         }
 
-        RenderJsonDetails(sb, "Memory JSON", memory);
+        MaybeRenderJsonDetails(sb, "Memory JSON", memory, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderSynchronization(StringBuilder sb, JsonElement root)
+    private static void RenderSynchronization(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"synchronization\">");
         sb.AppendLine("<h2>Synchronization</h2>");
@@ -726,11 +806,11 @@ internal static class JsonHtmlReportRenderer
             sb.AppendLine("</details>");
         }
 
-        RenderJsonDetails(sb, "Synchronization JSON", sync);
+        MaybeRenderJsonDetails(sb, "Synchronization JSON", sync, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderSecurity(StringBuilder sb, JsonElement root)
+    private static void RenderSecurity(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"security\">");
         sb.AppendLine("<h2>Security</h2>");
@@ -768,11 +848,11 @@ internal static class JsonHtmlReportRenderer
             sb.AppendLine("</details>");
         }
 
-        RenderJsonDetails(sb, "Security JSON", security);
+        MaybeRenderJsonDetails(sb, "Security JSON", security, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderAssemblies(StringBuilder sb, JsonElement root)
+    private static void RenderAssemblies(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"assemblies\">");
         sb.AppendLine("<h2>Assemblies</h2>");
@@ -819,11 +899,11 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("</tbody></table></div>");
         sb.AppendLine("</details>");
 
-        RenderJsonDetails(sb, "Assemblies JSON", assemblies);
+        MaybeRenderJsonDetails(sb, "Assemblies JSON", assemblies, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderModules(StringBuilder sb, JsonElement root)
+    private static void RenderModules(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"modules\">");
         sb.AppendLine("<h2>Modules</h2>");
@@ -856,11 +936,11 @@ internal static class JsonHtmlReportRenderer
         }
         sb.AppendLine("</tbody></table></div>");
 
-        RenderJsonDetails(sb, "Modules JSON", modules);
+        MaybeRenderJsonDetails(sb, "Modules JSON", modules, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderSymbols(StringBuilder sb, JsonElement root)
+    private static void RenderSymbols(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"symbols\">");
         sb.AppendLine("<h2>Symbols</h2>");
@@ -902,11 +982,11 @@ internal static class JsonHtmlReportRenderer
             sb.AppendLine("</details>");
         }
 
-        RenderJsonDetails(sb, "Symbols JSON", symbols);
+        MaybeRenderJsonDetails(sb, "Symbols JSON", symbols, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderTimeline(StringBuilder sb, JsonElement root)
+    private static void RenderTimeline(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"timeline\">");
         sb.AppendLine("<h2>Timeline</h2>");
@@ -954,11 +1034,11 @@ internal static class JsonHtmlReportRenderer
             sb.AppendLine("</details>");
         }
 
-        RenderJsonDetails(sb, "Timeline JSON", timeline);
+        MaybeRenderJsonDetails(sb, "Timeline JSON", timeline, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderSourceContextIndex(StringBuilder sb, JsonElement root)
+    private static void RenderSourceContextIndex(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"source-context-index\">");
         sb.AppendLine("<h2>Source context index</h2>");
@@ -996,11 +1076,11 @@ internal static class JsonHtmlReportRenderer
         }
         sb.AppendLine("</tbody></table></div>");
 
-        RenderJsonDetails(sb, "Source context index JSON", contexts);
+        MaybeRenderJsonDetails(sb, "Source context index JSON", contexts, includeJsonDetails);
         sb.AppendLine("</section>");
     }
 
-    private static void RenderSignatureAndSelection(StringBuilder sb, JsonElement root)
+    private static void RenderSignatureAndSelection(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("<section class=\"card\" id=\"signature-selection\">");
         sb.AppendLine("<h2>Signature &amp; stack selection</h2>");
@@ -1020,7 +1100,7 @@ internal static class JsonHtmlReportRenderer
             WriteKvRow(sb, "Kind", signature, "kind");
             WriteKvRow(sb, "Hash", signature, "hash");
             sb.AppendLine("</table>");
-            RenderJsonDetails(sb, "Signature JSON", signature);
+            MaybeRenderJsonDetails(sb, "Signature JSON", signature, includeJsonDetails);
             sb.AppendLine("</div>");
         }
 
@@ -1028,7 +1108,7 @@ internal static class JsonHtmlReportRenderer
         {
             sb.AppendLine("<div class=\"panel\">");
             sb.AppendLine("<div class=\"panel-title\">Stack selection</div>");
-            RenderJsonDetails(sb, "Stack selection JSON", selection);
+            MaybeRenderJsonDetails(sb, "Stack selection JSON", selection, includeJsonDetails);
             sb.AppendLine("</div>");
         }
 
@@ -1132,6 +1212,16 @@ internal static class JsonHtmlReportRenderer
 
     private static string SerializeIndented(JsonElement element) =>
         JsonSerializer.Serialize(element, new JsonSerializerOptions { WriteIndented = true });
+
+    private static void MaybeRenderJsonDetails(StringBuilder sb, string title, JsonElement element, bool include)
+    {
+        if (!include)
+        {
+            return;
+        }
+
+        RenderJsonDetails(sb, title, element);
+    }
 
     private static void RenderJsonDetails(StringBuilder sb, string title, JsonElement element)
     {

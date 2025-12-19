@@ -12,42 +12,87 @@ namespace DebuggerMcp.Reporting;
 /// </summary>
 /// <remarks>
 /// The JSON report is treated as the source of truth; this renderer renders from JSON to avoid drift.
-/// The output is intentionally verbose and includes the full JSON payload (no truncation).
+/// The output may include raw JSON detail blocks when <see cref="ReportOptions.IncludeRawJsonDetails"/> is enabled.
 /// </remarks>
 internal static class JsonMarkdownReportRenderer
 {
-    internal static string Render(string reportJson, ReportFormat requestedFormat)
+    internal static string Render(string reportJson, ReportOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         using var doc = JsonDocument.Parse(reportJson);
         var root = doc.RootElement;
 
         var sb = new StringBuilder();
-        AppendTitle(sb, root, requestedFormat);
-        AppendTableOfContents(sb, root);
+        var includeJsonDetails = options.IncludeRawJsonDetails;
+
+        AppendTitle(sb, root, options);
+        AppendTableOfContents(sb, options);
 
         AppendAtAGlance(sb, root);
-        AppendRootCause(sb, root);
-        AppendFindings(sb, root);
-        AppendFaultingThread(sb, root);
-        AppendThreads(sb, root);
+        AppendRootCause(sb, root, includeJsonDetails);
+        AppendFindings(sb, root, includeJsonDetails);
 
-        AppendEnvironment(sb, root);
-        AppendMemory(sb, root);
-        AppendSynchronization(sb, root);
-        AppendSecurity(sb, root);
+        if (options.IncludeCallStacks)
+        {
+            AppendFaultingThread(sb, root, includeJsonDetails);
+        }
 
-        AppendAssemblies(sb, root);
-        AppendModules(sb, root);
-        AppendSymbols(sb, root);
-        AppendTimeline(sb, root);
+        if (options.IncludeThreadInfo)
+        {
+            AppendThreads(sb, root, includeJsonDetails);
+        }
 
-        AppendSourceContextIndex(sb, root);
-        AppendSignatureAndSelection(sb, root);
+        if (options.IncludeProcessInfo || options.IncludeDotNetInfo)
+        {
+            AppendEnvironment(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeHeapStats || options.IncludeMemoryLeakInfo)
+        {
+            AppendMemory(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeDeadlockInfo)
+        {
+            AppendSynchronization(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeSecurityAnalysis)
+        {
+            AppendSecurity(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeDotNetInfo)
+        {
+            AppendAssemblies(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeModules)
+        {
+            AppendModules(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeModules || options.IncludeDotNetInfo)
+        {
+            AppendSymbols(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeThreadInfo)
+        {
+            AppendTimeline(sb, root, includeJsonDetails);
+        }
+
+        if (options.IncludeCallStacks && options.IncludeDotNetInfo)
+        {
+            AppendSourceContextIndex(sb, root, includeJsonDetails);
+            AppendSignatureAndSelection(sb, root, includeJsonDetails);
+        }
 
         return sb.ToString();
     }
 
-    private static void AppendTitle(StringBuilder sb, JsonElement root, ReportFormat requestedFormat)
+    private static void AppendTitle(StringBuilder sb, JsonElement root, ReportOptions options)
     {
         sb.AppendLine("# Debugger MCP Report");
         sb.AppendLine();
@@ -84,11 +129,11 @@ internal static class JsonMarkdownReportRenderer
             }
         }
 
-        sb.AppendLine($"> Rendered from canonical JSON (source of truth). Requested format: `{EscapeInline(requestedFormat.ToString())}`");
+        sb.AppendLine($"> Rendered from canonical JSON (source of truth). Requested format: `{EscapeInline(options.Format.ToString())}`");
         sb.AppendLine();
     }
 
-    private static void AppendTableOfContents(StringBuilder sb, JsonElement root)
+    private static void AppendTableOfContents(StringBuilder sb, ReportOptions options)
     {
         sb.AppendLine("## Table of Contents");
         sb.AppendLine();
@@ -96,18 +141,51 @@ internal static class JsonMarkdownReportRenderer
         sb.AppendLine("- [At a glance](#at-a-glance)");
         sb.AppendLine("- [Root cause](#root-cause)");
         sb.AppendLine("- [Findings](#findings)");
-        sb.AppendLine("- [Faulting thread](#faulting-thread)");
-        sb.AppendLine("- [Threads](#threads)");
-        sb.AppendLine("- [Environment](#environment)");
-        sb.AppendLine("- [Memory & GC](#memory--gc)");
-        sb.AppendLine("- [Synchronization](#synchronization)");
-        sb.AppendLine("- [Security](#security)");
-        sb.AppendLine("- [Assemblies](#assemblies)");
-        sb.AppendLine("- [Modules](#modules)");
-        sb.AppendLine("- [Symbols](#symbols)");
-        sb.AppendLine("- [Timeline](#timeline)");
-        sb.AppendLine("- [Source context index](#source-context-index)");
-        sb.AppendLine("- [Signature & stack selection](#signature--stack-selection)");
+        if (options.IncludeCallStacks)
+        {
+            sb.AppendLine("- [Faulting thread](#faulting-thread)");
+        }
+        if (options.IncludeThreadInfo)
+        {
+            sb.AppendLine("- [Threads](#threads)");
+        }
+        if (options.IncludeProcessInfo || options.IncludeDotNetInfo)
+        {
+            sb.AppendLine("- [Environment](#environment)");
+        }
+        if (options.IncludeHeapStats || options.IncludeMemoryLeakInfo)
+        {
+            sb.AppendLine("- [Memory & GC](#memory--gc)");
+        }
+        if (options.IncludeDeadlockInfo)
+        {
+            sb.AppendLine("- [Synchronization](#synchronization)");
+        }
+        if (options.IncludeSecurityAnalysis)
+        {
+            sb.AppendLine("- [Security](#security)");
+        }
+        if (options.IncludeDotNetInfo)
+        {
+            sb.AppendLine("- [Assemblies](#assemblies)");
+        }
+        if (options.IncludeModules)
+        {
+            sb.AppendLine("- [Modules](#modules)");
+        }
+        if (options.IncludeModules || options.IncludeDotNetInfo)
+        {
+            sb.AppendLine("- [Symbols](#symbols)");
+        }
+        if (options.IncludeThreadInfo)
+        {
+            sb.AppendLine("- [Timeline](#timeline)");
+        }
+        if (options.IncludeCallStacks && options.IncludeDotNetInfo)
+        {
+            sb.AppendLine("- [Source context index](#source-context-index)");
+            sb.AppendLine("- [Signature & stack selection](#signature--stack-selection)");
+        }
         sb.AppendLine();
     }
 
@@ -166,7 +244,7 @@ internal static class JsonMarkdownReportRenderer
         }
     }
 
-    private static void AppendRootCause(StringBuilder sb, JsonElement root)
+    private static void AppendRootCause(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Root cause");
         sb.AppendLine();
@@ -219,12 +297,15 @@ internal static class JsonMarkdownReportRenderer
                 }
             }
 
-            AppendJsonDetails(sb, "Hypothesis JSON", hypothesis);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "Hypothesis JSON", hypothesis, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
     }
 
-    private static void AppendFindings(StringBuilder sb, JsonElement root)
+    private static void AppendFindings(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Findings");
         sb.AppendLine();
@@ -304,12 +385,15 @@ internal static class JsonMarkdownReportRenderer
                 sb.AppendLine();
             }
 
-            AppendJsonDetails(sb, "Finding JSON", finding);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "Finding JSON", finding, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
     }
 
-    private static void AppendFaultingThread(StringBuilder sb, JsonElement root)
+    private static void AppendFaultingThread(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Faulting thread");
         sb.AppendLine();
@@ -356,14 +440,17 @@ internal static class JsonMarkdownReportRenderer
             {
                 continue;
             }
-            AppendFrameDetails(sb, frame, includeSourceContext: true);
+            AppendFrameDetails(sb, frame, includeSourceContext: true, includeJsonDetails: includeJsonDetails);
         }
 
-        AppendJsonDetails(sb, "Faulting thread JSON", faultingThread);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Faulting thread JSON", faultingThread, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendThreads(StringBuilder sb, JsonElement root)
+    private static void AppendThreads(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Threads");
         sb.AppendLine();
@@ -402,16 +489,22 @@ internal static class JsonMarkdownReportRenderer
                 sb.AppendLine($"- Detected: `{EscapeInline(detected)}`");
                 sb.AppendLine();
             }
-            AppendJsonDetails(sb, "Deadlock JSON", deadlock);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "Deadlock JSON", deadlock, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
 
         if (threads.TryGetProperty("threadPool", out var threadPool) && threadPool.ValueKind == JsonValueKind.Object)
         {
             sb.AppendLine("### ThreadPool");
             sb.AppendLine();
-            AppendJsonDetails(sb, "ThreadPool JSON", threadPool);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "ThreadPool JSON", threadPool, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
 
         if (threads.TryGetProperty("all", out var all) && all.ValueKind == JsonValueKind.Array)
@@ -452,8 +545,11 @@ internal static class JsonMarkdownReportRenderer
                 sb.AppendLine($"<details><summary>Thread `{EscapeInline(id)}` • {EscapeText(state)} • {EscapeText(top)}</summary>");
                 sb.AppendLine();
 
-                AppendJsonDetails(sb, "Thread JSON", t);
-                sb.AppendLine();
+                MaybeAppendJsonDetails(sb, "Thread JSON", t, includeJsonDetails);
+                if (includeJsonDetails)
+                {
+                    sb.AppendLine();
+                }
 
                 if (t.TryGetProperty("callStack", out var cs) && cs.ValueKind == JsonValueKind.Array)
                 {
@@ -478,11 +574,14 @@ internal static class JsonMarkdownReportRenderer
             }
         }
 
-        AppendJsonDetails(sb, "Threads JSON", threads);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Threads JSON", threads, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendEnvironment(StringBuilder sb, JsonElement root)
+    private static void AppendEnvironment(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Environment");
         sb.AppendLine();
@@ -573,11 +672,14 @@ internal static class JsonMarkdownReportRenderer
         }
 
         sb.AppendLine();
-        AppendJsonDetails(sb, "Environment JSON", env);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Environment JSON", env, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendMemory(StringBuilder sb, JsonElement root)
+    private static void AppendMemory(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Memory & GC");
         sb.AppendLine();
@@ -612,32 +714,44 @@ internal static class JsonMarkdownReportRenderer
         {
             sb.AppendLine("### Top consumers");
             sb.AppendLine();
-            AppendJsonDetails(sb, "Top consumers JSON", topConsumers);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "Top consumers JSON", topConsumers, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
 
         if (memory.TryGetProperty("strings", out var strings) && strings.ValueKind == JsonValueKind.Object)
         {
             sb.AppendLine("### Strings");
             sb.AppendLine();
-            AppendJsonDetails(sb, "Strings JSON", strings);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "Strings JSON", strings, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
 
         if (memory.TryGetProperty("leakAnalysis", out var leak) && leak.ValueKind == JsonValueKind.Object)
         {
             sb.AppendLine("### Leak analysis");
             sb.AppendLine();
-            AppendJsonDetails(sb, "Leak analysis JSON", leak);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "Leak analysis JSON", leak, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
 
         if (memory.TryGetProperty("oom", out var oom) && oom.ValueKind == JsonValueKind.Object)
         {
             sb.AppendLine("### Out-of-memory");
             sb.AppendLine();
-            AppendJsonDetails(sb, "OOM JSON", oom);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "OOM JSON", oom, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
 
         if (memory.TryGetProperty("heapStats", out var heapStats) && heapStats.ValueKind == JsonValueKind.Object)
@@ -650,11 +764,14 @@ internal static class JsonMarkdownReportRenderer
             sb.AppendLine();
         }
 
-        AppendJsonDetails(sb, "Memory JSON", memory);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Memory JSON", memory, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendSynchronization(StringBuilder sb, JsonElement root)
+    private static void AppendSynchronization(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Synchronization");
         sb.AppendLine();
@@ -686,11 +803,14 @@ internal static class JsonMarkdownReportRenderer
             sb.AppendLine();
         }
 
-        AppendJsonDetails(sb, "Synchronization JSON", sync);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Synchronization JSON", sync, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendSecurity(StringBuilder sb, JsonElement root)
+    private static void AppendSecurity(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Security");
         sb.AppendLine();
@@ -729,11 +849,14 @@ internal static class JsonMarkdownReportRenderer
             sb.AppendLine();
         }
 
-        AppendJsonDetails(sb, "Security JSON", security);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Security JSON", security, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendAssemblies(StringBuilder sb, JsonElement root)
+    private static void AppendAssemblies(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Assemblies");
         sb.AppendLine();
@@ -771,11 +894,14 @@ internal static class JsonMarkdownReportRenderer
         sb.AppendLine("</details>");
         sb.AppendLine();
 
-        AppendJsonDetails(sb, "Assemblies JSON", assemblies);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Assemblies JSON", assemblies, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendModules(StringBuilder sb, JsonElement root)
+    private static void AppendModules(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Modules");
         sb.AppendLine();
@@ -803,11 +929,14 @@ internal static class JsonMarkdownReportRenderer
         }
         sb.AppendLine();
 
-        AppendJsonDetails(sb, "Modules JSON", modules);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Modules JSON", modules, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendSymbols(StringBuilder sb, JsonElement root)
+    private static void AppendSymbols(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Symbols");
         sb.AppendLine();
@@ -850,11 +979,14 @@ internal static class JsonMarkdownReportRenderer
             sb.AppendLine();
         }
 
-        AppendJsonDetails(sb, "Symbols JSON", symbols);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Symbols JSON", symbols, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendTimeline(StringBuilder sb, JsonElement root)
+    private static void AppendTimeline(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Timeline");
         sb.AppendLine();
@@ -895,11 +1027,14 @@ internal static class JsonMarkdownReportRenderer
             sb.AppendLine();
         }
 
-        AppendJsonDetails(sb, "Timeline JSON", timeline);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Timeline JSON", timeline, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendSourceContextIndex(StringBuilder sb, JsonElement root)
+    private static void AppendSourceContextIndex(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Source context index");
         sb.AppendLine();
@@ -928,11 +1063,14 @@ internal static class JsonMarkdownReportRenderer
         }
         sb.AppendLine();
 
-        AppendJsonDetails(sb, "Source context index JSON", contexts);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Source context index JSON", contexts, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
-    private static void AppendSignatureAndSelection(StringBuilder sb, JsonElement root)
+    private static void AppendSignatureAndSelection(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
         sb.AppendLine("## Signature & stack selection");
         sb.AppendLine();
@@ -953,20 +1091,26 @@ internal static class JsonMarkdownReportRenderer
             AppendTableRow(sb, "Kind", GetString(signature, "kind"));
             AppendTableRow(sb, "Hash", GetString(signature, "hash"));
             sb.AppendLine();
-            AppendJsonDetails(sb, "Signature JSON", signature);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "Signature JSON", signature, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
 
         if (analysis.TryGetProperty("stackSelection", out var selection) && selection.ValueKind == JsonValueKind.Object)
         {
             sb.AppendLine("### Stack selection");
             sb.AppendLine();
-            AppendJsonDetails(sb, "Stack selection JSON", selection);
-            sb.AppendLine();
+            MaybeAppendJsonDetails(sb, "Stack selection JSON", selection, includeJsonDetails);
+            if (includeJsonDetails)
+            {
+                sb.AppendLine();
+            }
         }
     }
 
-    private static void AppendFrameDetails(StringBuilder sb, JsonElement frame, bool includeSourceContext)
+    private static void AppendFrameDetails(StringBuilder sb, JsonElement frame, bool includeSourceContext, bool includeJsonDetails)
     {
         var frameNumber = GetString(frame, "frameNumber");
         var module = GetString(frame, "module");
@@ -1043,13 +1187,19 @@ internal static class JsonMarkdownReportRenderer
                     sb.AppendLine();
                 }
 
-                AppendJsonDetails(sb, "Source context JSON", sc);
-                sb.AppendLine();
+                MaybeAppendJsonDetails(sb, "Source context JSON", sc, includeJsonDetails);
+                if (includeJsonDetails)
+                {
+                    sb.AppendLine();
+                }
             }
         }
 
-        AppendJsonDetails(sb, "Frame JSON", frame);
-        sb.AppendLine();
+        MaybeAppendJsonDetails(sb, "Frame JSON", frame, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
         sb.AppendLine("</details>");
         sb.AppendLine();
     }
@@ -1140,6 +1290,16 @@ internal static class JsonMarkdownReportRenderer
             JsonValueKind.Array => string.Join(Environment.NewLine, element.EnumerateArray().Select(ElementToText)),
             _ => element.ToString()
         };
+
+    private static void MaybeAppendJsonDetails(StringBuilder sb, string title, JsonElement element, bool include)
+    {
+        if (!include)
+        {
+            return;
+        }
+
+        AppendJsonDetails(sb, title, element);
+    }
 
     private static void AppendJsonDetails(StringBuilder sb, string title, JsonElement element)
     {

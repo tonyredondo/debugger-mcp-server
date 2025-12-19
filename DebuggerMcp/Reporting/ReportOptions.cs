@@ -131,6 +131,15 @@ public class ReportOptions
     public int MaxCallStackFrames { get; set; } = 0; // Show all frames by default
 
     /// <summary>
+    /// Gets or sets whether to include verbose raw JSON detail blocks within derived reports.
+    /// </summary>
+    /// <remarks>
+    /// JSON is always available via <c>report(action="full", format="json")</c> and <c>report(action="get")</c>.
+    /// Disabling raw JSON details keeps Markdown/HTML reports concise (especially for summary reports).
+    /// </remarks>
+    public bool IncludeRawJsonDetails { get; set; } = true;
+
+    /// <summary>
     /// Creates default options for a full report.
     /// </summary>
     public static ReportOptions FullReport => new()
@@ -170,7 +179,8 @@ public class ReportOptions
         IncludeCharts = true,
         MaxCallStackFrames = 10,
         MaxThreadsToShow = 5,
-        MaxEnvironmentVariables = 20  // Show fewer env vars in summary
+        MaxEnvironmentVariables = 20,  // Show fewer env vars in summary
+        IncludeRawJsonDetails = false
     };
 }
 
