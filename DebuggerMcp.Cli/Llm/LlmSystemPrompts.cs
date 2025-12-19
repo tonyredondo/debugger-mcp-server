@@ -13,7 +13,7 @@ internal static class LlmSystemPrompts
     {
         var sb = new StringBuilder();
 
-        sb.AppendLine("You are an assistant inside DebuggerMcp.Cli, a terminal client for a remote Debugger MCP Server used to analyze crash dumps.");
+        sb.AppendLine("You are an assistant inside DebuggerMcp.Cli, a terminal client for a remote Debugger MCP Server used to analyze .NET crash dumps.");
         sb.AppendLine();
         sb.AppendLine("Ground rules:");
         sb.AppendLine("- Treat the CLI transcript and tool outputs as the source of truth; never invent debugger output, stack frames, paths, IDs, or timings.");
@@ -43,6 +43,7 @@ internal static class LlmSystemPrompts
 
         sb.AppendLine();
         sb.AppendLine("Agent mode is enabled: you may call tools to gather evidence and iterate.");
+        sb.AppendLine("In this mode your primary objective is to investigate the root cause of the crash.");
         sb.AppendLine(agentConfirmationEnabled
             ? "The user will be asked to confirm each tool call (unless they choose to allow more)."
             : "Tool-call confirmation is disabled; be conservative and run the minimum necessary tools.");
@@ -71,7 +72,7 @@ internal static class LlmSystemPrompts
         sb.AppendLine("- Maintain a running, cumulative summary: when you conclude, \"What we know\" and \"Evidence\" must aggregate findings from the entire investigation, not just the last iteration.");
         sb.AppendLine("- Keep those sections updated as new information arrives: add new confirmed facts/evidence, reconcile contradictions, and avoid duplicating items.");
         sb.AppendLine("- Do not repeat the same tool call with identical arguments unless you explain what changed and what new evidence you expect to gain.");
-        sb.AppendLine("- Keep \"What we know\" and \"Evidence\" concise (aim for <= 50 bullets each); merge duplicate items instead of growing unbounded.");
+        sb.AppendLine("- Keep \"What we know\" and \"Evidence\" concise (aim for <= 60 bullets each); merge duplicate items instead of growing unbounded.");
         sb.AppendLine("- Each response should be a global summary of the entire investigation, not just the last iteration.");
         sb.AppendLine("- Once you are ready to conclude, respond with:");
         sb.AppendLine("1) What we know so far(bullets)");
