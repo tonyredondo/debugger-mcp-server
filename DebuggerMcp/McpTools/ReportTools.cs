@@ -149,7 +149,7 @@ public class ReportTools(
         var report = reportService.GenerateReport(result, options, metadata);
         if (reportFormat == ReportFormat.Json && !string.IsNullOrWhiteSpace(metadata.DumpId))
         {
-            session.SetCachedReport(metadata.DumpId, metadata.GeneratedAt, report, includesWatches: includeWatches, includesSecurity: includeSecurity);
+            session.SetCachedReport(metadata.DumpId, metadata.GeneratedAt, report, includesWatches: includeWatches, includesSecurity: includeSecurity, maxStackFrames: maxStackFrames);
         }
         return report;
     }
@@ -231,7 +231,7 @@ public class ReportTools(
             throw new InvalidOperationException("No dump is open. Use dump(action=\"open\") first (CLI: open <dumpId>).");
         }
 
-        if (session.TryGetCachedReport(dumpId, requireWatches: includeWatches, requireSecurity: includeSecurity, out var cached))
+        if (session.TryGetCachedReport(dumpId, requireWatches: includeWatches, requireSecurity: includeSecurity, requireAllFrames: true, out var cached))
         {
             return cached;
         }

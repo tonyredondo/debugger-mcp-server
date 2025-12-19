@@ -139,7 +139,7 @@ public class AnalysisTools(
 
         if (!string.IsNullOrWhiteSpace(metadata.DumpId))
         {
-            session.SetCachedReport(metadata.DumpId, metadata.GeneratedAt, json, includesWatches: includeWatches, includesSecurity: true);
+            session.SetCachedReport(metadata.DumpId, metadata.GeneratedAt, json, includesWatches: includeWatches, includesSecurity: true, maxStackFrames: 0);
         }
 
         return json;

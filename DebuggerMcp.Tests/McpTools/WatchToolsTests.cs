@@ -363,14 +363,14 @@ public class WatchToolsTests : IDisposable
         SetDumpOpen(sessionId, userId, DumpId);
 
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
-        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: false, includesSecurity: true);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: false, includesSecurity: true, maxStackFrames: 0);
 
         // Act
         await _tools.AddWatch(sessionId, userId, "0x12345678");
 
         // Assert
         Assert.Null(session.CachedReportDumpId);
-        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, out _));
+        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, requireAllFrames: false, out _));
     }
 
     [Fact]
@@ -386,14 +386,14 @@ public class WatchToolsTests : IDisposable
         Assert.Single(existing);
 
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
-        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
 
         // Act
         await _tools.RemoveWatch(sessionId, userId, existing[0].Id);
 
         // Assert
         Assert.Null(session.CachedReportDumpId);
-        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, out _));
+        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, requireAllFrames: false, out _));
     }
 
     [Fact]
@@ -408,14 +408,14 @@ public class WatchToolsTests : IDisposable
         Assert.True(await _watchStore.HasWatchesAsync(userId, DumpId));
 
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
-        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true, maxStackFrames: 0);
 
         // Act
         await _tools.ClearWatches(sessionId, userId);
 
         // Assert
         Assert.Null(session.CachedReportDumpId);
-        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, out _));
+        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, requireAllFrames: false, out _));
     }
 
     private void SetDumpOpen(string sessionId, string userId, string dumpId)

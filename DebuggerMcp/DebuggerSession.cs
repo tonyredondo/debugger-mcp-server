@@ -114,6 +114,11 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     /// </summary>
     public bool CachedReportIncludesSecurity { get; private set; }
 
+    /// <summary>
+    /// Gets the maximum stack frames included in the cached canonical JSON report document (0 = all frames).
+    /// </summary>
+    public int CachedReportMaxStackFrames { get; private set; }
+
     private string? _cachedReportJson;
 
     /// <summary>
@@ -124,7 +129,8 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     /// <param name="reportJson">Canonical report JSON document string.</param>
     /// <param name="includesWatches"><c>true</c> when watch evaluations were included/enabled during report generation.</param>
     /// <param name="includesSecurity"><c>true</c> when security analysis was included during report generation.</param>
-    public void SetCachedReport(string dumpId, DateTime generatedAtUtc, string reportJson, bool includesWatches, bool includesSecurity)
+    /// <param name="maxStackFrames">Maximum stack frames included (0 = all frames).</param>
+    public void SetCachedReport(string dumpId, DateTime generatedAtUtc, string reportJson, bool includesWatches, bool includesSecurity, int maxStackFrames)
     {
         if (string.IsNullOrWhiteSpace(dumpId))
         {
@@ -136,14 +142,19 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
             throw new ArgumentException("reportJson cannot be null or empty", nameof(reportJson));
         }
 
+        if (maxStackFrames < 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(maxStackFrames), "maxStackFrames must be >= 0.");
+        }
+
         lock (_reportCacheLock)
         {
             if (_cachedReportJson != null &&
                 CachedReportDumpId != null &&
                 string.Equals(CachedReportDumpId, dumpId, StringComparison.OrdinalIgnoreCase))
             {
-                var existingScore = GetReportCompletenessScore(CachedReportIncludesWatches, CachedReportIncludesSecurity);
-                var incomingScore = GetReportCompletenessScore(includesWatches, includesSecurity);
+                var existingScore = GetReportCompletenessScore(CachedReportIncludesWatches, CachedReportIncludesSecurity, CachedReportMaxStackFrames);
+                var incomingScore = GetReportCompletenessScore(includesWatches, includesSecurity, maxStackFrames);
 
                 // Prefer the most complete cached report. Only replace when the incoming report is more complete,
                 // or when completeness matches and the incoming report is newer.
@@ -158,6 +169,7 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
             CachedReportGeneratedAtUtc = generatedAtUtc;
             CachedReportIncludesWatches = includesWatches;
             CachedReportIncludesSecurity = includesSecurity;
+            CachedReportMaxStackFrames = maxStackFrames;
             _cachedReportJson = reportJson;
         }
     }
@@ -168,9 +180,10 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     /// <param name="dumpId">Dump ID that the caller expects.</param>
     /// <param name="requireWatches">When <c>true</c>, only returns a cached report that includes watch evaluations.</param>
     /// <param name="requireSecurity">When <c>true</c>, only returns a cached report that includes security analysis.</param>
+    /// <param name="requireAllFrames">When <c>true</c>, only returns a cached report that includes all stack frames (maxStackFrames=0).</param>
     /// <param name="reportJson">When <c>true</c>, contains the cached report JSON.</param>
     /// <returns><c>true</c> when a matching cached report exists; otherwise <c>false</c>.</returns>
-    public bool TryGetCachedReport(string dumpId, bool requireWatches, bool requireSecurity, out string reportJson)
+    public bool TryGetCachedReport(string dumpId, bool requireWatches, bool requireSecurity, bool requireAllFrames, out string reportJson)
     {
         if (string.IsNullOrWhiteSpace(dumpId))
         {
@@ -184,7 +197,8 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
                 CachedReportDumpId == null ||
                 !string.Equals(CachedReportDumpId, dumpId, StringComparison.OrdinalIgnoreCase) ||
                 (requireWatches && !CachedReportIncludesWatches) ||
-                (requireSecurity && !CachedReportIncludesSecurity))
+                (requireSecurity && !CachedReportIncludesSecurity) ||
+                (requireAllFrames && CachedReportMaxStackFrames != 0))
             {
                 reportJson = string.Empty;
                 return false;
@@ -207,10 +221,11 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
             CachedReportGeneratedAtUtc = null;
             CachedReportIncludesWatches = false;
             CachedReportIncludesSecurity = false;
+            CachedReportMaxStackFrames = 0;
         }
     }
 
-    private static int GetReportCompletenessScore(bool includesWatches, bool includesSecurity)
+    private static int GetReportCompletenessScore(bool includesWatches, bool includesSecurity, int maxStackFrames)
     {
         var score = 0;
         if (includesWatches)
@@ -221,6 +236,12 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
         if (includesSecurity)
         {
             score += 2;
+        }
+
+        // A canonical report should include full stacks (0 = all frames). Treat capped stacks as less complete.
+        if (maxStackFrames == 0)
+        {
+            score += 4;
         }
 
         return score;
