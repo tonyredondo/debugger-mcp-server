@@ -651,16 +651,16 @@ internal static class JsonMarkdownReportRenderer
                 sb.AppendLine("</details>");
             }
 
-            if (process.Value.TryGetProperty("environmentVariables", out var envVars) && envVars.ValueKind == JsonValueKind.Object)
+            if (process.Value.TryGetProperty("environmentVariables", out var envVars) && envVars.ValueKind == JsonValueKind.Array)
             {
                 sb.AppendLine();
                 sb.AppendLine("<details><summary>Environment variables</summary>");
                 sb.AppendLine();
-                sb.AppendLine("| Key | Value |");
-                sb.AppendLine("|---|---|");
-                foreach (var kv in envVars.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
+                var i = 0;
+                foreach (var ev in envVars.EnumerateArray())
                 {
-                    sb.AppendLine($"| `{EscapeInline(kv.Name)}` | `{EscapeInline(kv.Value.GetString() ?? kv.Value.ToString())}` |");
+                    var text = ev.ValueKind == JsonValueKind.String ? ev.GetString() : ev.ToString();
+                    sb.AppendLine($"- [{i++}] `{EscapeInline(text ?? string.Empty)}`");
                 }
                 sb.AppendLine();
                 sb.AppendLine("</details>");

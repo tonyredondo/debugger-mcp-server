@@ -162,7 +162,7 @@ public class ReportService
 
                 if (IsFaultingThread(obj))
                 {
-                    limited.Add(obj);
+                    limited.Add(obj.DeepClone());
                 }
             }
 
@@ -183,7 +183,7 @@ public class ReportService
                     continue;
                 }
 
-                limited.Add(obj);
+                limited.Add(obj.DeepClone());
             }
 
             // As a final fallback, ensure we always return something.
@@ -191,7 +191,7 @@ public class ReportService
             {
                 for (var i = 0; i < Math.Min(all.Count, options.MaxThreadsToShow); i++)
                 {
-                    limited.Add(all[i]);
+                    limited.Add(all[i]?.DeepClone());
                 }
             }
 
@@ -225,7 +225,7 @@ public class ReportService
         var truncated = new JsonArray();
         for (var i = 0; i < maxFrames && i < callStack.Count; i++)
         {
-            truncated.Add(callStack[i]);
+            truncated.Add(callStack[i]?.DeepClone());
         }
 
         thread["callStack"] = truncated;
@@ -246,7 +246,7 @@ public class ReportService
         var limited = new JsonArray();
         for (var i = 0; i < options.MaxModulesToShow && i < modules.Count; i++)
         {
-            limited.Add(modules[i]);
+            limited.Add(modules[i]?.DeepClone());
         }
 
         analysis["modules"] = limited;
@@ -261,21 +261,16 @@ public class ReportService
 
         if (analysis["environment"] is not JsonObject env ||
             env["process"] is not JsonObject process ||
-            process["environmentVariables"] is not JsonObject vars ||
+            process["environmentVariables"] is not JsonArray vars ||
             vars.Count <= options.MaxEnvironmentVariables)
         {
             return;
         }
 
-        var ordered = vars
-            .OrderBy(kvp => kvp.Key, StringComparer.Ordinal)
-            .Take(options.MaxEnvironmentVariables)
-            .ToArray();
-
-        var limited = new JsonObject();
-        foreach (var (k, v) in ordered)
+        var limited = new JsonArray();
+        for (var i = 0; i < options.MaxEnvironmentVariables && i < vars.Count; i++)
         {
-            limited[k] = v;
+            limited.Add(vars[i]?.DeepClone());
         }
 
         process["environmentVariables"] = limited;

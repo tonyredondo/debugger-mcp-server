@@ -717,16 +717,18 @@ internal static class JsonHtmlReportRenderer
                 sb.AppendLine("</details>");
             }
 
-            if (process.Value.TryGetProperty("environmentVariables", out var vars) && vars.ValueKind == JsonValueKind.Object)
+            if (process.Value.TryGetProperty("environmentVariables", out var vars) && vars.ValueKind == JsonValueKind.Array)
             {
                 sb.AppendLine("<details class=\"details\">");
                 sb.AppendLine("<summary>Environment variables</summary>");
-                sb.AppendLine("<table class=\"kv\">");
-                foreach (var kv in vars.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
+                sb.AppendLine("<pre class=\"code\"><code class=\"language-text\">");
+                var idx = 0;
+                foreach (var ev in vars.EnumerateArray())
                 {
-                    sb.AppendLine("<tr><td class=\"k\"><code>" + HttpUtility.HtmlEncode(kv.Name) + "</code></td><td class=\"v\"><code>" + HttpUtility.HtmlEncode(kv.Value.GetString() ?? kv.Value.ToString()) + "</code></td></tr>");
+                    var text = ev.ValueKind == JsonValueKind.String ? ev.GetString() : ev.ToString();
+                    sb.AppendLine(HttpUtility.HtmlEncode("[" + idx++ + "] " + (text ?? string.Empty)));
                 }
-                sb.AppendLine("</table>");
+                sb.AppendLine("</code></pre>");
                 sb.AppendLine("</details>");
             }
         }

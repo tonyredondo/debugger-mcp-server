@@ -384,6 +384,44 @@ public class ReportGeneratorTests
     }
 
     [Fact]
+    public void ReportService_GenerateReport_WhenMaxEnvironmentVariablesSet_TruncatesEnvironmentVariableListInMarkdown()
+    {
+        // Arrange
+        var service = new ReportService();
+        var analysis = CreateSampleAnalysis();
+        analysis.Environment = new EnvironmentInfo
+        {
+            Process = new ProcessInfo
+            {
+                SensitiveDataFiltered = true,
+                EnvironmentVariables = new List<string>
+                {
+                    "A=1",
+                    "B=2",
+                    "C=3",
+                    "D=4"
+                }
+            }
+        };
+
+        var options = ReportOptions.SummaryReport;
+        options.MaxEnvironmentVariables = 2;
+        options.IncludeRawJsonDetails = false;
+        var metadata = CreateSampleMetadata();
+
+        // Act
+        var report = service.GenerateReport(analysis, options, metadata);
+
+        // Assert
+        Assert.Contains("## Environment", report);
+        Assert.Contains("Environment variables", report);
+        Assert.Contains("A=1", report);
+        Assert.Contains("B=2", report);
+        Assert.DoesNotContain("C=3", report);
+        Assert.DoesNotContain("D=4", report);
+    }
+
+    [Fact]
     public void ReportService_GenerateReport_SelectsJsonGenerator()
     {
         // Arrange
