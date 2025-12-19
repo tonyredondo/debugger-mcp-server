@@ -3382,17 +3382,19 @@ public class ClrMdAnalyzer : IDisposable
                     processedStaticTypes.Add(ownerTypeName);
                     if (staticTypesScanned < maxStaticTypesToScan)
                     {
-                        var hasObjectRefStatics = false;
+                        // Prefer skipping static scanning when we can cheaply prove there are no object refs,
+                        // but if ClrMD can't enumerate static fields, treat it as "unknown" and scan best-effort.
+                        var shouldScanStatics = true;
                         try
                         {
-                            hasObjectRefStatics = objType.StaticFields.Any(sf => sf.IsObjectReference);
+                            shouldScanStatics = objType.StaticFields.Any(sf => sf.IsObjectReference);
                         }
                         catch
                         {
-                            // Best-effort; do not block owner enrichment.
+                            shouldScanStatics = true;
                         }
 
-                        if (hasObjectRefStatics)
+                        if (shouldScanStatics)
                         {
                             // Static field scanning can be expensive (types * domains). Keep a hard cap for perf.
                             staticTypesScanned++;
