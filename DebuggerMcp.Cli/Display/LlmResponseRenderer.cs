@@ -191,8 +191,10 @@ internal sealed class LlmResponseRenderer
         // Add a visual separator before titles to improve readability.
         if (output.Count > 0)
         {
-            // Use an explicit newline so Spectre emits a blank line even when the caller prints via Rows.
-            Add(output, new Markup("\n"), state, applyMaxBlocks);
+            // A renderable containing a newline will create *two* visual blank lines when printed via Rows:
+            // one from the embedded '\n' and another from Rows moving to the next row.
+            // Use a whitespace-only line instead to create exactly one blank line.
+            Add(output, new Markup(" "), state, applyMaxBlocks);
         }
 
         if (heading.Level <= 2)

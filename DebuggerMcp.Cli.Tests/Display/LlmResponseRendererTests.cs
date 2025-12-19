@@ -101,10 +101,18 @@ public class LlmResponseRendererTests
 
         using var console = new TestConsole().Width(80);
         console.Write(new Spectre.Console.Rows(blocks));
-        var output = string.Join('\n', console.Lines);
-        Assert.Contains("para", output, StringComparison.Ordinal);
-        Assert.Contains("Title", output, StringComparison.Ordinal);
-        Assert.Contains("para\n\n", output, StringComparison.Ordinal);
+        var lines = console.Lines.ToArray();
+        Assert.Contains(lines, l => l.Contains("para", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains("Title", StringComparison.Ordinal));
+
+        var paraIndex = Array.FindIndex(lines, l => l.Contains("para", StringComparison.Ordinal));
+        var titleIndex = Array.FindIndex(lines, l => l.Contains("Title", StringComparison.Ordinal));
+        Assert.True(paraIndex >= 0 && titleIndex > paraIndex);
+
+        // Exactly one whitespace-only line between para and Title.
+        var between = lines[(paraIndex + 1)..titleIndex];
+        Assert.Single(between);
+        Assert.True(string.IsNullOrWhiteSpace(between[0]));
     }
 
     [Fact]
