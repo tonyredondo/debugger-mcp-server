@@ -78,6 +78,7 @@ internal sealed class LlmTraceStore
         try
         {
             var json = JsonSerializer.Serialize(payload);
+            json = LlmTraceRedactor.RedactText(json);
             lock (_gate)
             {
                 File.AppendAllText(EventsFilePath, json + Environment.NewLine, Encoding.UTF8);

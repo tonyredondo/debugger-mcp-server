@@ -72,7 +72,7 @@ public sealed class LlmHttpTraceHandlerTests
             var trace = new LlmHttpTraceHandler(store, "openai") { InnerHandler = inner };
             using var http = new HttpClient(trace);
 
-            using var req = new HttpRequestMessage(HttpMethod.Post, "https://example.test/chat/completions")
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://example.test/chat/completions?api_key=sk-123")
             {
                 Content = new StringContent("OPENAI_API_KEY=sk-123", Encoding.UTF8, "text/plain")
             };
@@ -88,6 +88,10 @@ public sealed class LlmHttpTraceHandlerTests
             var responseText = await File.ReadAllTextAsync(responseFile);
             Assert.DoesNotContain("sk-123", responseText, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("sk-***", responseText, StringComparison.OrdinalIgnoreCase);
+
+            var eventsText = await File.ReadAllTextAsync(Path.Combine(temp, "events.jsonl"));
+            Assert.DoesNotContain("sk-123", eventsText, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("api_key=***", eventsText, StringComparison.OrdinalIgnoreCase);
         }
         finally
         {
