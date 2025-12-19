@@ -24,6 +24,8 @@ public class ReportSectionApiTests
         Assert.Contains("\"toc\"", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("analysis.threads.all", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"howToExpand\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("report_get", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("MCP: report(action=", json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

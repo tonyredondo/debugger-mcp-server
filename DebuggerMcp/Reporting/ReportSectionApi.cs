@@ -61,10 +61,10 @@ internal static class ReportSectionApi
             toc,
             howToExpand = new[]
             {
-                "Use report_get(path=\"analysis.exception\")",
-                "Use report_get(path=\"analysis.threads.faultingThread\")",
-                "Use report_get(path=\"analysis.threads.all\", limit=25, cursor=null)",
-                "Use report_get(path=\"analysis.assemblies.items\", limit=50, cursor=null)"
+                "Sampling/agent: report_get(path=\"analysis.exception\"); MCP: report(action=\"get\", path=\"analysis.exception\")",
+                "Sampling/agent: report_get(path=\"analysis.threads.faultingThread\"); MCP: report(action=\"get\", path=\"analysis.threads.faultingThread\")",
+                "Sampling/agent: report_get(path=\"analysis.threads.all\", limit=25, cursor=null); MCP: report(action=\"get\", path=\"analysis.threads.all\", limit=25)",
+                "Sampling/agent: report_get(path=\"analysis.assemblies.items\", limit=50, cursor=null); MCP: report(action=\"get\", path=\"analysis.assemblies.items\", limit=50)"
             }
         };
 
