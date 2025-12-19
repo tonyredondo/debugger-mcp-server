@@ -96,7 +96,7 @@ internal static class TranscriptRedactor
         // JSON-style pairs: "apiKey": "..."
         text = Regex.Replace(
             text,
-            @"(?i)""(openrouter_api_key|api[_-]?key|token|password|secret)""\s*:\s*""[^""]*""",
+            @"(?i)""(openrouter_api_key|openai_api_key|api[_-]?key|token|password|secret)""\s*:\s*""[^""]*""",
             "\"$1\":\"***\"",
             RegexOptions.CultureInvariant);
 
@@ -109,7 +109,14 @@ internal static class TranscriptRedactor
 
         text = Regex.Replace(
             text,
-            @"(?i)\b(openrouter_api_key|api[_-]?key|token|password|secret)\b\s*[:=]\s*([^\s]+)",
+            @"(?i)\b(openrouter_api_key|openai_api_key|api[_-]?key|token|password|secret)\b\s*[:=]\s*([^\s]+)",
+            "$1=***",
+            RegexOptions.CultureInvariant);
+
+        // Common env-var style names (underscore-separated) don't match the patterns above because "_" is a word character.
+        text = Regex.Replace(
+            text,
+            @"(?i)\b(openai_api_key|openrouter_api_key|openai[_-]?api[_-]?key|openrouter[_-]?api[_-]?key)\b\s*[:=]\s*([^\s]+)",
             "$1=***",
             RegexOptions.CultureInvariant);
 

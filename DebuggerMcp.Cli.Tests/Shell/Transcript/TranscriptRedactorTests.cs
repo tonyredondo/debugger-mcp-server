@@ -29,8 +29,10 @@ public class TranscriptRedactorTests
     [Theory]
     [InlineData("Authorization: Bearer abc.def", "Authorization: Bearer ***")]
     [InlineData("OPENROUTER_API_KEY=sk-123", "OPENROUTER_API_KEY=***")]
+    [InlineData("OPENAI_API_KEY=sk-123", "OPENAI_API_KEY=***")]
     [InlineData("apiKey: abc", "apiKey=***")]
     [InlineData("{\"apiKey\":\"abc\"}", "{\"apiKey\":\"***\"}")]
+    [InlineData("{\"openai_api_key\":\"abc\"}", "{\"openai_api_key\":\"***\"}")]
     [InlineData("Incorrect API key provided: sk-123", "Incorrect API key provided: sk-***")]
     [InlineData("Invalid key: rk-live-abc123", "Invalid key: rk-***")]
     public void RedactText_RedactsKeyValueSecrets(string input, string expected)
