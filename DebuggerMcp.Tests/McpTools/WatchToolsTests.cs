@@ -16,13 +16,14 @@ public class WatchToolsTests : IDisposable
     private readonly SymbolManager _symbolManager;
     private readonly WatchStore _watchStore;
     private readonly WatchTools _tools;
+    private const string DumpId = "dump-123";
 
     public WatchToolsTests()
     {
         _tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
         Directory.CreateDirectory(_tempPath);
 
-        _sessionManager = new DebuggerSessionManager(_tempPath);
+        _sessionManager = new DebuggerSessionManager(_tempPath, debuggerFactory: _ => new TestDebuggerManager());
         _symbolManager = new SymbolManager(_tempPath);
         _watchStore = new WatchStore(_tempPath);
         _tools = new WatchTools(_sessionManager, _symbolManager, _watchStore, NullLogger<WatchTools>.Instance);
@@ -348,5 +349,103 @@ public class WatchToolsTests : IDisposable
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             _tools.ClearWatches(sessionId, userId));
     }
-}
 
+    // ============================================================
+    // Report Cache Invalidation Tests
+    // ============================================================
+
+    [Fact]
+    public async Task AddWatch_WhenReportIsCached_ClearsCachedReport()
+    {
+        // Arrange
+        var userId = "test-user";
+        var sessionId = _sessionManager.CreateSession(userId);
+        SetDumpOpen(sessionId, userId, DumpId);
+
+        var session = _sessionManager.GetSessionInfo(sessionId, userId);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: false, includesSecurity: true);
+
+        // Act
+        await _tools.AddWatch(sessionId, userId, "0x12345678");
+
+        // Assert
+        Assert.Null(session.CachedReportDumpId);
+        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, out _));
+    }
+
+    [Fact]
+    public async Task RemoveWatch_WhenReportIsCached_ClearsCachedReport()
+    {
+        // Arrange
+        var userId = "test-user";
+        var sessionId = _sessionManager.CreateSession(userId);
+        SetDumpOpen(sessionId, userId, DumpId);
+
+        await _tools.AddWatch(sessionId, userId, "0x12345678");
+        var existing = await _watchStore.GetWatchesAsync(userId, DumpId);
+        Assert.Single(existing);
+
+        var session = _sessionManager.GetSessionInfo(sessionId, userId);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true);
+
+        // Act
+        await _tools.RemoveWatch(sessionId, userId, existing[0].Id);
+
+        // Assert
+        Assert.Null(session.CachedReportDumpId);
+        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, out _));
+    }
+
+    [Fact]
+    public async Task ClearWatches_WhenReportIsCached_ClearsCachedReport()
+    {
+        // Arrange
+        var userId = "test-user";
+        var sessionId = _sessionManager.CreateSession(userId);
+        SetDumpOpen(sessionId, userId, DumpId);
+
+        await _tools.AddWatch(sessionId, userId, "0x12345678");
+        Assert.True(await _watchStore.HasWatchesAsync(userId, DumpId));
+
+        var session = _sessionManager.GetSessionInfo(sessionId, userId);
+        session.SetCachedReport(DumpId, DateTime.UtcNow, "{ \"report\": 1 }", includesWatches: true, includesSecurity: true);
+
+        // Act
+        await _tools.ClearWatches(sessionId, userId);
+
+        // Assert
+        Assert.Null(session.CachedReportDumpId);
+        Assert.False(session.TryGetCachedReport(DumpId, requireWatches: false, requireSecurity: false, out _));
+    }
+
+    private void SetDumpOpen(string sessionId, string userId, string dumpId)
+    {
+        var manager = (TestDebuggerManager)_sessionManager.GetSession(sessionId, userId);
+        manager.IsDumpOpen = true;
+
+        var session = _sessionManager.GetSessionInfo(sessionId, userId);
+        session.CurrentDumpId = dumpId;
+    }
+
+    private sealed class TestDebuggerManager : IDebuggerManager
+    {
+        public bool IsInitialized => true;
+        public bool IsDumpOpen { get; set; }
+        public string? CurrentDumpPath => null;
+        public string DebuggerType => "LLDB";
+        public bool IsSosLoaded => false;
+        public bool IsDotNetDump => false;
+
+        public Task InitializeAsync() => Task.CompletedTask;
+        public void OpenDumpFile(string dumpFilePath, string? executablePath = null) => throw new NotSupportedException();
+        public void CloseDump() => IsDumpOpen = false;
+        public string ExecuteCommand(string command) => throw new NotSupportedException();
+        public void LoadSosExtension() => throw new NotSupportedException();
+        public void ConfigureSymbolPath(string symbolPath) => throw new NotSupportedException();
+        public void Dispose()
+        {
+        }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}

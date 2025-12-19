@@ -93,6 +93,9 @@ public class WatchTools(
         // Add to persistent store
         await WatchStore.AddWatchAsync(sanitizedUserId, session.CurrentDumpId!, watch);
 
+        // Watches affect the canonical report document; invalidate any cached report so it can be regenerated.
+        session.ClearCachedReport();
+
         return $"Watch added successfully.\n" +
                $"Watch ID: {watch.Id}\n" +
                $"Expression: {watch.Expression}\n" +
@@ -270,6 +273,9 @@ public class WatchTools(
             return $"Watch with ID '{watchId}' not found.";
         }
 
+        // Watches affect the canonical report document; invalidate any cached report so it can be regenerated.
+        session.ClearCachedReport();
+
         return $"Watch '{watchId}' removed successfully.";
     }
 
@@ -311,6 +317,9 @@ public class WatchTools(
 
         // Clear all watches
         await WatchStore.ClearWatchesAsync(sanitizedUserId, session.CurrentDumpId!);
+
+        // Watches affect the canonical report document; invalidate any cached report so it can be regenerated.
+        session.ClearCachedReport();
 
         return $"Cleared {count} watch expression(s) successfully.";
     }
