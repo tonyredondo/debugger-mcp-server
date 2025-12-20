@@ -636,7 +636,10 @@ internal static class ReportSectionApi
             return json;
         }
 
-        var previewChars = Math.Clamp(maxChars / 3, 64, DefaultPreviewChars);
+        // Preview is embedded as a JSON string in the error response, so its serialized size can grow
+        // significantly due to escaping. Keep it small relative to maxChars so we can still return
+        // suggestedPaths even at low limits.
+        var previewChars = Math.Clamp(maxChars / 8, 64, DefaultPreviewChars);
         return SerializeTooLarge(
             path,
             maxChars,
@@ -685,7 +688,7 @@ internal static class ReportSectionApi
         ReportWhere? where,
         string preview)
     {
-        var toc = BuildLocalToc(path, resolvedValue, maxEntries: MaxTocEntries);
+        var toc = BuildTooLargeToc(path, resolvedValue, maxEntries: MaxTocEntries);
         var suggested = BuildSuggestedPaths(path, toc);
 
         var message = $"Response exceeds maxChars ({maxChars}). Fetch a narrower path, or page the data (arrays: limit/cursor; objects: pageKind=\"object\" + limit/cursor).";
@@ -729,8 +732,7 @@ internal static class ReportSectionApi
                 {
                     estimatedChars,
                     maxChars,
-                    suggestedPaths = suggested.Take(5).ToList(),
-                    preview
+                    suggestedPaths = suggested.Take(5).ToList()
                 }
             }
         };
@@ -749,6 +751,25 @@ internal static class ReportSectionApi
             path,
             error = new { code = "too_large", message = "Error response exceeded maxChars." }
         }, JsonSerializationDefaults.IndentedIgnoreNull);
+    }
+
+    private static IReadOnlyList<Dictionary<string, object?>> BuildTooLargeToc(string basePath, JsonElement value, int maxEntries)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            return BuildLocalToc(basePath, value, maxEntries);
+        }
+
+        if (value.ValueKind == JsonValueKind.Array && value.GetArrayLength() > 0)
+        {
+            var first = value[0];
+            if (first.ValueKind == JsonValueKind.Object)
+            {
+                return BuildLocalToc($"{basePath}[0]", first, maxEntries);
+            }
+        }
+
+        return Array.Empty<Dictionary<string, object?>>();
     }
 
     private static string BuildPreview(string json, int maxChars)
@@ -1110,13 +1131,41 @@ internal static class ReportSectionApi
             else if (prop.Value.ValueKind == JsonValueKind.Object)
             {
                 entry["pageable"] = true;
-                entry["propertyCount"] = prop.Value.EnumerateObject().Count();
+                var capped = CountObjectPropertiesCapped(prop.Value, max: 256, out var truncated);
+                entry["propertyCount"] = capped;
+                if (truncated)
+                {
+                    entry["propertyCountIsTruncated"] = true;
+                }
             }
 
             results.Add(entry);
         }
 
         return results;
+    }
+
+    private static int CountObjectPropertiesCapped(JsonElement obj, int max, out bool truncated)
+    {
+        truncated = false;
+
+        if (obj.ValueKind != JsonValueKind.Object || max <= 0)
+        {
+            return 0;
+        }
+
+        var count = 0;
+        foreach (var _ in obj.EnumerateObject())
+        {
+            count++;
+            if (count > max)
+            {
+                truncated = true;
+                return max;
+            }
+        }
+
+        return count;
     }
 
     private static IReadOnlyList<string> BuildSuggestedPaths(string basePath, IReadOnlyList<Dictionary<string, object?>> toc)
@@ -1162,6 +1211,12 @@ internal static class ReportSectionApi
         if (preferred.Count == 0)
         {
             preferred.Add(basePath);
+
+            // For array paths, also suggest the first element (helps when the array is huge).
+            if (!basePath.EndsWith("]", StringComparison.Ordinal))
+            {
+                preferred.Add($"{basePath}[0]");
+            }
         }
 
         return preferred;

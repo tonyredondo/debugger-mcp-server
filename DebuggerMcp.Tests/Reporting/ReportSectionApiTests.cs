@@ -356,6 +356,37 @@ public class ReportSectionApiTests
         Assert.Contains("where is only supported for array", json, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void GetSection_WhenArrayResponseTooLarge_IncludesFirstElementSuggestedPaths()
+    {
+        var longText = new string('x', 4000);
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": {
+            "assemblies": {
+              "items": [
+                { "name":"a", "path":"/x/a.dll", "payload":"__LONG__" },
+                { "name":"b", "path":"/x/b.dll", "payload":"__LONG__" }
+              ]
+            }
+          }
+        }
+        """;
+        report = report.Replace("__LONG__", longText, StringComparison.Ordinal);
+
+        var json = ReportSectionApi.GetSection(
+            report,
+            "analysis.assemblies.items",
+            limit: 2,
+            cursor: null,
+            maxChars: 1000);
+
+        Assert.Contains("\"code\": \"too_large\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("suggestedPaths", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("analysis.assemblies.items[0]", json, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ExtractCursor(string json)
     {
         using var doc = JsonDocument.Parse(json);
