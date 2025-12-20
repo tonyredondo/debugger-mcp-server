@@ -200,6 +200,7 @@ dotnet run
 cd DebuggerMcp
 dotnet run -- --http
 ```
+Alias: `--api`
 
 #### MCP HTTP Mode - Unified (MCP + Upload API)
 ```bash

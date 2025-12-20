@@ -77,7 +77,7 @@ symbols datadog config
 ### Analysis (`help analysis`)
 - `analyze <type> -o <file>` - Run analysis and save output (e.g., `analyze crash -o ./crash.json`)
 - `analyze ai -o <file>` - AI-powered deep crash analysis (requires MCP sampling / LLM config)
-- `analyze perf|cpu|memory|gc|contention -o <file>` - Performance analyses (save JSON)
+- `analyze perf|cpu|memory|allocations|gc|threads|contention -o <file>` - Performance analyses (save JSON; many aliases supported)
 - `analyze security -o <file>` - Security scan (save JSON)
 - `compare <s1> <s2>` - Compare dumps
 
@@ -203,7 +203,7 @@ open <dumpId>
 analyze crash -o ./crash.json
 report -o ./crash-report.md
 ```
-Note: `analyze crash`, `analyze ai`, and `report --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
+Note: `analyze crash`, `analyze ai`, and `report -o <file> --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
 
 ### Compare Two Dumps
 ```bash

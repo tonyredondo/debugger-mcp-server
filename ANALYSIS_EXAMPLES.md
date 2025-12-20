@@ -13,7 +13,7 @@ The Debugger MCP Server includes automated analysis tools that execute relevant 
 | Tool | Description | Key parameters |
 |------|-------------|----------------|
 | `analyze` | Automated analysis (crash/AI/perf/security) | `kind`, `sessionId`, `userId`, `includeWatches?` |
-| `compare` | Compare two sessions/dumps | `kind`, `sessionId`, `userId`, `targetSessionId`, `targetUserId` |
+| `compare` | Compare two sessions/dumps | `kind`, `baselineSessionId`, `baselineUserId`, `targetSessionId`, `targetUserId` |
 | `inspect` | Object/module/SOS helpers | `kind`, `sessionId`, `userId` (+ kind-specific args) |
 | `report` | Report generation + section fetch | `action`, `sessionId`, `userId`, `format?`, `path?`, `limit?`, `cursor?`, `maxChars?` |
 | `dump` | Open/close a dump in a session | `action`, `sessionId`, `userId`, `dumpId` |

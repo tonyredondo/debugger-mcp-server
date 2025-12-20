@@ -206,6 +206,43 @@ public class DocsContractTests
 
         // Ensure report CLI usage reflects the implemented flags and formats.
         Assert.Contains("report -o <file> [-f markdown|html|json] [--summary] [--no-watches]", text, StringComparison.Ordinal);
+
+        // Avoid implying reports can be generated without an output path.
+        Assert.DoesNotContain("report --format json", text, StringComparison.Ordinal);
+        Assert.Contains("report -o <file> --format json", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CliReadme_DocumentsUpdatedDefaultsAndJsonReportNote()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "DebuggerMcp.Cli", "README.md");
+        var text = File.ReadAllText(path);
+
+        Assert.Contains("`DEBUGGER_MCP_TIMEOUT`", text, StringComparison.Ordinal);
+        Assert.Contains("| `DEBUGGER_MCP_TIMEOUT` | Request timeout (seconds) | 600 |", text, StringComparison.Ordinal);
+        Assert.Contains("| `DEBUGGER_MCP_HISTORY_FILE` | Command history file | ~/.dbg-mcp-history |", text, StringComparison.Ordinal);
+        Assert.Contains("report -o <file> --format json", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("report --format json", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Readme_HttpModeMentionsApiAlias()
+    {
+        var readme = ReadmeEndpointTable.ReadReadmeText();
+        Assert.Contains("Alias: `--api`", readme, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnalysisExamples_CompareParameters_UseBaselineSessionIds()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "ANALYSIS_EXAMPLES.md");
+        var text = File.ReadAllText(path);
+
+        Assert.Contains("baselineSessionId", text, StringComparison.Ordinal);
+        Assert.Contains("baselineUserId", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("`kind`, `sessionId`, `userId`, `targetSessionId`", text, StringComparison.Ordinal);
     }
 
     private static class ApiRouteDiscovery
