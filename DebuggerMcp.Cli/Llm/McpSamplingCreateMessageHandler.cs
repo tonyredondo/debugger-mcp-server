@@ -1076,15 +1076,21 @@ internal sealed class McpSamplingCreateMessageHandler(
             return new ParsedBlocks(string.Empty, [], []);
         }
 
+        var sb = new StringBuilder();
+        var toolCalls = new List<ChatToolCall>();
+        var toolResults = new List<ToolResult>();
+
+        if (contentProp.ValueKind == JsonValueKind.Object)
+        {
+            ExtractContentItem(contentProp, sb, toolCalls, toolResults);
+            return new ParsedBlocks(sb.ToString().Trim(), toolCalls, toolResults);
+        }
+
         if (contentProp.ValueKind != JsonValueKind.Array)
         {
             // Preserve unknown shapes as text so the model sees it.
             return new ParsedBlocks(contentProp.GetRawText(), [], []);
         }
-
-        var sb = new StringBuilder();
-        var toolCalls = new List<ChatToolCall>();
-        var toolResults = new List<ToolResult>();
 
         foreach (var item in contentProp.EnumerateArray())
         {
@@ -1098,50 +1104,63 @@ internal sealed class McpSamplingCreateMessageHandler(
             {
                 continue;
             }
-
-            var type = TryGetString(item, "type") ?? string.Empty;
-            if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
-            {
-                AppendBlock(sb, TryGetString(item, "text"));
-                continue;
-            }
-
-            if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
-            {
-                var id = TryGetString(item, "id") ?? string.Empty;
-                var name = TryGetString(item, "name") ?? string.Empty;
-                var input = TryGetProperty(item, "input", out var inputProp) ? inputProp.GetRawText() : "{}";
-                if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
-                {
-                    toolCalls.Add(new ChatToolCall(id, name, input));
-                }
-                continue;
-            }
-
-            if (string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase))
-            {
-                var toolUseId =
-                    TryGetString(item, "tool_use_id") ??
-                    TryGetString(item, "toolUseId") ??
-                    TryGetString(item, "toolCallId") ??
-                    string.Empty;
-
-                var content = TryGetProperty(item, "content", out var trContent)
-                    ? ExtractTextFromContentElement(trContent)
-                    : (TryGetString(item, "text") ?? string.Empty);
-
-                if (!string.IsNullOrWhiteSpace(toolUseId))
-                {
-                    toolResults.Add(new ToolResult(toolUseId, content));
-                }
-                continue;
-            }
-
-            // Unknown content item: preserve as compact JSON so the model still sees it.
-            AppendBlock(sb, item.GetRawText());
+            ExtractContentItem(item, sb, toolCalls, toolResults);
         }
 
         return new ParsedBlocks(sb.ToString().Trim(), toolCalls, toolResults);
+    }
+
+    private static void ExtractContentItem(
+        JsonElement item,
+        StringBuilder textBuffer,
+        List<ChatToolCall> toolCalls,
+        List<ToolResult> toolResults)
+    {
+        if (item.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        var type = TryGetString(item, "type") ?? string.Empty;
+        if (string.Equals(type, "text", StringComparison.OrdinalIgnoreCase))
+        {
+            AppendBlock(textBuffer, TryGetString(item, "text"));
+            return;
+        }
+
+        if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+        {
+            var id = TryGetString(item, "id") ?? string.Empty;
+            var name = TryGetString(item, "name") ?? string.Empty;
+            var input = TryGetProperty(item, "input", out var inputProp) ? inputProp.GetRawText() : "{}";
+            if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+            {
+                toolCalls.Add(new ChatToolCall(id, name, input));
+            }
+            return;
+        }
+
+        if (string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase))
+        {
+            var toolUseId =
+                TryGetString(item, "tool_use_id") ??
+                TryGetString(item, "toolUseId") ??
+                TryGetString(item, "toolCallId") ??
+                string.Empty;
+
+            var content = TryGetProperty(item, "content", out var trContent)
+                ? ExtractTextFromContentElement(trContent)
+                : (TryGetString(item, "text") ?? string.Empty);
+
+            if (!string.IsNullOrWhiteSpace(toolUseId))
+            {
+                toolResults.Add(new ToolResult(toolUseId, content));
+            }
+            return;
+        }
+
+        // Unknown content item: preserve as compact JSON so the model still sees it.
+        AppendBlock(textBuffer, item.GetRawText());
     }
 
     private static List<ChatToolCall> ParseOpenAiToolCalls(JsonElement messageObject)

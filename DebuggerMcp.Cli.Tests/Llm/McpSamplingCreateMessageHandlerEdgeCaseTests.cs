@@ -289,6 +289,46 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenToolResultIsSingleObjectContent_EmitsOpenAiToolRoleMessage()
+    {
+        var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-4o-mini" };
+        ChatCompletionRequest? captured = null;
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                captured = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            {
+              "role": "assistant",
+              "content": null,
+              "tool_calls": [
+                { "id":"tc1", "type":"function", "function": { "name":"exec", "arguments":"{\"command\":\"bt\"}" } }
+              ]
+            },
+            {
+              "role": "user",
+              "content":
+                { "type": "tool_result", "tool_use_id": "tc1", "content": [ { "type": "text", "text": "OUTPUT" } ] }
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(captured);
+        Assert.Contains(captured!.Messages, m => m.Role == "assistant" && m.ToolCalls is { Count: > 0 });
+        Assert.Contains(captured.Messages, m => m.Role == "tool" && m.ToolCallId == "tc1" && m.Content.Contains("OUTPUT", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenConversationShrinks_EmitsProgressAgain()
     {
         var settings = new LlmSettings { Provider = "openrouter", OpenRouterModel = "openrouter/test" };
