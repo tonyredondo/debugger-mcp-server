@@ -21,8 +21,6 @@ public class JsonHtmlReportRendererCoverageTests
 
         Assert.Contains("<!DOCTYPE html>", html, StringComparison.Ordinal);
         Assert.Contains("id=\"at-a-glance\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"root-cause\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"findings\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"faulting-thread\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"threads\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"memory-gc\"", html, StringComparison.Ordinal);
@@ -32,11 +30,10 @@ public class JsonHtmlReportRendererCoverageTests
         Assert.Contains("id=\"symbols\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"timeline\"", html, StringComparison.Ordinal);
         Assert.Contains("id=\"source-context-index\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"signature-selection\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"signature\"", html, StringComparison.Ordinal);
 
         Assert.Contains("<summary>Recommendations</summary>", html, StringComparison.Ordinal);
         Assert.Contains("Native missing examples", html, StringComparison.Ordinal);
-        Assert.Contains("Next actions", html, StringComparison.Ordinal);
         Assert.Contains("<pre class=\"code\"><code class=\"language-json\">", html, StringComparison.Ordinal); // raw JSON / code blocks
     }
 
@@ -136,18 +133,6 @@ public class JsonHtmlReportRendererCoverageTests
         var root = System.Text.Json.Nodes.JsonNode.Parse(JsonMarkdownReportRendererCoverageTests.BuildCanonicalReportJson())!.AsObject();
         var analysis = root["analysis"]!.AsObject();
 
-        var rootCause = analysis["rootCause"]!.AsObject();
-        var hypotheses = rootCause["hypotheses"]!.AsArray();
-        var hypothesis = hypotheses[0]!.AsObject();
-        hypothesis["confidence"] = "0.5";
-        hypothesis["evidence"]!.AsArray().Add(System.Text.Json.Nodes.JsonValue.Create("bad-evidence"));
-        hypotheses.Add(System.Text.Json.Nodes.JsonValue.Create("bad-hypothesis"));
-
-        var findings = analysis["findings"]!.AsArray();
-        var finding = findings[0]!.AsObject();
-        finding["evidence"]!.AsArray().Add(System.Text.Json.Nodes.JsonValue.Create("bad-evidence"));
-        findings.Add(System.Text.Json.Nodes.JsonValue.Create("bad-finding"));
-
         var threads = analysis["threads"]!.AsObject();
         threads["all"]!.AsArray().Add(System.Text.Json.Nodes.JsonValue.Create("bad-thread"));
 
@@ -206,8 +191,6 @@ public class JsonHtmlReportRendererCoverageTests
         options.IncludeRawJsonDetails = false;
 
         var html = JsonHtmlReportRenderer.Render(root.ToJsonString(), options);
-        Assert.Contains("id=\"root-cause\"", html, StringComparison.Ordinal);
-        Assert.Contains("id=\"findings\"", html, StringComparison.Ordinal);
         Assert.Contains("not found", html, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("(none)", html, StringComparison.OrdinalIgnoreCase);
     }

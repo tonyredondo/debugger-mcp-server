@@ -83,7 +83,7 @@ public class CrashAnalysisDerivedFieldsBuilderTests
     }
 
     [Fact]
-    public void PopulateDerivedFields_WhenMultipleSignalsTimersAndLohPressure_PopulatesFindingsAndRootCause()
+    public void PopulateDerivedFields_WhenMultipleSignalsTimersAndLohPressure_PopulatesSignatureSymbolsAndTimeline()
     {
         var result = CreateBaselineResult();
 
@@ -133,19 +133,20 @@ public class CrashAnalysisDerivedFieldsBuilderTests
         Assert.Equal("crash", result.Signature!.Kind);
         Assert.StartsWith("sha256:", result.Signature.Hash, StringComparison.Ordinal);
 
-        Assert.NotNull(result.Findings);
-        Assert.Contains(result.Findings!, f => f.Id == "threads.deadlock.detected");
-        Assert.Contains(result.Findings!, f => f.Id == "timers.high.count");
-        Assert.Contains(result.Findings!, f => f.Id == "memory.loh.pressure");
-        Assert.Contains(result.Findings!, f => f.Id == "symbols.native.missing");
+        Assert.Null(result.StackSelection);
+        Assert.Null(result.Findings);
+        Assert.Null(result.RootCause);
 
-        Assert.NotNull(result.RootCause);
-        Assert.NotEmpty(result.RootCause!.Hypotheses);
-        Assert.Equal("Hang/snapshot capture (SIGSTOP)", result.RootCause.Hypotheses[0].Label);
+        Assert.NotNull(result.Symbols);
+        Assert.Equal(2, result.Symbols!.Native.MissingCount);
+
+        Assert.NotNull(result.Timeline);
+        Assert.NotNull(result.Timeline!.Deadlocks);
+        Assert.Contains(result.Timeline.Deadlocks!, d => d.Kind == "monitor-cycle");
     }
 
     [Fact]
-    public void PopulateDerivedFields_WhenSigStopWithoutSignalOrException_AddsSigStopSnapshotFinding()
+    public void PopulateDerivedFields_WhenSigStopWithoutSignalOrException_ClassifiesSignatureAsHang()
     {
         var result = CreateBaselineResult();
         result.Environment = new EnvironmentInfo { CrashInfo = new CrashDiagnosticInfo { SignalName = null } };
@@ -153,8 +154,10 @@ public class CrashAnalysisDerivedFieldsBuilderTests
 
         CrashAnalysisDerivedFieldsBuilder.PopulateDerivedFields(result);
 
-        Assert.NotNull(result.Findings);
-        Assert.Contains(result.Findings!, f => f.Id == "capture.sigstop.snapshot");
+        Assert.NotNull(result.Signature);
+        Assert.Equal("hang", result.Signature!.Kind);
+        Assert.Null(result.Findings);
+        Assert.Null(result.RootCause);
     }
 
     [Theory]

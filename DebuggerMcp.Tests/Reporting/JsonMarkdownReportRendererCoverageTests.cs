@@ -22,9 +22,7 @@ public class JsonMarkdownReportRendererCoverageTests
         Assert.Contains("# Debugger MCP Report", markdown, StringComparison.Ordinal);
         Assert.Contains("## Table of Contents", markdown, StringComparison.Ordinal);
         Assert.Contains("## At a glance", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Root cause", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Findings", markdown, StringComparison.Ordinal);
-        Assert.Contains("<details><summary>Next actions</summary>", markdown, StringComparison.Ordinal);
+        Assert.Contains("<details><summary>Recommendations</summary>", markdown, StringComparison.Ordinal);
         Assert.Contains("## Faulting thread", markdown, StringComparison.Ordinal);
         Assert.Contains("## Threads", markdown, StringComparison.Ordinal);
         Assert.Contains("### Deadlock", markdown, StringComparison.Ordinal);
@@ -38,7 +36,7 @@ public class JsonMarkdownReportRendererCoverageTests
         Assert.Contains("<details><summary>Native missing examples</summary>", markdown, StringComparison.Ordinal);
         Assert.Contains("## Timeline", markdown, StringComparison.Ordinal);
         Assert.Contains("## Source context index", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Signature & stack selection", markdown, StringComparison.Ordinal);
+        Assert.Contains("## Signature", markdown, StringComparison.Ordinal);
 
         Assert.Contains("```json", markdown, StringComparison.Ordinal); // raw JSON details blocks
         Assert.Contains("<pre>", markdown, StringComparison.Ordinal);   // newline table cell escaping
@@ -109,33 +107,6 @@ public class JsonMarkdownReportRendererCoverageTests
                     ["assemblyCount"] = "1",
                     ["recommendations"] = new JsonArray("do a", "do b")
                 },
-                ["rootCause"] = new JsonObject
-                {
-                    ["hypotheses"] = new JsonArray(
-                        new JsonObject
-                        {
-                            ["label"] = "Mismatch",
-                            ["confidence"] = 0.75,
-                            ["evidence"] = new JsonArray(
-                                new JsonObject
-                                {
-                                    ["jsonPointer"] = "/analysis/exception",
-                                    ["note"] = "Evidence note"
-                                })
-                        })
-                },
-                ["findings"] = new JsonArray(
-                    new JsonObject
-                    {
-                        ["id"] = "f1",
-                        ["title"] = "Finding A",
-                        ["category"] = "perf",
-                        ["severity"] = "warning",
-                        ["confidence"] = 0.5,
-                        ["summary"] = "summary",
-                        ["evidence"] = new JsonArray(new JsonObject { ["jsonPointer"] = "/analysis/threads", ["note"] = "thread evidence" }),
-                        ["nextActions"] = new JsonArray("action 1", "action 2")
-                    }),
                 ["threads"] = new JsonObject
                 {
                     ["summary"] = new JsonObject { ["total"] = "2", ["foreground"] = "1", ["background"] = "1", ["unstarted"] = "0", ["dead"] = "0", ["pending"] = "0" },
@@ -276,7 +247,6 @@ public class JsonMarkdownReportRendererCoverageTests
                         ["status"] = "remote"
                     }),
                 ["signature"] = new JsonObject { ["kind"] = "crash", ["hash"] = "sha256:abc" },
-                ["stackSelection"] = new JsonObject { ["threadSelections"] = new JsonArray() }
             }
         };
 
@@ -357,20 +327,6 @@ public class JsonMarkdownReportRendererCoverageTests
         var root = JsonNode.Parse(BuildCanonicalReportJson())!.AsObject();
         var analysis = root["analysis"]!.AsObject();
 
-        // Root-cause: include non-object elements and a non-numeric confidence to exercise GetDouble fallback.
-        var rootCause = analysis["rootCause"]!.AsObject();
-        var hypotheses = rootCause["hypotheses"]!.AsArray();
-        var hypothesis = hypotheses[0]!.AsObject();
-        hypothesis["confidence"] = "0.5";
-        hypothesis["evidence"]!.AsArray().Add(JsonValue.Create("bad-evidence"));
-        hypotheses.Add(JsonValue.Create("not-an-object"));
-
-        // Findings: include non-object elements and non-object evidence.
-        var findings = analysis["findings"]!.AsArray();
-        var finding = findings[0]!.AsObject();
-        finding["evidence"]!.AsArray().Add(JsonValue.Create("bad-evidence"));
-        findings.Add(JsonValue.Create(123));
-
         // Threads: include non-object thread entries and non-object call stack frames.
         var threads = analysis["threads"]!.AsObject();
         threads["all"]!.AsArray().Add(JsonValue.Create("bad-thread"));
@@ -431,8 +387,6 @@ public class JsonMarkdownReportRendererCoverageTests
         options.IncludeRawJsonDetails = false;
 
         var markdown = JsonMarkdownReportRenderer.Render(root.ToJsonString(), options);
-        Assert.Contains("## Root cause", markdown, StringComparison.Ordinal);
-        Assert.Contains("## Findings", markdown, StringComparison.Ordinal);
         Assert.Contains("## Faulting thread", markdown, StringComparison.Ordinal);
         Assert.Contains("not found", markdown, StringComparison.OrdinalIgnoreCase);
     }

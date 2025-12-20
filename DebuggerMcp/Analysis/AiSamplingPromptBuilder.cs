@@ -28,8 +28,7 @@ internal static class AiSamplingPromptBuilder
             assemblies = BuildAssemblies(report.Assemblies),
             symbols = report.Symbols,
             timeline = report.Timeline,
-            signature = report.Signature,
-            stackSelection = report.StackSelection
+            signature = report.Signature
         };
 
         return JsonSerializer.Serialize(prompt, JsonSerializationDefaults.IndentedIgnoreNull);

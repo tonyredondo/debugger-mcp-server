@@ -79,8 +79,6 @@ public class JsonDerivedReportRenderingTests
                 new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
 
             Assert.Contains("## At a glance", markdown);
-            Assert.Contains("## Root cause", markdown);
-            Assert.Contains("## Findings", markdown);
             Assert.Contains("Faulting thread", markdown);
             Assert.Contains("Source context", markdown);
             Assert.Contains("line 3", markdown);
@@ -149,8 +147,6 @@ public class JsonDerivedReportRenderingTests
                 new ReportMetadata { DumpId = "d", UserId = "u", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
 
             Assert.Contains("id=\"at-a-glance\"", html);
-            Assert.Contains("id=\"root-cause\"", html);
-            Assert.Contains("id=\"findings\"", html);
             Assert.Contains("Faulting thread", html);
             Assert.Contains("Source context", html);
             Assert.Contains("line 3", html);

@@ -53,4 +53,42 @@ public class ReportServiceJsonSerializationTests
         Assert.False(analysisElement.TryGetProperty("exception", out _));
         Assert.False(analysisElement.TryGetProperty("environment", out _));
     }
+
+    [Fact]
+    public void GenerateReport_WhenFormatIsJson_DoesNotSerializeInterpretiveAnalysisFields()
+    {
+        var service = new ReportService();
+        var analysis = new CrashAnalysisResult
+        {
+            Summary = new AnalysisSummary { CrashType = "Managed", Severity = "critical" },
+            Threads = new ThreadsInfo
+            {
+                All =
+                [
+                    new ThreadInfo
+                    {
+                        ThreadId = "t1",
+                        IsFaulting = true,
+                        CallStack = [new StackFrame { Module = "m", Function = "f" }]
+                    }
+                ]
+            },
+            StackSelection = new StackSelectionInfo { ThreadSelections = [] },
+            Findings = [new AnalysisFinding { Id = "f1", Title = "Finding", Category = "test", Severity = "warning" }],
+            RootCause = new RootCauseAnalysis { Hypotheses = [] }
+        };
+
+        var json = service.GenerateReport(
+            analysis,
+            new ReportOptions { Format = ReportFormat.Json },
+            new ReportMetadata { DumpId = "dump-1", UserId = "user-1", DebuggerType = "LLDB", GeneratedAt = DateTime.UnixEpoch });
+
+        using var doc = JsonDocument.Parse(json);
+        var analysisElement = doc.RootElement.GetProperty("analysis");
+        Assert.True(analysisElement.TryGetProperty("summary", out _));
+
+        Assert.False(analysisElement.TryGetProperty("stackSelection", out _));
+        Assert.False(analysisElement.TryGetProperty("findings", out _));
+        Assert.False(analysisElement.TryGetProperty("rootCause", out _));
+    }
 }

@@ -30,8 +30,6 @@ internal static class JsonMarkdownReportRenderer
         AppendTableOfContents(sb, options);
 
         AppendAtAGlance(sb, root);
-        AppendRootCause(sb, root, includeJsonDetails);
-        AppendFindings(sb, root, includeJsonDetails);
 
         if (options.IncludeCallStacks)
         {
@@ -86,7 +84,7 @@ internal static class JsonMarkdownReportRenderer
         if (options.IncludeCallStacks && options.IncludeDotNetInfo)
         {
             AppendSourceContextIndex(sb, root, includeJsonDetails);
-            AppendSignatureAndSelection(sb, root, includeJsonDetails);
+            AppendSignature(sb, root, includeJsonDetails);
         }
 
         return sb.ToString();
@@ -139,8 +137,6 @@ internal static class JsonMarkdownReportRenderer
         sb.AppendLine();
 
         sb.AppendLine("- [At a glance](#at-a-glance)");
-        sb.AppendLine("- [Root cause](#root-cause)");
-        sb.AppendLine("- [Findings](#findings)");
         if (options.IncludeCallStacks)
         {
             sb.AppendLine("- [Faulting thread](#faulting-thread)");
@@ -184,7 +180,7 @@ internal static class JsonMarkdownReportRenderer
         if (options.IncludeCallStacks && options.IncludeDotNetInfo)
         {
             sb.AppendLine("- [Source context index](#source-context-index)");
-            sb.AppendLine("- [Signature & stack selection](#signature--stack-selection)");
+            sb.AppendLine("- [Signature](#signature)");
         }
         sb.AppendLine();
     }
@@ -1070,9 +1066,9 @@ internal static class JsonMarkdownReportRenderer
         }
     }
 
-    private static void AppendSignatureAndSelection(StringBuilder sb, JsonElement root, bool includeJsonDetails)
+    private static void AppendSignature(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
-        sb.AppendLine("## Signature & stack selection");
+        sb.AppendLine("## Signature");
         sb.AppendLine();
 
         if (!TryGetAnalysis(root, out var analysis))
@@ -1084,8 +1080,6 @@ internal static class JsonMarkdownReportRenderer
 
         if (analysis.TryGetProperty("signature", out var signature) && signature.ValueKind == JsonValueKind.Object)
         {
-            sb.AppendLine("### Signature");
-            sb.AppendLine();
             sb.AppendLine("| Key | Value |");
             sb.AppendLine("|---|---|");
             AppendTableRow(sb, "Kind", GetString(signature, "kind"));
@@ -1096,18 +1090,11 @@ internal static class JsonMarkdownReportRenderer
             {
                 sb.AppendLine();
             }
+            return;
         }
 
-        if (analysis.TryGetProperty("stackSelection", out var selection) && selection.ValueKind == JsonValueKind.Object)
-        {
-            sb.AppendLine("### Stack selection");
-            sb.AppendLine();
-            MaybeAppendJsonDetails(sb, "Stack selection JSON", selection, includeJsonDetails);
-            if (includeJsonDetails)
-            {
-                sb.AppendLine();
-            }
-        }
+        sb.AppendLine("_No signature available._");
+        sb.AppendLine();
     }
 
     private static void AppendFrameDetails(StringBuilder sb, JsonElement frame, bool includeSourceContext, bool includeJsonDetails)

@@ -99,21 +99,21 @@ public class CrashAnalysisResult
     /// Explains how each thread's "meaningful top frame" was selected.
     /// </summary>
     [JsonPropertyName("stackSelection")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore]
     public StackSelectionInfo? StackSelection { get; set; }
 
     /// <summary>
     /// Structured findings derived from the report with evidence pointers.
     /// </summary>
     [JsonPropertyName("findings")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore]
     public List<AnalysisFinding>? Findings { get; set; }
 
     /// <summary>
     /// Root cause hypotheses (confidence + evidence), not a single asserted truth.
     /// </summary>
     [JsonPropertyName("rootCause")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [JsonIgnore]
     public RootCauseAnalysis? RootCause { get; set; }
 
     /// <summary>

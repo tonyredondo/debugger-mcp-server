@@ -55,8 +55,6 @@ internal static class JsonHtmlReportRenderer
 
         RenderHeader(sb, root, options);
         RenderAtAGlance(sb, root);
-        RenderRootCause(sb, root, includeJsonDetails);
-        RenderFindings(sb, root, includeJsonDetails);
 
         if (options.IncludeCallStacks)
         {
@@ -111,7 +109,7 @@ internal static class JsonHtmlReportRenderer
         if (options.IncludeCallStacks && options.IncludeDotNetInfo)
         {
             RenderSourceContextIndex(sb, root, includeJsonDetails);
-            RenderSignatureAndSelection(sb, root, includeJsonDetails);
+            RenderSignature(sb, root, includeJsonDetails);
         }
 
         sb.AppendLine("</main>");
@@ -130,8 +128,6 @@ internal static class JsonHtmlReportRenderer
 
         sb.AppendLine("<nav class=\"nav\">");
         AppendNavLink(sb, "At a glance", "#at-a-glance");
-        AppendNavLink(sb, "Root cause", "#root-cause");
-        AppendNavLink(sb, "Findings", "#findings");
         if (options.IncludeCallStacks)
         {
             AppendNavLink(sb, "Faulting thread", "#faulting-thread");
@@ -175,7 +171,7 @@ internal static class JsonHtmlReportRenderer
         if (options.IncludeCallStacks && options.IncludeDotNetInfo)
         {
             AppendNavLink(sb, "Source context index", "#source-context-index");
-            AppendNavLink(sb, "Signature & selection", "#signature-selection");
+            AppendNavLink(sb, "Signature", "#signature");
         }
         sb.AppendLine("</nav>");
 
@@ -1082,10 +1078,10 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("</section>");
     }
 
-    private static void RenderSignatureAndSelection(StringBuilder sb, JsonElement root, bool includeJsonDetails)
+    private static void RenderSignature(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
-        sb.AppendLine("<section class=\"card\" id=\"signature-selection\">");
-        sb.AppendLine("<h2>Signature &amp; stack selection</h2>");
+        sb.AppendLine("<section class=\"card\" id=\"signature\">");
+        sb.AppendLine("<h2>Signature</h2>");
 
         if (!TryGetAnalysis(root, out var analysis))
         {
@@ -1097,23 +1093,17 @@ internal static class JsonHtmlReportRenderer
         if (analysis.TryGetProperty("signature", out var signature) && signature.ValueKind == JsonValueKind.Object)
         {
             sb.AppendLine("<div class=\"panel\">");
-            sb.AppendLine("<div class=\"panel-title\">Signature</div>");
             sb.AppendLine("<table class=\"kv\">");
             WriteKvRow(sb, "Kind", signature, "kind");
             WriteKvRow(sb, "Hash", signature, "hash");
             sb.AppendLine("</table>");
             MaybeRenderJsonDetails(sb, "Signature JSON", signature, includeJsonDetails);
             sb.AppendLine("</div>");
+            sb.AppendLine("</section>");
+            return;
         }
 
-        if (analysis.TryGetProperty("stackSelection", out var selection) && selection.ValueKind == JsonValueKind.Object)
-        {
-            sb.AppendLine("<div class=\"panel\">");
-            sb.AppendLine("<div class=\"panel-title\">Stack selection</div>");
-            MaybeRenderJsonDetails(sb, "Stack selection JSON", selection, includeJsonDetails);
-            sb.AppendLine("</div>");
-        }
-
+        sb.AppendLine("<div class=\"muted\">No signature available.</div>");
         sb.AppendLine("</section>");
     }
 

@@ -351,35 +351,6 @@ internal static class CrashAnalysisResultContract
         Assert.Contains(result.Signature.Kind, new[] { "crash", "hang", "oom", "unknown" });
         Assert.NotNull(result.Signature.Parts);
 
-        Assert.NotNull(result.StackSelection);
-        Assert.Equal(1, result.StackSelection!.Version);
-        Assert.NotNull(result.StackSelection.ThreadSelections);
-        Assert.Equal(result.Threads!.All!.Count, result.StackSelection.ThreadSelections.Count);
-
-        for (var i = 0; i < result.Threads.All.Count; i++)
-        {
-            var thread = result.Threads.All[i];
-            var selection = result.StackSelection.ThreadSelections[i];
-            Assert.Equal(thread.ThreadId ?? string.Empty, selection.ThreadId);
-
-            if (thread.CallStack.Count == 0)
-            {
-                Assert.Null(selection.SelectedFrameIndex);
-                continue;
-            }
-
-            Assert.NotNull(selection.SelectedFrameIndex);
-            Assert.InRange(selection.SelectedFrameIndex!.Value, 0, thread.CallStack.Count - 1);
-            if (selection.SkippedFrames != null)
-            {
-                foreach (var skipped in selection.SkippedFrames)
-                {
-                    Assert.InRange(skipped.FrameIndex, 0, thread.CallStack.Count - 1);
-                    Assert.False(string.IsNullOrWhiteSpace(skipped.Reason));
-                }
-            }
-        }
-
         Assert.NotNull(result.Symbols);
         var expectedMissing = result.Modules?.Count(m => m.HasSymbols == false) ?? 0;
         Assert.Equal(expectedMissing, result.Symbols!.Native.MissingCount);
@@ -387,7 +358,7 @@ internal static class CrashAnalysisResultContract
         var expectedResolved = 0;
         var expectedUnresolved = 0;
         var expectedManagedMissing = 0;
-        foreach (var thread in result.Threads.All)
+        foreach (var thread in result.Threads!.All!)
         {
             foreach (var frame in thread.CallStack)
             {
@@ -418,35 +389,5 @@ internal static class CrashAnalysisResultContract
         Assert.Equal(1, result.Timeline!.Version);
         Assert.Equal("snapshot", result.Timeline.Kind);
         Assert.Equal(Math.Min(result.Threads.All.Count, 200), result.Timeline.Threads.Count);
-
-        Assert.NotNull(result.Findings);
-        foreach (var finding in result.Findings!)
-        {
-            Assert.False(string.IsNullOrWhiteSpace(finding.Id));
-            Assert.False(string.IsNullOrWhiteSpace(finding.Title));
-            Assert.InRange(finding.Confidence, 0, 1);
-            if (finding.Evidence != null)
-            {
-                foreach (var evidence in finding.Evidence)
-                {
-                    Assert.StartsWith("/analysis/", evidence.JsonPointer);
-                }
-            }
-        }
-
-        Assert.NotNull(result.RootCause);
-        Assert.NotNull(result.RootCause!.Hypotheses);
-        foreach (var hypothesis in result.RootCause.Hypotheses)
-        {
-            Assert.False(string.IsNullOrWhiteSpace(hypothesis.Label));
-            Assert.InRange(hypothesis.Confidence, 0, 1);
-            if (hypothesis.Evidence != null)
-            {
-                foreach (var evidence in hypothesis.Evidence)
-                {
-                    Assert.StartsWith("/analysis/", evidence.JsonPointer);
-                }
-            }
-        }
     }
 }

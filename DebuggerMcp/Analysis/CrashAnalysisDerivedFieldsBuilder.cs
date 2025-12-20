@@ -21,12 +21,14 @@ internal static class CrashAnalysisDerivedFieldsBuilder
             return;
         }
 
-        result.StackSelection = BuildStackSelection(result);
+        // Only populate deterministic, data-oriented derived fields.
+        // Interpretive fields (rootCause/findings/stackSelection) are intentionally excluded from the canonical report.
+        result.StackSelection = null;
         result.Signature = BuildSignature(result);
         result.Symbols = BuildSymbols(result);
         result.Timeline = BuildTimeline(result);
-        result.Findings = BuildFindings(result);
-        result.RootCause = BuildRootCause(result);
+        result.Findings = null;
+        result.RootCause = null;
     }
 
     private static StackSelectionInfo BuildStackSelection(CrashAnalysisResult result)
