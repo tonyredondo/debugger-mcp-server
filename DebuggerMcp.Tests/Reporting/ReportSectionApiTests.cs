@@ -289,6 +289,73 @@ public class ReportSectionApiTests
         Assert.Contains("preview", json, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void GetSection_WhenCursorIsLegacyButQueryUsesSelect_ReturnsInvalidCursor()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "threads": { "all": [ { "id":1, "name":"a" }, { "id":2, "name":"b" } ] } }
+        }
+        """;
+
+        // Legacy cursors (no queryHash) should only work for the default query (no select/where).
+        var legacyCursor = EncodeCursor(path: "analysis.threads.all", offset: 1, limit: 1);
+        var json = ReportSectionApi.GetSection(
+            report,
+            "analysis.threads.all",
+            limit: 1,
+            cursor: legacyCursor,
+            maxChars: 50_000,
+            pageKind: null,
+            select: new[] { "id" },
+            where: null);
+
+        Assert.Contains("\"code\": \"invalid_cursor\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("does not match the current query", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetSection_WhenArrayPath_PageKindDoesNotAffectCursor()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "threads": { "all": [ { "id":1 }, { "id":2 }, { "id":3 } ] } }
+        }
+        """;
+
+        // Even if the caller mistakenly sets pageKind to "object", array paging must remain stable.
+        var first = ReportSectionApi.GetSection(report, "analysis.threads.all", limit: 1, cursor: null, maxChars: 50_000, pageKind: "object");
+        var second = ReportSectionApi.GetSection(report, "analysis.threads.all", limit: 1, cursor: ExtractCursor(first), maxChars: 50_000, pageKind: "array");
+
+        Assert.Contains("\"id\": 2", second, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetSection_WhenWhereProvidedForObject_ReturnsInvalidArgument()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "exception": { "type":"System.Exception", "message":"boom" } }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(
+            report,
+            "analysis.exception",
+            limit: null,
+            cursor: null,
+            maxChars: 50_000,
+            pageKind: null,
+            select: null,
+            where: new ReportSectionApi.ReportWhere("type", "System.Exception", CaseInsensitive: true));
+
+        Assert.Contains("\"code\": \"invalid_argument\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("where is only supported for array", json, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ExtractCursor(string json)
     {
         using var doc = JsonDocument.Parse(json);

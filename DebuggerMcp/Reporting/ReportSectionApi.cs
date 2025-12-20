@@ -121,10 +121,14 @@ internal static class ReportSectionApi
             return SerializeError(path, "invalid_path", resolveError ?? $"Path '{path}' does not exist.", maxResponseChars);
         }
 
-        var queryHash = ComputeQueryHash(effectivePageKind, effectiveSelect, effectiveWhere);
+        if (effectiveWhere != null && value.ValueKind != JsonValueKind.Array)
+        {
+            return SerializeError(path, "invalid_argument", "where is only supported for array paths.", maxResponseChars);
+        }
 
         if (value.ValueKind == JsonValueKind.Array)
         {
+            var queryHash = ComputeQueryHash(pageKind: "array", select: effectiveSelect, where: effectiveWhere);
             var totalCount = value.GetArrayLength();
             var filtered = ApplyWhereFilter(value, effectiveWhere);
             var page = ResolvePage(path, kind: "array", length: filtered.Count, limit, cursor, queryHash, out var pageError);
@@ -160,13 +164,14 @@ internal static class ReportSectionApi
                 }
             };
 
-            return SerializeBounded(response, maxResponseChars, path, value, effectivePageKind, effectiveSelect, effectiveWhere);
+            return SerializeBounded(response, maxResponseChars, path, value, pageKind: "array", select: effectiveSelect, where: effectiveWhere);
         }
 
         if (value.ValueKind == JsonValueKind.Object &&
             (effectivePageKind is "object" or "auto") &&
             value.EnumerateObject().Any())
         {
+            var queryHash = ComputeQueryHash(pageKind: "object", select: effectiveSelect, where: null);
             List<string> properties;
             if (effectiveSelect is { Count: > 0 })
             {
@@ -224,6 +229,11 @@ internal static class ReportSectionApi
         }
 
         var responseObj = new { path, value = ProjectElement(value, effectiveSelect) };
+
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            return SerializeError(path, "invalid_cursor", "Cursor cannot be used for this path because the value is not pageable (array, or object paging enabled via pageKind=\"object\").", maxResponseChars);
+        }
 
         return SerializeBounded(responseObj, maxResponseChars, path, value, effectivePageKind, effectiveSelect, effectiveWhere);
     }
@@ -518,8 +528,14 @@ internal static class ReportSectionApi
                 return default;
             }
 
-            if (!string.IsNullOrWhiteSpace(decoded.QueryHash) &&
-                !string.Equals(decoded.QueryHash, queryHash, StringComparison.Ordinal))
+            var decodedHash = decoded.QueryHash;
+            if (string.IsNullOrWhiteSpace(decodedHash))
+            {
+                // Back-compat: v0 cursors didn't include queryHash; treat them as the default query for this kind.
+                decodedHash = ComputeQueryHash(kind, select: null, where: null);
+            }
+
+            if (!string.Equals(decodedHash, queryHash, StringComparison.Ordinal))
             {
                 error = "Cursor does not match the current query (select/where/pageKind changed).";
                 return default;
