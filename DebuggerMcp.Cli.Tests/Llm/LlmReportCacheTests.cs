@@ -320,4 +320,67 @@ public class LlmReportCacheTests
             Assert.False(rel.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal));
         }
     }
+
+    [Fact]
+    public void LooksLikeDebuggerMcpReport_WhenFileMissing_ReturnsFalse()
+    {
+        var missingPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"), "missing-report.json");
+        Assert.False(LlmReportCache.LooksLikeDebuggerMcpReport(missingPath));
+    }
+
+    [Fact]
+    public void BuildOrLoadCachedReport_WhenPrimitiveValueExceedsCap_WritesTruncatedPlaceholderSection()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache-root");
+        Directory.CreateDirectory(tempRoot);
+
+        var reportPath = Path.Combine(tempRoot, "report.json");
+        var pad = new string('p', 50_000);
+        File.WriteAllText(reportPath, $$"""
+        {
+          "metadata": { "dumpId": "d1" },
+          "analysis": {
+            "environment": { "os": "linux", "pad": "{{pad}}" }
+          }
+        }
+        """);
+
+        var cached = LlmReportCache.BuildOrLoadCachedReport(reportPath, cacheRoot, maxSectionBytes: 10_000);
+
+        var padSection = Assert.Single(cached.Sections, s => s.JsonPointer == "/analysis/environment/pad");
+        Assert.True(File.Exists(padSection.FilePath));
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(padSection.FilePath));
+        Assert.Equal(JsonValueKind.Object, doc.RootElement.ValueKind);
+        Assert.True(doc.RootElement.GetProperty("truncated").GetBoolean());
+        Assert.Equal("/analysis/environment/pad", doc.RootElement.GetProperty("jsonPointer").GetString());
+    }
+
+    [Fact]
+    public void BuildOrLoadCachedReport_WhenArrayContainsPrimitives_UsesIndexKeysForChildren()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache-root");
+        Directory.CreateDirectory(tempRoot);
+
+        var reportPath = Path.Combine(tempRoot, "report.json");
+        var numbers = string.Join(", ", Enumerable.Range(0, 200));
+        File.WriteAllText(reportPath, $$"""
+        {
+          "metadata": { "dumpId": "d1" },
+          "analysis": {
+            "environment": { "os": "linux" },
+            "numbers": [ {{numbers}} ]
+          }
+        }
+        """);
+
+        var cached = LlmReportCache.BuildOrLoadCachedReport(reportPath, cacheRoot, maxSectionBytes: 1_000);
+
+        Assert.Contains(cached.Sections, s => s.JsonPointer == "/analysis/numbers/0");
+        Assert.Contains(cached.Sections, s => s.JsonPointer == "/analysis/numbers/199");
+        Assert.Contains(cached.Sections, s => s.SectionId.Contains("analysis.numbers[0]", StringComparison.Ordinal));
+        Assert.Contains(cached.Sections, s => s.SectionId.Contains("analysis.numbers[199]", StringComparison.Ordinal));
+    }
 }

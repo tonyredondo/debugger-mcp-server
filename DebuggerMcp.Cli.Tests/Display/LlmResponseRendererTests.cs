@@ -407,6 +407,229 @@ public class LlmResponseRendererTests
         Assert.Contains("HtmlBlock", output, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void Render_EmptyString_ReturnsSingleEmptyBlock()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render(string.Empty, consoleWidth: 80);
+
+        Assert.Single(blocks);
+        Assert.IsType<Markup>(blocks[0]);
+    }
+
+    [Fact]
+    public void Render_WhitespaceOnlyText_FallsBackToAnsiText()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render(" \n \n", consoleWidth: 80);
+
+        Assert.NotEmpty(blocks);
+        Assert.Contains(blocks, b => b is Markup);
+    }
+
+    [Fact]
+    public void Render_IndentedCodeBlock_RendersPanel()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("    hello\n    world\n", consoleWidth: 80);
+
+        Assert.Contains(blocks, b => b is Panel);
+    }
+
+    [Fact]
+    public void Render_ThematicBreak_RendersRule()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("before\n\n---\n\nafter\n", consoleWidth: 80);
+
+        Assert.Contains(blocks, b => b is Rule r && string.IsNullOrEmpty(r.Title));
+    }
+
+    [Fact]
+    public void Render_ListItemWithNoParagraph_RendersPrefixOnly()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("-\n  - child\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+
+        Assert.Contains("  - child", output, StringComparison.Ordinal);
+        Assert.Contains("\n-\n", "\n" + output + "\n", StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_HandlesItalicAndUnderline()
+    {
+        var text = "\u001B[3;4;31mhi\u001B[0m";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("[italic underline red]hi[/]", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_CanDisableStylesAndResetColors()
+    {
+        var text = "\u001B[1;3;4;31mhi\u001B[22;23;24;39mbye";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("[bold italic underline red]hi[/]bye", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_HandlesBrightColors()
+    {
+        var text = "\u001B[90mhi\u001B[0m";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("[grey]hi[/]", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_IgnoresUnsupportedSgrCodes()
+    {
+        var text = "\u001B[38;5;200mhi\u001B[0m";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("hi", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_StripAnsi_RemovesCommonSequences()
+    {
+        var text = "\u001B[31mred\u001B[0m \u001B[2Jclear \u001B]0;title\u0007ok";
+        var stripped = AnsiToSpectreMarkup.StripAnsi(text);
+        Assert.Equal("red clear ok", stripped);
+    }
+
+    [Fact]
+    public void Render_SoftLineBreak_RendersAsSpace()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("a\nb\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+
+        Assert.Contains("a b", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_HardLineBreak_RendersAsNewline()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("a  \nb\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+
+        Assert.Contains("a", output, StringComparison.Ordinal);
+        Assert.Contains("b", output, StringComparison.Ordinal);
+        Assert.Contains("a\nb", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_InlineHtml_FallsBackToInlineToString()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("hello <span>hi</span> world\n", consoleWidth: 120);
+
+        using var console = new TestConsole().Width(120);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+
+        Assert.Contains("hello", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hi", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Render_Table_FallbackWithManyRows_AddsMoreRowsMarker()
+    {
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine("| A | B |");
+        sb.AppendLine("|---|---|");
+        for (var i = 0; i < 10; i++)
+        {
+            sb.AppendLine($"| a{i} |  |");
+        }
+
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxTableColumns = 1, MaxTableRows = 2 });
+        var blocks = renderer.Render(sb.ToString(), consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+
+        Assert.Contains("a0", output, StringComparison.Ordinal);
+        Assert.Contains("more rows", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Render_List_WhenMaxBlocksIsHit_AddsTruncationMarker()
+    {
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxBlocks = 1 });
+        var blocks = renderer.Render("- a\n- b\n- c\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+
+        Assert.Contains("output truncated", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_Convert_WhenNullOrEmpty_ReturnsEmpty()
+    {
+        Assert.Equal(string.Empty, AnsiToSpectreMarkup.Convert(null));
+        Assert.Equal(string.Empty, AnsiToSpectreMarkup.Convert(string.Empty));
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_StripAnsi_WhenNullOrEmpty_ReturnsEmpty()
+    {
+        Assert.Equal(string.Empty, AnsiToSpectreMarkup.StripAnsi(null));
+        Assert.Equal(string.Empty, AnsiToSpectreMarkup.StripAnsi(string.Empty));
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_Convert_WhenTextEndsWithEscape_SkipsIncompleteSequence()
+    {
+        var text = "hi\u001B";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("hi", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_Convert_WhenEscapeIsNotSgrOrKnownAnsi_LeavesFollowingText()
+    {
+        var text = "\u001BXYZ";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("XYZ", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_Convert_WhenCsiSequenceIsIncomplete_SkipsToEnd()
+    {
+        var text = "\u001B[31";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal(string.Empty, markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_Convert_WhenOscTerminatesWithEscapeBackslash_SkipsSequence()
+    {
+        var text = "\u001B]0;title\u001B\\hello";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("hello", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_ConvertsSgrWithLeadingEmptyCode()
+    {
+        var text = "\u001B[;31mhi\u001B[0m";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("[red]hi[/]", markup);
+    }
+
     private static int CountOccurrences(string haystack, string needle)
     {
         if (needle.Length == 0)

@@ -276,4 +276,148 @@ public class OpenAiClientTests
         Assert.Contains("truncated", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(ex.Message.Length < 50_000);
     }
+
+    [Fact]
+    public async Task ChatCompletionAsync_EncodesToolAndAssistantToolCallsAndProviderFields()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-4o-mini",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        using var providerDoc = JsonDocument.Parse("""{ "effort": "high" }""");
+        using var reservedDoc = JsonDocument.Parse("\"tc1\"");
+        using var toolSchemaDoc = JsonDocument.Parse("""{ "type":"object","properties":{"command":{"type":"string"}} }""");
+
+        IReadOnlyList<ChatToolCall> assistantToolCalls =
+        [
+            new ChatToolCall("tc1", "exec", "{\"command\":\"bt\"}")
+        ];
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = "{\"choices\":[{\"message\":{\"content\":\"hello\"}}]}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        _ = await client.ChatCompletionAsync(
+            new ChatCompletionRequest
+            {
+                Messages =
+                [
+                    new ChatMessage("user", "hi", toolCallId: null, toolCalls: null, providerMessageFields: new Dictionary<string, JsonElement>
+                    {
+                        // Reserved key: should not appear as extension data.
+                        ["tool_call_id"] = reservedDoc.RootElement.Clone()
+                    }),
+                    new ChatMessage(
+                        "assistant",
+                        string.Empty,
+                        toolCallId: null,
+                        toolCalls: assistantToolCalls,
+                        providerMessageFields: new Dictionary<string, JsonElement>
+                        {
+                            ["reasoning"] = providerDoc.RootElement.Clone(),
+                            ["role"] = reservedDoc.RootElement.Clone(),
+                            ["content"] = reservedDoc.RootElement.Clone()
+                        }),
+                    new ChatMessage("tool", "bt-output", toolCallId: "tc1", toolCalls: null)
+                ],
+                Tools =
+                [
+                    new ChatTool
+                    {
+                        Name = "exec",
+                        Description = "run",
+                        Parameters = toolSchemaDoc.RootElement.Clone()
+                    }
+                ]
+            });
+
+        Assert.NotNull(handler.LastRequestBody);
+        using var doc = JsonDocument.Parse(handler.LastRequestBody!);
+
+        var messages = doc.RootElement.GetProperty("messages");
+        Assert.Equal(3, messages.GetArrayLength());
+
+        // User message does not gain tool_call_id from provider fields.
+        Assert.False(messages[0].TryGetProperty("tool_call_id", out _));
+
+        // Assistant tool calls are encoded and empty content is omitted/null.
+        Assert.True(messages[1].TryGetProperty("tool_calls", out var toolCalls));
+        Assert.Equal(1, toolCalls.GetArrayLength());
+        Assert.Equal("tc1", toolCalls[0].GetProperty("id").GetString());
+        Assert.Equal("exec", toolCalls[0].GetProperty("function").GetProperty("name").GetString());
+
+        // Provider-specific fields included as extension data.
+        Assert.True(messages[1].TryGetProperty("reasoning", out var reasoning));
+        Assert.Equal("high", reasoning.GetProperty("effort").GetString());
+
+        // Tool message includes tool_call_id.
+        Assert.Equal("tc1", messages[2].GetProperty("tool_call_id").GetString());
+
+        // Tool schema passed through.
+        var tools = doc.RootElement.GetProperty("tools");
+        Assert.Equal(1, tools.GetArrayLength());
+        Assert.Equal("exec", tools[0].GetProperty("function").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task ChatAsync_WhenErrorBodyEmpty_Throws()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-4o-mini",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent(string.Empty, Encoding.UTF8, "text/plain")
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync([new ChatMessage("user", "hi")]));
+        Assert.Contains("OpenAI request failed", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ChatAsync_WhenErrorBodyHasInvalidUtf8_DoesNotThrowDecoderExceptions()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-4o-mini",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        var bytes = new byte[] { 0xFF, 0xFF, 0x61 };
+        var handler = new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            Content = new ByteArrayContent(bytes)
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        var ex = await Assert.ThrowsAsync<HttpRequestException>(() => client.ChatAsync([new ChatMessage("user", "hi")]));
+        Assert.Contains("OpenAI request failed", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
 }

@@ -8,6 +8,19 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 public class LlmFileAttachmentsTests
 {
     [Fact]
+    public void ExtractAndLoad_WhenPromptWhitespace_ReturnsNoAttachments()
+    {
+        var prompt = " \n\t";
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            prompt,
+            baseDirectory: Environment.CurrentDirectory);
+
+        Assert.Equal(prompt, cleaned);
+        Assert.Empty(attachments);
+        Assert.Empty(reports);
+    }
+
+    [Fact]
     public void ExtractAndLoad_RewritesPromptAndLoadsFile()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
@@ -269,6 +282,69 @@ public class LlmFileAttachmentsTests
     }
 
     [Fact]
+    public void ExtractAndLoad_WhenFileEmpty_MarksUnavailable()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        var filePath = Path.Combine(tempRoot, "empty.txt");
+        File.WriteAllText(filePath, string.Empty);
+
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze @./empty.txt please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1024,
+            maxTotalBytes: 10_000);
+
+        Assert.Contains("(<unavailable: ./empty.txt>)", cleaned, StringComparison.Ordinal);
+        Assert.Empty(attachments);
+        Assert.Empty(reports);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_WhenMaxBytesTooSmallForTruncationMarker_ReturnsPrefixOnly()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        var filePath = Path.Combine(tempRoot, "tiny.txt");
+        File.WriteAllText(filePath, new string('x', 200));
+
+        var (_, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze @./tiny.txt please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 5,
+            maxTotalBytes: 50_000);
+
+        Assert.Empty(reports);
+        var a = Assert.Single(attachments);
+        Assert.True(a.Truncated);
+        Assert.True(a.Content.Length <= 5);
+        Assert.DoesNotContain("file truncated", a.Content, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_WhenFileContainsInvalidUtf8Bytes_DoesNotThrowAndPreservesAsciiSuffix()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        var filePath = Path.Combine(tempRoot, "invalid.bin");
+        var bytes = new byte[] { 0xFF, 0xFE, 0xFD, 0xFC, 0xFB, (byte)'a', (byte)'b', (byte)'c' };
+        File.WriteAllBytes(filePath, bytes);
+
+        var (_, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            "Analyze @./invalid.bin please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1024,
+            maxTotalBytes: 50_000);
+
+        Assert.Empty(reports);
+        var a = Assert.Single(attachments);
+        Assert.Contains("abc", a.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExtractAndLoad_FileContainingBackticks_UsesLongerFence()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
@@ -287,6 +363,51 @@ public class LlmFileAttachmentsTests
         // Should not use the same ``` fence when the content contains ```.
         Assert.DoesNotContain("\n```markdown\nbefore\n```\ninside", a.MessageForModel, StringComparison.Ordinal);
         Assert.Contains("````", a.MessageForModel, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExtractAndLoad_WhenReportIndexBudgetTooSmall_TruncatesIndexBeforeSummary()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        Directory.CreateDirectory(cacheRoot);
+
+        var reportPath = Path.Combine(tempRoot, "big-report.json");
+        var report = new
+        {
+            metadata = new { dumpId = "dump-1" },
+            analysis = new
+            {
+                environment = new { os = "linux" },
+                threads = new { },
+                padding = new string('x', 50_000)
+            }
+        };
+        File.WriteAllText(reportPath, System.Text.Json.JsonSerializer.Serialize(report));
+
+        var displayPath = $"./{Path.GetFileName(reportPath)}";
+        var cached = LlmReportCache.BuildOrLoadCachedReport(reportPath, cacheRoot, maxSectionBytes: 1_000);
+        var manifestBytes = Encoding.UTF8.GetByteCount(cached.ManifestJson);
+        var indexSuffix = "... (truncated report index) ...";
+        var indexSuffixBytes = Encoding.UTF8.GetByteCount(Environment.NewLine + indexSuffix);
+        var budgetForPayload = Math.Max(1, Math.Min(manifestBytes - 1, Math.Max(60, indexSuffixBytes + 8)));
+        var wrapperOverhead = LlmReportCache.BuildModelAttachmentMessage(displayPath, summaryJson: string.Empty, manifestJson: string.Empty);
+        var reportWrapperBytes = Encoding.UTF8.GetByteCount(wrapperOverhead);
+        var maxTotalBytes = reportWrapperBytes + budgetForPayload;
+
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            $"Analyze @{displayPath} please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1_000,
+            maxTotalBytes: maxTotalBytes,
+            cacheRootDirectory: cacheRoot);
+
+        Assert.Contains("(<attached:", cleaned);
+        Assert.Empty(attachments);
+        var r = Assert.Single(reports);
+        Assert.Contains("truncated report index", r.MessageForModel, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Encoding.UTF8.GetByteCount(r.MessageForModel) <= maxTotalBytes);
     }
 
     [Fact]

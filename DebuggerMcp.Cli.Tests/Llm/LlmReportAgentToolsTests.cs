@@ -8,6 +8,29 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 public class LlmReportAgentToolsTests
 {
     [Fact]
+    public void GetTools_ReturnsFindAndGetTools_WithExpectedSchemas()
+    {
+        var tools = LlmReportAgentTools.GetTools();
+        Assert.Equal(2, tools.Count);
+
+        var find = Assert.Single(tools, t => t.Name == "find_report_sections");
+        Assert.False(string.IsNullOrWhiteSpace(find.Description));
+        Assert.True(find.Parameters.TryGetProperty("properties", out var findProps));
+        Assert.True(findProps.TryGetProperty("query", out var querySchema));
+        Assert.Equal("string", querySchema.GetProperty("type").GetString());
+        Assert.True(find.Parameters.TryGetProperty("required", out var required));
+        Assert.Contains(required.EnumerateArray(), v => string.Equals(v.GetString(), "query", StringComparison.Ordinal));
+
+        var get = Assert.Single(tools, t => t.Name == "get_report_section");
+        Assert.False(string.IsNullOrWhiteSpace(get.Description));
+        Assert.True(get.Parameters.TryGetProperty("properties", out var getProps));
+        Assert.True(getProps.TryGetProperty("sectionId", out _));
+        Assert.True(getProps.TryGetProperty("jsonPointer", out _));
+        Assert.True(getProps.TryGetProperty("maxChars", out var maxCharsSchema));
+        Assert.Equal("integer", maxCharsSchema.GetProperty("type").GetString());
+    }
+
+    [Fact]
     public void IsReportTool_RecognizesReportTools()
     {
         Assert.True(LlmReportAgentTools.IsReportTool("find_report_sections"));
@@ -38,6 +61,28 @@ public class LlmReportAgentToolsTests
         var report = CreateReport(dir.Path, "r1.json");
 
         var call = new ChatToolCall("c1", "find_report_sections", "{not-json");
+        var result = await LlmReportAgentTools.ExecuteAsync(call, [report], CancellationToken.None);
+        Assert.Contains("Invalid tool arguments", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Get_WhenArgsMissing_ReturnsError()
+    {
+        using var dir = new TempDirectory();
+        var report = CreateReport(dir.Path, "r1.json");
+
+        var call = new ChatToolCall("c1", "get_report_section", "   ");
+        var result = await LlmReportAgentTools.ExecuteAsync(call, [report], CancellationToken.None);
+        Assert.Contains("Missing tool arguments", result, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Get_WhenArgsInvalidJson_ReturnsError()
+    {
+        using var dir = new TempDirectory();
+        var report = CreateReport(dir.Path, "r1.json");
+
+        var call = new ChatToolCall("c1", "get_report_section", "{not-json");
         var result = await LlmReportAgentTools.ExecuteAsync(call, [report], CancellationToken.None);
         Assert.Contains("Invalid tool arguments", result, StringComparison.OrdinalIgnoreCase);
     }
@@ -196,6 +241,21 @@ public class LlmReportAgentToolsTests
         Assert.True(truncated.GetBoolean());
         Assert.True(doc.RootElement.TryGetProperty("content", out var content));
         Assert.True(content.TryGetProperty("text", out _));
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_Get_WhenJsonPointerProvided_LoadsSection()
+    {
+        using var dir = new TempDirectory();
+        var report = CreateReport(dir.Path, "r1.json");
+
+        var call = new ChatToolCall("c1", "get_report_section", "{\"jsonPointer\":\"/analysis/exception\"}");
+        var json = await LlmReportAgentTools.ExecuteAsync(call, [report], CancellationToken.None);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.True(doc.RootElement.TryGetProperty("content", out var content));
+        Assert.True(content.TryGetProperty("hello", out var hello));
+        Assert.Equal("world", hello.GetString());
     }
 
     private static LlmFileAttachments.ReportAttachmentContext CreateReport(string rootDir, string fileName)
