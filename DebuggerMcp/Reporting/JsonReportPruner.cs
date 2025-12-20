@@ -81,7 +81,6 @@ internal static class JsonReportPruner
             analysis.Remove("assemblies");
             analysis.Remove("symbols");
             analysis.Remove("signature");
-            analysis.Remove("stackSelection");
             analysis.Remove("sourceContext");
         }
 
@@ -247,4 +246,3 @@ internal static class JsonReportPruner
         process["environmentVariables"] = limited;
     }
 }
-

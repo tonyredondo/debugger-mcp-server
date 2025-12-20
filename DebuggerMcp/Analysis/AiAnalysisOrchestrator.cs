@@ -522,9 +522,9 @@ public sealed class AiAnalysisOrchestrator(
         sb.AppendLine();
         sb.AppendLine("Before calling analysis_complete, gather at least one additional piece of evidence using tools.");
         sb.AppendLine("Minimum recommended sequence:");
+        sb.AppendLine("- report_get(path=\"analysis.summary\")");
         sb.AppendLine("- report_get(path=\"analysis.exception\")");
         sb.AppendLine("- report_get(path=\"analysis.threads.faultingThread\")");
-        sb.AppendLine("- report_get(path=\"analysis.rootCause\")");
         sb.AppendLine("- report_get(path=\"analysis.environment\")");
         sb.AppendLine("- report_get(path=\"analysis.assemblies.items\", limit=50)");
         sb.AppendLine();
