@@ -9,11 +9,12 @@ Artifacts:
 - Server: `DebuggerMcp.Tests/TestResults/coverage/coverage.cobertura.xml`
 - CLI: `DebuggerMcp.Cli.Tests/TestResults/coverage/coverage.cobertura.xml`
 
-Current (last run via `dotnet test`):
+Note: do not hardcode “current coverage %” in this document. It drifts immediately.
 
-- Server: **54.96% line**, **46.82% branch**
-- CLI: **66.15% line**, **47.80% branch**
-- Combined (weighted by valid lines): **56.35% line**, **46.90% branch**
+To get the current baseline:
+
+- Quick per-project summary: `dotnet test` (prints per-test-project coverage summary)
+- Combined report (optional HTML): `./coverage.sh` (prints `./TestResults/coverage-report/Summary.txt` when `reportgenerator` is installed)
 
 ## How to run coverage
 
@@ -30,7 +31,7 @@ Current (last run via `dotnet test`):
 2. Prioritize “uncovered lines” over “lowest %” (big red files first).
 3. When code is hard to test, refactor into small pure helpers (parsers/mappers/classifiers) and unit test those.
 4. Keep environment-variable tests isolated/serialized to avoid flakiness.
-5. Every batch ends with `dotnet test` (coverage) and updating this baseline section.
+5. Every batch ends with `dotnet test` (coverage) and (optionally) refreshing any screenshots/examples.
 
 ## Prioritized hotspots (largest uncovered files)
 

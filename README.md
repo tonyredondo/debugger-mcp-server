@@ -544,9 +544,7 @@ dotnet test --filter "FullyQualifiedName~DebuggerFactoryTests"
 
 ### Code Coverage
 
-| Module | Line | Branch | Method |
-|--------|------|--------|--------|
-| DebuggerMcp | 59.55% | 56.11% | 73.3% |
+Coverage is collected via Coverlet (see `coverlet.runsettings`) and printed as a per-test-project summary during `dotnet test`.
 
 To generate HTML reports:
 ```bash
@@ -562,9 +560,7 @@ xdg-open ./TestResults/coverage-report/index.html  # Linux
 ```
 
 ### Test Statistics
-- **Total Tests**: ~1170 across 59 test files
-- **Pass Rate**: 100%
-- **Coverage Areas**:
+The repository includes extensive xUnit coverage for both the server and CLI, including:
   - Automated crash analysis (CrashAnalyzer, DotNetCrashAnalyzer)
   - Security components (PathSanitizer, DumpFileValidator, SymbolFileValidator)
   - Session management (DebuggerSessionManager)

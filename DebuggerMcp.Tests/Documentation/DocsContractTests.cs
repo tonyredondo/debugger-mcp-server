@@ -131,6 +131,20 @@ public class DocsContractTests
             "README.md is missing MCP resource URIs:\n" + string.Join('\n', missing));
     }
 
+    [Fact]
+    public void Readme_DoesNotHardcodeCoverageOrTestCounts()
+    {
+        var readme = ReadmeEndpointTable.ReadReadmeText();
+
+        // Coverage changes frequently; README should describe how to obtain it, not hardcode a % table.
+        Assert.DoesNotContain("| Module | Line | Branch | Method |", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("| DebuggerMcp |", readme, StringComparison.Ordinal);
+
+        // Total test counts drift quickly; avoid pinning a number in README.
+        var totalTestsRegex = new Regex("^\\-\\s*\\*\\*Total Tests\\*\\*:", RegexOptions.Multiline);
+        Assert.DoesNotMatch(totalTestsRegex, readme);
+    }
+
     private static class ApiRouteDiscovery
     {
         public static HashSet<string> DiscoverControllerRoutes()

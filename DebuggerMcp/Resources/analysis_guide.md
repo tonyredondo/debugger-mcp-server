@@ -193,7 +193,7 @@ Trace files are written under `LOG_STORAGE_PATH/ai-sampling` (in Docker: `/app/l
 analyze(kind: "crash", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
-> If auto-detection fails, you can load SOS manually: `inspect(kind: "load_sos", sessionId: "...", userId: "...")`.
+> Avoid manually loading SOS during normal flows; `dump(action="open")` auto-loads it for .NET dumps. Only use `inspect(kind: "load_sos", sessionId: "...", userId: "...")` if you have explicit evidence that SOS is not loaded (e.g., SOS commands consistently fail).
 
 ### What It Detects
 
@@ -1331,7 +1331,7 @@ For PDF output:
 - Ensure `dump(action="open")` was called successfully before analysis
 
 ### "SOS extension not loaded"
-- SOS is auto-loaded for .NET dumps. If detection failed, call `inspect(kind="load_sos")` manually
+- SOS is auto-loaded for .NET dumps. Only call `inspect(kind="load_sos")` if you have explicit evidence that SOS is not loaded (e.g., SOS commands consistently fail)
 - Check the `dump(action="open")` response to verify .NET detection status
 
 ### Memory comparison shows no types

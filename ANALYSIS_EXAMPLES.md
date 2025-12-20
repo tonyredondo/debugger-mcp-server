@@ -180,7 +180,7 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
 analyze(kind="crash", sessionId="session-123", userId="user1")
 ```
 
-> **Note**: If SOS auto-detection failed, you can manually call `inspect(kind=\"load_sos\", ...)` first.
+> **Note**: Avoid manually loading SOS during normal flows; `dump(action="open")` auto-loads it for .NET dumps. Only use `inspect(kind="load_sos", ...)` if you have explicit evidence that SOS is not loaded (e.g., SOS commands consistently fail).
 
 **What it does**:
 - Extracts CLR version information
