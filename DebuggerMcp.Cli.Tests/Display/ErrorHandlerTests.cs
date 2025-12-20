@@ -336,8 +336,13 @@ public class ErrorHandlerTests
 
         var output = _testConsole.Output;
         Assert.Contains("An error occurred", output, StringComparison.OrdinalIgnoreCase);
+#if DEBUG
         Assert.Contains("Exception type", output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("InvalidOperationException", output, StringComparison.OrdinalIgnoreCase);
+#else
+        Assert.DoesNotContain("Exception type", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("InvalidOperationException", output, StringComparison.OrdinalIgnoreCase);
+#endif
     }
 
     [Theory]

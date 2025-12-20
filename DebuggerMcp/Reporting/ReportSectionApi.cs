@@ -19,7 +19,7 @@ internal static class ReportSectionApi
 {
     internal const int DefaultLimit = 50;
     internal const int MaxLimit = 200;
-    internal const int DefaultMaxResponseChars = 200_000;
+    internal const int DefaultMaxResponseChars = 20_000;
     private const int MaxPathChars = 512;
     private const int MaxCursorChars = 4096;
 

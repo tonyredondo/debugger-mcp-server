@@ -233,6 +233,7 @@ If there's a mismatch, you'll be prompted to switch to a compatible server.
 | `dumps delete <id>` | Delete a dump |
 | `symbols upload <file>` | Upload symbol file(s) |
 | `symbols list` | List symbols for current dump |
+| `symbols datadog <subcommand>` | Download/load Datadog tracer symbols (optional) |
 | `stats` | Show server statistics |
 
 **Examples:**
@@ -243,6 +244,11 @@ dumps list
 symbols upload ./app.pdb
 symbols upload *.pdb              # Wildcard support!
 symbols upload ./bin/**/*.pdb     # Recursive wildcard!
+
+# Optional: Datadog tracer symbols (if your dump includes Datadog.Trace)
+symbols datadog prepare
+symbols datadog download --force-version
+symbols datadog config
 ```
 
 ### Session Management
@@ -308,6 +314,8 @@ analyze security
 Note: `analyze crash`, `analyze ai`, and `report --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
 
 ### LLM Commands
+
+Note: when you enter `llmagent`, the CLI temporarily sets `llm set-agent-confirm false` so tool calls can run autonomously. The previous setting is restored when you exit `llmagent`.
 
 | Command | Description |
 |---------|-------------|

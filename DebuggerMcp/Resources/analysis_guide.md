@@ -131,7 +131,7 @@ analyze(kind: "crash", sessionId: "your-session-id", userId: "your-user-id")
 Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
 1. Build an initial structured crash report (JSON)
 2. Use MCP sampling (`sampling/createMessage`) to ask the connected client’s LLM to analyze it
-3. Allow the LLM to request additional evidence via tools (e.g., `exec`, `inspect`, `get_thread_stack`)
+3. Allow the LLM to request additional evidence via tools (e.g., `report_get`, `exec`, `inspect`, `get_thread_stack`)
 4. Return the original report enriched with `analysis.aiAnalysis`
 
 ### Prerequisites
@@ -150,9 +150,10 @@ analyze(kind: "ai", sessionId: "your-session-id", userId: "your-user-id")
 
 ### Tool Guidance (for the LLM)
 
-During AI sampling, the model has access to the sampling tools `exec`, `inspect`, `get_thread_stack`, and `analysis_complete`.
+During AI sampling, the model has access to the sampling tools `report_get`, `exec`, `inspect`, `get_thread_stack`, and `analysis_complete`.
 
 When the AI asks for more evidence, prefer:
+- `report_get(path: "analysis.exception")` / `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
 - `inspect(address: "0x...", maxDepth: 3)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
 - `get_thread_stack(threadId: "...")` when you need a full stack for a specific thread already present in the report.
 - `exec` only for debugger/SOS commands that don’t have a first-class sampling tool.
@@ -165,6 +166,12 @@ Enable server-side tracing (may include sensitive debugger output):
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000` (per-file cap)
 
 Trace files are written under `LOG_STORAGE_PATH/ai-sampling` (in Docker: `/app/logs/ai-sampling`).
+
+### Optional Environment Variables (Crash Analysis + Source Context)
+
+- `SKIP_HEAP_ENUM=true` (or legacy: `SKIP_SYNC_BLOCKS=true`) skips heap/sync-block enumeration. Use this as a safety valve for cross-architecture/emulation scenarios where heap walks can SIGSEGV.
+- `GITHUB_API_ENABLED=false` disables GitHub commit enrichment for assemblies. When enabled, `GITHUB_TOKEN` increases GitHub API rate limits.
+- `DEBUGGERMCP_SOURCE_CONTEXT_ROOTS="/repo1;/repo2"` (also supports `:` separators on Linux/macOS) allows the server to resolve `sourceContext` to local files and include code snippets in reports.
 
 ---
 

@@ -105,6 +105,21 @@ curl -X POST http://localhost:5000/api/symbols/upload-batch \
 
 Symbols are automatically configured when you open the dump.
 
+#### Optional: Datadog Trace Symbols (MCP)
+
+If your dump includes Datadog tracer components (e.g., `Datadog.Trace.dll`), you can use the MCP tool `datadog_symbols` to download matching public symbols from Datadog’s build artifacts and (optionally) load them into the debugger:
+
+```
+datadog_symbols(action: "prepare", sessionId: "session-xyz-789", userId: "your-user-id")
+```
+
+Configuration (optional):
+- `DATADOG_TRACE_SYMBOLS_ENABLED` (default: true)
+- `DATADOG_TRACE_SYMBOLS_PAT` (optional; Azure DevOps PAT for private access)
+- `DATADOG_TRACE_SYMBOLS_CACHE_DIR` (optional; custom cache directory)
+- `DATADOG_TRACE_SYMBOLS_TIMEOUT_SECONDS` (default: 120)
+- `DATADOG_TRACE_SYMBOLS_MAX_ARTIFACT_SIZE` (default: 524288000 bytes / 500 MiB)
+
 ---
 
 ### Step 3: Create a Debugging Session (MCP)

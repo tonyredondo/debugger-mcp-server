@@ -16,7 +16,7 @@ A cross-platform MCP (Model Context Protocol) server to control debuggers (WinDb
 - **HTTP API (REST)**: For dump uploads, symbol management, and report generation
 - **Unified Process**: Both MCP and HTTP API can run in the same process
 - **Multitenant**: Support for multiple simultaneous users
-- **Session Management**: Up to 5 concurrent sessions per user
+- **Session Management**: Up to 10 concurrent sessions per user (default; configurable via `MAX_SESSIONS_PER_USER`)
 
 ### Debugging Capabilities
 - ✅ Opening and analyzing memory dumps (.dmp on Windows, .core on Linux/macOS)
@@ -825,6 +825,31 @@ export SESSION_INACTIVITY_THRESHOLD_MINUTES=1440
 # Session limits (defaults: 10 per user, 50 total)
 export MAX_SESSIONS_PER_USER=10
 export MAX_TOTAL_SESSIONS=50
+
+# Crash analysis / reporting knobs (optional)
+#
+# GitHub commit enrichment for assemblies (adds author/message metadata when commit hashes are detected).
+# Set GITHUB_API_ENABLED=false to disable network calls.
+export GITHUB_API_ENABLED=true
+export GITHUB_TOKEN="..."  # optional; increases GitHub API rate limits (also used by Source Link release resolver)
+export GH_TOKEN="..."      # optional alias (used by the GitHub releases resolver)
+
+# Skip heap/sync-block enumeration (safety valve).
+# Useful when analyzing cross-architecture dumps (e.g., x64 dump on arm64 host) or emulation, where heap walks can SIGSEGV.
+export SKIP_HEAP_ENUM=false
+export SKIP_SYNC_BLOCKS=false  # legacy alias for SKIP_HEAP_ENUM
+
+# Local source context roots (optional).
+# When a report includes sourceContext/sourcelink URLs, the server can fetch and include source snippets.
+# Provide one or more repo roots (separated by ';' and also ':' on Linux/macOS).
+export DEBUGGERMCP_SOURCE_CONTEXT_ROOTS="/path/to/repo1;/path/to/repo2"
+
+# Datadog trace symbols (used by the `datadog_symbols` MCP tool).
+export DATADOG_TRACE_SYMBOLS_ENABLED=true
+export DATADOG_TRACE_SYMBOLS_PAT="..."                  # optional; Azure DevOps PAT for private access
+export DATADOG_TRACE_SYMBOLS_CACHE_DIR="/path/to/cache" # optional; defaults under dump storage
+export DATADOG_TRACE_SYMBOLS_TIMEOUT_SECONDS=120
+export DATADOG_TRACE_SYMBOLS_MAX_ARTIFACT_SIZE=524288000
 
 # Optional: skip post-upload analysis (dotnet-symbol --verifycore + architecture detection)
 # Useful in constrained environments and tests.

@@ -3762,7 +3762,8 @@ public class Program
         output.Markup("  [cyan]DATADOG_TRACE_SYMBOLS_ENABLED[/]         Enable/disable (default: true)");
         output.Markup("  [cyan]DATADOG_TRACE_SYMBOLS_PAT[/]             Azure DevOps PAT for private access");
         output.Markup("  [cyan]DATADOG_TRACE_SYMBOLS_CACHE_DIR[/]       Custom cache directory");
-        output.Markup("  [cyan]DATADOG_TRACE_SYMBOLS_TIMEOUT_SECONDS[/] Download timeout (default: 300)");
+        output.Markup("  [cyan]DATADOG_TRACE_SYMBOLS_TIMEOUT_SECONDS[/] API/download timeout (default: 120)");
+        output.Markup("  [cyan]DATADOG_TRACE_SYMBOLS_MAX_ARTIFACT_SIZE[/] Max artifact size in bytes (default: 524288000)");
     }
 
     /// <summary>

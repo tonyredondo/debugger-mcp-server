@@ -100,12 +100,27 @@ If you control the server, you can increase the limit via `MAX_REQUEST_BODY_SIZE
 
 ### "Maximum sessions reached" Error
 
-**Cause**: User has 5 active sessions.
+**Cause**: User has reached the per-user session limit (default: 10).
 
 **Solution**:
 - Close unused sessions with `CloseSession`
 - Use `ListSessions` to see all active sessions
 - Wait for automatic cleanup (24 hours by default)
+- If you control the server, increase the limit via `MAX_SESSIONS_PER_USER`
+
+---
+
+## 🧠 Crash Analysis Safety Valves
+
+### SIGSEGV / native crash during heap or sync-block analysis
+
+**Cause**: Some heap walks (sync blocks / object enumeration) can crash in cross-architecture or emulation scenarios (for example, analyzing an `x64` dump on an `arm64` host).
+
+**Solution**:
+- Set `SKIP_HEAP_ENUM=true` (or legacy: `SKIP_SYNC_BLOCKS=true`) on the server to skip heap/sync-block enumeration.
+- Prefer using a server that matches the dump architecture and libc (e.g., Alpine/musl dumps on Alpine images).
+
+This reduces leak/deadlock detail in the JSON report but keeps the rest of the analysis running.
 
 ---
 

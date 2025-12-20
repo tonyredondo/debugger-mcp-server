@@ -45,12 +45,21 @@ dbg-mcp> report -o ./report.md
 - `dumps upload <file>` - Upload dump with progress
 - `dumps list/info/delete` - Manage dumps
 - `symbols upload <file>` - Upload symbols (wildcards supported: `*.pdb`)
+- `symbols datadog <subcommand>` - Download/load Datadog tracer symbols (optional)
 - `stats` - Server statistics
 
 #### Symbol Upload Notes
 - Symbol files are stored under `.symbols_<dumpId>/` on the server.
 - Uploaded symbol file names are normalized to a safe basename (any directory components are stripped).
 - If you upload a `.zip`, the server extracts only symbol-related entries and ignores other files; see `debugger://workflow-guide` for the ZIP extraction rules and limits.
+
+#### Datadog Trace Symbols (Optional)
+If your dump includes Datadog tracer components (e.g., `Datadog.Trace.dll`), you can download and load matching symbols:
+```bash
+symbols datadog prepare
+symbols datadog download --force-version
+symbols datadog config
+```
 
 ### Session Management (`help session`)
 - `session create` - Create session
@@ -82,6 +91,7 @@ dbg-mcp> report -o ./report.md
 In `llmagent` mode:
 - Exit with `exit`/Ctrl+C or `/exit`
 - Use `/help`, `/tools`, `/reset`, `/reset conversation`
+- Tool confirmations are disabled by default for the duration of the session (the previous setting is restored on exit)
 
 ### Advanced (`help advanced`)
 - `watch add/list/eval/remove/clear` - Watch expressions

@@ -74,6 +74,36 @@ public class DocsContractTests
         Assert.Equal(allowed.Count, listed.Count);
     }
 
+    [Fact]
+    public void Readme_EnvironmentVariables_DocumentsKeyAnalysisAndIntegrationKnobs()
+    {
+        var readme = ReadmeEndpointTable.ReadReadmeText();
+
+        var required = new[]
+        {
+            "GITHUB_API_ENABLED",
+            "GITHUB_TOKEN",
+            "GH_TOKEN",
+            "SKIP_HEAP_ENUM",
+            "SKIP_SYNC_BLOCKS",
+            "DEBUGGERMCP_SOURCE_CONTEXT_ROOTS",
+            "DATADOG_TRACE_SYMBOLS_ENABLED",
+            "DATADOG_TRACE_SYMBOLS_PAT",
+            "DATADOG_TRACE_SYMBOLS_CACHE_DIR",
+            "DATADOG_TRACE_SYMBOLS_TIMEOUT_SECONDS",
+            "DATADOG_TRACE_SYMBOLS_MAX_ARTIFACT_SIZE"
+        };
+
+        var missing = required
+            .Where(name => !readme.Contains(name, StringComparison.Ordinal))
+            .OrderBy(name => name, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "README.md is missing environment variable documentation for:\n" + string.Join('\n', missing));
+    }
+
     private static class ApiRouteDiscovery
     {
         public static HashSet<string> DiscoverControllerRoutes()

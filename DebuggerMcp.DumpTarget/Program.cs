@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace DebuggerMcp.DumpTarget;
@@ -147,7 +148,12 @@ internal static class Program
             Nested = new SampleNested { X = 7, Y = 8 }
         };
 
-        var vtAddress = GetUnmanagedAddressHex(ref vt);
+        // Capture the value type in unmanaged memory so dump-based tests can reliably inspect it even when
+        // the dump target is built with optimizations enabled (stack locals can be moved/rewritten).
+        var vtSize = Marshal.SizeOf<SampleValueType>();
+        var vtUnmanaged = Marshal.AllocHGlobal(vtSize);
+        Marshal.StructureToPtr(vt, vtUnmanaged, fDeleteOld: false);
+        var vtAddress = $"0x{vtUnmanaged.ToInt64():x}";
         var vtMethodTable = GetMethodTableHex<SampleValueType>();
 
         // Allocate a variety of objects so heap analyzers have something to inspect.

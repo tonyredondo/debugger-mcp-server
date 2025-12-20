@@ -43,7 +43,7 @@ Note: `format: "json"` returns the canonical report document shape: `{ "metadata
 Optional parameters:
 - `includeSecurity` (default: true) affects `full` and `get` output.
 - `maxStackFrames` (default: 0 = all) limits stack frames in `full`.
-- `maxChars` (get only, optional) caps the response size as a guardrail.
+- `maxChars` (get only, optional; default: 20000) caps the response size as a guardrail and returns an error if exceeded.
 
 ### 5) `analyze`
 Run analysis on the currently open dump.
@@ -127,3 +127,9 @@ Datadog symbol workflows.
 Notes:
 - `forceVersion` can be used to force version fallback logic during prepare/download.
 - `version` and `buildId` are optional hints for selecting artifacts.
+- Environment variables:
+  - `DATADOG_TRACE_SYMBOLS_ENABLED` (default: true)
+  - `DATADOG_TRACE_SYMBOLS_PAT` (optional; Azure DevOps PAT for private access)
+  - `DATADOG_TRACE_SYMBOLS_CACHE_DIR` (optional; custom cache directory)
+  - `DATADOG_TRACE_SYMBOLS_TIMEOUT_SECONDS` (default: 120)
+  - `DATADOG_TRACE_SYMBOLS_MAX_ARTIFACT_SIZE` (default: 524288000 bytes / 500 MiB)
