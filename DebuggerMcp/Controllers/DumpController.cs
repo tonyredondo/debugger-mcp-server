@@ -625,16 +625,19 @@ public class DumpController : ControllerBase
             {
                 try
                 {
+                    var chmodStartInfo = new System.Diagnostics.ProcessStartInfo
+                    {
+                        FileName = "chmod",
+                        UseShellExecute = false,
+                        RedirectStandardOutput = true,
+                        RedirectStandardError = true
+                    };
+                    chmodStartInfo.ArgumentList.Add("+x");
+                    chmodStartInfo.ArgumentList.Add(binaryPath);
+
                     var chmodProcess = new System.Diagnostics.Process
                     {
-                        StartInfo = new System.Diagnostics.ProcessStartInfo
-                        {
-                            FileName = "chmod",
-                            Arguments = $"+x \"{binaryPath}\"",
-                            UseShellExecute = false,
-                            RedirectStandardOutput = true,
-                            RedirectStandardError = true
-                        }
+                        StartInfo = chmodStartInfo
                     };
                     chmodProcess.Start();
                     await chmodProcess.WaitForExitAsync();
@@ -1636,12 +1639,13 @@ public static class DumpAnalyzer
             var startInfo = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = dotnetSymbolPath,
-                Arguments = $"--verifycore \"{dumpFilePath}\"",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+            startInfo.ArgumentList.Add("--verifycore");
+            startInfo.ArgumentList.Add(dumpFilePath);
 
             using var process = new System.Diagnostics.Process { StartInfo = startInfo };
             var output = new System.Text.StringBuilder();
@@ -1750,12 +1754,12 @@ public static class DumpAnalyzer
             var startInfo = new System.Diagnostics.ProcessStartInfo
             {
                 FileName = "file",
-                Arguments = $"\"{dumpFilePath}\"",
                 UseShellExecute = false,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 CreateNoWindow = true
             };
+            startInfo.ArgumentList.Add(dumpFilePath);
 
             using var process = new System.Diagnostics.Process { StartInfo = startInfo };
             var output = new System.Text.StringBuilder();

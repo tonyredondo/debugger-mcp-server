@@ -40,6 +40,13 @@ public class SymbolManager
     /// </summary>
     private const long MaxSymbolFileSize = 500 * 1024 * 1024;
 
+    private const int MaxSymbolZipEntries = 25_000;
+    private const long MaxSymbolZipTotalUncompressedBytes = 2L * 1024 * 1024 * 1024; // 2 GiB
+    private const long MaxSymbolZipSingleEntryBytes = 512L * 1024 * 1024; // 512 MiB
+    private const int MaxSymbolZipPathLength = 1024;
+    private const long MaxSymbolZipCompressionRatioThresholdBytes = 10L * 1024 * 1024; // 10 MiB
+    private const double MaxSymbolZipCompressionRatio = 200.0;
+
     /// <summary>
     /// Microsoft public symbol server URL.
     /// </summary>
@@ -113,10 +120,7 @@ public class SymbolManager
             throw new ArgumentException("Dump ID cannot be null or empty.", nameof(dumpId));
         }
 
-        if (string.IsNullOrWhiteSpace(fileName))
-        {
-            throw new ArgumentException("File name cannot be null or empty.", nameof(fileName));
-        }
+        fileName = NormalizeSymbolFileName(fileName);
 
         if (fileStream == null || !fileStream.CanRead)
         {
@@ -139,7 +143,7 @@ public class SymbolManager
         // Create dump-specific symbol directory
         var dumpSymbolDir = GetOrCreateDumpSymbolDirectory(dumpId);
 
-        // Store file with original name (allow overwrite if same file uploaded again)
+        // Store file by file name only (path components stripped to prevent traversal).
         var storagePath = Path.Combine(dumpSymbolDir, fileName);
 
         // Copy stream to file
@@ -181,6 +185,41 @@ public class SymbolManager
     }
 
     /// <summary>
+    /// Normalizes an uploaded symbol file name to prevent path traversal and invalid filesystem names.
+    /// </summary>
+    /// <param name="fileName">The uploaded file name.</param>
+    /// <returns>A safe file name suitable for <see cref="Path.Combine(string,string)"/>.</returns>
+    /// <exception cref="ArgumentException">Thrown when the file name is empty or not a valid file name.</exception>
+    private static string NormalizeSymbolFileName(string fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            throw new ArgumentException("File name cannot be null or empty.", nameof(fileName));
+        }
+
+        // Normalize separators so we treat Windows-style paths as paths even on Unix.
+        var normalized = fileName.Trim().Replace('\\', '/');
+        var name = Path.GetFileName(normalized);
+        if (string.IsNullOrWhiteSpace(name) || name is "." or "..")
+        {
+            throw new ArgumentException("File name is not a valid file name.", nameof(fileName));
+        }
+
+        // Defense-in-depth: disallow any remaining directory separators.
+        if (name.Contains('/') || name.Contains('\\'))
+        {
+            throw new ArgumentException("File name is not a valid file name.", nameof(fileName));
+        }
+
+        if (name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        {
+            throw new ArgumentException("File name is not a valid file name.", nameof(fileName));
+        }
+
+        return name;
+    }
+
+    /// <summary>
     /// Stores a ZIP file containing multiple symbol files for a specific dump.
     /// The ZIP is extracted preserving its directory structure.
     /// </summary>
@@ -206,19 +245,32 @@ public class SymbolManager
 
         using var archive = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Read);
 
+        var entryCount = 0;
+        long totalUncompressed = 0;
+        var baseDir = Path.GetFullPath(dumpSymbolDir);
+        if (!baseDir.EndsWith(Path.DirectorySeparatorChar))
+        {
+            baseDir += Path.DirectorySeparatorChar;
+        }
+        var pathComparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+
         foreach (var entry in archive.Entries)
         {
             // Skip directory entries (they have empty names or end with /)
             if (string.IsNullOrEmpty(entry.Name))
                 continue;
 
-            // Sanitize the entry path to prevent path traversal
-            var relativePath = entry.FullName.Replace('\\', '/');
-
-            // Check for path traversal attempts
-            if (relativePath.Contains("..") || Path.IsPathRooted(relativePath))
+            entryCount++;
+            if (entryCount > MaxSymbolZipEntries)
             {
-                continue; // Skip potentially malicious entries
+                throw new InvalidOperationException($"ZIP contains too many entries ({entryCount}). Max allowed: {MaxSymbolZipEntries}.");
+            }
+
+            // Sanitize the entry path to prevent path traversal and zip bombs via pathological paths.
+            var relativePath = entry.FullName.Replace('\\', '/');
+            if (string.IsNullOrWhiteSpace(relativePath) || relativePath.Length > MaxSymbolZipPathLength)
+            {
+                continue;
             }
 
             // Skip macOS metadata folders (__MACOSX contains resource forks and extended attributes)
@@ -228,8 +280,57 @@ public class SymbolManager
                 continue;
             }
 
-            // Build the full destination path
-            var destPath = Path.Combine(dumpSymbolDir, relativePath);
+            // Skip common junk
+            if (relativePath.EndsWith("/.DS_Store", StringComparison.OrdinalIgnoreCase) ||
+                relativePath.EndsWith("/Thumbs.db", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // Reject rooted paths and any dot-segments (ZipSlip defense-in-depth).
+            if (relativePath.StartsWith("/", StringComparison.Ordinal) || relativePath.Contains('\0'))
+            {
+                continue;
+            }
+
+            var segments = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length == 0 || segments.Any(s => s is "." or ".."))
+            {
+                continue;
+            }
+
+            // Only extract symbol-related entries to reduce risk of storing arbitrary content.
+            if (!ShouldExtractSymbolZipEntry(relativePath))
+            {
+                continue;
+            }
+
+            // Enforce conservative extraction limits to mitigate zip bombs.
+            if (entry.Length < 0 || entry.Length > MaxSymbolZipSingleEntryBytes)
+            {
+                throw new InvalidOperationException($"ZIP entry '{entry.FullName}' is too large to extract ({entry.Length} bytes).");
+            }
+
+            totalUncompressed += entry.Length;
+            if (totalUncompressed > MaxSymbolZipTotalUncompressedBytes)
+            {
+                throw new InvalidOperationException($"ZIP expands to too much data ({totalUncompressed} bytes). Max allowed: {MaxSymbolZipTotalUncompressedBytes} bytes.");
+            }
+
+            if (entry.Length >= MaxSymbolZipCompressionRatioThresholdBytes &&
+                entry.CompressedLength > 0 &&
+                (entry.Length / (double)entry.CompressedLength) > MaxSymbolZipCompressionRatio)
+            {
+                throw new InvalidOperationException($"ZIP entry '{entry.FullName}' appears highly-compressed (ratio {(entry.Length / (double)entry.CompressedLength):N1}); refusing to extract.");
+            }
+
+            // Build the full destination path and ensure it stays within the dump symbols directory.
+            var destPath = Path.GetFullPath(Path.Combine(dumpSymbolDir, relativePath));
+            if (!destPath.StartsWith(baseDir, pathComparison))
+            {
+                continue;
+            }
+
             var destDir = Path.GetDirectoryName(destPath);
 
             // Ensure destination directory exists
@@ -263,6 +364,50 @@ public class SymbolManager
             SymbolDirectories = extractedDirs.OrderBy(d => d).ToList(),
             RootSymbolDirectory = dumpSymbolDir
         };
+    }
+
+    /// <summary>
+    /// Returns whether a ZIP entry should be extracted for symbol loading.
+    /// </summary>
+    /// <param name="relativePath">The entry path within the ZIP (relative, normalized).</param>
+    /// <returns><see langword="true"/> when the entry looks like a symbol file; otherwise <see langword="false"/>.</returns>
+    private static bool ShouldExtractSymbolZipEntry(string relativePath)
+    {
+        // Keep original path shape for dSYM bundle detection.
+        var normalized = relativePath.Replace('\\', '/');
+        var fileName = Path.GetFileName(normalized);
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return false;
+        }
+
+        // Allow DWARF files inside .dSYM bundles even if they have no extension.
+        if (normalized.Contains(".dSYM/Contents/Resources/DWARF/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        // Compound debug symbols (e.g., libfoo.so.dbg).
+        if (fileName.EndsWith(".so.dbg", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        var ext = Path.GetExtension(fileName);
+        if (string.IsNullOrWhiteSpace(ext))
+        {
+            return false;
+        }
+
+        // Symbol-related extensions (documented by the API).
+        return ext.Equals(".pdb", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".so", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".dylib", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".dwarf", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".sym", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".debug", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".dbg", StringComparison.OrdinalIgnoreCase) ||
+               ext.Equals(".dsym", StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>

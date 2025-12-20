@@ -536,16 +536,21 @@ public class GitHubReleasesResolver : IDisposable
             // Extract the tar.gz using tar command
             _logger?.LogInformation("Running: tar -xzf \"{TarGz}\" -C \"{ExtractDir}\"", Path.GetFileName(tarGzPath), extractDir);
 
+            var tarStartInfo = new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "tar",
+                UseShellExecute = false,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            };
+            tarStartInfo.ArgumentList.Add("-xzf");
+            tarStartInfo.ArgumentList.Add(tarGzPath);
+            tarStartInfo.ArgumentList.Add("-C");
+            tarStartInfo.ArgumentList.Add(extractDir);
+
             var tarProcess = new System.Diagnostics.Process
             {
-                StartInfo = new System.Diagnostics.ProcessStartInfo
-                {
-                    FileName = "tar",
-                    Arguments = $"-xzf \"{tarGzPath}\" -C \"{extractDir}\"",
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true
-                }
+                StartInfo = tarStartInfo
             };
 
             tarProcess.Start();

@@ -2672,12 +2672,12 @@ public class LldbManager : IDebuggerManager
                         StartInfo = new ProcessStartInfo
                         {
                             FileName = "which",
-                            Arguments = "dotnet-symbol",
                             UseShellExecute = false,
                             RedirectStandardOutput = true,
                             CreateNoWindow = true
                         }
                     };
+                    whichProcess.StartInfo.ArgumentList.Add("dotnet-symbol");
                     whichProcess.Start();
                     var result = whichProcess.StandardOutput.ReadToEnd().Trim();
                     whichProcess.WaitForExit();

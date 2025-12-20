@@ -2848,6 +2848,9 @@ public class ClrMdAnalyzer : IDisposable
     private CombinedHeapAnalysis GetCombinedHeapAnalysisSequential(
         ClrHeap heap, int topN, int maxStringLength, int timeoutMs, System.Diagnostics.Stopwatch sw)
     {
+        var logger = _logger;
+        var taskStateReadErrorLogged = false;
+
         var typeStats = new Dictionary<string, (int Count, long Size, long Largest)>();
         var stringCounts = new Dictionary<string, (int Count, long Size)>();
         var largeObjects = new List<LargeObjectInfo>();
@@ -2973,7 +2976,16 @@ public class ClrMdAnalyzer : IDisposable
                             break;
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    // Best-effort: treat as pending if we cannot read state flags, and log only once to avoid spam.
+                    asyncSummary.PendingTasks++;
+                    if (!taskStateReadErrorLogged)
+                    {
+                        taskStateReadErrorLogged = true;
+                        logger?.LogDebug(ex, "[ClrMD] Failed to read Task state flags for {Address} ({Type})", obj.Address, typeName);
+                    }
+                }
             }
             
             // === State Machine Analysis ===
@@ -2994,6 +3006,9 @@ public class ClrMdAnalyzer : IDisposable
     private CombinedHeapAnalysis GetCombinedHeapAnalysisParallel(
         ClrHeap heap, ClrSegment[] segments, int topN, int maxStringLength, int timeoutMs, System.Diagnostics.Stopwatch sw)
     {
+        var logger = _logger;
+        var taskStateReadErrorLogGate = 0;
+
         var allTypeStats = new System.Collections.Concurrent.ConcurrentBag<Dictionary<string, (int Count, long Size, long Largest)>>();
         var allStringCounts = new System.Collections.Concurrent.ConcurrentBag<Dictionary<string, (int Count, long Size)>>();
         var allLargeObjects = new System.Collections.Concurrent.ConcurrentBag<LargeObjectInfo>();
@@ -3125,7 +3140,15 @@ public class ClrMdAnalyzer : IDisposable
                             default: localPendingTasks++; break;
                         }
                     }
-                    catch { }
+                    catch (Exception ex)
+                    {
+                        // Best-effort: count as pending if we cannot read the task state.
+                        localPendingTasks++;
+                        if (System.Threading.Interlocked.CompareExchange(ref taskStateReadErrorLogGate, 1, 0) == 0)
+                        {
+                            logger?.LogDebug(ex, "[ClrMD] Failed to read Task state flags during parallel heap scan");
+                        }
+                    }
                 }
                 
                 // State machines

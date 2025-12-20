@@ -2,6 +2,7 @@ using Xunit;
 using DebuggerMcp;
 using System;
 using System.IO;
+using System.Text;
 
 namespace DebuggerMcp.Tests;
 
@@ -191,5 +192,112 @@ public class SymbolManagerTests
         Assert.NotNull(SymbolManager.NuGetSymbolServer);
         Assert.NotEmpty(SymbolManager.NuGetSymbolServer);
         Assert.StartsWith("https://", SymbolManager.NuGetSymbolServer);
+    }
+
+    [Fact]
+    public async Task StoreSymbolFileAsync_WhenFileNameContainsPathTraversal_StripsPathAndStoresUnderSymbolsDirectory()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+        var dumpId = "dump-1";
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
+        var stored = await manager.StoreSymbolFileAsync(dumpId, "../evil.pdb", stream);
+
+        var symbolsDir = Path.Combine(dumpRoot, ".symbols_dump-1");
+        var expectedPath = Path.Combine(symbolsDir, "evil.pdb");
+
+        Assert.Equal(Path.GetFullPath(expectedPath), Path.GetFullPath(stored));
+        Assert.True(File.Exists(stored));
+    }
+
+    [Fact]
+    public async Task StoreSymbolFileAsync_WhenFileNameIsWindowsPath_StripsPathAndStoresUnderSymbolsDirectory()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+        var dumpId = "dump-2";
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
+        var stored = await manager.StoreSymbolFileAsync(dumpId, @"C:\temp\sym.pdb", stream);
+
+        var symbolsDir = Path.Combine(dumpRoot, ".symbols_dump-2");
+        var expectedPath = Path.Combine(symbolsDir, "sym.pdb");
+
+        Assert.Equal(Path.GetFullPath(expectedPath), Path.GetFullPath(stored));
+        Assert.True(File.Exists(stored));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData(".")]
+    [InlineData("..")]
+    public async Task StoreSymbolFileAsync_WhenFileNameInvalid_Throws(string fileName)
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
+        _ = await Assert.ThrowsAsync<ArgumentException>(() => manager.StoreSymbolFileAsync("dump-3", fileName, stream));
+    }
+
+    [Fact]
+    public async Task StoreSymbolZipAsync_SkipsTraversalAndNonSymbolFiles_AndExtractsSymbolsAndDsymDwarf()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+
+        await using var zipStream = new MemoryStream();
+        using (var zip = new System.IO.Compression.ZipArchive(zipStream, System.IO.Compression.ZipArchiveMode.Create, leaveOpen: true))
+        {
+            AddZipEntry(zip, "../evil.pdb", "EVIL");
+            AddZipEntry(zip, "notes.txt", "NOT A SYMBOL");
+            AddZipEntry(zip, "__MACOSX/._meta", "META");
+            AddZipEntry(zip, "good/sym.pdb", "PDBDATA");
+            AddZipEntry(zip, "bundle.dSYM/Contents/Resources/DWARF/MyApp", "DWARF");
+        }
+        zipStream.Position = 0;
+
+        var result = await manager.StoreSymbolZipAsync("dump-zip-1", zipStream);
+
+        Assert.Equal("dump-zip-1", result.DumpId);
+        Assert.Contains("good/sym.pdb", result.ExtractedFiles);
+        Assert.Contains("bundle.dSYM/Contents/Resources/DWARF/MyApp", result.ExtractedFiles);
+        Assert.DoesNotContain(result.ExtractedFiles, p => p.Contains("evil", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.ExtractedFiles, p => p.EndsWith("notes.txt", StringComparison.OrdinalIgnoreCase));
+
+        var symbolsDir = Path.Combine(dumpRoot, ".symbols_dump-zip-1");
+        Assert.True(File.Exists(Path.Combine(symbolsDir, "good", "sym.pdb")));
+        Assert.True(File.Exists(Path.Combine(symbolsDir, "bundle.dSYM", "Contents", "Resources", "DWARF", "MyApp")));
+        Assert.False(File.Exists(Path.Combine(dumpRoot, "evil.pdb")));
+    }
+
+    private static void AddZipEntry(System.IO.Compression.ZipArchive zip, string path, string content)
+    {
+        var entry = zip.CreateEntry(path);
+        using var entryStream = entry.Open();
+        using var writer = new StreamWriter(entryStream, Encoding.UTF8, leaveOpen: false);
+        writer.Write(content);
     }
 }
