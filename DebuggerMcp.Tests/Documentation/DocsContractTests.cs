@@ -279,6 +279,46 @@ public class DocsContractTests
         Assert.Contains("inspect(kind: \"load_sos\"", text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void Readme_DotNet10Install_UsesChannelBasedInstallerExample()
+    {
+        var readme = ReadmeEndpointTable.ReadReadmeText();
+        Assert.Contains(".NET 10 SDK", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("recently released", readme, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dotnet-install.sh", readme, StringComparison.Ordinal);
+        Assert.Contains("--channel 10.0", readme, StringComparison.Ordinal);
+        Assert.DoesNotContain("--version 10.0", readme, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void McpToolsDoc_ListsAllExportedToolNames()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "DebuggerMcp", "Resources", "mcp_tools.md");
+        var text = File.ReadAllText(path);
+
+        // Ensure the canonical MCP doc enumerates the same tool names surfaced by the README table.
+        var required = new[]
+        {
+            "`session`",
+            "`dump`",
+            "`exec`",
+            "`report`",
+            "`analyze`",
+            "`compare`",
+            "`watch`",
+            "`symbols`",
+            "`source_link`",
+            "`inspect`",
+            "`datadog_symbols`"
+        };
+
+        foreach (var token in required)
+        {
+            Assert.Contains(token, text, StringComparison.Ordinal);
+        }
+    }
+
     private static class ApiRouteDiscovery
     {
         public static HashSet<string> DiscoverControllerRoutes()

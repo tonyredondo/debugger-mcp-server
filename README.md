@@ -114,7 +114,7 @@ The server exposes documentation and guides as MCP resources for easy access:
 ### Software
 
 #### All Platforms
-- **.NET 10** (recently released)
+- **.NET 10 SDK**
 
 #### Windows-Specific
 - **Debugging Tools for Windows** (part of Windows SDK)
@@ -151,7 +151,7 @@ xcode-select --install
 https://dotnet.microsoft.com/download/dotnet/10.0
 
 # Or use the install script (Linux/macOS):
-curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --version 10.0
+curl -sSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0
 ```
 
 ### 2. Install Platform-Specific Debugger
@@ -245,6 +245,7 @@ dbg-mcp server list
 **Why Multiple Servers?**
 - **Architecture matching**: ARM64 dumps require ARM64 servers, x64 dumps require x64 servers
 - **Alpine vs Debian**: Alpine-based .NET dumps require Alpine servers for proper symbol resolution (musl vs glibc)
+- **x64 safety valves (docker-compose defaults)**: the x64 variants enable `SKIP_HEAP_ENUM=true` / `SKIP_SYNC_BLOCKS=true` by default to avoid flaky heap walks under emulation; disable if you need full heap/sync-block analysis.
 
 The CLI automatically detects dump/server mismatches and prompts you to switch to a compatible server.
 

@@ -5,7 +5,7 @@ The `dbg-mcp` CLI provides a powerful command-line interface for remote crash du
 ## Installation
 
 ```bash
-# As a .NET global tool
+# As a .NET global tool (when published to NuGet)
 dotnet tool install -g DebuggerMcp.Cli
 
 # Or run from source

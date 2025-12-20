@@ -19,7 +19,7 @@ A powerful command-line interface for the Debugger MCP Server, enabling remote c
 
 ## Installation
 
-### As a .NET Global Tool
+### As a .NET Global Tool (when published to NuGet)
 
 ```bash
 dotnet tool install -g DebuggerMcp.Cli
