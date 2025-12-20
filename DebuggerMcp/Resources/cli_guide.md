@@ -47,6 +47,11 @@ dbg-mcp> report -o ./report.md
 - `symbols upload <file>` - Upload symbols (wildcards supported: `*.pdb`)
 - `stats` - Server statistics
 
+#### Symbol Upload Notes
+- Symbol files are stored under `.symbols_<dumpId>/` on the server.
+- Uploaded symbol file names are normalized to a safe basename (any directory components are stripped).
+- If you upload a `.zip`, the server extracts only symbol-related entries and ignores other files; see `debugger://workflow-guide` for the ZIP extraction rules and limits.
+
 ### Session Management (`help session`)
 - `session create` - Create session
 - `session list` - List sessions

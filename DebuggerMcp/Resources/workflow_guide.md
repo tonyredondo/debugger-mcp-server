@@ -456,6 +456,18 @@ When `API_KEY` environment variable is set, include `X-API-Key` header in all re
 - **Form Data**: `file` (ZIP archive), `dumpId`
 - **Returns**: Extraction result with file counts
 
+ZIP extraction rules:
+- Only extracts symbol-related entries by path/extension:
+  - `.pdb`, `.so`, `.dylib`, `.dwarf`, `.sym`, `.debug`, `.dbg`, `.so.dbg`, `.dsym`
+  - DWARF files inside `.dSYM/Contents/Resources/DWARF/` (even without an extension)
+- Skips common junk (`__MACOSX`, `.DS_Store`, `Thumbs.db`) and any suspicious paths (absolute paths, dot-segments, NUL bytes).
+- Preserves the ZIP directory structure for extracted symbol entries.
+- Applies defensive limits; violations return `400 Bad Request` with a descriptive error:
+  - Max entries: 25,000
+  - Max extracted bytes (total): 2 GiB
+  - Max extracted bytes (per entry): 512 MiB
+  - Compression ratio guard: entries ≥ 10 MiB with ratio > 200 are rejected
+
 ### Health Check
 - **GET** `/health`
 - **Returns**: `{ status: "healthy", timestamp }`

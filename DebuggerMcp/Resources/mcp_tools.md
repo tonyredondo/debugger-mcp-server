@@ -86,6 +86,10 @@ Symbol management.
 - **reload**: `symbols(action: "reload", sessionId: "...", userId: "...")`
 - **verify_core_modules**: `symbols(action: "verify_core_modules", sessionId: "...", userId: "...", moduleNames: "libcoreclr.so,libclrjit.so")`
 
+Notes:
+- Symbol files are uploaded via the HTTP API (`/api/symbols/*`) and stored under `.symbols_<dumpId>/` on the server.
+- ZIP uploads extract only symbol-related entries and apply defensive extraction limits; see `debugger://workflow-guide`.
+
 ### 9) `source_link`
 Source link utilities for the current session/dump.
 

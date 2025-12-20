@@ -71,11 +71,11 @@ A cross-platform MCP (Model Context Protocol) server to control debuggers (WinDb
 ### Symbol Support
 - ✅ **Automatic symbol configuration**: Microsoft Symbol Server configured automatically when opening dumps
 - ✅ **Dump-specific symbols**: Upload multiple symbol files per dump (batch upload supported)
-- ✅ **ZIP archive support**: Upload ZIP files containing symbol directories (preserves structure)
+- ✅ **ZIP archive support**: Upload ZIP files containing symbol directories (preserves structure for extracted symbol entries; non-symbol entries are ignored)
 - ✅ **Organized by dump**: Symbols stored in dump-specific directories for easy management
 - ✅ **Remote symbol servers**: Microsoft Symbol Server, NuGet Symbol Server, custom servers
-- ✅ **Multiple formats**: .pdb (Windows), .so/.dylib (Linux/macOS), .dwarf, .sym, .debug, .dbg, .dSYM
-- ✅ **Symbol file validation**: File type and size validation (up to 500MB per file)
+- ✅ **Multiple formats**: .pdb (Windows), .so/.dylib (Linux/macOS), .dwarf, .sym, .debug, .dbg, .so.dbg, .dSYM (DWARF)
+- ✅ **Symbol file validation**: Single/batch uploads validate headers + enforce file size limit (500 MiB per file)
 - ✅ **Zero configuration**: Just upload symbols and open dump - symbols are configured automatically
 
 ### MCP Resources
@@ -92,8 +92,9 @@ The server exposes documentation and guides as MCP resources for easy access:
 - 🔒 **API Key Authentication**: Optional authentication via `X-API-Key` header
 - 🔒 **CORS Configuration**: Configurable allowed origins for production deployments
 - 🔒 **Dump File Validation**: Magic byte validation ensures only valid dump files are uploaded
-- 🔒 **Symbol File Validation**: Validates symbol file formats (PDB, ELF, Mach-O) before storage
-- 🔒 **Path Traversal Prevention**: All user identifiers are sanitized to prevent directory traversal attacks
+- 🔒 **Symbol File Validation**: Single/batch uploads validate symbol headers (PDB, ELF, Mach-O, etc.) before storage
+- 🔒 **ZIP Extraction Hardening**: ZIP uploads extract only symbol-related entries and apply ZipSlip + zip bomb defenses
+- 🔒 **Path Traversal Prevention**: User identifiers and uploaded symbol file names are sanitized to prevent directory traversal attacks
 - 🔒 **Secure Responses**: Internal file paths are never exposed in API responses
 - 🔒 Session isolation per user
 - 🔒 Session ownership validation
@@ -352,6 +353,16 @@ curl -X POST http://localhost:5000/api/symbols/upload-zip \
   -F "file=@/path/to/symbols.zip" \
   -F "dumpId=abc123-def456-ghi789"
 ```
+
+**Notes (storage + safety)**:
+- Symbol files are stored under `.symbols_<dumpId>/`.
+- Uploaded symbol file names are normalized to a safe basename (any directory components are stripped).
+- ZIP uploads extract only symbol-related entries (other entries are ignored) and apply defensive limits:
+  - Max entries: 25,000
+  - Max extracted bytes (total): 2 GiB
+  - Max extracted bytes (per entry): 512 MiB
+  - Compression ratio guard: entries ≥ 10 MiB with ratio > 200 are rejected
+  - Paths must be relative (no absolute paths or `..` segments)
 
 Response (batch upload):
 ```json

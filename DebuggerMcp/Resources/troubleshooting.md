@@ -195,6 +195,7 @@ xcode-select --install
 - Symbol files not uploaded
 - Symbol server not accessible
 - Symbol mismatch
+- ZIP upload contained no symbol entries (non-symbol files are ignored)
 
 **Solutions**:
 
@@ -204,6 +205,8 @@ xcode-select --install
      -F "file=@MyApp.pdb" \
      -F "dumpId=abc123"
    ```
+
+   If you upload a ZIP archive, only symbol-related entries are extracted (other entries are ignored). If the ZIP is very large or suspiciously compressed, the server may reject it with a `400` error.
 
 2. **Verify symbol server access** (Windows/WinDbg):
    ```
