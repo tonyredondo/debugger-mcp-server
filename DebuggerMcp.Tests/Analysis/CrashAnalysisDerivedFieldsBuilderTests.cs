@@ -20,11 +20,8 @@ public class CrashAnalysisDerivedFieldsBuilderTests
         CrashAnalysisDerivedFieldsBuilder.PopulateDerivedFields(result);
 
         Assert.Null(result.Signature);
-        Assert.Null(result.StackSelection);
         Assert.Null(result.Symbols);
         Assert.Null(result.Timeline);
-        Assert.Null(result.Findings);
-        Assert.Null(result.RootCause);
     }
 
     [Fact]
@@ -133,10 +130,6 @@ public class CrashAnalysisDerivedFieldsBuilderTests
         Assert.Equal("crash", result.Signature!.Kind);
         Assert.StartsWith("sha256:", result.Signature.Hash, StringComparison.Ordinal);
 
-        Assert.Null(result.StackSelection);
-        Assert.Null(result.Findings);
-        Assert.Null(result.RootCause);
-
         Assert.NotNull(result.Symbols);
         Assert.Equal(2, result.Symbols!.Native.MissingCount);
 
@@ -156,8 +149,6 @@ public class CrashAnalysisDerivedFieldsBuilderTests
 
         Assert.NotNull(result.Signature);
         Assert.Equal("hang", result.Signature!.Kind);
-        Assert.Null(result.Findings);
-        Assert.Null(result.RootCause);
     }
 
     [Theory]

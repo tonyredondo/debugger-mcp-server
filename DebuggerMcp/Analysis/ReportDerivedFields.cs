@@ -1,4 +1,5 @@
-using System;
+#nullable enable
+
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
@@ -77,123 +78,6 @@ public class AnalysisSignatureParts
 }
 
 /// <summary>
-/// Explains deterministic per-thread stack frame selection.
-/// </summary>
-public class StackSelectionInfo
-{
-    /// <summary>
-    /// Schema version for selection semantics.
-    /// </summary>
-    [JsonPropertyName("version")]
-    public int Version { get; set; } = 1;
-
-    /// <summary>
-    /// Per-thread selection information.
-    /// </summary>
-    [JsonPropertyName("threadSelections")]
-    public List<ThreadStackSelection> ThreadSelections { get; set; } = [];
-}
-
-/// <summary>
-/// Per-thread information about which frame was selected as the "meaningful top frame".
-/// </summary>
-public class ThreadStackSelection
-{
-    /// <summary>
-    /// Thread ID string (as present in the report).
-    /// </summary>
-    [JsonPropertyName("threadId")]
-    public string ThreadId { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Index of the selected frame within the thread call stack.
-    /// </summary>
-    [JsonPropertyName("selectedFrameIndex")]
-    public int? SelectedFrameIndex { get; set; }
-
-    /// <summary>
-    /// Frame skip reasons for transparency/debuggability.
-    /// </summary>
-    [JsonPropertyName("skippedFrames")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<SkippedFrame>? SkippedFrames { get; set; }
-}
-
-/// <summary>
-/// Explains why a frame was skipped during top-frame selection.
-/// </summary>
-public class SkippedFrame
-{
-    /// <summary>
-    /// Index of the skipped frame within the call stack.
-    /// </summary>
-    [JsonPropertyName("frameIndex")]
-    public int FrameIndex { get; set; }
-
-    /// <summary>
-    /// Machine-readable reason code.
-    /// </summary>
-    [JsonPropertyName("reason")]
-    public string Reason { get; set; } = string.Empty;
-}
-
-/// <summary>
-/// A structured finding produced from the analysis result with evidence pointers for auditability.
-/// </summary>
-public class AnalysisFinding
-{
-    /// <summary>
-    /// Stable identifier for the finding (suitable for automation).
-    /// </summary>
-    [JsonPropertyName("id")]
-    public string Id { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Human-readable title.
-    /// </summary>
-    [JsonPropertyName("title")]
-    public string Title { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Category (crash, hang, oom, deadlock, perf, symbols, etc.).
-    /// </summary>
-    [JsonPropertyName("category")]
-    public string Category { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Severity (info, warning, error).
-    /// </summary>
-    [JsonPropertyName("severity")]
-    public string Severity { get; set; } = "info";
-
-    /// <summary>
-    /// Confidence in [0..1].
-    /// </summary>
-    [JsonPropertyName("confidence")]
-    public double Confidence { get; set; }
-
-    /// <summary>
-    /// Short summary of the finding.
-    /// </summary>
-    [JsonPropertyName("summary")]
-    public string Summary { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Evidence pointers into the JSON report.
-    /// </summary>
-    [JsonPropertyName("evidence")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<AnalysisEvidence>? Evidence { get; set; }
-
-    /// <summary>
-    /// Suggested next actions.
-    /// </summary>
-    [JsonPropertyName("nextActions")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<string>? NextActions { get; set; }
-}
-
-/// <summary>
 /// Evidence entry that points to a location in the JSON report.
 /// </summary>
 public class AnalysisEvidence
@@ -210,50 +94,6 @@ public class AnalysisEvidence
     [JsonPropertyName("note")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Note { get; set; }
-}
-
-/// <summary>
-/// Root cause analysis represented as hypotheses, not a single asserted truth.
-/// </summary>
-public class RootCauseAnalysis
-{
-    /// <summary>
-    /// Ordered hypotheses with confidence and evidence.
-    /// </summary>
-    [JsonPropertyName("hypotheses")]
-    public List<RootCauseHypothesis> Hypotheses { get; set; } = [];
-}
-
-/// <summary>
-/// A single root cause hypothesis.
-/// </summary>
-public class RootCauseHypothesis
-{
-    /// <summary>
-    /// Short label for the hypothesis.
-    /// </summary>
-    [JsonPropertyName("label")]
-    public string Label { get; set; } = string.Empty;
-
-    /// <summary>
-    /// Confidence in [0..1].
-    /// </summary>
-    [JsonPropertyName("confidence")]
-    public double Confidence { get; set; }
-
-    /// <summary>
-    /// Evidence pointers supporting the hypothesis.
-    /// </summary>
-    [JsonPropertyName("evidence")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<AnalysisEvidence>? Evidence { get; set; }
-
-    /// <summary>
-    /// Evidence pointers that may contradict the hypothesis.
-    /// </summary>
-    [JsonPropertyName("counterEvidence")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<AnalysisEvidence>? CounterEvidence { get; set; }
 }
 
 /// <summary>

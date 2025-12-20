@@ -293,7 +293,7 @@ internal static class LlmReportCache
             var analysisObj = new Dictionary<string, object?>(StringComparer.OrdinalIgnoreCase);
 
             // Whitelist only factual, low-bias sections.
-            foreach (var key in new[] { "environment", "symbols", "stackSelection", "threads", "modules", "assemblies", "timeline", "memory", "async", "synchronization" })
+            foreach (var key in new[] { "environment", "symbols", "threads", "modules", "assemblies", "timeline", "memory", "async", "synchronization" })
             {
                 if (!analysis.TryGetProperty(key, out var section))
                 {
@@ -638,7 +638,7 @@ internal static class LlmReportCache
             // These are stable across our reports and unlikely to occur together with top-level metadata/dumpId in arbitrary JSON.
             var analysisKeys =
                 new HashSet<string>(
-                    ["environment", "threads", "modules", "assemblies", "signature", "symbols", "stackSelection", "timeline", "memory", "async", "synchronization"],
+                    ["environment", "threads", "modules", "assemblies", "signature", "symbols", "timeline", "memory", "async", "synchronization"],
                     StringComparer.OrdinalIgnoreCase);
 
             while (reader.Read())

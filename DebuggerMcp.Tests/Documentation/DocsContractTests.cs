@@ -278,7 +278,7 @@ public class DocsContractTests
         var text = File.ReadAllText(path);
 
         Assert.Contains("\"synchronization\"", text, StringComparison.Ordinal);
-        Assert.Contains("\"rootCause\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"aiAnalysis\"", text, StringComparison.Ordinal);
         Assert.Contains("\"sourceContext\"", text, StringComparison.Ordinal);
     }
 

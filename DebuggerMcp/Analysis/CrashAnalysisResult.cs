@@ -96,27 +96,6 @@ public class CrashAnalysisResult
     public AnalysisSignature? Signature { get; set; }
 
     /// <summary>
-    /// Explains how each thread's "meaningful top frame" was selected.
-    /// </summary>
-    [JsonPropertyName("stackSelection")]
-    [JsonIgnore]
-    public StackSelectionInfo? StackSelection { get; set; }
-
-    /// <summary>
-    /// Structured findings derived from the report with evidence pointers.
-    /// </summary>
-    [JsonPropertyName("findings")]
-    [JsonIgnore]
-    public List<AnalysisFinding>? Findings { get; set; }
-
-    /// <summary>
-    /// Root cause hypotheses (confidence + evidence), not a single asserted truth.
-    /// </summary>
-    [JsonPropertyName("rootCause")]
-    [JsonIgnore]
-    public RootCauseAnalysis? RootCause { get; set; }
-
-    /// <summary>
     /// Symbol and source resolution health summary.
     /// </summary>
     [JsonPropertyName("symbols")]

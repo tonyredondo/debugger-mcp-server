@@ -40,9 +40,6 @@ Crash analysis outputs (`analyze` kind `crash`/`ai` and `report` with `format: "
     "synchronization": { },// Synchronization primitives + ownership/contenders
     "watches": { },       // Watch expression evaluation results
     "signature": { },     // Stable dedup signature for triage
-    "stackSelection": { },// Evidence for meaningful top frames
-    "findings": [ ],      // Structured findings with evidence pointers
-    "rootCause": { },     // Hypotheses with confidence + evidence
     "sourceContext": [ ], // Bounded source snippets (when available)
     "aiAnalysis": { }     // AI-only (present for analyze(kind="ai"))
   }

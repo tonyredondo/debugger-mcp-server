@@ -73,9 +73,6 @@ public class ReportServiceJsonSerializationTests
                     }
                 ]
             },
-            StackSelection = new StackSelectionInfo { ThreadSelections = [] },
-            Findings = [new AnalysisFinding { Id = "f1", Title = "Finding", Category = "test", Severity = "warning" }],
-            RootCause = new RootCauseAnalysis { Hypotheses = [] }
         };
 
         var json = service.GenerateReport(

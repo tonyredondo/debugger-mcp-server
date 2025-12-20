@@ -22,31 +22,10 @@ internal static class CrashAnalysisDerivedFieldsBuilder
         }
 
         // Only populate deterministic, data-oriented derived fields.
-        // Interpretive fields (rootCause/findings/stackSelection) are intentionally excluded from the canonical report.
-        result.StackSelection = null;
+        // Interpretive fields are intentionally excluded from the canonical report.
         result.Signature = BuildSignature(result);
         result.Symbols = BuildSymbols(result);
         result.Timeline = BuildTimeline(result);
-        result.Findings = null;
-        result.RootCause = null;
-    }
-
-    private static StackSelectionInfo BuildStackSelection(CrashAnalysisResult result)
-    {
-        var selections = new List<ThreadStackSelection>(result.Threads!.All!.Count);
-
-        foreach (var thread in result.Threads.All)
-        {
-            var selection = StackFrameSelection.SelectMeaningfulTopFrame(thread.CallStack);
-            selections.Add(new ThreadStackSelection
-            {
-                ThreadId = thread.ThreadId ?? string.Empty,
-                SelectedFrameIndex = selection.SelectedFrameIndex,
-                SkippedFrames = selection.SkippedFrames.Count > 0 ? selection.SkippedFrames : null
-            });
-        }
-
-        return new StackSelectionInfo { ThreadSelections = selections };
     }
 
     private static AnalysisSignature BuildSignature(CrashAnalysisResult result)
@@ -483,6 +462,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
         return (chains, deadlocks);
     }
 
+#if false
     private static List<AnalysisFinding> BuildFindings(CrashAnalysisResult result)
     {
         var findings = new List<AnalysisFinding>();
@@ -733,6 +713,7 @@ internal static class CrashAnalysisDerivedFieldsBuilder
 
         return new RootCauseAnalysis { Hypotheses = hypotheses };
     }
+#endif
 
     private static string ComputeSha256Hex(string input)
     {
@@ -747,10 +728,16 @@ internal static class CrashAnalysisDerivedFieldsBuilder
 /// </summary>
 internal static class StackFrameSelection
 {
+    internal sealed class SkippedFrameInfo
+    {
+        public int FrameIndex { get; init; }
+        public string Reason { get; init; } = string.Empty;
+    }
+
     internal sealed class SelectionResult
     {
         public int? SelectedFrameIndex { get; init; }
-        public List<SkippedFrame> SkippedFrames { get; init; } = [];
+        public List<SkippedFrameInfo> SkippedFrames { get; init; } = [];
     }
 
     internal static SelectionResult SelectMeaningfulTopFrame(IReadOnlyList<StackFrame> callStack)
@@ -760,7 +747,7 @@ internal static class StackFrameSelection
             return new SelectionResult { SelectedFrameIndex = null };
         }
 
-        var skipped = new List<SkippedFrame>();
+        var skipped = new List<SkippedFrameInfo>();
         for (var i = 0; i < callStack.Count; i++)
         {
             var frame = callStack[i];
@@ -769,7 +756,7 @@ internal static class StackFrameSelection
                 return new SelectionResult { SelectedFrameIndex = i, SkippedFrames = skipped };
             }
 
-            skipped.Add(new SkippedFrame { FrameIndex = i, Reason = ClassifySkipReason(frame) });
+            skipped.Add(new SkippedFrameInfo { FrameIndex = i, Reason = ClassifySkipReason(frame) });
         }
 
         // If everything is a placeholder, fall back to index 0 to keep deterministic behavior.

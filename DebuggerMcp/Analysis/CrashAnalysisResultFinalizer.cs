@@ -92,7 +92,7 @@ internal static class CrashAnalysisResultFinalizer
 
         result.Summary.Description = description;
 
-        // Populate derived fields (signature, findings, timeline, etc.) based on the finalized stacks.
+        // Populate derived fields (signature, symbols, timeline, etc.) based on the finalized stacks.
         // This is intentionally done at the end so consumers see deterministic data computed from the final report state.
         CrashAnalysisDerivedFieldsBuilder.PopulateDerivedFields(result);
     }
