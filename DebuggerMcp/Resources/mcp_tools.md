@@ -29,6 +29,7 @@ Execute a raw debugger command (WinDbg/LLDB syntax). Use as a last resort.
 Notes:
 - If you have a managed object address, prefer `inspect(kind: "object", ...)` over `exec "sos dumpobj ..."` (the inspect path is more complete and safer).
 - For managed stacks, prefer `inspect(kind: "clr_stack", ...)` over `exec "sos clrstack ..."` when possible.
+- In LLDB sessions, SOS commands typically do not use the `!` prefix. This server normalizes WinDbg-style SOS commands for LLDB by stripping a leading `!`, so `exec(command: "!pe")` works on both debuggers (WinDbg runs `!pe`, LLDB runs `pe`).
 
 ### 4) `report`
 Generate reports (returns report content).

@@ -611,7 +611,7 @@ public class LldbManager : IDebuggerManager
     /// <item><description>image list - List loaded modules</description></item>
     /// <item><description>memory read - Read memory</description></item>
     /// </list>
-    /// <para>After loading SOS, .NET commands like "clrthreads", "dumpheap" are available.</para>
+    /// <para>After loading SOS, .NET commands like "clrthreads", "clrstack", "dumpheap", "pe" are available.</para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
     /// Thrown if the debugger is not initialized or no dump is open.
@@ -1074,7 +1074,7 @@ public class LldbManager : IDebuggerManager
     /// <para>The debugger must be initialized and a dump must be open before calling this method.</para>
     /// <para>On Linux/macOS, this loads the libsosplugin.so library.</para>
     /// <para>The SOS plugin must be installed (typically comes with .NET SDK).</para>
-    /// <para>After loading, commands like "clrthreads", "dumpheap", "pe", etc. become available.</para>
+    /// <para>After loading, commands like "clrthreads", "clrstack", "dumpheap", "pe", etc. become available.</para>
     /// </remarks>
     /// <exception cref="InvalidOperationException">
     /// Thrown if the debugger is not initialized or if no dump is open.

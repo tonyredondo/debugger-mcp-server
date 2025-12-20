@@ -104,6 +104,33 @@ public class DocsContractTests
             "README.md is missing environment variable documentation for:\n" + string.Join('\n', missing));
     }
 
+    [Fact]
+    public void Readme_McpResourcesTable_ListsAllPublishedResources()
+    {
+        var readme = ReadmeEndpointTable.ReadReadmeText();
+
+        var required = new[]
+        {
+            "debugger://mcp-tools",
+            "debugger://workflow-guide",
+            "debugger://analysis-guide",
+            "debugger://windbg-commands",
+            "debugger://lldb-commands",
+            "debugger://sos-commands",
+            "debugger://troubleshooting",
+            "debugger://cli-guide"
+        };
+
+        var missing = required
+            .Where(uri => !readme.Contains(uri, StringComparison.Ordinal))
+            .OrderBy(uri => uri, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "README.md is missing MCP resource URIs:\n" + string.Join('\n', missing));
+    }
+
     private static class ApiRouteDiscovery
     {
         public static HashSet<string> DiscoverControllerRoutes()

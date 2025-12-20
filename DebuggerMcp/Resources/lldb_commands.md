@@ -120,6 +120,10 @@ plugin load /path/to/libsosplugin.so    # Linux
 plugin load /path/to/libsosplugin.dylib  # macOS
 ```
 
+Notes:
+- When using this repository’s MCP `exec` tool, you may issue WinDbg-style SOS commands (prefixed with `!`) even on LLDB (the server strips the leading `!` for LLDB sessions). Example: `exec(command: "!dumpheap -stat")`.
+- Some environments also support `sos <command>` (e.g., `sos help`, `sos dumpil ...`). If a command is “not a valid command”, try the non-`sos` form or consult `sos help`.
+
 ## 💡 Tips
 
 ### Quick Crash Analysis
@@ -198,4 +202,3 @@ x/10xg address
 | `dq` | `memory read -s8` | Read QWORDs |
 | `da` | `x/s` | Display ASCII string |
 | `.ecxr` | (N/A for dumps) | Exception context |
-

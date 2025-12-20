@@ -27,6 +27,20 @@ dotnet-sos install
 
 ---
 
+## 🧭 WinDbg vs LLDB Command Forms
+
+SOS command names are largely the same across debuggers, but the prefixes differ:
+
+| Scenario | Recommended form | Example |
+|----------|------------------|---------|
+| WinDbg | `!<command>` | `!clrthreads`, `!pe`, `!clrstack -a`, `!dumpheap -stat` |
+| LLDB interactive | `<command>` or `sos <command>` | `pe`, `clrstack -a`, `dumpheap -stat` (or `sos help`) |
+| This MCP server (LLDB sessions) | `!<command>` or `<command>` | `exec(command: "!clrthreads")` (server strips `!` for LLDB) |
+
+Tip: if a command errors, run `sos help` (LLDB) or `!soshelp` / `!help` (WinDbg) and use the documented syntax for your debugger.
+
+---
+
 ## 🧵 Thread Commands
 
 | Command | Description |
@@ -241,7 +255,8 @@ dotnet-sos install
 
 ### Linux/macOS (LLDB)
 - Some commands may have slightly different syntax
-- Use `soshelp` (without !) after loading plugin
+- Prefer running SOS commands without `!` in interactive LLDB (or use `sos <command>` when available)
+- If you’re using this repository’s MCP `exec` tool, WinDbg-style `!<command>` is OK in LLDB sessions (the server strips the leading `!`)
 - Ensure libsosplugin matches CLR version
 
 ### Finding SOS Plugin Path
@@ -255,4 +270,3 @@ find /usr/local -name "libsosplugin.dylib" 2>/dev/null
 # Or use dotnet-sos
 dotnet-sos install
 ```
-

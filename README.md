@@ -389,8 +389,10 @@ Response (batch upload):
       - Microsoft Symbol Server
       - Dump-specific symbols (if uploaded)
    ✅ SOS auto-loaded for .NET dumps
-3. exec(sessionId, userId, command="!threads") → List .NET threads
-4. exec(sessionId, userId, command="k") → Show call stack (with symbols!)
+3. exec(sessionId, userId, command="!threads") → (WinDbg) List .NET threads
+   exec(sessionId, userId, command="!clrthreads") → (LLDB) List .NET threads (SOS)
+4. exec(sessionId, userId, command="k") → (WinDbg) Show call stack (with symbols!)
+   exec(sessionId, userId, command="bt") → (LLDB) Show call stack (with symbols!)
 5. analyze(kind="crash", sessionId, userId) → Analyze crash
 6. session(action="close", sessionId, userId) → Close and cleanup
 ```
@@ -435,8 +437,13 @@ r                 - Show registers
 
 #### Linux/macOS (LLDB)
 ```
-clrthreads        - List .NET threads (after loading SOS)
-dumpheap          - Dump managed heap (after loading SOS)
+# SOS (.NET) commands:
+# - You can use WinDbg-style SOS commands (prefixed with '!') even on LLDB; the server strips the leading '!' for LLDB sessions.
+!clrthreads       - List .NET threads (SOS)
+!clrstack -a      - Managed call stack with args/locals (SOS)
+!dumpheap -stat   - Managed heap statistics (SOS)
+
+# Native LLDB commands:
 bt                - Backtrace (call stack)
 image list        - List loaded images/modules
 register read     - Show registers

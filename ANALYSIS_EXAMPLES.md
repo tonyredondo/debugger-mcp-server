@@ -15,6 +15,7 @@ The Debugger MCP Server includes automated analysis tools that execute relevant 
 | `analyze` | Automated analysis (crash/AI/perf/security) | `kind`, `sessionId`, `userId`, `includeWatches?` |
 | `compare` | Compare two sessions/dumps | `kind`, `sessionId`, `userId`, `targetSessionId`, `targetUserId` |
 | `inspect` | Object/module/SOS helpers | `kind`, `sessionId`, `userId` (+ kind-specific args) |
+| `report` | Report generation + section fetch | `action`, `sessionId`, `userId`, `format?`, `path?`, `limit?`, `cursor?`, `maxChars?` |
 | `dump` | Open/close a dump in a session | `action`, `sessionId`, `userId`, `dumpId` |
 
 ---
@@ -134,6 +135,7 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
 **Notes**:
 - Requires an MCP client that supports sampling (`sampling/createMessage`) with tools enabled.
 - When the AI needs object details, prefer the first-class sampling tool (`inspect(address=\"0x...\", maxDepth=3)`) over raw SOS `dumpobj` commands.
+- Prefer `report(action=\"index\")` to seed LLM context and `report(action=\"get\", path=...)` (or the sampling tool `report_get(path=...)`) to fetch additional evidence instead of re-running full analysis.
 - To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
 - Output matches `analyze(kind="crash")` plus an `analysis.aiAnalysis` section.
 

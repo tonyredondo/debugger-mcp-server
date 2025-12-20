@@ -260,7 +260,8 @@ analyze(kind: "crash", sessionId: "session-xyz-789", userId: "your-user-id")
 **Common SOS Commands**:
 ```
 # List managed threads
-exec(sessionId, userId, command: "!threads")
+exec(sessionId, userId, command: "!threads")      # WinDbg
+exec(sessionId, userId, command: "!clrthreads")   # LLDB (SOS)
 
 # Show heap statistics
 exec(sessionId, userId, command: "!dumpheap -stat")

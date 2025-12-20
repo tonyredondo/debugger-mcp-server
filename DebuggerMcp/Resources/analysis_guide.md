@@ -1254,7 +1254,7 @@ Generate comprehensive, shareable reports from your crash analysis in multiple f
 | `report(action="full")` | Generate full analysis report | `sessionId`, `userId`, `format`, `includeWatches`, `includeSecurity`, `maxStackFrames` |
 | `report(action="summary")` | Generate brief summary report | `sessionId`, `userId`, `format` |
 | `report(action="index")` | Get a small report index (summary + TOC) | `sessionId`, `userId` |
-| `report(action="get")` | Fetch a specific report section by path (paged for arrays) | `sessionId`, `userId`, `path`, `limit?`, `cursor?`, `maxChars?` |
+| `report(action="get")` | Fetch a specific report section by path (paged for arrays) | `sessionId`, `userId`, `path`, `limit?`, `cursor?`, `maxChars?` (default: 20000; returns an error if exceeded) |
 
 ### Supported Formats
 

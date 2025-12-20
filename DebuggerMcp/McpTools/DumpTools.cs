@@ -394,7 +394,7 @@ public class DumpTools(
             // Check if SOS is already loaded (e.g., auto-loaded during OpenDump)
             if (manager.IsSosLoaded)
             {
-                return "SOS extension is already loaded. You can use SOS commands like clrthreads, dumpheap, clrstack, etc.";
+                return "SOS extension is already loaded. You can use SOS commands like clrthreads, clrstack, dumpheap -stat, pe, etc. (WinDbg-style '!<command>' is also accepted; the server normalizes this for LLDB).";
             }
 
             // Warn if this doesn't appear to be a .NET dump, but still allow loading
@@ -409,7 +409,7 @@ public class DumpTools(
             // subsequent report_index/report_get regenerates with the richer data set.
             session.ClearCachedReport();
 
-            return warning + "SOS extension loaded successfully. You can now use SOS commands like clrthreads, dumpheap, clrstack, etc.";
+            return warning + "SOS extension loaded successfully. You can now use SOS commands like clrthreads, clrstack, dumpheap -stat, pe, etc. (WinDbg-style '!<command>' is also accepted; the server normalizes this for LLDB).";
         }
         catch (ArgumentException)
         {
