@@ -145,6 +145,7 @@ public sealed class AiAnalysisOrchestrator(
         string? lastModel = null;
         var toolIndexByIteration = new Dictionary<int, int>();
         var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
+        var analysisCompleteRefusals = 0;
 
         var traceRunDir = InitializeSamplingTraceDirectory();
 
@@ -229,17 +230,32 @@ public sealed class AiAnalysisOrchestrator(
                 continue;
             }
 
+            ToolUseContentBlock? pendingAnalysisComplete = null;
+            JsonElement pendingAnalysisCompleteInput = default;
+            string? pendingAnalysisCompleteName = null;
+            string? pendingAnalysisCompleteId = null;
+
+            var rewrittenToolUses = new List<(ToolUseContentBlock ToolUse, string Name, JsonElement Input)>(toolUses.Count);
             foreach (var toolUse in toolUses)
             {
                 var (effectiveToolName, effectiveToolInput) = RewriteToolUseIfNeeded(toolUse, clrMdAnalyzer);
+                rewrittenToolUses.Add((toolUse, effectiveToolName, effectiveToolInput));
+            }
+
+            foreach (var (toolUse, effectiveToolName, effectiveToolInput) in rewrittenToolUses)
+            {
                 LogRequestedToolSummary(iteration, toolUse, effectiveToolName, effectiveToolInput);
 
                 if (string.Equals(effectiveToolName, "analysis_complete", StringComparison.OrdinalIgnoreCase))
                 {
-                    var completed = ParseAnalysisComplete(effectiveToolInput, commandsExecuted, iteration, response.Model);
-                    completed.AnalyzedAt = DateTime.UtcNow;
-                    WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", completed);
-                    return completed;
+                    if (pendingAnalysisComplete == null)
+                    {
+                        pendingAnalysisComplete = toolUse;
+                        pendingAnalysisCompleteInput = effectiveToolInput;
+                        pendingAnalysisCompleteName = effectiveToolName;
+                        pendingAnalysisCompleteId = toolUse.Id;
+                    }
+                    continue;
                 }
 
                 lastIterationHadToolCalls = true;
@@ -391,6 +407,65 @@ public sealed class AiAnalysisOrchestrator(
                     });
                 }
             }
+
+            if (pendingAnalysisComplete != null)
+            {
+                var otherToolsCoissued = rewrittenToolUses.Any(t => !string.Equals(t.Name, "analysis_complete", StringComparison.OrdinalIgnoreCase));
+
+                if (!HasEvidenceToolCalls(commandsExecuted) || otherToolsCoissued)
+                {
+                    analysisCompleteRefusals++;
+                    lastIterationHadToolCalls = true;
+
+                    var msg = BuildAnalysisCompleteRefusalMessage(otherToolsCoissued, analysisCompleteRefusals);
+                    var toolName = pendingAnalysisCompleteName ?? "analysis_complete";
+                    var toolUseId = pendingAnalysisCompleteId;
+
+                    var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+                    toolIndexByIteration[iteration] = toolOrdinal;
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
+                        new { tool = toolName, input = CloneToolInput(pendingAnalysisCompleteInput).ToString(), output = msg, isError = true, duration = TimeSpan.Zero.ToString("c") });
+
+                    if (string.IsNullOrWhiteSpace(toolUseId))
+                    {
+                        messages.Add(new SamplingMessage
+                        {
+                            Role = Role.User,
+                            Content =
+                            [
+                                new TextContentBlock { Text = msg }
+                            ]
+                        });
+                        continue;
+                    }
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new ToolResultContentBlock
+                            {
+                                ToolUseId = toolUseId,
+                                IsError = true,
+                                Content =
+                                [
+                                    new TextContentBlock
+                                    {
+                                        Text = TruncateForModel(msg)
+                                    }
+                                ]
+                            }
+                        ]
+                    });
+                    continue;
+                }
+
+                var completed = ParseAnalysisComplete(pendingAnalysisCompleteInput, commandsExecuted, iteration, response.Model);
+                completed.AnalyzedAt = DateTime.UtcNow;
+                WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", completed);
+                return completed;
+            }
         }
 
         if (!lastIterationHadToolCalls && !string.IsNullOrWhiteSpace(lastIterationAssistantText))
@@ -421,6 +496,47 @@ public sealed class AiAnalysisOrchestrator(
         };
         WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", incomplete);
         return incomplete;
+    }
+
+    private static bool HasEvidenceToolCalls(List<ExecutedCommand> commandsExecuted)
+    {
+        foreach (var cmd in commandsExecuted)
+        {
+            var tool = cmd.Tool ?? string.Empty;
+            if (tool.Equals("exec", StringComparison.OrdinalIgnoreCase) ||
+                tool.Equals("report_get", StringComparison.OrdinalIgnoreCase) ||
+                tool.Equals("inspect", StringComparison.OrdinalIgnoreCase) ||
+                tool.Equals("get_thread_stack", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildAnalysisCompleteRefusalMessage(bool toolCallsWereCoissued, int refusalCount)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Cannot finalize yet.");
+        sb.AppendLine();
+        sb.AppendLine("Before calling analysis_complete, gather at least one additional piece of evidence using tools.");
+        sb.AppendLine("Minimum recommended sequence:");
+        sb.AppendLine("- report_get(path=\"analysis.exception\")");
+        sb.AppendLine("- report_get(path=\"analysis.threads.faultingThread\")");
+        sb.AppendLine("- report_get(path=\"analysis.rootCause\")");
+        sb.AppendLine("- report_get(path=\"analysis.environment\")");
+        sb.AppendLine("- report_get(path=\"analysis.assemblies.items\", limit=50)");
+        sb.AppendLine();
+        if (toolCallsWereCoissued)
+        {
+            sb.AppendLine("Also: do not call analysis_complete in the same message as other tool calls.");
+            sb.AppendLine("Execute evidence-gathering tools first, then call analysis_complete in a later message after you've read the tool outputs.");
+            sb.AppendLine();
+        }
+        sb.AppendLine($"Refusal count: {refusalCount}");
+        sb.AppendLine("Now call report_get (or exec/inspect/get_thread_stack) to gather evidence, then try analysis_complete again.");
+        return sb.ToString().TrimEnd();
     }
 
     private void LogSamplingRequestSummary(int iteration, CreateMessageRequestParams request)
@@ -834,6 +950,7 @@ public sealed class AiAnalysisOrchestrator(
         sb.AppendLine("Analyze this crash report.");
         sb.AppendLine("You are provided a small report index (summary + table of contents) and a bounded evidence snapshot.");
         sb.AppendLine("If you need more data, call tools (report_get/exec/inspect/get_thread_stack).");
+        sb.AppendLine("Do not call analysis_complete until you've executed at least one evidence tool call.");
         sb.AppendLine("Avoid rerunning the same tool calls; reuse prior evidence and expand only the specific sections you need.");
         sb.AppendLine();
         sb.AppendLine("Report index (summary + TOC):");

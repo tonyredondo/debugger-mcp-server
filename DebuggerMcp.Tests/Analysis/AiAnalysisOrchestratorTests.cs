@@ -14,6 +14,43 @@ namespace DebuggerMcp.Tests.Analysis;
 public class AiAnalysisOrchestratorTests
 {
     [Fact]
+    public async Task AnalyzeCrashAsync_WhenModelCallsAnalysisCompleteImmediately_RequiresEvidenceToolBeforeCompleting()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "premature",
+                confidence = "high",
+                reasoning = "done"
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
+            {
+                path = "analysis.exception"
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "root cause after evidence",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{\"metadata\":{},\"analysis\":{\"exception\":{\"type\":\"System.Exception\",\"message\":\"boom\"}}}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("root cause after evidence", result.RootCause);
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c => c.Tool == "report_get");
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_EmitsSamplingRequestAndResponseLogs()
     {
         var logs = new List<(LogLevel Level, string Message)>();
@@ -215,9 +252,13 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public async Task AnalyzeCrashAsync_AnalysisCompleteOnFirstIteration_ReturnsResult()
+    public async Task AnalyzeCrashAsync_AnalysisCompleteAfterEvidence_ReturnsResult()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
+            {
+                path = "analysis.exception"
+            }))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {
                 rootCause = "NullReferenceException in Foo.Bar",
@@ -232,13 +273,13 @@ public class AiAnalysisOrchestratorTests
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            "{\"x\":1}",
+            "{\"metadata\":{},\"analysis\":{\"exception\":{\"type\":\"System.NullReferenceException\",\"message\":\"boom\"}}}",
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
         Assert.Equal("NullReferenceException in Foo.Bar", result.RootCause);
         Assert.Equal("high", result.Confidence);
-        Assert.Equal(1, result.Iterations);
+        Assert.Equal(2, result.Iterations);
     }
 
     [Fact]
@@ -664,6 +705,10 @@ public class AiAnalysisOrchestratorTests
     public async Task AnalyzeCrashAsync_AnalysisCompleteWithAdditionalFindings_ParsesStringArrayAndSkipsEmptyValues()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
+            {
+                path = "analysis.exception"
+            }))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {
                 rootCause = "Ok",
@@ -681,12 +726,12 @@ public class AiAnalysisOrchestratorTests
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
-            MaxIterations = 1
+            MaxIterations = 2
         };
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            "{}",
+            "{\"metadata\":{},\"analysis\":{\"exception\":{\"type\":\"System.Exception\",\"message\":\"boom\"}}}",
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
