@@ -13,7 +13,7 @@ public static class FileLoggerExtensions
     /// Adds a file logger that writes to rolling daily log files.
     /// </summary>
     /// <param name="builder">The logging builder.</param>
-    /// <param name="logDirectory">Directory to store log files. Defaults to LOG_STORAGE_PATH env var or /app/logs.</param>
+    /// <param name="logDirectory">Directory to store log files. Defaults to LOG_STORAGE_PATH env var or {AppContext.BaseDirectory}/logs.</param>
     /// <param name="filePrefix">Prefix for log file names. Defaults to "server".</param>
     /// <param name="minimumLevel">Minimum log level. Defaults to Information.</param>
     /// <returns>The logging builder for chaining.</returns>

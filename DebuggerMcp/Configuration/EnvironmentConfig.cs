@@ -25,6 +25,11 @@ namespace DebuggerMcp.Configuration;
 ///     <term>Directory for symbol cache downloads</term>
 ///   </item>
 ///   <item>
+///     <term>LOG_STORAGE_PATH</term>
+///     <term>{AppContext.BaseDirectory}/logs</term>
+///     <term>Directory for server logs and trace artifacts</term>
+///   </item>
+///   <item>
 ///     <term>API_KEY</term>
 ///     <term>None (disabled)</term>
 ///     <term>API key for authentication</term>

@@ -91,6 +91,7 @@ The server exposes documentation and guides as MCP resources for easy access:
 ### Security Features
 - 🔒 **API Key Authentication**: Optional authentication via `X-API-Key` header
 - 🔒 **CORS Configuration**: Configurable allowed origins for production deployments
+- 🔒 **Rate Limiting**: Fixed-window per-IP limiter (default: 120 requests/min, configurable via `RATE_LIMIT_REQUESTS_PER_MINUTE`)
 - 🔒 **Dump File Validation**: Magic byte validation ensures only valid dump files are uploaded
 - 🔒 **Symbol File Validation**: Single/batch uploads validate symbol headers (PDB, ELF, Mach-O, etc.) before storage
 - 🔒 **ZIP Extraction Hardening**: ZIP uploads extract only symbol-related entries and apply ZipSlip + zip bomb defenses
@@ -98,7 +99,7 @@ The server exposes documentation and guides as MCP resources for easy access:
 - 🔒 **Secure Responses**: Internal file paths are never exposed in API responses
 - 🔒 Session isolation per user
 - 🔒 Session ownership validation
-- 📊 Maximum 5 sessions per user
+- 📊 Maximum 10 sessions per user (default; configurable via `MAX_SESSIONS_PER_USER`)
 - 📊 Maximum 50 total sessions in the system
 - 📊 Maximum dump size: 5GB by default (configurable via `MAX_REQUEST_BODY_SIZE_GB`)
 - 🧹 Automatic cleanup of inactive sessions (default: 24 hours, configurable via `SESSION_INACTIVITY_THRESHOLD_MINUTES`)
@@ -600,6 +601,7 @@ Quick workflow:
 
 | Resource URI | Name | Description |
 |--------------|------|-------------|
+| `debugger://mcp-tools` | MCP Tools | Canonical compact MCP tool list (11 tools) |
 | `debugger://workflow-guide` | Workflow Guide | Complete workflow for analyzing memory dumps |
 | `debugger://analysis-guide` | Analysis Guide | Crash analysis, .NET analysis, and dump comparison features |
 | `debugger://windbg-commands` | WinDbg Commands Reference | Common WinDbg commands for crash analysis |
@@ -617,6 +619,7 @@ Quick workflow:
 | `POST` | `/api/dumps/upload` | Upload a dump file |
 | `GET` | `/api/dumps/{userId}/{dumpId}` | Get dump information |
 | `GET` | `/api/dumps/user/{userId}` | List all dumps for a user |
+| `POST` | `/api/dumps/{userId}/{dumpId}/binary` | Upload an executable/binary for a dump |
 | `DELETE` | `/api/dumps/{userId}/{dumpId}` | Delete a dump |
 | `GET` | `/api/dumps/stats` | Get session and storage statistics |
 | `POST` | `/api/dumps/compare` | Compare two dumps (via HTTP API) |
@@ -784,6 +787,15 @@ export ASPNETCORE_URLS="http://localhost:5000"
 # Dump storage directory (default: system temp directory)
 export DUMP_STORAGE_PATH="/custom/path/dumps"
 
+# Symbol cache directory for remote symbol servers (default: platform-specific)
+export SYMBOL_STORAGE_PATH="/custom/path/symbols"
+
+# Persistent session storage directory (default: /app/sessions in containers)
+export SESSION_STORAGE_PATH="/custom/path/sessions"
+
+# Log storage directory (used for server logs and trace artifacts)
+export LOG_STORAGE_PATH="/custom/path/logs"
+
 # API Key for authentication (optional - when set, X-API-Key header is required)
 export API_KEY="your-secret-api-key"
 
@@ -791,8 +803,14 @@ export API_KEY="your-secret-api-key"
 # When not set, allows any origin (development mode)
 export CORS_ALLOWED_ORIGINS="https://app.example.com,https://admin.example.com"
 
+# Rate limiting (requests per minute per IP, default: 120)
+export RATE_LIMIT_REQUESTS_PER_MINUTE=120
+
 # Custom SOS plugin path (optional - for non-standard installations)
 export SOS_PLUGIN_PATH="/custom/path/to/libsosplugin.so"
+
+# Optional override path for dotnet-symbol tool
+export DOTNET_SYMBOL_TOOL_PATH="/custom/path/to/dotnet-symbol"
 
 # Enable Swagger UI (default: enabled in development)
 export ENABLE_SWAGGER="true"
@@ -803,6 +821,10 @@ export MAX_REQUEST_BODY_SIZE_GB=5
 # Session cleanup settings
 export SESSION_CLEANUP_INTERVAL_MINUTES=5
 export SESSION_INACTIVITY_THRESHOLD_MINUTES=1440
+
+# Session limits (defaults: 10 per user, 50 total)
+export MAX_SESSIONS_PER_USER=10
+export MAX_TOTAL_SESSIONS=50
 
 # Optional: skip post-upload analysis (dotnet-symbol --verifycore + architecture detection)
 # Useful in constrained environments and tests.
@@ -817,7 +839,12 @@ export SYMBOL_DOWNLOAD_TIMEOUT_MINUTES=10
 export DEBUGGER_MCP_AI_SAMPLING_TRACE=true
 export DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
 export DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
+
+# Convenience only: used in startup messages (HTTP binding is controlled by ASP.NET Core, e.g. ASPNETCORE_URLS)
+export PORT=5000
 ```
+
+Tip: `DebuggerMcp/Configuration/EnvironmentConfig.cs` is the server-side source of truth for configuration knobs (names + defaults).
 
 ### Security Configuration
 

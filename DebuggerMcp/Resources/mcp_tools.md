@@ -33,13 +33,17 @@ Notes:
 ### 4) `report`
 Generate reports (returns report content).
 
-- **full**: `report(action: "full", sessionId: "...", userId: "...", format: "json", includeWatches: true)`
+- **full**: `report(action: "full", sessionId: "...", userId: "...", format: "json", includeWatches: true, includeSecurity: true, maxStackFrames: 0)`
 - **summary**: `report(action: "summary", sessionId: "...", userId: "...", format: "json")`
 - **index**: `report(action: "index", sessionId: "...", userId: "...")` (small report index: summary + TOC)
-- **get**: `report(action: "get", sessionId: "...", userId: "...", path: "analysis.threads.all", limit: 25)` (fetch a specific report section; arrays are pageable via cursor)
+- **get**: `report(action: "get", sessionId: "...", userId: "...", path: "analysis.threads.all", limit: 25, cursor: \"...\")` (fetch a specific report section; arrays are pageable via cursor)
 
 Tip: For LLM consumption, prefer `format: "json"` (structured). Use `markdown` for human-readable output.
 Note: `format: "json"` returns the canonical report document shape: `{ "metadata": { ... }, "analysis": { ... } }`.
+Optional parameters:
+- `includeSecurity` (default: true) affects `full` and `get` output.
+- `maxStackFrames` (default: 0 = all) limits stack frames in `full`.
+- `maxChars` (get only, optional) caps the response size as a guardrail.
 
 ### 5) `analyze`
 Run analysis on the currently open dump.
@@ -99,12 +103,12 @@ Source link utilities for the current session/dump.
 ### 10) `inspect`
 ClrMD/SOS helpers for inspection.
 
-- **object**: `inspect(kind: "object", sessionId: "...", userId: "...", address: "0x...", methodTable: "0x...", maxDepth: 5)`
+- **object**: `inspect(kind: "object", sessionId: "...", userId: "...", address: "0x...", methodTable: "0x...", maxDepth: 5, maxArrayElements: 10, maxStringLength: 1024)`
 - **module**: `inspect(kind: "module", sessionId: "...", userId: "...", address: "0x...")`
 - **modules**: `inspect(kind: "modules", sessionId: "...", userId: "...")`
-- **lookup_type**: `inspect(kind: "lookup_type", sessionId: "...", userId: "...", typeName: "Namespace.Type", moduleName: "*")`
+- **lookup_type**: `inspect(kind: "lookup_type", sessionId: "...", userId: "...", typeName: "Namespace.Type", moduleName: "*", includeAllModules: false)`
 - **lookup_method**: `inspect(kind: "lookup_method", sessionId: "...", userId: "...", typeName: "Namespace.Type", methodName: "Method")`
-- **clr_stack**: `inspect(kind: "clr_stack", sessionId: "...", userId: "...", includeArguments: true, includeLocals: true)`
+- **clr_stack**: `inspect(kind: "clr_stack", sessionId: "...", userId: "...", includeArguments: true, includeLocals: true, includeRegisters: true, threadId: 0)`
 - **load_sos**: `inspect(kind: "load_sos", sessionId: "...", userId: "...")`
 
 Notes:
@@ -115,7 +119,11 @@ Notes:
 Datadog symbol workflows.
 
 - **prepare**: `datadog_symbols(action: "prepare", sessionId: "...", userId: "...", loadIntoDebugger: true)`
-- **download**: `datadog_symbols(action: "download", sessionId: "...", userId: "...", commitSha: "...", targetFramework: "net8.0")`
+- **download**: `datadog_symbols(action: "download", sessionId: "...", userId: "...", commitSha: "...", targetFramework: "net8.0", loadIntoDebugger: true, forceVersion: false, version: \"...\", buildId: 123)`
 - **list_artifacts**: `datadog_symbols(action: "list_artifacts", commitSha: "...")`
 - **get_config**: `datadog_symbols(action: "get_config")`
 - **clear**: `datadog_symbols(action: "clear", sessionId: "...", userId: "...", clearApiCache: false)`
+
+Notes:
+- `forceVersion` can be used to force version fallback logic during prepare/download.
+- `version` and `buildId` are optional hints for selecting artifacts.

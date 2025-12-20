@@ -7,7 +7,7 @@ A powerful command-line interface for the Debugger MCP Server, enabling remote c
 - 🔌 **Remote Connection**: Connect to any Debugger MCP Server instance
 - 📤 **File Upload**: Upload dump and symbol files with progress tracking
 - 🔍 **Interactive Debugging**: Execute debugger commands in real-time
-- 📊 **Crash Analysis**: Automated crash analysis for native and .NET applications
+- 📊 **Crash Analysis**: Automated crash analysis for .NET dumps (native dumps supported via debugger commands)
 - 🤖 **AI Crash Analysis**: Deep, tool-driven analysis via MCP sampling (`analyze ai`)
 - 🧠 **LLM + Agent Mode**: OpenRouter/OpenAI/Anthropic chat and tool-using agent (`llm`, `llmagent`)
 - ⚡ **Performance Profiling**: CPU, memory, GC, and thread contention analysis

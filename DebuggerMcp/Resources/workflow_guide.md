@@ -440,6 +440,12 @@ Notes:
 - **Headers**: `X-API-Key` (if enabled)
 - **Returns**: Success message
 
+### Upload Dump Binary (Standalone Apps)
+- **POST** `/api/dumps/{userId}/{dumpId}/binary`
+- **Headers**: `X-API-Key` (if enabled)
+- **Form Data**: `file` (executable/binary)
+- **Returns**: Upload confirmation
+
 ### Get Session Statistics
 - **GET** `/api/dumps/stats`
 - **Headers**: `X-API-Key` (if enabled)
@@ -489,7 +495,7 @@ ZIP extraction rules:
 
 1. **Upload First**: Always upload dumps via HTTP API before using MCP tools
 2. **Save IDs**: Save both `dumpId` and `sessionId` for use in subsequent operations
-3. **Session Limits**: Each user can have up to 5 concurrent sessions
+3. **Session Limits**: Each user can have up to 10 concurrent sessions (default; configurable via `MAX_SESSIONS_PER_USER`)
 4. **System Limits**: Maximum 50 total concurrent sessions across all users
 5. **File Size**: Maximum dump file size is 5GB by default (configurable via `MAX_REQUEST_BODY_SIZE_GB`)
 6. **Cleanup**: Inactive sessions are automatically cleaned up after 24 hours by default (configurable via `SESSION_INACTIVITY_THRESHOLD_MINUTES`)
@@ -502,6 +508,7 @@ ZIP extraction rules:
 
 - **API Key Authentication**: Set `API_KEY` env var to require `X-API-Key` header
 - **CORS Configuration**: Set `CORS_ALLOWED_ORIGINS` env var to restrict allowed origins
+- **Rate Limiting**: Fixed-window per-IP limiter (default: 120 requests/min, configurable via `RATE_LIMIT_REQUESTS_PER_MINUTE`)
 - **File Validation**: Uploads are validated to be genuine dump files
 - **Path Sanitization**: User identifiers are sanitized to prevent path traversal
 - **Session Isolation**: Users can only access their own sessions
