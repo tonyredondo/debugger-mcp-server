@@ -412,11 +412,18 @@ When `API_KEY` environment variable is set, include `X-API-Key` header in all re
 - **Form Data**: `file`, `dumpId`
 - **Returns**: Upload confirmation
 
+Notes:
+- The server stores uploaded symbol files under `.symbols_<dumpId>/`.
+- The server normalizes the uploaded symbol `fileName` to a safe basename for storage (any directory components are stripped).
+
 ### Upload Symbols (Batch)
 - **POST** `/api/symbols/upload-batch`
 - **Headers**: `X-API-Key` (if enabled)
 - **Form Data**: `files[]`, `dumpId`
 - **Returns**: Upload confirmation with file list
+
+Notes:
+- Uploaded symbol file names are normalized to a safe basename for storage (any directory components are stripped).
 
 ### Get Dump Info
 - **GET** `/api/dumps/{userId}/{dumpId}`

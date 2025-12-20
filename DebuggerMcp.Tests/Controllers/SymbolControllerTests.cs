@@ -2,6 +2,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Linq;
 
 namespace DebuggerMcp.Tests.Controllers;
 
@@ -134,6 +135,30 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     }
 
     [Fact]
+    public async Task UploadSymbol_FileNameContainsPathSegments_ReturnsSanitizedBasename()
+    {
+        // Arrange
+        var pdbContent = CreateValidPortablePdbHeader();
+
+        var content = new MultipartFormDataContent();
+        content.Add(new StringContent("sanitize-name-dump-id"), "dumpId");
+        var fileContent = new ByteArrayContent(pdbContent);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        content.Add(fileContent, "file", @"C:\temp\sym.pdb");
+
+        // Act
+        var response = await _client.PostAsync("/api/symbols/upload", content);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<JsonElement>(body);
+
+        Assert.True(result.TryGetProperty("fileName", out var fileName));
+        Assert.Equal("sym.pdb", fileName.GetString());
+    }
+
+    [Fact]
     public async Task UploadSymbol_ValidWindowsPdb_ReturnsOk()
     {
         // Arrange
@@ -252,6 +277,48 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
 
         Assert.True(result.TryGetProperty("filesUploaded", out var filesUploaded));
         Assert.Equal(2, filesUploaded.GetInt32());
+
+        Assert.True(result.TryGetProperty("files", out var files));
+        var fileNames = files.EnumerateArray()
+            .Select(f => f.GetProperty("fileName").GetString())
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+        Assert.Contains("App1.pdb", fileNames);
+        Assert.Contains("App2.pdb", fileNames);
+    }
+
+    [Fact]
+    public async Task UploadSymbolBatch_FileNamesContainPathSegments_ReturnsSanitizedBasenames()
+    {
+        // Arrange
+        var content = new MultipartFormDataContent();
+        content.Add(new StringContent("batch-sanitize-dump-id"), "dumpId");
+
+        var pdb1Content = CreateValidPortablePdbHeader();
+        var file1Content = new ByteArrayContent(pdb1Content);
+        file1Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        content.Add(file1Content, "files", "../App1.pdb");
+
+        var pdb2Content = CreateValidPortablePdbHeader();
+        var file2Content = new ByteArrayContent(pdb2Content);
+        file2Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        content.Add(file2Content, "files", @"C:\x\App2.pdb");
+
+        // Act
+        var response = await _client.PostAsync("/api/symbols/upload-batch", content);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        var result = JsonSerializer.Deserialize<JsonElement>(body);
+
+        Assert.True(result.TryGetProperty("files", out var files));
+        var fileNames = files.EnumerateArray()
+            .Select(f => f.GetProperty("fileName").GetString())
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+        Assert.Contains("App1.pdb", fileNames);
+        Assert.Contains("App2.pdb", fileNames);
     }
 
     [Fact]

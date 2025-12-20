@@ -220,6 +220,16 @@ public class SymbolManager
     }
 
     /// <summary>
+    /// Gets a safe file name for storing an uploaded symbol file.
+    /// </summary>
+    /// <param name="fileName">The uploaded file name.</param>
+    /// <returns>A safe basename that can be used for on-disk storage.</returns>
+    internal static string GetSafeSymbolFileNameForStorage(string fileName)
+    {
+        return NormalizeSymbolFileName(fileName);
+    }
+
+    /// <summary>
     /// Stores a ZIP file containing multiple symbol files for a specific dump.
     /// The ZIP is extracted preserving its directory structure.
     /// </summary>

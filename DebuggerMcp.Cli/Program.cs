@@ -1286,7 +1286,7 @@ public class Program
                     output.Markup("  [dim]With --force-version: + Azure Pipelines tag → GitHub tag[/]");
                     output.WriteLine();
                     output.Markup("[bold]ZIP ARCHIVE SUPPORT[/] (for upload)");
-                    output.Markup("  [dim]Upload a .zip file to extract symbols preserving directory structure.[/]");
+                    output.Markup("  [dim]Upload a .zip file to extract symbols (symbol-only; preserves directory structure for extracted symbol entries).[/]");
                     output.Markup("  [dim]All subdirectories are added to the debugger's symbol search paths.[/]");
                     output.WriteLine();
                     output.Markup("[bold]WILDCARD PATTERNS[/] (for upload)");

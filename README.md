@@ -74,7 +74,7 @@ A cross-platform MCP (Model Context Protocol) server to control debuggers (WinDb
 - ✅ **ZIP archive support**: Upload ZIP files containing symbol directories (preserves structure for extracted symbol entries; non-symbol entries are ignored)
 - ✅ **Organized by dump**: Symbols stored in dump-specific directories for easy management
 - ✅ **Remote symbol servers**: Microsoft Symbol Server, NuGet Symbol Server, custom servers
-- ✅ **Multiple formats**: .pdb (Windows), .so/.dylib (Linux/macOS), .dwarf, .sym, .debug, .dbg, .so.dbg, .dSYM (DWARF)
+- ✅ **Common formats**: .pdb (Windows), .so/.dylib (Linux/macOS), .dwarf, .sym, .debug, .dbg, .so.dbg, .dSYM (DWARF) (validated by file signatures)
 - ✅ **Symbol file validation**: Single/batch uploads validate headers + enforce file size limit (500 MiB per file)
 - ✅ **Zero configuration**: Just upload symbols and open dump - symbols are configured automatically
 

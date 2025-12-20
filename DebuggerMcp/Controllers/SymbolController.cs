@@ -34,7 +34,7 @@ public class SymbolController : ControllerBase
     /// <summary>
     /// Uploads a symbol file for a specific dump.
     /// </summary>
-    /// <param name="file">Symbol file to upload (.pdb, .so, .dylib, .dwarf).</param>
+    /// <param name="file">Symbol file to upload (for example: .pdb, .so, .dylib, .debug, .dbg, .dwarf, .sym).</param>
     /// <param name="dumpId">Dump ID to associate the symbol with.</param>
     /// <returns>Upload result.</returns>
     [HttpPost("upload")]
@@ -87,12 +87,12 @@ public class SymbolController : ControllerBase
 
             // Reset stream and store
             stream.Position = 0;
-            await _symbolManager.StoreSymbolFileAsync(sanitizedDumpId, file.FileName, stream);
+            _ = await _symbolManager.StoreSymbolFileAsync(sanitizedDumpId, file.FileName, stream);
 
             return Ok(new SymbolUploadResponse
             {
                 DumpId = sanitizedDumpId,
-                FileName = file.FileName,
+                FileName = SymbolManager.GetSafeSymbolFileNameForStorage(file.FileName),
                 Size = file.Length,
                 Format = symbolFormat
             });
@@ -122,8 +122,10 @@ public class SymbolController : ControllerBase
     /// <returns>Extraction result with file counts and directory paths.</returns>
     /// <remarks>
     /// <para>Use this endpoint to upload a ZIP archive containing multiple symbol files organized in directories.</para>
-    /// <para>The directory structure is preserved, and all subdirectories are added to the symbol search path.</para>
-    /// <para>Supported symbol file types inside the ZIP: .pdb, .so, .dylib, .dwarf, .sym, .debug, .dbg, .dSYM</para>
+    /// <para>The directory structure is preserved for extracted symbol entries, and all subdirectories are added to the symbol search path.</para>
+    /// <para>Only symbol-related entries are extracted; other files in the ZIP are ignored.</para>
+    /// <para>Supported symbol file types inside the ZIP: .pdb, .so, .dylib, .dwarf, .sym, .debug, .dbg, .so.dbg, and DWARF files under .dSYM/Contents/Resources/DWARF/ (even without an extension).</para>
+    /// <para>The server applies defensive extraction limits (entry count, total size, per-entry size, and compression ratio) and rejects suspicious archives with a 400 response.</para>
     /// </remarks>
     [HttpPost("upload-zip")]
     [ProducesResponseType(typeof(SymbolZipUploadResponse), StatusCodes.Status200OK)]
@@ -291,7 +293,7 @@ public class SymbolController : ControllerBase
                     var file = files.First(f => f.FileName == kvp.Key);
                     uploadedFiles.Add(new SymbolFileInfo
                     {
-                        FileName = file.FileName,
+                        FileName = SymbolManager.GetSafeSymbolFileNameForStorage(file.FileName),
                         Size = file.Length,
                         Format = SymbolFileValidator.GetSymbolFormat(GetHeader(kvp.Value))
                     });
