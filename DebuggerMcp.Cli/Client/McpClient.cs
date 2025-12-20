@@ -1401,6 +1401,11 @@ public class McpClient : IMcpClient
         int limit = 50,
         string? cursor = null,
         int? maxChars = null,
+        string? pageKind = null,
+        string[]? select = null,
+        string? whereField = null,
+        string? whereEquals = null,
+        bool whereCaseInsensitive = true,
         bool includeWatches = true,
         bool includeSecurity = true,
         CancellationToken cancellationToken = default)
@@ -1424,6 +1429,23 @@ public class McpClient : IMcpClient
         if (maxChars.HasValue)
         {
             args["maxChars"] = maxChars.Value;
+        }
+
+        if (!string.IsNullOrWhiteSpace(pageKind))
+        {
+            args["pageKind"] = pageKind;
+        }
+
+        if (select is { Length: > 0 })
+        {
+            args["select"] = select;
+        }
+
+        if (!string.IsNullOrWhiteSpace(whereField) && !string.IsNullOrWhiteSpace(whereEquals))
+        {
+            args["whereField"] = whereField;
+            args["whereEquals"] = whereEquals;
+            args["whereCaseInsensitive"] = whereCaseInsensitive;
         }
 
         return await CallToolAsync("report", args, cancellationToken);

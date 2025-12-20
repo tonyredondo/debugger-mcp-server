@@ -54,7 +54,11 @@ internal static class LlmSystemPrompts
         sb.AppendLine();
         sb.AppendLine("Tooling:");
         sb.AppendLine("- report_index(): get a small report index (summary + TOC) for the currently opened dump");
-        sb.AppendLine("- report_get({path,limit?,cursor?,maxChars?}): fetch a section of the canonical crash report JSON (prefer this over re-running analyze(kind=crash) just to rediscover facts)");
+        sb.AppendLine("- report_get({path,limit?,cursor?,pageKind?,select?,where?,maxChars?}): fetch a section of the canonical crash report JSON");
+        sb.AppendLine("  - Path supports dot-path + optional [index] (e.g., analysis.threads.all[0]).");
+        sb.AppendLine("  - Arrays are pageable via limit/cursor; objects can be paged via pageKind=\"object\" + limit/cursor.");
+        sb.AppendLine("  - Use select=[...] to project only needed fields; use where={field,equals,caseInsensitive?} for simple array filtering.");
+        sb.AppendLine("  - Prefer omitting maxChars (server default is 20000); if you hit too_large, use the returned suggestedPaths/page cursor hints.");
         sb.AppendLine("- exec({command}): run a debugger command in the current session");
         sb.AppendLine("- analyze({kind}): run automated analysis (crash|performance|cpu|allocations|gc|contention|security)");
         sb.AppendLine("- inspect_object({address,maxDepth?}): inspect a .NET object at an address (prefer this over exec \"sos dumpobj\" when available)");

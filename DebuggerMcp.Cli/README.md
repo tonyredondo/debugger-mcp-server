@@ -344,7 +344,7 @@ Note: when you enter `llmagent`, the CLI temporarily sets `llm set-agent-confirm
 
 In agent mode, the LLM can also call report tools to avoid re-running expensive analysis:
 - `report_index` (small report index: summary + TOC)
-- `report_get` (fetch a report section by path, with paging for arrays)
+- `report_get` (fetch a report section by path, with paging + projection + simple filtering; objects can be paged via `pageKind="object"`)
 
 ### Comparison Commands
 

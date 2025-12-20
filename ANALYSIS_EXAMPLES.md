@@ -139,6 +139,7 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
 - Requires an MCP client that supports sampling (`sampling/createMessage`) with tools enabled.
 - When the AI needs object details, prefer the first-class sampling tool (`inspect(address=\"0x...\", maxDepth=3)`) over raw SOS `dumpobj` commands.
 - Prefer `report(action=\"index\")` to seed LLM context and `report(action=\"get\", path=...)` (or the sampling tool `report_get(path=...)`) to fetch additional evidence instead of re-running full analysis.
+  - Use `select=[...]` to project only needed fields, `where={field,equals}` for simple array filtering, and `pageKind=\"object\"` to page large objects when needed.
 - To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
 - Output matches `analyze(kind="crash")` plus an `analysis.aiAnalysis` section.
 

@@ -1132,7 +1132,41 @@ internal sealed class McpSamplingCreateMessageHandler(
         {
             var id = TryGetString(item, "id") ?? string.Empty;
             var name = TryGetString(item, "name") ?? string.Empty;
-            var input = TryGetProperty(item, "input", out var inputProp) ? inputProp.GetRawText() : "{}";
+            var input = "{}";
+            if (TryGetProperty(item, "input", out var inputProp))
+            {
+                input = inputProp.ValueKind switch
+                {
+                    JsonValueKind.String => inputProp.GetString() ?? string.Empty,
+                    JsonValueKind.Undefined => string.Empty,
+                    JsonValueKind.Null => string.Empty,
+                    _ => inputProp.GetRawText()
+                };
+
+                input = input.Trim();
+
+                // Some providers (or intermediate adapters) send tool_use.input as a JSON string that itself contains JSON.
+                // OpenAI-style tool call arguments must be JSON text, so unwrap safely when possible.
+                if (inputProp.ValueKind == JsonValueKind.String && input.Length > 0)
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(input);
+                        input = doc.RootElement.GetRawText();
+                    }
+                    catch
+                    {
+                        // If the string isn't JSON, wrap it in a stable JSON object so the tool handler can decide what to do.
+                        input = JsonSerializer.Serialize(new Dictionary<string, string> { ["__raw"] = input });
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(input))
+                {
+                    input = "{}";
+                }
+            }
+
             if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
             {
                 toolCalls.Add(new ChatToolCall(id, name, input));

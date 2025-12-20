@@ -153,7 +153,9 @@ analyze(kind: "ai", sessionId: "your-session-id", userId: "your-user-id")
 During AI sampling, the model has access to the sampling tools `report_get`, `exec`, `inspect`, `get_thread_stack`, and `analysis_complete`.
 
 When the AI asks for more evidence, prefer:
-- `report_get(path: "analysis.exception")` / `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
+- `report_get(path: "analysis.exception", select: ["type","message","hresult"])` and `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
+- If a section is too large, use the returned `suggestedPaths` and retry with a narrower path, or page objects via `pageKind: "object"` + `limit/cursor`.
+- For arrays, page via `limit/cursor`, and reduce payload via `select: [...]` and (when applicable) `where: { field: "...", equals: "..." }`.
 - `inspect(address: "0x...", maxDepth: 3)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
 - `get_thread_stack(threadId: "...")` when you need a full stack for a specific thread already present in the report.
 - `exec` only for debugger/SOS commands that don’t have a first-class sampling tool.

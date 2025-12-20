@@ -25,15 +25,18 @@ internal static class LlmAgentTools
             new ChatTool
             {
                 Name = "report_get",
-                Description = "Fetch a section of the canonical crash report JSON by dot-path (e.g., analysis.exception, analysis.threads.all) with paging for arrays.",
+                Description = "Fetch a section of the canonical crash report JSON by path (dot-path + optional [index]) with paging, projection, and simple filtering.",
                 Parameters = JsonDocument.Parse("""
                 {
                   "type":"object",
                   "properties":{
                     "path":{"type":"string","description":"Dot-path under metadata/analysis"},
-                    "limit":{"type":"integer","description":"Array page size (default 50, max 200)"},
+                    "limit":{"type":"integer","description":"Page size for arrays (and for objects when pageKind='object') (default 50, max 200)"},
                     "cursor":{"type":"string","description":"Paging cursor from a previous response"},
-                    "maxChars":{"type":"integer","description":"Optional response size guardrail; returns an error if exceeded"}
+                    "pageKind":{"type":"string","description":"Paging kind: array (default) | object | auto","enum":["array","object","auto"]},
+                    "select":{"type":"array","items":{"type":"string"},"description":"Projection: object fields to include (applies to objects and array items)"},
+                    "where":{"type":"object","description":"Filter (arrays only): exact match on a field","properties":{"field":{"type":"string"},"equals":{"type":"string"},"caseInsensitive":{"type":"boolean","default":true}},"required":["field","equals"]},
+                    "maxChars":{"type":"integer","description":"Optional response size guardrail (default 20000). If exceeded, returns a 'too_large' error with suggested sub-paths and paging hints.","default":20000}
                   },
                   "required":["path"]
                 }

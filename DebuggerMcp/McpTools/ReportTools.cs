@@ -208,6 +208,11 @@ public class ReportTools(
         [Description("Array page size (default: 50, max: 200)")] int limit = ReportSectionApi.DefaultLimit,
         [Description("Paging cursor from a previous response (optional)")] string? cursor = null,
         [Description("Optional maximum response size (guardrail)")] int? maxChars = null,
+        [Description("Paging kind: array (default) | object | auto")] string? pageKind = null,
+        [Description("Optional projection: object fields to include (applies to objects and array items)")] string[]? select = null,
+        [Description("Optional filter (arrays only): field name for equality match")] string? whereField = null,
+        [Description("Optional filter (arrays only): equals value for whereField")] string? whereEquals = null,
+        [Description("Optional filter (arrays only): case-insensitive comparison (default: true)")] bool whereCaseInsensitive = true,
         [Description("Include watch expression evaluations if a report must be generated (default: true)")] bool includeWatches = true,
         [Description("Include security analysis if a report must be generated (default: true)")] bool includeSecurity = true)
     {
@@ -222,7 +227,11 @@ public class ReportTools(
         ValidateDumpIsOpen(manager);
 
         var reportJson = await EnsureCachedCanonicalReportJsonAsync(sessionId, sanitizedUserId, session, includeWatches, includeSecurity).ConfigureAwait(false);
-        return ReportSectionApi.GetSection(reportJson, path, limit, cursor, maxChars);
+        var where = (!string.IsNullOrWhiteSpace(whereField) && !string.IsNullOrWhiteSpace(whereEquals))
+            ? new ReportSectionApi.ReportWhere(whereField!, whereEquals!, whereCaseInsensitive)
+            : null;
+
+        return ReportSectionApi.GetSection(reportJson, path, limit, cursor, maxChars, pageKind, select, where);
     }
 
     private async Task<string> EnsureCachedCanonicalReportJsonAsync(

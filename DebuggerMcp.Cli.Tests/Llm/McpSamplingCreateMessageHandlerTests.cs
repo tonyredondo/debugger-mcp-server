@@ -617,6 +617,69 @@ public class McpSamplingCreateMessageHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenMcpToolUseUsesStringInput_ParsesArgumentsAndEmitsToolMessages()
+    {
+        var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-5.2" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" },
+            {
+              "role": "assistant",
+              "content": [
+                { "type": "tool_use", "id": "call_1", "name": "report_get", "input": "{\"path\":\"analysis.exception\",\"maxChars\":12000}" },
+                { "type": "tool_use", "id": "call_2", "name": "report_get", "input": "{\"path\":\"analysis.environment\",\"maxChars\":12000}" }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                { "type": "tool_result", "tool_use_id": "call_1", "content": [ "{\\n  \\\\\\\"path\\\\\\\": \\\\\\\"analysis.exception\\\\\\\"\\n}" ] }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                { "type": "tool_result", "tool_use_id": "call_2", "content": [ "{\\n  \\\\\\\"path\\\\\\\": \\\\\\\"analysis.environment\\\\\\\"\\n}" ] }
+              ]
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal(4, seenRequest!.Messages.Count);
+
+        Assert.Equal("user", seenRequest.Messages[0].Role);
+        Assert.Equal("Hello", seenRequest.Messages[0].Content);
+
+        Assert.Equal("assistant", seenRequest.Messages[1].Role);
+        var toolCalls = seenRequest.Messages[1].ToolCalls;
+        Assert.NotNull(toolCalls);
+        Assert.Equal(2, toolCalls!.Count);
+        Assert.Equal("call_1", toolCalls[0].Id);
+        Assert.Equal("report_get", toolCalls[0].Name);
+        Assert.Contains("\"path\":\"analysis.exception\"", toolCalls[0].ArgumentsJson);
+
+        var toolMessages = seenRequest.Messages.Where(m => string.Equals(m.Role, "tool", StringComparison.OrdinalIgnoreCase)).ToList();
+        Assert.Equal(2, toolMessages.Count);
+        Assert.Contains(toolMessages, m => m.ToolCallId == "call_1" && m.Content.Contains("analysis.exception", StringComparison.Ordinal));
+        Assert.Contains(toolMessages, m => m.ToolCallId == "call_2" && m.Content.Contains("analysis.environment", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HandleAsync_ToolMessageWithoutToolCallId_PreservesAsUserMessage()
     {
         var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };

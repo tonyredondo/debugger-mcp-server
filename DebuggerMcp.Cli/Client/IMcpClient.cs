@@ -273,6 +273,11 @@ public interface IMcpClient : IAsyncDisposable
         int limit = 50,
         string? cursor = null,
         int? maxChars = null,
+        string? pageKind = null,
+        string[]? select = null,
+        string? whereField = null,
+        string? whereEquals = null,
+        bool whereCaseInsensitive = true,
         bool includeWatches = true,
         bool includeSecurity = true,
         CancellationToken cancellationToken = default);

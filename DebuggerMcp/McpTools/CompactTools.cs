@@ -136,13 +136,31 @@ public sealed class CompactTools
         [Description("Section path (get only): dot-path under metadata/analysis")] string? path = null,
         [Description("Array page size (get only, default: 50)")] int limit = ReportSectionApi.DefaultLimit,
         [Description("Paging cursor (get only, optional)")] string? cursor = null,
-        [Description("Optional maximum response size (get only, guardrail)")] int? maxChars = null)
+        [Description("Optional maximum response size (get only, guardrail)")] int? maxChars = null,
+        [Description("Paging kind (get only): array (default) | object | auto")] string? pageKind = null,
+        [Description("Projection (get only): object fields to include (applies to objects and array items)")] string[]? select = null,
+        [Description("Filter (get only, arrays only): field name for equality match")] string? whereField = null,
+        [Description("Filter (get only, arrays only): equals value for whereField")] string? whereEquals = null,
+        [Description("Filter (get only, arrays only): case-insensitive comparison (default: true)")] bool whereCaseInsensitive = true)
         => NormalizeRequired(action, nameof(action)) switch
         {
             "full" => _reportTools.GenerateReport(sessionId, userId, format, includeWatches, includeSecurity, maxStackFrames),
             "summary" => _reportTools.GenerateSummaryReport(sessionId, userId, format),
             "index" => _reportTools.GetReportIndex(sessionId, userId, includeWatches, includeSecurity),
-            "get" => _reportTools.GetReportSection(sessionId, userId, Require(path, nameof(path)), limit, cursor, maxChars, includeWatches, includeSecurity),
+            "get" => _reportTools.GetReportSection(
+                sessionId,
+                userId,
+                Require(path, nameof(path)),
+                limit,
+                cursor,
+                maxChars,
+                pageKind,
+                select,
+                whereField,
+                whereEquals,
+                whereCaseInsensitive,
+                includeWatches,
+                includeSecurity),
             _ => throw new ArgumentException($"Unknown report action '{action}'", nameof(action)),
         };
 

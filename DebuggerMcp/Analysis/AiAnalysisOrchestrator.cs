@@ -523,10 +523,11 @@ public sealed class AiAnalysisOrchestrator(
         sb.AppendLine("Before calling analysis_complete, gather at least one additional piece of evidence using tools.");
         sb.AppendLine("Minimum recommended sequence:");
         sb.AppendLine("- report_get(path=\"analysis.summary\")");
-        sb.AppendLine("- report_get(path=\"analysis.exception\")");
+        sb.AppendLine("- report_get(path=\"analysis.exception\", select=[\"type\",\"message\",\"hresult\"])");
         sb.AppendLine("- report_get(path=\"analysis.threads.faultingThread\")");
-        sb.AppendLine("- report_get(path=\"analysis.environment\")");
-        sb.AppendLine("- report_get(path=\"analysis.assemblies.items\", limit=50)");
+        sb.AppendLine("- report_get(path=\"analysis.environment.platform\")");
+        sb.AppendLine("- report_get(path=\"analysis.environment.runtime\")");
+        sb.AppendLine("- report_get(path=\"analysis.assemblies.items\", limit=25, select=[\"name\",\"assemblyVersion\",\"fileVersion\",\"path\"])");
         sb.AppendLine();
         if (toolCallsWereCoissued)
         {
@@ -714,19 +715,20 @@ public sealed class AiAnalysisOrchestrator(
 
         try
         {
+            var utf8NoBom = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
             var path = Path.Combine(traceRunDir, fileName);
             var json = JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
             var maxBytes = SamplingTraceMaxFileBytes > 0 ? SamplingTraceMaxFileBytes : 2_000_000;
-            var bytes = Encoding.UTF8.GetBytes(json);
+            var bytes = utf8NoBom.GetBytes(json);
             if (bytes.Length > maxBytes)
             {
-                var truncated = Encoding.UTF8.GetString(bytes, 0, maxBytes);
+                var truncated = utf8NoBom.GetString(bytes, 0, maxBytes);
                 truncated += $"{Environment.NewLine}... [truncated, totalBytes={bytes.Length}]";
-                File.WriteAllText(path, truncated, Encoding.UTF8);
+                File.WriteAllText(path, truncated, utf8NoBom);
             }
             else
             {
-                File.WriteAllText(path, json, Encoding.UTF8);
+                File.WriteAllText(path, json, utf8NoBom);
             }
         }
         catch (Exception ex)
@@ -1083,7 +1085,45 @@ public sealed class AiAnalysisOrchestrator(
             maxChars = mc;
         }
 
-        return ReportSectionApi.GetSection(fullReportJson, path!, limit, cursor, maxChars);
+        var pageKind = TryGetString(toolInput, "pageKind");
+
+        IReadOnlyList<string>? select = null;
+        if (toolInput.TryGetProperty("select", out var selectEl) && selectEl.ValueKind == JsonValueKind.Array)
+        {
+            var fields = new List<string>();
+            foreach (var item in selectEl.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    var s = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(s))
+                    {
+                        fields.Add(s!);
+                    }
+                }
+            }
+            select = fields.Count > 0 ? fields : null;
+        }
+
+        ReportSectionApi.ReportWhere? where = null;
+        if (toolInput.TryGetProperty("where", out var whereEl) && whereEl.ValueKind == JsonValueKind.Object)
+        {
+            var field = TryGetString(whereEl, "field");
+            var equals = TryGetString(whereEl, "equals");
+            var caseInsensitive = true;
+            if (whereEl.TryGetProperty("caseInsensitive", out var ciEl) &&
+                (ciEl.ValueKind == JsonValueKind.True || ciEl.ValueKind == JsonValueKind.False))
+            {
+                caseInsensitive = ciEl.GetBoolean();
+            }
+
+            if (!string.IsNullOrWhiteSpace(field) && !string.IsNullOrWhiteSpace(equals))
+            {
+                where = new ReportSectionApi.ReportWhere(field!, equals!, caseInsensitive);
+            }
+        }
+
+        return ReportSectionApi.GetSection(fullReportJson, path!, limit, cursor, maxChars, pageKind, select, where);
     }
 
     private static Task<string> ExecuteExecAsync(JsonElement toolInput, IDebuggerManager debugger, CancellationToken cancellationToken)
@@ -1363,10 +1403,17 @@ IMPORTANT: If the report includes source context or Source Link URLs (analysis.s
 
 Available tools:
 - exec: Run any debugger command (LLDB/WinDbg/SOS)
-- report_get: Fetch a section of the canonical report JSON by dot-path (e.g., analysis.exception, analysis.threads.all) with paging for arrays
+- report_get: Fetch a section of the canonical report JSON by path (dot-path + optional [index]) with paging, projection, and simple filtering
 - inspect: Inspect .NET objects by address (when available)
 - get_thread_stack: Get a full stack trace for a specific thread from the report
 - analysis_complete: Call when you've determined the root cause
+
+report_get notes:
+- Path supports dot-path + optional [index] (e.g., analysis.threads.all[0]). Query expressions like items[?name==...] are NOT supported; use where={field,equals} instead.
+- Arrays are pageable via limit/cursor.
+- Objects can be paged via pageKind="object" + limit/cursor (useful when a single object is too large).
+- Use select=[...] to project only needed fields (applies to objects and array items).
+- Prefer omitting maxChars (server default is 20000). If you hit too_large, use the returned suggestedPaths/page hints and retry with a narrower request.
 
 SOS/.NET debugger command notes:
 - If SOS is loaded (metadata.sosLoaded=true), prefer SOS commands via: exec "!<command> ..." (e.g., !clrthreads, !pe, !clrstack -a, !dumpheap -stat). On LLDB the server strips the leading '!'.

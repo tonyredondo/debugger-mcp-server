@@ -5339,6 +5339,49 @@ public class Program
                     var limit = args.TryGetProperty("limit", out var lProp) && lProp.TryGetInt32(out var l) ? l : 50;
                     var cursor = args.TryGetProperty("cursor", out var cProp) ? cProp.GetString() : null;
                     int? maxChars = args.TryGetProperty("maxChars", out var mProp) && mProp.TryGetInt32(out var mc) ? mc : null;
+                    var pageKind = args.TryGetProperty("pageKind", out var pkProp) ? pkProp.GetString() : null;
+
+                    string[]? select = null;
+                    if (args.TryGetProperty("select", out var selectProp) && selectProp.ValueKind == JsonValueKind.Array)
+                    {
+                        var fields = new List<string>();
+                        foreach (var el in selectProp.EnumerateArray())
+                        {
+                            if (el.ValueKind == JsonValueKind.String)
+                            {
+                                var s = el.GetString();
+                                if (!string.IsNullOrWhiteSpace(s))
+                                {
+                                    fields.Add(s!);
+                                }
+                            }
+                        }
+                        select = fields.Count > 0 ? fields.ToArray() : null;
+                    }
+
+                    string? whereField = null;
+                    string? whereEquals = null;
+                    var whereCaseInsensitive = true;
+                    if (args.TryGetProperty("where", out var whereProp) && whereProp.ValueKind == JsonValueKind.Object)
+                    {
+                        whereField = whereProp.TryGetProperty("field", out var wf) ? wf.GetString() : null;
+                        whereEquals = whereProp.TryGetProperty("equals", out var we) ? we.GetString() : null;
+                        if (whereProp.TryGetProperty("caseInsensitive", out var wci) &&
+                            (wci.ValueKind == JsonValueKind.True || wci.ValueKind == JsonValueKind.False))
+                        {
+                            whereCaseInsensitive = wci.GetBoolean();
+                        }
+                    }
+                    else
+                    {
+                        whereField = args.TryGetProperty("whereField", out var wfProp) ? wfProp.GetString() : null;
+                        whereEquals = args.TryGetProperty("whereEquals", out var weProp) ? weProp.GetString() : null;
+                        if (args.TryGetProperty("whereCaseInsensitive", out var wciProp) &&
+                            (wciProp.ValueKind == JsonValueKind.True || wciProp.ValueKind == JsonValueKind.False))
+                        {
+                            whereCaseInsensitive = wciProp.GetBoolean();
+                        }
+                    }
 
                     if (string.IsNullOrWhiteSpace(path))
                     {
@@ -5354,6 +5397,11 @@ public class Program
                         limit: limit,
                         cursor: cursor,
                         maxChars: maxChars,
+                        pageKind: pageKind,
+                        select: select,
+                        whereField: whereField,
+                        whereEquals: whereEquals,
+                        whereCaseInsensitive: whereCaseInsensitive,
                         includeWatches: true,
                         includeSecurity: true,
                         cancellationToken: cancellationToken);

@@ -17,6 +17,7 @@ internal sealed class LlmTraceStore
     private readonly object _gate = new();
     private readonly int? _maxFileBytes;
     private int _counter;
+    private static readonly UTF8Encoding Utf8NoBom = new(encoderShouldEmitUTF8Identifier: false);
 
     /// <summary>
     /// Gets the trace directory path.
@@ -81,7 +82,7 @@ internal sealed class LlmTraceStore
             json = LlmTraceRedactor.RedactText(json);
             lock (_gate)
             {
-                File.AppendAllText(EventsFilePath, json + Environment.NewLine, Encoding.UTF8);
+                File.AppendAllText(EventsFilePath, json + Environment.NewLine, Utf8NoBom);
             }
         }
         catch
@@ -161,16 +162,16 @@ internal sealed class LlmTraceStore
         }
 
         var path = Path.Combine(DirectoryPath, fileName);
-        var bytes = Encoding.UTF8.GetBytes(text ?? string.Empty);
+        var bytes = Utf8NoBom.GetBytes(text ?? string.Empty);
         if (_maxFileBytes.HasValue && bytes.Length > _maxFileBytes.Value)
         {
-            var truncated = Encoding.UTF8.GetString(bytes, 0, _maxFileBytes.Value);
+            var truncated = Utf8NoBom.GetString(bytes, 0, _maxFileBytes.Value);
             truncated += $"{Environment.NewLine}... [truncated, totalBytes={bytes.Length}]";
-            File.WriteAllText(path, truncated, Encoding.UTF8);
+            File.WriteAllText(path, truncated, Utf8NoBom);
         }
         else
         {
-            File.WriteAllText(path, text ?? string.Empty, Encoding.UTF8);
+            File.WriteAllText(path, text ?? string.Empty, Utf8NoBom);
         }
     }
 

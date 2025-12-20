@@ -45,10 +45,13 @@ public static class SamplingTools
         {
           "type": "object",
           "properties": {
-            "path": { "type": "string", "description": "Dot-path under metadata/analysis (e.g., analysis.exception, analysis.threads.all)." },
-            "limit": { "type": "integer", "description": "Array page size (default: 50, max: 200)." },
+            "path": { "type": "string", "description": "Path under metadata/analysis (dot-path + optional [index], e.g., analysis.exception, analysis.threads.all[0])." },
+            "limit": { "type": "integer", "description": "Page size for arrays (and for objects when pageKind='object') (default: 50, max: 200)." },
             "cursor": { "type": "string", "description": "Paging cursor from a previous response (optional)." },
-            "maxChars": { "type": "integer", "description": "Optional response size guardrail; returns an error if exceeded." }
+            "pageKind": { "type": "string", "enum": ["array","object","auto"], "description": "Paging kind: array (default) | object | auto." },
+            "select": { "type": "array", "items": { "type": "string" }, "description": "Projection: object fields to include (applies to objects and array items)." },
+            "where": { "type": "object", "description": "Filter (arrays only): exact match on a field.", "properties": { "field": { "type": "string" }, "equals": { "type": "string" }, "caseInsensitive": { "type": "boolean", "default": true } }, "required": ["field","equals"] },
+            "maxChars": { "type": "integer", "description": "Optional response size guardrail (default: 20000). If exceeded, returns a 'too_large' error with suggested sub-paths and paging hints.", "default": 20000 }
           },
           "required": ["path"]
         }

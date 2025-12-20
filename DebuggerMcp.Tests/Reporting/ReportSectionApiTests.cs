@@ -193,6 +193,102 @@ public class ReportSectionApiTests
         Assert.DoesNotContain("\"nextCursor\"", second, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Fact]
+    public void GetSection_WhenArrayPath_WithIndex_SupportsBracketIndex()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "threads": { "all": [ { "id":1 }, { "id":2 }, { "id":3 } ] } }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(report, "analysis.threads.all[1].id", limit: null, cursor: null, maxChars: 50_000);
+        Assert.Contains("\"path\": \"analysis.threads.all[1].id\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"value\": 2", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetSection_WhenArrayPath_WithWhereAndSelect_FiltersAndProjects()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": {
+            "assemblies": {
+              "items": [
+                { "name":"a", "assemblyVersion":"1.0.0", "path":"/x/a.dll", "extra":"x" },
+                { "name":"b", "assemblyVersion":"2.0.0", "path":"/x/b.dll", "extra":"y" }
+              ]
+            }
+          }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(
+            report,
+            "analysis.assemblies.items",
+            limit: 50,
+            cursor: null,
+            maxChars: 50_000,
+            pageKind: null,
+            select: new[] { "name", "path" },
+            where: new ReportSectionApi.ReportWhere("name", "b", CaseInsensitive: true));
+
+        using var doc = JsonDocument.Parse(json);
+        var value = doc.RootElement.GetProperty("value");
+        Assert.Equal(JsonValueKind.Array, value.ValueKind);
+        Assert.Single(value.EnumerateArray());
+        var item = value[0];
+        Assert.True(item.TryGetProperty("name", out _));
+        Assert.True(item.TryGetProperty("path", out _));
+        Assert.False(item.TryGetProperty("extra", out _));
+    }
+
+    [Fact]
+    public void GetSection_WhenObjectPagingEnabled_PagesObjectProperties()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": {
+            "environment": { "a": 1, "b": 2, "c": 3 }
+          }
+        }
+        """;
+
+        var first = ReportSectionApi.GetSection(report, "analysis.environment", limit: 1, cursor: null, maxChars: 50_000, pageKind: "object");
+        using var firstDoc = JsonDocument.Parse(first);
+        var firstValue = firstDoc.RootElement.GetProperty("value");
+        Assert.Equal(JsonValueKind.Object, firstValue.ValueKind);
+        Assert.Single(firstValue.EnumerateObject());
+        var nextCursor = firstDoc.RootElement.GetProperty("page").GetProperty("nextCursor").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(nextCursor));
+
+        var second = ReportSectionApi.GetSection(report, "analysis.environment", limit: 1, cursor: nextCursor, maxChars: 50_000, pageKind: "object");
+        using var secondDoc = JsonDocument.Parse(second);
+        var secondValue = secondDoc.RootElement.GetProperty("value");
+        Assert.Single(secondValue.EnumerateObject());
+    }
+
+    [Fact]
+    public void GetSection_WhenResponseTooLarge_IncludesSuggestedPathsAndPreview()
+    {
+        var longText = new string('x', 5000);
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "exception": { "type":"System.Exception", "message":"boom", "data":"__LONG__" } }
+        }
+        """;
+        report = report.Replace("__LONG__", longText, StringComparison.Ordinal);
+
+        var json = ReportSectionApi.GetSection(report, "analysis.exception", limit: null, cursor: null, maxChars: 1000);
+        Assert.Contains("\"code\": \"too_large\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("suggestedPaths", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("preview", json, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static string ExtractCursor(string json)
     {
         using var doc = JsonDocument.Parse(json);

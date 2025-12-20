@@ -97,6 +97,7 @@ report.md
 report.json
 myreport.*
 myreport*.json
+DebuggerMcp.Cli/*-ai.json
 
 # CLI history files
 *_history.txt
