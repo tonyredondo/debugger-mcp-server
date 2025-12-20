@@ -6,6 +6,8 @@ using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using DebuggerMcp;
+using DebuggerMcp.McpTools;
+using DebuggerMcp.Reporting;
 using Microsoft.AspNetCore.Mvc;
 using Xunit;
 
@@ -145,6 +147,42 @@ public class DocsContractTests
         Assert.DoesNotMatch(totalTestsRegex, readme);
     }
 
+    [Fact]
+    public void McpToolsDoc_AnalyzeAi_DefaultsMatchExportedToolSignature()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "DebuggerMcp", "Resources", "mcp_tools.md");
+        var text = File.ReadAllText(path);
+
+        var analyze = typeof(CompactTools).GetMethod("Analyze", BindingFlags.Public | BindingFlags.Instance);
+        Assert.NotNull(analyze);
+
+        var maxIterations = analyze!.GetParameters().Single(p => p.Name == "maxIterations");
+        var maxTokens = analyze.GetParameters().Single(p => p.Name == "maxTokens");
+
+        Assert.True(maxIterations.HasDefaultValue);
+        Assert.True(maxTokens.HasDefaultValue);
+
+        var expectedIterations = Convert.ToInt32(maxIterations.DefaultValue);
+        var expectedTokens = Convert.ToInt32(maxTokens.DefaultValue);
+
+        Assert.Contains($"maxIterations: {expectedIterations}", text, StringComparison.Ordinal);
+        Assert.Contains($"maxTokens: {expectedTokens}", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void McpToolsDoc_ReportGet_DefaultMaxCharsMatchesServer()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "DebuggerMcp", "Resources", "mcp_tools.md");
+        var text = File.ReadAllText(path);
+
+        Assert.Contains(
+            $"default: {ReportSectionApi.DefaultMaxResponseChars}",
+            text,
+            StringComparison.Ordinal);
+    }
+
     private static class ApiRouteDiscovery
     {
         public static HashSet<string> DiscoverControllerRoutes()
@@ -274,18 +312,23 @@ public class DocsContractTests
 
         private static string FindRepoRoot()
         {
-            var dir = new DirectoryInfo(AppContext.BaseDirectory);
-            while (dir != null && !File.Exists(Path.Combine(dir.FullName, "DebuggerMcp.slnx")))
-            {
-                dir = dir.Parent;
-            }
-
-            if (dir == null)
-            {
-                throw new InvalidOperationException("Failed to locate repo root (DebuggerMcp.slnx not found).");
-            }
-
-            return dir.FullName;
+            return DocsContractTests.FindRepoRoot();
         }
+    }
+
+    private static string FindRepoRoot()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !File.Exists(Path.Combine(dir.FullName, "DebuggerMcp.slnx")))
+        {
+            dir = dir.Parent;
+        }
+
+        if (dir == null)
+        {
+            throw new InvalidOperationException("Failed to locate repo root (DebuggerMcp.slnx not found).");
+        }
+
+        return dir.FullName;
     }
 }

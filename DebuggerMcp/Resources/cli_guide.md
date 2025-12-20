@@ -108,6 +108,15 @@ dbg-mcp [localhost:5000] session:d0307dc3>  # With session
 dbg-mcp [localhost:5000] session:d0307dc3 dump:abc123>  # With dump
 ```
 
+### TTY Requirement (Interactive Mode)
+
+The interactive `dbg-mcp` shell requires a real console/TTY (it uses `Console.KeyAvailable` for responsive editing, history, and tab completion).
+
+If stdin is redirected (e.g., piping commands into `dbg-mcp`), you may see an error like:
+`Cannot see if a key has been pressed when either application does not have a console or when console input has been redirected from a file.`
+
+Run `dbg-mcp` in a terminal, or use the non-interactive top-level commands where applicable.
+
 ### Keyboard Shortcuts
 - `↑/↓` - History navigation
 - `Tab` - Auto-completion
@@ -123,6 +132,10 @@ Like Docker, use partial IDs:
 session use d           # Matches d0307dc3-...
 compare heap d03 a8b    # Partial session IDs
 ```
+
+### Auto-Restore Last Session
+
+After connecting to a server, the CLI will try to restore the last-used session for the current `(serverUrl, userId)` pair. If a dump is already open in that session, the CLI also syncs the dump ID to the prompt.
 
 ## Configuration
 
