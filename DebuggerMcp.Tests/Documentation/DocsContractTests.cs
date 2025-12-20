@@ -19,6 +19,31 @@ namespace DebuggerMcp.Tests.Documentation;
 public class DocsContractTests
 {
     [Fact]
+    public void MarkdownDocs_RelativeMarkdownLinks_Exist()
+    {
+        var root = FindRepoRoot();
+
+        var files = new[]
+        {
+            Path.Combine(root, "README.md"),
+            Path.Combine(root, "ANALYSIS_EXAMPLES.md"),
+            Path.Combine(root, "CONTRIBUTING.md"),
+            Path.Combine(root, "DebuggerMcp.Cli", "README.md"),
+        }.Concat(Directory.GetFiles(Path.Combine(root, "DebuggerMcp", "Resources"), "*.md"));
+
+        var missing = files
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .SelectMany(file => FindMissingMarkdownLinkTargets(file))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        Assert.True(
+            missing.Count == 0,
+            "Broken markdown links detected:\n" + string.Join('\n', missing));
+    }
+
+    [Fact]
     public void Readme_HttpApiTables_CoverAllControllerEndpoints()
     {
         var documented = ReadmeEndpointTable.ParseFromReadme(ReadmeEndpointTable.ReadReadmeText());
@@ -466,5 +491,58 @@ public class DocsContractTests
         }
 
         return dir.FullName;
+    }
+
+    private static IEnumerable<string> FindMissingMarkdownLinkTargets(string markdownFilePath)
+    {
+        if (!File.Exists(markdownFilePath))
+        {
+            yield return $"{Path.GetFileName(markdownFilePath)}: file does not exist";
+            yield break;
+        }
+
+        var markdown = File.ReadAllText(markdownFilePath);
+
+        foreach (Match match in Regex.Matches(markdown, "\\[[^\\]]*\\]\\((?<target>[^)]+)\\)", RegexOptions.Multiline))
+        {
+            var raw = match.Groups["target"].Value.Trim();
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                continue;
+            }
+
+            // Strip common "(path \"title\")" patterns.
+            var firstToken = raw.Split(' ', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (string.IsNullOrWhiteSpace(firstToken))
+            {
+                continue;
+            }
+
+            if (firstToken.Contains("://", StringComparison.OrdinalIgnoreCase) ||
+                firstToken.StartsWith("#", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var pathOnly = firstToken.Split('#', 2)[0];
+            if (!pathOnly.EndsWith(".md", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            // We only validate repository-relative links (not absolute filesystem paths).
+            if (pathOnly.StartsWith("/", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var baseDir = Path.GetDirectoryName(markdownFilePath) ?? string.Empty;
+            var resolved = Path.GetFullPath(Path.Combine(baseDir, pathOnly));
+
+            if (!File.Exists(resolved))
+            {
+                yield return $"{Path.GetRelativePath(FindRepoRoot(), markdownFilePath)} -> {pathOnly}";
+            }
+        }
     }
 }
