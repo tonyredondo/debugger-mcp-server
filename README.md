@@ -788,7 +788,7 @@ For complete documentation, see [DebuggerMcp.Cli/README.md](DebuggerMcp.Cli/READ
 # HTTP API port (default: 5000)
 export ASPNETCORE_URLS="http://localhost:5000"
 
-# Dump storage directory (default: system temp directory)
+# Dump storage directory (default: {TempPath}/WinDbgDumps)
 export DUMP_STORAGE_PATH="/custom/path/dumps"
 
 # Symbol cache directory for remote symbol servers (default: platform-specific)
@@ -797,7 +797,7 @@ export SYMBOL_STORAGE_PATH="/custom/path/symbols"
 # Persistent session storage directory (default: /app/sessions in containers)
 export SESSION_STORAGE_PATH="/custom/path/sessions"
 
-# Log storage directory (used for server logs and trace artifacts)
+# Log storage directory (default: {AppContext.BaseDirectory}/logs; used for server logs and trace artifacts)
 export LOG_STORAGE_PATH="/custom/path/logs"
 
 # API Key for authentication (optional - when set, X-API-Key header is required)

@@ -144,6 +144,11 @@ After connecting to a server, the CLI will try to restore the last-used session 
 ```bash
 export DEBUGGER_MCP_URL=http://localhost:5000
 export DEBUGGER_MCP_API_KEY=your-key
+export DEBUGGER_MCP_USER_ID=your-user-id              # optional; defaults to current username
+export DEBUGGER_MCP_TIMEOUT=600                       # optional; request timeout seconds (default: 600)
+export DEBUGGER_MCP_OUTPUT=text                       # optional; text|json (default: text)
+export DEBUGGER_MCP_HISTORY_FILE=~/.dbg-mcp-history    # optional; command history file
+export DEBUGGER_MCP_CONFIG=~/.dbg-mcp/config.json      # optional; override config file path
 export DEBUGGER_MCP_VERBOSE=true
 
 # LLM provider (required for llm / llmagent, and for analyze ai when using the dbg-mcp CLI as the sampling client)
@@ -170,7 +175,9 @@ export DEBUGGER_MCP_CODEX_AUTH_PATH="/path/to/auth.json"
 {
   "defaultServer": "http://localhost:5000",
   "apiKey": "your-key",
-  "timeout": 300
+  "userId": "your-user-id",
+  "timeout": 600,
+  "outputFormat": "text"
 }
 ```
 

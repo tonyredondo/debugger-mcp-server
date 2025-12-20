@@ -42,8 +42,10 @@ Generate reports (returns report content).
 Tip: For LLM consumption, prefer `format: "json"` (structured). Use `markdown` for human-readable output.
 Note: `format: "json"` returns the canonical report document shape: `{ "metadata": { ... }, "analysis": { ... } }`.
 Optional parameters:
+- `includeWatches` (default: true) affects `full` output (and `index` / `get` when those sections include watch results).
 - `includeSecurity` (default: true) affects `full` and `get` output.
 - `maxStackFrames` (default: 0 = all) limits stack frames in `full`.
+- `limit` (get only, optional; default: 50; max: 200) pages array sections.
 - `maxChars` (get only, optional; default: 20000) caps the response size as a guardrail and returns an error if exceeded.
 
 ### 5) `analyze`

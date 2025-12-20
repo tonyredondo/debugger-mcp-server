@@ -239,7 +239,7 @@ analyze(kind: "crash", sessionId: "session-xyz-789", userId: "your-user-id")
 ### Step 7: Managed/.NET Details (MCP)
 
 For .NET dumps, SOS is **automatically loaded** when `dump(action: "open")` detects a .NET runtime.
-If detection fails, you can load SOS manually with `inspect(kind: "load_sos", ...)`.
+Avoid manually loading SOS during normal flows; `dump(action="open")` auto-loads it for .NET dumps. Only use `inspect(kind: "load_sos", ...)` if you have explicit evidence that SOS is not loaded (e.g., SOS commands consistently fail).
 
 Use the crash analysis tool (it performs .NET analysis via SOS/ClrMD):
 

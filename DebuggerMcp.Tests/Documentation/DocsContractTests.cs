@@ -192,6 +192,19 @@ public class DocsContractTests
             StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void CliGuide_DocumentsActualDefaults()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "DebuggerMcp", "Resources", "cli_guide.md");
+        var text = File.ReadAllText(path);
+
+        // Keep a few critical defaults in sync with ConnectionSettings.
+        Assert.Contains("DEBUGGER_MCP_TIMEOUT=600", text, StringComparison.Ordinal);
+        Assert.Contains("DEBUGGER_MCP_HISTORY_FILE=~/.dbg-mcp-history", text, StringComparison.Ordinal);
+        Assert.Contains("\"timeout\": 600", text, StringComparison.Ordinal);
+    }
+
     private static class ApiRouteDiscovery
     {
         public static HashSet<string> DiscoverControllerRoutes()

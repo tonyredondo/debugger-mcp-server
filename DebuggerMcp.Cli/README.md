@@ -72,10 +72,11 @@ dbg-mcp> exit
 | `DEBUGGER_MCP_URL` | Default server URL | - |
 | `DEBUGGER_MCP_API_KEY` | Default API key | - |
 | `DEBUGGER_MCP_USER_ID` | Default user ID | Current username |
-| `DEBUGGER_MCP_TIMEOUT` | Request timeout (seconds) | 300 |
+| `DEBUGGER_MCP_TIMEOUT` | Request timeout (seconds) | 600 |
 | `DEBUGGER_MCP_OUTPUT` | Output format (text/json) | text |
 | `DEBUGGER_MCP_VERBOSE` | Enable verbose mode | false |
-| `DEBUGGER_MCP_HISTORY_FILE` | Command history file | ~/.dbg-mcp/history |
+| `DEBUGGER_MCP_HISTORY_FILE` | Command history file | ~/.dbg-mcp-history |
+| `DEBUGGER_MCP_CONFIG` | Override config file path | ~/.dbg-mcp/config.json |
 
 #### LLM / OpenRouter
 
@@ -138,7 +139,7 @@ Create `~/.dbg-mcp/config.json`:
   "defaultServer": "http://localhost:5000",
   "apiKey": "your-api-key",
   "userId": "your-username",
-  "timeout": 300,
+  "timeout": 600,
   "outputFormat": "text",
   "historySize": 1000
 }
