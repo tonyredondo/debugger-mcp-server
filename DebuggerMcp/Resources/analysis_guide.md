@@ -253,7 +253,7 @@ analyze(kind: "crash", sessionId: "your-session-id", userId: "your-user-id")
     },
     "environment": {
       "runtime": {
-        "clrVersion": "9.0.10"
+        "clrVersion": "10.0.0"
       }
     },
     "memory": {
@@ -266,9 +266,9 @@ analyze(kind: "crash", sessionId: "your-session-id", userId: "your-user-id")
       "items": [
         {
           "name": "System.Private.CoreLib",
-          "assemblyVersion": "9.0.0.0",
-          "fileVersion": "9.0.10.0",
-          "path": "/usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Private.CoreLib.dll"
+          "assemblyVersion": "10.0.0.0",
+          "fileVersion": "10.0.0.0",
+          "path": "/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.0/System.Private.CoreLib.dll"
         }
       ]
     }

@@ -114,7 +114,11 @@ After loading SOS plugin:
 | `pe` | Print exception |
 | `dumpheap -stat` | Heap statistics |
 
-To load SOS:
+Notes:
+- When using this repository’s Debugger MCP Server, SOS is typically **auto-loaded** when `dump(action: "open")` detects a .NET runtime. Avoid manually loading SOS during normal flows unless you have explicit evidence it is not loaded (e.g., SOS/inspect commands consistently fail).
+- If you need to force SOS loading in the MCP server, use `inspect(kind: "load_sos", sessionId: "...", userId: "...")`.
+
+To load SOS when using LLDB directly (outside the MCP server):
 ```
 plugin load /path/to/libsosplugin.so    # Linux
 plugin load /path/to/libsosplugin.dylib  # macOS

@@ -6,6 +6,8 @@ A comprehensive reference of SOS (Son of Strike) debugging extension commands fo
 
 ### Loading SOS
 
+> When using this repository’s Debugger MCP Server, SOS is typically **auto-loaded** when `dump(action: "open")` detects a .NET runtime. Avoid manually loading SOS during normal flows unless you have explicit evidence it is not loaded (e.g., SOS/inspect commands consistently fail). If you need to force SOS loading in the MCP server, use `inspect(kind: "load_sos", sessionId: "...", userId: "...")`.
+
 **WinDbg (Windows)**:
 ```
 .loadby sos coreclr    # .NET Core / .NET 5+

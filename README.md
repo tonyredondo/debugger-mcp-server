@@ -122,7 +122,7 @@ The server exposes documentation and guides as MCP resources for easy access:
 
 #### Linux/macOS-Specific
 - **LLDB** (Low Level Debugger)
-- **libsosplugin.so** (SOS plugin for LLDB, included with .NET SDK)
+- **libsosplugin.so** (SOS plugin for LLDB; typically available with .NET runtime/SDK installs, or can be provided via `SOS_PLUGIN_PATH`)
 
 ##### Installing LLDB on Linux:
 ```bash
@@ -932,10 +932,10 @@ sudo apt-get install lldb
 
 **Problem**: "libsosplugin.so not found"
 ```bash
-# Solution: Ensure .NET SDK is installed and SOS plugin is available
+# Solution: Ensure SOS plugin is available (often part of .NET runtime/SDK installs)
 find /usr -name "libsosplugin.so" 2>/dev/null
 
-# Or set custom path
+# Or set custom path (used by the server when auto-loading SOS)
 export SOS_PLUGIN_PATH="/path/to/libsosplugin.so"
 ```
 
@@ -964,7 +964,6 @@ curl -H "X-API-Key: your-api-key" http://localhost:5000/api/dumps/user/user123
 ## 📖 Documentation
 
 - [Analysis Examples](ANALYSIS_EXAMPLES.md) - Crash analysis JSON output examples
-- [Feature Proposals](FEATURE_PROPOSALS.md) - Proposed and implemented features with technical details
 - [CLI Documentation](DebuggerMcp.Cli/README.md) - Complete CLI client reference
 
 ## 🤝 Contributing

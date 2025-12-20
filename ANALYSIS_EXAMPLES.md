@@ -37,7 +37,13 @@ Crash analysis outputs (`analyze` kind `crash`/`ai` and `report` with `format: "
     "modules": [ ],       // Native modules
     "async": { },         // Async/await state machines, tasks, timers
     "security": { },      // Security analysis findings
+    "synchronization": { },// Synchronization primitives + ownership/contenders
     "watches": { },       // Watch expression evaluation results
+    "signature": { },     // Stable dedup signature for triage
+    "stackSelection": { },// Evidence for meaningful top frames
+    "findings": [ ],      // Structured findings with evidence pointers
+    "rootCause": { },     // Hypotheses with confidence + evidence
+    "sourceContext": [ ], // Bounded source snippets (when available)
     "aiAnalysis": { }     // AI-only (present for analyze(kind="ai"))
   }
 }
@@ -210,7 +216,7 @@ analyze(kind="crash", sessionId="session-123", userId="user1")
     },
     "environment": {
       "runtime": {
-        "clrVersion": "9.0.10"
+        "clrVersion": "10.0.0"
       }
     },
     "exception": {
@@ -221,9 +227,9 @@ analyze(kind="crash", sessionId="session-123", userId="user1")
       "items": [
         {
           "name": "System.Collections.Concurrent",
-          "assemblyVersion": "9.0.0.0",
-          "fileVersion": "9.0.10.0",
-          "path": "/usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Collections.Concurrent.dll"
+          "assemblyVersion": "10.0.0.0",
+          "fileVersion": "10.0.0.0",
+          "path": "/usr/share/dotnet/shared/Microsoft.NETCore.App/10.0.0/System.Collections.Concurrent.dll"
         }
       ]
     }

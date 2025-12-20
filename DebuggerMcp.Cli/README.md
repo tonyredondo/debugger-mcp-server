@@ -298,9 +298,11 @@ showobj 0x7f8a2b3c4d50
 | `analyze ai -o <file>` | AI-assisted crash analysis via MCP sampling (saves JSON) |
 | `analyze perf -o <file>` | Comprehensive performance profiling (saves JSON) |
 | `analyze cpu -o <file>` | CPU usage and hot function analysis (saves JSON) |
-| `analyze memory -o <file>` | Memory allocation analysis (saves JSON) |
+| `analyze allocations -o <file>` | Memory allocation analysis (saves JSON) |
+| `analyze memory -o <file>` | Memory allocation analysis (alias of `allocations`; saves JSON) |
 | `analyze gc -o <file>` | Garbage collection behavior analysis (saves JSON) |
 | `analyze contention -o <file>` | Thread contention and lock analysis (saves JSON) |
+| `analyze threads -o <file>` | Thread contention and lock analysis (alias of `contention`; saves JSON) |
 | `analyze security -o <file>` | Security vulnerability scan with CWE mappings (saves JSON) |
 
 **Examples:**

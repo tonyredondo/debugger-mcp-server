@@ -245,6 +245,40 @@ public class DocsContractTests
         Assert.DoesNotContain("`kind`, `sessionId`, `userId`, `targetSessionId`", text, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AnalysisExamples_SchemaOverview_MentionsKeySections()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "ANALYSIS_EXAMPLES.md");
+        var text = File.ReadAllText(path);
+
+        Assert.Contains("\"synchronization\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"rootCause\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"sourceContext\"", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LldbCommandsDoc_MentionsSosAutoLoadedInMcpServer()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "DebuggerMcp", "Resources", "lldb_commands.md");
+        var text = File.ReadAllText(path);
+
+        Assert.Contains("SOS is typically **auto-loaded**", text, StringComparison.Ordinal);
+        Assert.Contains("inspect(kind: \"load_sos\"", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SosCommandsDoc_MentionsSosAutoLoadedInMcpServer()
+    {
+        var root = FindRepoRoot();
+        var path = Path.Combine(root, "DebuggerMcp", "Resources", "sos_commands.md");
+        var text = File.ReadAllText(path);
+
+        Assert.Contains("SOS is typically **auto-loaded**", text, StringComparison.Ordinal);
+        Assert.Contains("inspect(kind: \"load_sos\"", text, StringComparison.Ordinal);
+    }
+
     private static class ApiRouteDiscovery
     {
         public static HashSet<string> DiscoverControllerRoutes()

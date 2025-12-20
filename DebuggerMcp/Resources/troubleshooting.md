@@ -187,7 +187,8 @@ sudo pacman -S lldb
    ```bash
    export SOS_PLUGIN_PATH="/path/to/libsosplugin.so"
    ```
-3. Install dotnet-sos:
+3. If you’re using the Debugger MCP Server, avoid manually loading SOS during normal flows; `dump(action="open")` auto-loads SOS for .NET dumps. If you have explicit evidence SOS is not loaded, use `inspect(kind: "load_sos", sessionId: "...", userId: "...")`.
+4. Install dotnet-sos:
    ```bash
    dotnet tool install -g dotnet-sos
    dotnet-sos install
