@@ -25,5 +25,26 @@ public class CrashAnalyzerManagedMethodFrameTests
         Assert.Equal("[ManagedMethod]", frame.Function);
         Assert.Equal(string.Empty, frame.Module);
     }
-}
 
+    [Fact]
+    public void ParseSingleFrame_WhenLineContainsOnlySpValue_ReturnsJitFrameWithStackPointer()
+    {
+        var mockManager = new Mock<IDebuggerManager>();
+        var analyzer = new CrashAnalyzer(mockManager.Object);
+
+        var method = typeof(CrashAnalyzer).GetMethod(
+            "ParseSingleFrame",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var frame = (StackFrame?)method!.Invoke(analyzer, new object[]
+        {
+            "    frame #0: 0x0000000100000000 SP=0x0000000100001000"
+        });
+
+        Assert.NotNull(frame);
+        Assert.True(frame!.IsManaged);
+        Assert.Contains("[JIT Code @", frame.Function, StringComparison.Ordinal);
+        Assert.Equal("0x0000000100001000", frame.StackPointer);
+    }
+}

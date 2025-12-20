@@ -31,6 +31,30 @@ public class LlmResponseRendererTests
     }
 
     [Fact]
+    public void AnsiToSpectreMarkup_HandlesBoldAndColor()
+    {
+        var text = "\u001B[1;32mhi\u001B[0m";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("[bold green]hi[/]", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_HandlesBackgroundColors()
+    {
+        var text = "\u001B[41mhi\u001B[0m";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("[on red]hi[/]", markup);
+    }
+
+    [Fact]
+    public void AnsiToSpectreMarkup_HandlesEmptySgrReset()
+    {
+        var text = "\u001B[mhi";
+        var markup = AnsiToSpectreMarkup.Convert(text);
+        Assert.Equal("hi", markup);
+    }
+
+    [Fact]
     public void Render_UnorderedList_RendersBullets()
     {
         var renderer = new LlmResponseRenderer();
@@ -234,6 +258,153 @@ public class LlmResponseRendererTests
         console.Write(new Spectre.Console.Rows(blocks));
         var output = string.Join('\n', console.Lines);
         Assert.Contains("output truncated", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Render_OrderedList_UsesStartIndex()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("5. a\n6. b\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("5. a", output, StringComparison.Ordinal);
+        Assert.Contains("6. b", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_NestedList_IndentsChildItems()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("- a\n  - b\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("- a", output, StringComparison.Ordinal);
+        Assert.Contains("  - b", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_List_RespectsMaxListItemsAndAddsTruncationMarker()
+    {
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < 10; i++)
+        {
+            sb.AppendLine($"- item{i}");
+        }
+
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxListItems = 2 });
+        var blocks = renderer.Render(sb.ToString(), consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("item0", output, StringComparison.Ordinal);
+        Assert.Contains("item1", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("item2", output, StringComparison.Ordinal);
+        Assert.Contains("list truncated", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Render_Link_RendersLabelAndUrl()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("[x](https://example.com)\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("x", output, StringComparison.Ordinal);
+        Assert.Contains("https://example.com", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_Table_WhenTooWide_FallsBackToPanelText()
+    {
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxTableColumns = 1 });
+        var blocks = renderer.Render("| A | B |\n|---|---|\n| a | b |\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("a", output, StringComparison.Ordinal);
+        Assert.Contains("b", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_InlineFormatting_RendersTextWithoutRawMarkdownMarkers()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("This is *it* and **bold** and `code`.\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("it", output, StringComparison.Ordinal);
+        Assert.Contains("bold", output, StringComparison.Ordinal);
+        Assert.Contains("code", output, StringComparison.Ordinal);
+        Assert.DoesNotContain("`", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_Link_WithEmptyLabel_RendersUrl()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("[](https://example.com)\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("https://example.com", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_Heading_Level3_UsesMarkup()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("### Title\n", consoleWidth: 80);
+
+        Assert.NotEmpty(blocks);
+        Assert.IsNotType<Rule>(blocks[0]);
+    }
+
+    [Fact]
+    public void Render_CodeBlock_WhenTooLong_Truncates()
+    {
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxCodeBlockChars = 40 });
+        var blocks = renderer.Render("```txt\n" + new string('x', 200) + "\n```\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("truncated", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Render_WhenMarkdownExceedsMaxChars_FallsBackToAnsiText()
+    {
+        var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxMarkdownChars = 10 });
+        var blocks = renderer.Render("\u001B[31mHELLO\u001B[0m world", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("HELLO", output, StringComparison.Ordinal);
+        Assert.Contains("world", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_HtmlBlock_FallsBackToToString()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("<div>hi</div>\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+        var output = string.Join('\n', console.Lines);
+        Assert.Contains("HtmlBlock", output, StringComparison.OrdinalIgnoreCase);
     }
 
     private static int CountOccurrences(string haystack, string needle)

@@ -288,4 +288,43 @@ public class LlmFileAttachmentsTests
         Assert.DoesNotContain("\n```markdown\nbefore\n```\ninside", a.MessageForModel, StringComparison.Ordinal);
         Assert.Contains("````", a.MessageForModel, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void ExtractAndLoad_WhenLargeDebuggerMcpReport_CreatesCachedReportAttachment()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        Directory.CreateDirectory(cacheRoot);
+
+        var reportPath = Path.Combine(tempRoot, "big-report.json");
+        var report = new
+        {
+            metadata = new { dumpId = "dump-1" },
+            analysis = new
+            {
+                environment = new { os = "linux" },
+                // make it exceed the per-file cap so it triggers report caching
+                padding = new string('x', 50_000)
+            }
+        };
+        File.WriteAllText(reportPath, System.Text.Json.JsonSerializer.Serialize(report));
+
+        var (cleaned, attachments, reports) = LlmFileAttachments.ExtractAndLoad(
+            $"Analyze @./{Path.GetFileName(reportPath)} please",
+            baseDirectory: tempRoot,
+            maxBytesPerFile: 1_000,
+            maxTotalBytes: 20_000,
+            cacheRootDirectory: cacheRoot);
+
+        Assert.Contains("(<attached:", cleaned);
+        Assert.Empty(attachments);
+        var r = Assert.Single(reports);
+        Assert.EndsWith("big-report.json", r.AbsolutePath, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(r.CachedReport.Sections);
+        Assert.Contains("find_report_sections", r.MessageForModel, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Report index", r.MessageForModel, StringComparison.OrdinalIgnoreCase);
+        Assert.NotEmpty(r.SectionIdToFile);
+        Assert.NotEmpty(r.PointerToFile);
+    }
 }

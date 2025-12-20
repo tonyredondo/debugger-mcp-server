@@ -3404,7 +3404,7 @@ public class Program
             ".dylib" => "[cyan]📦[/]",      // macOS shared library
             ".dbg" => "[green]🔧[/]",       // Linux debug symbols
             ".dwarf" => "[green]🔧[/]",     // DWARF debug info
-            ".dSYM" => "[green]🔧[/]",      // macOS debug symbols
+            ".dsym" => "[green]🔧[/]",      // macOS debug symbols
             ".json" => "[yellow]📄[/]",     // JSON config
             ".xml" => "[yellow]📄[/]",      // XML config
             _ => "[dim]📄[/]"               // Generic file

@@ -214,4 +214,42 @@ public class CrashAnalyzerPrivateHelpersTests
             "https://github.com/dotnet/dotnet/blob/b0f34d51fccc69fd334253924abd8d6853fad7aa/src/runtime/src/coreclr/vm/threads.cpp#L7058",
             url);
     }
+
+    [Theory]
+    [InlineData(null, false)]
+    [InlineData("", false)]
+    [InlineData(" ", false)]
+    [InlineData("dotnet", true)]
+    [InlineData(" DOTNET ", true)]
+    [InlineData("/usr/lib/libc.so", true)]
+    [InlineData("/usr/lib/libc.so.6", false)]
+    [InlineData("/usr/lib/libfoo.dylib", true)]
+    [InlineData("System.Private.CoreLib.dll", false)]
+    public void LooksLikePosixNativeBinary_RecognizesCommonPatterns(string? modulePath, bool expected)
+    {
+        var method = typeof(CrashAnalyzer).GetMethod(
+            "LooksLikePosixNativeBinary",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var actual = (bool)method!.Invoke(null, new object?[] { modulePath })!;
+        Assert.Equal(expected, actual);
+    }
+
+    [Theory]
+    [InlineData("https://github.com/dotnet/runtime/tree/14fd3a2", "14fd3a2")]
+    [InlineData("https://github.com/dotnet/runtime/tree/14fd3a2f7f3f1b2c3d4e5f6a7b8c9d0e1f2a3b4c", "14fd3a2f7f3f1b2c3d4e5f6a7b8c9d0e1f2a3b4c")]
+    [InlineData("https://github.com/dotnet/runtime/commit/14fd3a2", "14fd3a2")]
+    [InlineData("https://github.com/dotnet/runtime", null)]
+    [InlineData(null, null)]
+    public void TryExtractCommitHashFromTreeUrl_ExtractsSha(string? treeUrl, string? expected)
+    {
+        var method = typeof(CrashAnalyzer).GetMethod(
+            "TryExtractCommitHashFromTreeUrl",
+            BindingFlags.Static | BindingFlags.NonPublic);
+        Assert.NotNull(method);
+
+        var actual = method!.Invoke(null, new object?[] { treeUrl }) as string;
+        Assert.Equal(expected, actual);
+    }
 }

@@ -14,6 +14,7 @@ public class EnvironmentConfigTests : IDisposable
     public EnvironmentConfigTests()
     {
         // Store original environment variables to restore after tests
+        StoreOriginalValue("DOTNET_RUNNING_IN_CONTAINER");
         StoreOriginalValue(EnvironmentConfig.DumpStoragePath);
         StoreOriginalValue(EnvironmentConfig.SymbolStoragePath);
         StoreOriginalValue(EnvironmentConfig.LogStoragePath);
@@ -25,6 +26,7 @@ public class EnvironmentConfigTests : IDisposable
         StoreOriginalValue(EnvironmentConfig.MaxTotalSessions);
         StoreOriginalValue(EnvironmentConfig.SessionCleanupIntervalMinutes);
         StoreOriginalValue(EnvironmentConfig.SessionInactivityThresholdMinutes);
+        StoreOriginalValue(EnvironmentConfig.SessionStoragePath);
         StoreOriginalValue(EnvironmentConfig.SosPluginPath);
         StoreOriginalValue(EnvironmentConfig.Port);
         StoreOriginalValue(EnvironmentConfig.MaxRequestBodySizeGb);
@@ -127,6 +129,12 @@ public class EnvironmentConfigTests : IDisposable
     }
 
     [Fact]
+    public void SessionStoragePath_ConstantName_IsCorrect()
+    {
+        Assert.Equal("SESSION_STORAGE_PATH", EnvironmentConfig.SessionStoragePath);
+    }
+
+    [Fact]
     public void SosPluginPath_ConstantName_IsCorrect()
     {
         Assert.Equal("SOS_PLUGIN_PATH", EnvironmentConfig.SosPluginPath);
@@ -199,6 +207,45 @@ public class EnvironmentConfigTests : IDisposable
     {
         // Default is 24 hours (1440 minutes) for long-running debug sessions
         Assert.Equal(1440, EnvironmentConfig.DefaultSessionInactivityThresholdMinutes);
+    }
+
+    [Fact]
+    public void DefaultSessionStoragePath_WhenInContainer_ReturnsAppSessions()
+    {
+        SetEnv("DOTNET_RUNNING_IN_CONTAINER", "true");
+
+        var path = EnvironmentConfig.DefaultSessionStoragePath;
+
+        Assert.Equal("/app/sessions", path);
+    }
+
+    [Fact]
+    public void GetSessionStoragePath_WhenSet_ReturnsConfiguredPath()
+    {
+        SetEnv(EnvironmentConfig.SessionStoragePath, "/tmp/sessions");
+
+        Assert.Equal("/tmp/sessions", EnvironmentConfig.GetSessionStoragePath());
+    }
+
+    [Fact]
+    public void GetLogStoragePath_WhenUnset_ReturnsDefaultUnderBaseDirectory()
+    {
+        ClearEnv(EnvironmentConfig.LogStoragePath);
+
+        var actual = EnvironmentConfig.GetLogStoragePath();
+
+        Assert.False(string.IsNullOrWhiteSpace(actual));
+        Assert.EndsWith(Path.Combine("logs"), actual, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GetAiSamplingTraceFilesDirectory_IsDerivedFromLogStoragePath()
+    {
+        SetEnv(EnvironmentConfig.LogStoragePath, "/tmp/logs-root");
+
+        var actual = EnvironmentConfig.GetAiSamplingTraceFilesDirectory();
+
+        Assert.Equal(Path.Combine("/tmp/logs-root", "ai-sampling"), actual);
     }
 
     [Fact]

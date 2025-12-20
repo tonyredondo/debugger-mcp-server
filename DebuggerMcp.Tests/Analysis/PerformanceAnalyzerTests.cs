@@ -74,6 +74,43 @@ public class PerformanceAnalyzerTests
         Assert.NotNull(result.AllocationAnalysis);
     }
 
+    [Fact]
+    public async Task AnalyzeGcAsync_WithLldbEeheapFormat_ParsesGenerationSizes()
+    {
+        var mock = new Mock<IDebuggerManager>();
+        mock.Setup(m => m.DebuggerType).Returns("LLDB");
+        mock.Setup(m => m.ExecuteCommand("eeheap -gc")).Returns(
+            "Workstation GC\nConcurrent GC\n" +
+            "generation 0:\n" +
+            "    segment            begin        allocated        committed allocated size     committed size\n" +
+            "    0000000000000001 0000000000000002 0000000000000003 0000000000000004 0x10 (16) 0x20 (32)\n" +
+            "generation 1:\n" +
+            "    segment            begin        allocated        committed allocated size     committed size\n" +
+            "    0000000000000005 0000000000000006 0000000000000007 0000000000000008 0x08 (8) 0x10 (16)\n" +
+            "generation 2:\n" +
+            "    segment            begin        allocated        committed allocated size     committed size\n" +
+            "    0000000000000009 000000000000000a 000000000000000b 000000000000000c 0x04 (4) 0x08 (8)\n" +
+            "Large object heap:\n" +
+            "    segment            begin        allocated        committed allocated size     committed size\n" +
+            "    000000000000000d 000000000000000e 000000000000000f 0000000000000010 0x02 (2) 0x04 (4)\n" +
+            "Pinned object heap:\n" +
+            "    segment            begin        allocated        committed allocated size     committed size\n" +
+            "    0000000000000011 0000000000000012 0000000000000013 0000000000000014 0x01 (1) 0x02 (2)\n" +
+            "GC Allocated Heap Size:    Size: 0x1f (31) bytes.\n");
+
+        var analyzer = new PerformanceAnalyzer(mock.Object);
+        var result = await analyzer.AnalyzeGcAsync();
+
+        Assert.Equal("Workstation", result.GcMode);
+        Assert.True(result.ConcurrentGc);
+        Assert.Equal(16, result.Gen0SizeBytes);
+        Assert.Equal(8, result.Gen1SizeBytes);
+        Assert.Equal(4, result.Gen2SizeBytes);
+        Assert.Equal(2, result.LohSizeBytes);
+        Assert.Equal(1, result.PohSizeBytes);
+        Assert.Equal(31, result.TotalHeapSizeBytes);
+    }
+
 
 
     [Fact]
@@ -380,6 +417,29 @@ Workstation GC");
     }
 
     [Fact]
+    public async Task AnalyzeContentionAsync_WhenSyncblkIsWinDbgExtendedFormat_ParsesOwnerThreadAndCountsLocks()
+    {
+        var mock = new Mock<IDebuggerManager>();
+        mock.Setup(m => m.DebuggerType).Returns("WinDbg");
+        mock.Setup(m => m.ExecuteCommand("!syncblk")).Returns(
+            @"Index SyncBlock MonitorHeld Recursion Owning Thread Info  SyncBlock Owner
+  12 0000024453f8a5a8    1         1 0000024453f46720  1c54  10   00000244540a5820 System.Object");
+        mock.Setup(m => m.ExecuteCommand("!locks")).Returns("");
+        mock.Setup(m => m.ExecuteCommand("~*e !clrstack")).Returns("");
+
+        var analyzer = new PerformanceAnalyzer(mock.Object);
+
+        var result = await analyzer.AnalyzeContentionAsync();
+
+        Assert.NotNull(result);
+        Assert.NotEmpty(result.SyncBlocks);
+        Assert.Equal(1, result.TotalLockCount);
+        Assert.Equal("1c54", result.SyncBlocks[0].OwnerThreadId);
+        Assert.Equal("00000244540a5820", result.SyncBlocks[0].ObjectAddress);
+        Assert.Equal("System.Object", result.SyncBlocks[0].ObjectType);
+    }
+
+    [Fact]
     public async Task AnalyzeContentionAsync_ParsesContentedLocks()
     {
         // Arrange
@@ -637,4 +697,3 @@ public class PerformanceAnalysisResultTests
         Assert.Empty(result.WaitingThreads);
     }
 }
-

@@ -91,6 +91,30 @@ public class ProgramHelpTests
     }
 
     [Fact]
+    public void ShowHelp_SessionCommand_WhenCategoryRemoved_ShowsLegacySessionCommandHelp()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        // Program.ShowHelp checks HelpSystem.Categories before falling back to its legacy switch/case.
+        // Temporarily remove the "session" category to cover the command-specific help text.
+        var hadSession = DebuggerMcp.Cli.Help.HelpSystem.Categories.TryGetValue("session", out var originalDescription) &&
+                         DebuggerMcp.Cli.Help.HelpSystem.Categories.Remove("session");
+        try
+        {
+            DebuggerMcp.Cli.Program.ShowHelp(output, ["session"]);
+            Assert.Contains("SESSION Command", console.Output, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            if (hadSession)
+            {
+                DebuggerMcp.Cli.Help.HelpSystem.Categories["session"] = originalDescription ?? "Debugging session management";
+            }
+        }
+    }
+
+    [Fact]
     public void ShowHelp_UnknownCommand_ShowsWarning()
     {
         var console = new TestConsole();

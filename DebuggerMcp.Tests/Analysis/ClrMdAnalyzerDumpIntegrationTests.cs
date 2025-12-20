@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Analysis.Synchronization;
@@ -97,10 +98,33 @@ public class ClrMdAnalyzerDumpIntegrationTests
             var gc = analyzer.GetGcSummary();
             Assert.NotNull(gc);
 
-            _ = analyzer.GetTopMemoryConsumers(topN: 5, timeoutMs: 10000);
-            _ = analyzer.GetStringAnalysis(topN: 5, maxStringLength: 100, timeoutMs: 10000);
-            _ = analyzer.GetAsyncAnalysis(timeoutMs: 10000);
-            _ = analyzer.GetCombinedHeapAnalysis(topN: 5, maxStringLength: 100, timeoutMs: 10000);
+            _ = analyzer.GetTopMemoryConsumers(topN: 5, timeoutMs: 30000);
+            _ = analyzer.GetStringAnalysis(topN: 5, maxStringLength: 100, timeoutMs: 30000);
+
+            // Exercise async analysis paths (faulted/canceled/pending tasks from DumpTarget).
+            var asyncAnalysis = analyzer.GetAsyncAnalysis(timeoutMs: 60000);
+            Assert.NotNull(asyncAnalysis);
+
+            var combined = analyzer.GetCombinedHeapAnalysis(topN: 20, maxStringLength: 100, timeoutMs: 60000);
+            Assert.NotNull(combined);
+            Assert.NotNull(combined!.TopMemoryConsumers);
+
+            // Validate that small-count top consumers get instance + owner enrichment (Entry[] array from DumpTarget).
+            var top = combined.TopMemoryConsumers!;
+            var enrichedEntry = top.BySize?.FirstOrDefault(s =>
+                !string.IsNullOrWhiteSpace(s.Type) &&
+                s.Type.Contains("Dictionary", StringComparison.Ordinal) &&
+                s.Type.Contains("UInt64", StringComparison.Ordinal) &&
+                s.Type.Contains("Int32", StringComparison.Ordinal) &&
+                s.Type.Contains("Entry[]", StringComparison.Ordinal));
+
+            Assert.NotNull(enrichedEntry);
+            Assert.NotNull(enrichedEntry!.Instances);
+            Assert.NotEmpty(enrichedEntry.Instances!);
+
+            var instance = enrichedEntry.Instances![0];
+            Assert.NotNull(instance.Owners);
+            Assert.True(instance.Owners!.Count(o => o.IsStatic == false && o.Type?.Contains("EntryArrayRoot", StringComparison.Ordinal) == true) >= 1);
 
             // Thread stacks.
             var stacks = analyzer.GetAllThreadStacks(includeArguments: false, includeLocals: false);
@@ -113,6 +137,11 @@ public class ClrMdAnalyzerDumpIntegrationTests
 
             var stacksWithArgsAndLocals = analyzer.GetAllThreadStacks(includeArguments: true, includeLocals: true);
             Assert.NotNull(stacksWithArgsAndLocals);
+            Assert.Null(stacksWithArgsAndLocals.Error);
+            Assert.Contains(stacksWithArgsAndLocals.Threads, t =>
+                t.Frames.Any(f => f.Locals?.Any(l =>
+                    l.ValueString != null &&
+                    l.ValueString.Contains("stack:dump-target", StringComparison.Ordinal)) == true));
 
             // Type resolution.
             _ = analyzer.Name2EE("System.String");
@@ -133,19 +162,76 @@ public class ClrMdAnalyzerDumpIntegrationTests
             ulong? anyObject = null;
             ulong? anyString = null;
             ulong? anyArray = null;
+            ulong? byteArray = null;
+            ulong? boxedArray = null;
+            ulong? complexStructArray = null;
+
+            var extractFaultedTaskInfo = typeof(ClrMdAnalyzer).GetMethod("ExtractFaultedTaskInfo", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(extractFaultedTaskInfo);
+            FaultedTaskInfo? extractedFaultedTask = null;
+
             foreach (var obj in heap.EnumerateObjects())
             {
                 if (!obj.IsValid || obj.IsFree)
                     continue;
+
+                if (extractedFaultedTask == null && obj.Type?.Name?.Contains("TaskRoots", StringComparison.Ordinal) == true)
+                {
+                    try
+                    {
+                        var faultedTask = obj.ReadObjectField("Faulted");
+                        if (!faultedTask.IsNull && faultedTask.IsValid)
+                        {
+                            extractedFaultedTask = extractFaultedTaskInfo!.Invoke(analyzer, [faultedTask]) as FaultedTaskInfo;
+                        }
+                    }
+                    catch
+                    {
+                        // Best-effort.
+                    }
+                }
 
                 anyObject ??= obj.Address;
                 if (anyString == null && obj.Type?.Name == "System.String")
                     anyString = obj.Address;
                 if (anyArray == null && obj.Type?.IsArray == true)
                     anyArray = obj.Address;
+                if (byteArray == null && obj.Type?.Name == "System.Byte[]")
+                    byteArray = obj.Address;
+                if (complexStructArray == null && obj.Type?.Name?.Contains("SampleComplexStruct[]", StringComparison.Ordinal) == true)
+                    complexStructArray = obj.Address;
+                if (boxedArray == null && obj.Type?.Name == "System.Object[]")
+                {
+                    try
+                    {
+                        var array = obj.AsArray();
+                        if (array.Length > 0)
+                        {
+                            var first = array.GetObjectValue(0);
+                            if (first.IsValid && first.Type?.IsString == true && first.AsString() == "marker:boxed-array")
+                            {
+                                boxedArray = obj.Address;
+                            }
+                        }
+                    }
+                    catch
+                    {
+                        // Best-effort.
+                    }
+                }
 
-                if (anyObject != null && anyString != null && anyArray != null)
+                if (anyObject != null && anyString != null && anyArray != null &&
+                    byteArray != null && boxedArray != null && complexStructArray != null &&
+                    extractedFaultedTask != null)
                     break;
+            }
+
+            Assert.NotNull(extractedFaultedTask);
+            Assert.Equal("Faulted", extractedFaultedTask!.Status);
+            Assert.False(string.IsNullOrWhiteSpace(extractedFaultedTask.ExceptionType));
+            if (!string.IsNullOrWhiteSpace(extractedFaultedTask.ExceptionMessage))
+            {
+                Assert.Contains("faulted:dump-target", extractedFaultedTask.ExceptionMessage, StringComparison.OrdinalIgnoreCase);
             }
 
             Assert.NotNull(anyObject);
@@ -164,10 +250,39 @@ public class ClrMdAnalyzerDumpIntegrationTests
                 Assert.NotNull(arrayInspected);
             }
 
+            // Targeted array coverage (DumpTarget creates these deterministically).
+            Assert.NotNull(byteArray);
+            var byteArrayInspected = analyzer.InspectObject(byteArray!.Value, maxDepth: 1, maxArrayElements: 3, maxStringLength: 16);
+            Assert.NotNull(byteArrayInspected);
+            Assert.True(byteArrayInspected!.IsArray);
+            Assert.Contains(byteArrayInspected.Elements!, e => e is byte);
+
+            Assert.NotNull(boxedArray);
+            var boxedArrayInspected = analyzer.InspectObject(boxedArray!.Value, maxDepth: 3, maxArrayElements: 16, maxStringLength: 64);
+            Assert.NotNull(boxedArrayInspected);
+            Assert.True(boxedArrayInspected!.IsArray);
+            Assert.Contains(boxedArrayInspected.Elements!, e => e is string s && s == "marker:boxed-array");
+            Assert.Contains(boxedArrayInspected.Elements!, e => e is int i && i == 123);
+            Assert.Contains(boxedArrayInspected.Elements!, e => e is bool b && b);
+
+            Assert.NotNull(complexStructArray);
+            var complexStructArrayInspected = analyzer.InspectObject(complexStructArray!.Value, maxDepth: 1, maxArrayElements: 4, maxStringLength: 64);
+            Assert.NotNull(complexStructArrayInspected);
+            Assert.True(complexStructArrayInspected!.IsArray);
+            Assert.Contains(complexStructArrayInspected.Elements!, e => e is ClrMdObjectInspection);
+
             // Synchronization analysis (ClrMD-based).
             var sync = new SynchronizationAnalyzer(analyzer.Runtime!, NullLogger.Instance, skipSyncBlocks: false);
             var syncResult = sync.Analyze();
             Assert.NotNull(syncResult);
+            Assert.NotNull(syncResult.SemaphoreSlims);
+            Assert.NotNull(syncResult.ReaderWriterLocks);
+            Assert.NotNull(syncResult.ResetEvents);
+            Assert.NotNull(syncResult.WaitHandles);
+            Assert.NotEmpty(syncResult.SemaphoreSlims!);
+            Assert.NotEmpty(syncResult.ReaderWriterLocks!);
+            Assert.NotEmpty(syncResult.ResetEvents!);
+            Assert.NotEmpty(syncResult.WaitHandles!);
 
             // Also exercise the skipSyncBlocks path, which is used for cross-arch/emulated analysis scenarios.
             var syncSkipped = new SynchronizationAnalyzer(analyzer.Runtime!, NullLogger.Instance, skipSyncBlocks: true);
@@ -208,6 +323,7 @@ public class ClrMdAnalyzerDumpIntegrationTests
             {
                 ["DOTNET_GCServer"] = "1",
                 ["COMPlus_gcServer"] = "1",
+                ["DUMP_TARGET_DISABLE_LARGE_HEAP"] = "1",
             });
 
         try

@@ -6,6 +6,30 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 public class LlmAgentRunnerTests
 {
     [Fact]
+    public async Task RunAsync_WhenSeedMessagesNull_Throws()
+    {
+        var runner = new LlmAgentRunner(
+            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            (_, _) => Task.FromResult("ok"));
+
+        _ = await Assert.ThrowsAsync<ArgumentNullException>(() => runner.RunAsync(null!, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenNoTextAndNoToolCalls_ReturnsPlaceholder()
+    {
+        Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> _, CancellationToken __)
+            => Task.FromResult(new ChatCompletionResult { Text = null, ToolCalls = [] });
+
+        var runner = new LlmAgentRunner(CompleteAsync, (_, _) => Task.FromResult("ok"), maxIterations: 5);
+        var result = await runner.RunAsync([new ChatMessage("user", "hi")], CancellationToken.None);
+
+        Assert.Equal("(LLM returned no content)", result.FinalText);
+        Assert.Equal(1, result.Iterations);
+        Assert.Equal(0, result.ToolCallsExecuted);
+    }
+
+    [Fact]
     public async Task RunAsync_ExecutesToolCallsAndReturnsFinalText()
     {
         var calls = new List<ChatToolCall>();
@@ -141,5 +165,77 @@ public class LlmAgentRunnerTests
         Assert.Equal(1, executed);
         Assert.Equal(1, result.ToolCallsExecuted);
         Assert.Equal(3, result.Iterations);
+    }
+
+    [Fact]
+    public async Task RunAsync_WhenAnalyzeToolCallRepeated_ReusesCachedToolResult()
+    {
+        var executed = 0;
+        var completions = 0;
+
+        Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> messages, CancellationToken _)
+        {
+            completions++;
+            if (completions == 1)
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "Investigating...",
+                    ToolCalls =
+                    [
+                        new ChatToolCall("c1", "analyze", "{\"kind\":\"crash\"}"),
+                        new ChatToolCall("c2", "analyze", "{\"kind\":\"CRASH\"}")
+                    ]
+                });
+            }
+
+            Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c1" && m.Content.Contains("analysis-output", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c2" && m.Content.Contains("cached tool result", StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(new ChatCompletionResult { Text = "Done", ToolCalls = [] });
+        }
+
+        Task<string> ExecuteToolAsync(ChatToolCall _, CancellationToken __)
+        {
+            executed++;
+            return Task.FromResult("analysis-output");
+        }
+
+        var runner = new LlmAgentRunner(CompleteAsync, ExecuteToolAsync, maxIterations: 10);
+        var result = await runner.RunAsync([new ChatMessage("user", "hi")], CancellationToken.None);
+
+        Assert.Equal("Done", result.FinalText);
+        Assert.Equal(2, result.Iterations);
+        Assert.Equal(1, executed);
+        Assert.Equal(1, result.ToolCallsExecuted);
+    }
+
+    [Fact]
+    public async Task RunAsync_TruncatesLargeToolOutput_ForModel()
+    {
+        var completions = 0;
+
+        Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> messages, CancellationToken _)
+        {
+            completions++;
+            if (completions == 1)
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "Investigating...",
+                    ToolCalls = [new ChatToolCall("c1", "exec", "{\"command\":\"bt\"}")]
+                });
+            }
+
+            Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c1" && m.Content.Contains("[truncated, total", StringComparison.OrdinalIgnoreCase));
+            return Task.FromResult(new ChatCompletionResult { Text = "Done", ToolCalls = [] });
+        }
+
+        Task<string> ExecuteToolAsync(ChatToolCall _, CancellationToken __)
+            => Task.FromResult(new string('x', 5000));
+
+        var runner = new LlmAgentRunner(CompleteAsync, ExecuteToolAsync, maxIterations: 5, maxToolResultChars: 600);
+        var result = await runner.RunAsync([new ChatMessage("user", "hi")], CancellationToken.None);
+
+        Assert.Equal("Done", result.FinalText);
     }
 }

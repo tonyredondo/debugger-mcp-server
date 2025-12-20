@@ -71,6 +71,55 @@ public class ErrorHandlerTests
     }
 
     [Fact]
+    public void Handle_HttpApiException_Forbidden_ShowsAccessDenied()
+    {
+        var ex = new HttpApiException("Forbidden", HttpStatusCode.Forbidden, "DENIED");
+
+        ErrorHandler.Handle(_output, ex, _state, "upload");
+
+        var output = _testConsole.Output;
+        Assert.Contains("Access denied", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("permission", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Handle_HttpApiException_RequestEntityTooLarge_ShowsUploadLimitMessage()
+    {
+        var ex = new HttpApiException("Too Large", HttpStatusCode.RequestEntityTooLarge, "TOO_LARGE");
+
+        ErrorHandler.Handle(_output, ex, _state, "upload");
+
+        var output = _testConsole.Output;
+        Assert.Contains("File too large", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("maximum upload size", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Handle_HttpApiException_InternalServerError_WithErrorCode_ShowsErrorCode()
+    {
+        var ex = new HttpApiException("Boom", HttpStatusCode.InternalServerError, "E123");
+
+        ErrorHandler.Handle(_output, ex, _state, "analyze");
+
+        var output = _testConsole.Output;
+        Assert.Contains("Server error", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Error code", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("E123", output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Handle_HttpApiException_DefaultStatus_ShowsHttpErrorAndOptionalErrorCode()
+    {
+        var ex = new HttpApiException("Teapot", (HttpStatusCode)418, "TEAPOT");
+
+        ErrorHandler.Handle(_output, ex, _state, "brew");
+
+        var output = _testConsole.Output;
+        Assert.Contains("HTTP error", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("TEAPOT", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Handle_McpClientException_SessionNotFound_ShowsSessionMessage()
     {
         // Arrange
@@ -101,6 +150,43 @@ public class ErrorHandlerTests
     }
 
     [Fact]
+    public void Handle_McpClientException_UnknownTool_ShowsNotSupportedMessage()
+    {
+        var ex = new McpClientException("Unknown tool: foo");
+
+        ErrorHandler.Handle(_output, ex, _state, "tool");
+
+        var output = _testConsole.Output;
+        Assert.Contains("not supported", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("older version", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("tools", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Handle_McpClientException_Timeout_ShowsTimeoutMessage()
+    {
+        var ex = new McpClientException("timeout while waiting for response");
+
+        ErrorHandler.Handle(_output, ex, _state, "analyze");
+
+        var output = _testConsole.Output;
+        Assert.Contains("timed out", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("timeout", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Handle_McpClientException_Generic_ShowsMcpError()
+    {
+        var ex = new McpClientException("some other MCP problem");
+
+        ErrorHandler.Handle(_output, ex, _state, "analyze");
+
+        var output = _testConsole.Output;
+        Assert.Contains("MCP error", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("some other MCP problem", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Handle_HttpRequestException_ConnectionRefused_ShowsConnectionMessage()
     {
         // Arrange
@@ -114,6 +200,42 @@ public class ErrorHandlerTests
         var output = _testConsole.Output;
         Assert.Contains("Connection refused", output);
         Assert.Contains("Server is not running", output);
+    }
+
+    [Fact]
+    public void Handle_HttpRequestException_ServerNotFound_ShowsNameResolutionMessage()
+    {
+        var ex = new HttpRequestException("No such host is known");
+
+        ErrorHandler.Handle(_output, ex, _state, "connect");
+
+        var output = _testConsole.Output;
+        Assert.Contains("Server not found", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("resolve", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Handle_HttpRequestException_SslError_ShowsSslMessage()
+    {
+        var ex = new HttpRequestException("TLS handshake failed: certificate error");
+
+        ErrorHandler.Handle(_output, ex, _state, "connect");
+
+        var output = _testConsole.Output;
+        Assert.Contains("SSL", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("certificate", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Handle_HttpRequestException_Generic_ShowsNetworkError()
+    {
+        var ex = new HttpRequestException("Some network issue");
+
+        ErrorHandler.Handle(_output, ex, _state, "connect");
+
+        var output = _testConsole.Output;
+        Assert.Contains("Network error", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("network connection", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -145,6 +267,30 @@ public class ErrorHandlerTests
     }
 
     [Fact]
+    public void Handle_IOException_FileInUse_ShowsFileInUseMessage()
+    {
+        var ex = new IOException("The process cannot access the file because it is being used by another process");
+
+        ErrorHandler.Handle(_output, ex, _state, "open");
+
+        var output = _testConsole.Output;
+        Assert.Contains("File is in use", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Close", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Handle_IOException_Generic_ShowsFileError()
+    {
+        var ex = new IOException("some IO error");
+
+        ErrorHandler.Handle(_output, ex, _state, "open");
+
+        var output = _testConsole.Output;
+        Assert.Contains("File error", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("some IO error", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Handle_UnauthorizedAccessException_ShowsPermissionMessage()
     {
         // Arrange
@@ -171,6 +317,27 @@ public class ErrorHandlerTests
         var output = _testConsole.Output;
         Assert.Contains("Invalid argument", output);
         Assert.Contains("sessionId", output);
+    }
+
+    [Fact]
+    public void Handle_GenericException_ShowsExceptionType_InDebugBuild()
+    {
+        Exception ex;
+        try
+        {
+            throw new InvalidOperationException("boom");
+        }
+        catch (Exception caught)
+        {
+            ex = caught;
+        }
+
+        ErrorHandler.Handle(_output, ex, _state, "run");
+
+        var output = _testConsole.Output;
+        Assert.Contains("An error occurred", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Exception type", output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("InvalidOperationException", output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Theory]
@@ -233,5 +400,16 @@ public class ErrorHandlerTests
         Assert.Contains("disconnect", output);
         Assert.Contains("abc123", output);
     }
-}
 
+    [Fact]
+    public void SuggestConnectionRecovery_WhenNoSessionId_DoesNotSuggestSessionUse()
+    {
+        _state.SetConnected("http://localhost:5000");
+
+        ErrorHandler.SuggestConnectionRecovery(_output, _state);
+
+        var output = _testConsole.Output;
+        Assert.Contains("Connection Recovery", output, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("session use", output, StringComparison.OrdinalIgnoreCase);
+    }
+}

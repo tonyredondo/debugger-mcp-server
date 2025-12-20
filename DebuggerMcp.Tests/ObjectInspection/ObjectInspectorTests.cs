@@ -1,4 +1,7 @@
+using System.Reflection;
+using DebuggerMcp.Analysis;
 using DebuggerMcp.ObjectInspection;
+using DebuggerMcp.ObjectInspection.Models;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -508,6 +511,94 @@ None
         Assert.NotNull(inspected.Fields);
         Assert.Single(inspected.Fields);
         Assert.Equal("[large array]", inspected.Fields[0].Name);
+    }
+
+    [Fact]
+    public async Task InspectAsync_ListCollection_MarksAsCollectionAndExtractsInlineableElements()
+    {
+        ObjectInspector.ClearCache();
+
+        var manager = new FakeDebuggerManager(command =>
+        {
+            if (command.StartsWith("dumpobj", StringComparison.OrdinalIgnoreCase))
+            {
+                return """
+Name:        System.Collections.Generic.List`1[[System.Int32, System.Private.CoreLib]]
+MethodTable: 00007ff9abcd1111
+EEClass:     00007ff9abcd2222
+Size:        48(0x30) bytes
+Fields:
+00007ff9abcd3333  4000001        8 System.Int32[] 0 instance 000000000000AAAA _items
+00007ff9abcd4444  4000002       10 System.Int32 0 instance 3 _size
+""";
+            }
+
+            if (command.StartsWith("dumparray", StringComparison.OrdinalIgnoreCase))
+            {
+                return """
+Name: System.Int32[]
+Number of elements 3
+[0] 1
+[1] 2
+[2] 3
+""";
+            }
+
+            return string.Empty;
+        });
+
+        var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
+
+        var inspected = await inspector.InspectAsync(
+            manager,
+            address: "0xA000",
+            maxDepth: 1,
+            maxArrayElements: 10,
+            maxStringLength: 64);
+
+        Assert.NotNull(inspected);
+        Assert.True(inspected!.IsCollection);
+        Assert.Equal("List", inspected.CollectionKind);
+        Assert.Equal(3, inspected.Count);
+        Assert.NotNull(inspected.Elements);
+        Assert.Equal(3, inspected.Elements!.Count);
+        Assert.Equal(1, Assert.IsType<int>(inspected.Elements[0]));
+    }
+
+    [Fact]
+    public void ConvertClrMdToDumpObjectResult_MapsFieldsAndValue()
+    {
+        var convert = typeof(ObjectInspector).GetMethod(
+            "ConvertClrMdToDumpObjectResult",
+            BindingFlags.NonPublic | BindingFlags.Static);
+
+        Assert.NotNull(convert);
+
+        var clrMd = new ClrMdObjectInspection
+        {
+            Type = "MyType",
+            MethodTable = "0x2000",
+            Size = 32,
+            IsString = true,
+            Value = "hello",
+            Fields =
+            [
+                new ClrMdFieldInspection { Name = "A", Type = "System.Int32", Value = 1, IsStatic = false }
+            ]
+        };
+
+        var result = (DumpObjectResult)convert!.Invoke(null, [clrMd])!;
+
+        Assert.True(result.Success);
+        Assert.Equal("MyType", result.Name);
+        Assert.Equal("0x2000", result.MethodTable);
+        Assert.Equal(32, result.Size);
+        Assert.Equal("hello", result.StringValue);
+        Assert.NotNull(result.Fields);
+        Assert.Single(result.Fields!);
+        Assert.Equal("A", result.Fields![0].Name);
+        Assert.Equal("System.Int32", result.Fields![0].Type);
+        Assert.Equal("1", result.Fields![0].Value);
     }
 
     private sealed class FakeDebuggerManager(Func<string, string> handler) : IDebuggerManager

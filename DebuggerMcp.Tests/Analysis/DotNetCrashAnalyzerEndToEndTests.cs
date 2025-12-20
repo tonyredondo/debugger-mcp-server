@@ -311,4 +311,95 @@ public class DotNetCrashAnalyzerEndToEndTests
             Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", original);
         }
     }
+
+    [Fact]
+    public async Task AnalyzeDotNetCrashAsync_WithDumpDomainAssemblies_PopulatesAssembliesAndDedupes()
+    {
+        var original = Environment.GetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED");
+        Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", "false");
+
+        try
+        {
+            var argvAddress = "0x0000ffffefcba618";
+
+            var outputs = new Dictionary<string, string>
+            {
+                // Base LLDB analysis.
+                ["thread list"] = "* thread #1: tid = 0x8954, 0x0000000100000000 dotnet`abort, name = 'dotnet', stop reason = signal SIGABRT",
+                ["bt all"] =
+                    "* thread #1, name = 'dotnet', stop reason = signal SIGABRT\n" +
+                    $"  * frame #0: 0x0000c5f644a77244 SP=0x0000ffffefcb76a0 dotnet`exe_start(argc=2, argv={argvAddress})\n" +
+                    $"    frame #1: 0x0000c5f644a77244 SP=0x0000ffffefcb75a0 dotnet`main(argc=2, argv={argvAddress})\n",
+                ["image list"] =
+                    "[  0] 12345678-1234-1234-1234-123456789ABC 0x0000000100000000 /usr/lib/dyld\n" +
+                    "[  1] 23456789-2345-2345-2345-23456789ABCD 0x0000000200000000 /usr/lib/libc.so.6\n" +
+                    "[  2] ABCDEFAB-0000-0000-0000-000000000000 0x0000000300000000 /usr/share/dotnet/shared/Microsoft.AspNetCore.App/9.0.10/Microsoft.Extensions.FileProviders.Physical.dll\n" +
+                    "[  3] BCDEFABC-0000-0000-0000-000000000000 0x0000000300010000 /usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Collections.Concurrent.dll\n",
+
+                // ProcessInfoExtractor memory read / string reads (argv + envp, split by NULL sentinel).
+                ["memory read"] =
+                    "0xffffefcba618: 0x0000ffffefcbbb24 0x0000ffffefcbbb2b\n" +
+                    "0xffffefcba628: 0x0000000000000000 0x0000ffffefcbbb8f\n",
+                ["expr -- (char*)0x0000ffffefcbbb24"] = "(char *) $1 = 0x0000ffffefcbbb24 \"dotnet\"",
+                ["expr -- (char*)0x0000ffffefcbbb2b"] = "(char *) $2 = 0x0000ffffefcbbb2b \"/app/MyApp.dll\"",
+                ["expr -- (char*)0x0000ffffefcbbb8f"] = "(char *) $3 = 0x0000ffffefcbbb8f \"DD_API_KEY=secret-value\"",
+
+                // .NET analysis commands (keep minimal; the goal is exercising dumpdomain parsing/dedup).
+                ["!eeversion"] = "CLR Version: 9.0.10.0",
+                ["clrstack -a -r -all"] =
+                    "OS Thread Id: 0x8954 (1)\n" +
+                    "Child SP         IP               Call Site\n" +
+                    "0000FFFFEFCB76A0 0000F75587765AB4 MyApp.Program.Main(System.String[])\n",
+                ["!pe -nested"] =
+                    "Exception object: 00007ff6b1234567\n" +
+                    "Exception type:   System.MissingMethodException\n" +
+                    "Message:          Method not found\n",
+                ["!dumpheap -stat"] = "Total 0 objects, 0 bytes\n",
+                ["!clrthreads"] = "ThreadCount:      1\n",
+                ["!finalizequeue"] = "generation 0 has 0 finalizable objects\n",
+                ["!syncblk"] = "Index SyncBlock MonitorHeld Recursion Owning Thread Info  SyncBlock Owner\n",
+                ["!threadpool"] = "Portable thread pool\n",
+                ["!ti"] = string.Empty,
+                ["!analyzeoom"] = string.Empty,
+                ["!crashinfo"] = "Signal: 11 (SIGSEGV)\n",
+
+                ["!dumpdomain"] =
+                    "Domain 1: 00007ff6b1234000\n" +
+                    "Assembly: 0x0000AAAA [Microsoft.Extensions.FileProviders.Physical]\n" +
+                    "ClassLoader: 0x0000BBBB\n" +
+                    "Module Name    0x0000CCCC  /usr/share/dotnet/shared/Microsoft.AspNetCore.App/9.0.10/Microsoft.Extensions.FileProviders.Physical.dll\n" +
+                    "Assembly: 0x0000DDDD /usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Collections.Concurrent.dll\n" +
+                    "Module: 0x0000EEEE /usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Collections.Concurrent.dll\n" +
+                    "Assembly: 0x0000FFFF My.Custom.Assembly\n" +
+                    "Dynamic\n" +
+                    "Module Name 0x0000ABCD /tmp/My.Custom.Assembly.dll\n" +
+                    "Assembly: 0x00001111 [ /usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Collections.Concurrent.dll ]\n" +
+                    "Module Name 0x00002222 /usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Collections.Concurrent.dll\n"
+            };
+
+            var manager = new StubDebuggerManager("LLDB", outputs);
+            var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver: new SourceLinkResolver(), clrMdAnalyzer: null);
+
+            var result = await analyzer.AnalyzeDotNetCrashAsync();
+
+            Assert.NotNull(result.Assemblies);
+            Assert.NotNull(result.Assemblies!.Items);
+            Assert.True(result.Assemblies.Count >= 2);
+
+            Assert.Contains(result.Assemblies.Items!, a =>
+                string.Equals(a.Name, "Microsoft.Extensions.FileProviders.Physical", StringComparison.Ordinal) &&
+                a.Path?.Contains("Microsoft.Extensions.FileProviders.Physical.dll", StringComparison.Ordinal) == true);
+
+            // Ensure path-based deduplication for System.Collections.Concurrent (multiple entries with the same dll path).
+            var concurrent = result.Assemblies.Items!
+                .Where(a => string.Equals(a.Name, "System.Collections.Concurrent", StringComparison.Ordinal))
+                .ToList();
+            Assert.Single(concurrent);
+            Assert.Contains("System.Collections.Concurrent.dll", concurrent[0].Path ?? string.Empty, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", original);
+        }
+    }
 }

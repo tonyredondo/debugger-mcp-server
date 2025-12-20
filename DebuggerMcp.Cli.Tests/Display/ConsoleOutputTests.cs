@@ -10,6 +10,15 @@ namespace DebuggerMcp.Cli.Tests.Display;
 public class ConsoleOutputTests
 {
     [Fact]
+    public void BeginTranscriptCapture_WhenSinkNull_Throws()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        _ = Assert.Throws<ArgumentNullException>(() => output.BeginTranscriptCapture(null!));
+    }
+
+    [Fact]
     public void Success_WritesSuccessPrefixAndMessage()
     {
         var console = new TestConsole();
@@ -46,6 +55,38 @@ public class ConsoleOutputTests
     }
 
     [Fact]
+    public void Error_WithException_WhenVerbose_WritesExceptionDetails()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console) { Verbose = true };
+
+        output.Error("bad", new InvalidOperationException("details"));
+
+        Assert.Contains("bad", console.Output);
+        Assert.Contains("details", console.Output);
+    }
+
+    [Fact]
+    public void Warning_Info_Dim_WriteLine_AndMarkup_WriteExpectedText()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        output.Warning("warn");
+        output.Info("info");
+        output.Dim("dim");
+        output.WriteLine("plain");
+        output.Markup("[green]hello[/] [[x]]");
+
+        Assert.Contains("warn", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("info", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("dim", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("plain", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hello", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[x]", console.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void KeyValue_WhenValueNull_WritesNotSetPlaceholder()
     {
         var console = new TestConsole();
@@ -66,6 +107,44 @@ public class ConsoleOutputTests
         output.Header("Title");
 
         Assert.Contains("Title", console.Output);
+    }
+
+    [Fact]
+    public void Panel_WritesTitleAndContent()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        output.Panel("MyPanel", "content");
+
+        Assert.Contains("MyPanel", console.Output, StringComparison.Ordinal);
+        Assert.Contains("content", console.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Table_WritesHeadersAndRows()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        output.Table(["H1", "H2"], new[] { new[] { "a", "b" } });
+
+        Assert.Contains("H1", console.Output, StringComparison.Ordinal);
+        Assert.Contains("H2", console.Output, StringComparison.Ordinal);
+        Assert.Contains("a", console.Output, StringComparison.Ordinal);
+        Assert.Contains("b", console.Output, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void WriteLlmResponse_RendersMarkdown()
+    {
+        var console = new TestConsole().Width(80);
+        var output = new ConsoleOutput(console);
+
+        output.WriteLlmResponse("## Title\n\n- a\n");
+
+        Assert.Contains("Title", console.Output, StringComparison.Ordinal);
+        Assert.Contains("- a", console.Output, StringComparison.Ordinal);
     }
 
     [Fact]

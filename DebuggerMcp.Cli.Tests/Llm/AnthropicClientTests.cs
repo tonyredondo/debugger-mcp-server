@@ -227,5 +227,319 @@ public class AnthropicClientTests
         Assert.Contains("truncated", ex.Message, StringComparison.OrdinalIgnoreCase);
         Assert.True(ex.Message.Length < 50_000);
     }
-}
 
+    [Fact]
+    public async Task ChatCompletionAsync_WhenApiKeyMissing_Throws()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = null,
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        using var http = new HttpClient(new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
+        var client = new AnthropicClient(http, settings);
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")]
+        }));
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenBaseUrlMissing_Throws()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = ""
+        };
+
+        using var http = new HttpClient(new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)));
+        var client = new AnthropicClient(http, settings);
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")]
+        }));
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenToolChoiceNone_DisablesToolsAndToolChoiceFields()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """{ "model":"claude-test", "content":[{"type":"text","text":"ok"}] }""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new AnthropicClient(http, settings);
+
+        using var schemaDoc = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}");
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")],
+            Tools = [new ChatTool { Name = "exec", Description = "d", Parameters = schemaDoc.RootElement.Clone() }],
+            ToolChoice = new ChatToolChoice { Mode = "none" },
+            MaxTokens = 32
+        });
+
+        using var reqDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.False(reqDoc.RootElement.TryGetProperty("tools", out _));
+        Assert.False(reqDoc.RootElement.TryGetProperty("tool_choice", out _));
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenToolChoiceFunctionName_SendsToolChoiceTool()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """{ "model":"claude-test", "content":[{"type":"text","text":"ok"}] }""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new AnthropicClient(http, settings);
+
+        using var schemaDoc = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}");
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")],
+            Tools = [new ChatTool { Name = "exec", Description = "d", Parameters = schemaDoc.RootElement.Clone() }],
+            ToolChoice = new ChatToolChoice { Mode = "function", FunctionName = "exec" },
+            MaxTokens = 32
+        });
+
+        using var reqDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.Equal("tool", reqDoc.RootElement.GetProperty("tool_choice").GetProperty("type").GetString());
+        Assert.Equal("exec", reqDoc.RootElement.GetProperty("tool_choice").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenThinkingBudgetExceedsMaxTokens_ClampsBudget()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """{ "model":"claude-test", "content":[{"type":"text","text":"ok"}] }""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new AnthropicClient(http, settings);
+
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")],
+            MaxTokens = 10,
+            ReasoningEffort = "high"
+        });
+
+        using var reqDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        Assert.True(reqDoc.RootElement.TryGetProperty("thinking", out var thinking));
+        Assert.Equal(9, thinking.GetProperty("budget_tokens").GetInt32());
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenResponseHasNoContent_ReturnsEmptyResult()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """{ "model":"claude-test" }""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new AnthropicClient(http, settings);
+
+        var result = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")]
+        });
+
+        Assert.Null(result.Text);
+        Assert.Empty(result.ToolCalls);
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenResponseJsonInvalid_Throws()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        var handler = new CapturingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{not-json", Encoding.UTF8, "application/json")
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new AnthropicClient(http, settings);
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")]
+        }));
+    }
+
+    [Fact]
+    public async Task ChatAsync_WhenResponseHasWhitespaceOnlyText_Throws()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """{ "model":"claude-test", "content":[{"type":"text","text":"   "}] }""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new AnthropicClient(http, settings);
+
+        _ = await Assert.ThrowsAsync<InvalidOperationException>(() => client.ChatAsync([new ChatMessage("user", "hi")]));
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenAssistantHasExistingToolUseBlocks_MergesAdditionalToolCalls()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """{ "model":"claude-test", "content":[{"type":"text","text":"ok"}] }""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new AnthropicClient(http, settings);
+
+        using var contentJsonDoc = JsonDocument.Parse("""[{ "type":"tool_use", "id":"t1", "name":"exec", "input": { "command":"bt" } }]""");
+        var toolCalls = new List<ChatToolCall> { new("t2", "exec", "{\"command\":\"clrstack\"}") };
+
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages =
+            [
+                new ChatMessage("user", "hi"),
+                new ChatMessage("assistant", "x", toolCallId: null, toolCalls: toolCalls, contentJson: contentJsonDoc.RootElement.Clone())
+            ],
+            MaxTokens = 64
+        });
+
+        using var reqDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        var messages = reqDoc.RootElement.GetProperty("messages");
+        var assistant = messages[1].GetProperty("content");
+        Assert.Equal(JsonValueKind.Array, assistant.ValueKind);
+        Assert.Equal(2, assistant.GetArrayLength());
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenToolMessageMissingToolCallId_SendsTextBlock()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "anthropic",
+            AnthropicApiKey = "k",
+            AnthropicModel = "claude-test",
+            AnthropicBaseUrl = "https://api.anthropic.com/v1"
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """{ "model":"claude-test", "content":[{"type":"text","text":"ok"}] }""";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new AnthropicClient(http, settings);
+
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages =
+            [
+                new ChatMessage("user", "hi"),
+                new ChatMessage("tool", "tool output", toolCallId: null, toolCalls: null)
+            ],
+            MaxTokens = 64
+        });
+
+        using var reqDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        var messages = reqDoc.RootElement.GetProperty("messages");
+        Assert.Equal("user", messages[1].GetProperty("role").GetString());
+        Assert.Equal("text", messages[1].GetProperty("content")[0].GetProperty("type").GetString());
+        Assert.Equal("tool output", messages[1].GetProperty("content")[0].GetProperty("text").GetString());
+    }
+}

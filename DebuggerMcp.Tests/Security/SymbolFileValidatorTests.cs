@@ -406,5 +406,29 @@ public class SymbolFileValidatorTests
         Assert.Equal(40, SymbolFileValidator.MaxHeaderSize);
     }
 
-}
+    [Fact]
+    public void IsValidSymbolStream_WhenTooShort_ReturnsFalseAndRestoresPosition()
+    {
+        var bytes = new byte[] { 1, 2, 3 };
+        using var stream = new MemoryStream(bytes);
+        stream.Position = 2;
 
+        var ok = SymbolFileValidator.IsValidSymbolStream(stream, "test.pdb");
+
+        Assert.False(ok);
+        Assert.Equal(2, stream.Position);
+    }
+
+    [Fact]
+    public void IsValidSymbolStream_WhenPortablePdbHeader_ReturnsTrue()
+    {
+        // "BSJB" portable PDB signature
+        var header = new byte[] { 0x42, 0x53, 0x4A, 0x42, 0, 0, 0, 0 };
+        using var stream = new MemoryStream(header);
+
+        var ok = SymbolFileValidator.IsValidSymbolStream(stream, "test.pdb");
+
+        Assert.True(ok);
+    }
+
+}

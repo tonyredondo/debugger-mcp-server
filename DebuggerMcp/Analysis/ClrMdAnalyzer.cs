@@ -2388,7 +2388,78 @@ public class ClrMdAnalyzer : IDisposable
                 var exceptionsHolder = contingentProps.ReadObjectField("m_exceptionsHolder");
                 if (!exceptionsHolder.IsNull)
                 {
-                    var faultException = exceptionsHolder.ReadObjectField("m_faultException");
+                    // Older runtimes store an AggregateException under "m_faultException".
+                    // Newer runtimes (net9+) store List<ExceptionDispatchInfo> under "m_faultExceptions".
+                    ClrObject faultException = default;
+                    try
+                    {
+                        faultException = exceptionsHolder.ReadObjectField("m_faultException");
+                    }
+                    catch
+                    {
+                        faultException = default;
+                    }
+                    if (faultException.IsNull)
+                    {
+                        ClrObject faultExceptions = default;
+                        try
+                        {
+                            faultExceptions = exceptionsHolder.ReadObjectField("m_faultExceptions");
+                        }
+                        catch
+                        {
+                            faultExceptions = default;
+                        }
+                        if (!faultExceptions.IsNull)
+                        {
+                            try
+                            {
+                                var items = faultExceptions.ReadObjectField("_items");
+                                if (items.IsNull)
+                                {
+                                    items = faultExceptions.ReadObjectField("items");
+                                }
+
+                                if (!items.IsNull && items.Type?.IsArray == true)
+                                {
+                                    var arr = items.AsArray();
+                                    var len = Math.Min(arr.Length, 16);
+                                    try
+                                    {
+                                        var size = faultExceptions.ReadField<int>("_size");
+                                        if (size > 0)
+                                        {
+                                            len = Math.Min(len, size);
+                                        }
+                                    }
+                                    catch
+                                    {
+                                        // Ignore list size read errors.
+                                    }
+                                    for (var i = 0; i < len; i++)
+                                    {
+                                        var edi = arr.GetObjectValue(i);
+                                        if (!edi.IsValid || edi.IsNull)
+                                        {
+                                            continue;
+                                        }
+
+                                        var exObj = edi.ReadObjectField("_exception");
+                                        if (exObj.IsValid && !exObj.IsNull)
+                                        {
+                                            faultException = exObj;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            catch
+                            {
+                                // Ignore errors while unpacking fault exception list.
+                            }
+                        }
+                    }
+
                     if (!faultException.IsNull && faultException.Type != null)
                     {
                         info.ExceptionType = faultException.Type.Name;

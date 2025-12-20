@@ -6,6 +6,24 @@ namespace DebuggerMcp.Tests.Logging;
 public class FileLoggerProviderTests
 {
     [Fact]
+    public void BeginScope_ReturnsNull()
+    {
+        var tempDir = CreateTempDirectory();
+        try
+        {
+            using var provider = new FileLoggerProvider(tempDir, filePrefix: "test", minimumLevel: LogLevel.Information);
+            var logger = provider.CreateLogger("My.Namespace.MyClass");
+
+            var fileLogger = Assert.IsType<FileLogger>(logger);
+            Assert.Null(fileLogger.BeginScope("scope"));
+        }
+        finally
+        {
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
     public void CreateLogger_ReusesSameCategoryInstance()
     {
         var tempDir = CreateTempDirectory();
@@ -93,4 +111,3 @@ public class FileLoggerProviderTests
         }
     }
 }
-

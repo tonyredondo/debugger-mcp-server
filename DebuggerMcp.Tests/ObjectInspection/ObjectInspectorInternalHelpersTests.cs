@@ -93,6 +93,38 @@ Parent MethodTable: 00007ff9abcd9999
     }
 
     [Fact]
+    public void ParseDumpMtForTypeInfo_WhenEnumType_MarksValueTypeAndEnum()
+    {
+        var output = """
+MethodTable: 00007ff9abcd1111
+Name:        MyNamespace.MyEnum
+Parent MethodTable: 00007ff9abcd9999
+System.Enum
+""";
+
+        var info = ObjectInspector.ParseDumpMtForTypeInfo(output, methodTable: "0x00007ff9abcd1111");
+
+        Assert.NotNull(info);
+        Assert.True(info!.IsValueType);
+        Assert.True(info.IsEnum);
+    }
+
+    [Fact]
+    public void ParseDumpMtForTypeInfo_WhenInterfaceAndMdInterfaceFlag_MarksAsInterface()
+    {
+        var output = """
+MethodTable: 00007ff9abcd1111
+Name:        IFoo
+Class Attributes: 0x00000020
+""";
+
+        var info = ObjectInspector.ParseDumpMtForTypeInfo(output, methodTable: "0x00007ff9abcd1111");
+
+        Assert.NotNull(info);
+        Assert.True(info!.IsInterface);
+    }
+
+    [Fact]
     public void ConvertClrMdToInspected_ConvertsFieldsAndNestedObjects()
     {
         var clr = new ClrMdObjectInspection
@@ -118,6 +150,31 @@ Parent MethodTable: 00007ff9abcd9999
 
         var nested = Assert.IsType<InspectedObject>(inspected.Fields[1].Value);
         Assert.Equal("0x3000", nested.Address);
+        Assert.Equal("MyChild", nested.Type);
+    }
+
+    [Fact]
+    public void ConvertClrMdToInspected_WhenElementsContainNestedObject_ConvertsToInspectedObject()
+    {
+        var clr = new ClrMdObjectInspection
+        {
+            Address = "0x1000",
+            Type = "MyArray",
+            Elements =
+            [
+                1,
+                new ClrMdObjectInspection { Address = "0x2000", Type = "MyChild" }
+            ]
+        };
+
+        var inspected = ObjectInspector.ConvertClrMdToInspected(clr);
+
+        Assert.NotNull(inspected.Elements);
+        Assert.Equal(2, inspected.Elements!.Count);
+        Assert.Equal(1, Assert.IsType<int>(inspected.Elements[0]));
+
+        var nested = Assert.IsType<InspectedObject>(inspected.Elements[1]);
+        Assert.Equal("0x2000", nested.Address);
         Assert.Equal("MyChild", nested.Type);
     }
 }

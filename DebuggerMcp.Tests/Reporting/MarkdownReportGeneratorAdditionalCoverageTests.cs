@@ -180,6 +180,110 @@ public class MarkdownReportGeneratorAdditionalCoverageTests
         Assert.Contains("String Duplicate Analysis", output, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("a.cs", "csharp")]
+    [InlineData("a.fs", "fsharp")]
+    [InlineData("a.vb", "vbnet")]
+    [InlineData("a.cpp", "cpp")]
+    [InlineData("a.c", "c")]
+    [InlineData("a.h", "cpp")]
+    [InlineData("a.rs", "rust")]
+    [InlineData("a.go", "go")]
+    [InlineData("a.java", "java")]
+    [InlineData("a.kt", "kotlin")]
+    [InlineData("a.js", "javascript")]
+    [InlineData("a.ts", "typescript")]
+    [InlineData("a.py", "python")]
+    [InlineData("a.rb", "ruby")]
+    [InlineData("a.php", "php")]
+    [InlineData("a.swift", "swift")]
+    [InlineData("a.m", "objectivec")]
+    [InlineData("a.sh", "bash")]
+    [InlineData("a.ps1", "powershell")]
+    [InlineData("a.json", "json")]
+    [InlineData("a.yml", "yaml")]
+    [InlineData("a.xml", "xml")]
+    [InlineData("a.unknown", "")]
+    public void GuessMarkdownCodeFenceLanguage_MapsExtensions(string sourceFile, string expected)
+    {
+        var method = typeof(MarkdownReportGenerator).GetMethod("GuessMarkdownCodeFenceLanguage", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var actual = method!.Invoke(null, new object?[] { sourceFile }) as string;
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void PrivateSections_Render_TopMemoryConsumersLargeObjectsAndTimeout()
+    {
+        var sb = new StringBuilder();
+        var mem = new TopMemoryConsumers
+        {
+            Summary = new HeapWalkSummary
+            {
+                TotalObjects = 10,
+                TotalSize = 100,
+                UniqueTypes = 2,
+                AnalysisTimeMs = 123,
+                WasAborted = true
+            },
+            BySize = [new TypeMemoryStats { Type = "T", Count = 1, TotalSize = 100, Percentage = 99.9 }],
+            LargeObjects = [new LargeObjectInfo { Address = "0x1", Type = "Big", Size = 90000, Generation = "Large" }]
+        };
+
+        InvokePrivateStatic(typeof(MarkdownReportGenerator), "AppendTopMemoryConsumers", sb, mem);
+
+        var output = sb.ToString();
+        Assert.Contains("Top Memory Consumers", output, StringComparison.Ordinal);
+        Assert.Contains("Large Objects", output, StringComparison.Ordinal);
+        Assert.Contains("aborted", output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void PrivateSections_Render_SourceContextAndTruncation()
+    {
+        var sb = new StringBuilder();
+        var entries = new List<SourceContextEntry>
+        {
+            new()
+            {
+                ThreadId = "1",
+                FrameNumber = 0,
+                Module = "m",
+                Function = "f",
+                SourceFile = "f.cs",
+                LineNumber = 10,
+                SourceUrl = "https://example.test/f.cs#L10",
+                StartLine = 8,
+                EndLine = 12,
+                Status = "remote",
+                Lines = ["a", "b", "c"]
+            },
+            new()
+            {
+                ThreadId = "2",
+                FrameNumber = 1,
+                Status = "error",
+                Error = "oops"
+            }
+        };
+
+        var append = typeof(MarkdownReportGenerator).GetMethod("AppendSourceContext", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(append);
+        append!.Invoke(null, new object[] { sb, entries });
+
+        var truncate = typeof(MarkdownReportGenerator).GetMethod("TruncateString", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(truncate);
+        var truncated = truncate!.Invoke(null, new object?[] { new string('a', 200), 30 }) as string;
+        Assert.NotNull(truncated);
+        Assert.True(truncated!.Length <= 30);
+
+        var output = sb.ToString();
+        Assert.Contains("Source Context", output, StringComparison.Ordinal);
+        Assert.Contains("```csharp", output, StringComparison.Ordinal);
+        Assert.Contains("oops", output, StringComparison.Ordinal);
+    }
+
     private static void InvokePrivateStatic(Type type, string methodName, StringBuilder sb, object arg)
     {
         var method = type.GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
@@ -192,4 +296,3 @@ public class MarkdownReportGeneratorAdditionalCoverageTests
         method!.Invoke(null, [sb, arg]);
     }
 }
-

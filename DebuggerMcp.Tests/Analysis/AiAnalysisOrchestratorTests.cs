@@ -660,6 +660,313 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains(result.CommandsExecuted!, c => c.Tool == "get_thread_stack" && c.Output.Contains("\"threadId\": \"17\"", StringComparison.OrdinalIgnoreCase));
     }
 
+    [Fact]
+    public async Task AnalyzeCrashAsync_AnalysisCompleteWithAdditionalFindings_ParsesStringArrayAndSkipsEmptyValues()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "medium",
+                reasoning = "done",
+                additionalFindings = new object?[]
+                {
+                    "first",
+                    "   ",
+                    null,
+                    123,
+                    new { x = 1 }
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 1
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("Ok", result.RootCause);
+        Assert.NotNull(result.AdditionalFindings);
+        Assert.Contains("first", result.AdditionalFindings!);
+        Assert.Contains("123", result.AdditionalFindings!);
+        Assert.Contains("{\"x\":1}", result.AdditionalFindings!);
+        Assert.DoesNotContain(result.AdditionalFindings!, s => string.IsNullOrWhiteSpace(s));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenToolIsRewritten_LogsOriginalToolSummary()
+    {
+        var logs = new List<(LogLevel Level, string Message)>();
+        var logger = new CollectingLogger<AiAnalysisOrchestrator>((level, message) => logs.Add((level, message)));
+
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "sos dumpobj 0x1234" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var inspector = new FakeManagedObjectInspector(isOpen: true, address =>
+            new ClrMdObjectInspection
+            {
+                Address = $"0x{address:x}",
+                Type = "System.String",
+                IsString = true,
+                Value = "hello"
+            });
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, logger)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: inspector);
+
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c => c.Tool == "inspect");
+        Assert.Contains(logs, entry =>
+            entry.Message.Contains("original:", StringComparison.OrdinalIgnoreCase) ||
+            entry.Message.Contains("(original", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenDuplicateToolCallsOccur_ReusesCachedResultAndAvoidsReExecuting()
+    {
+        var toolId1 = Guid.NewGuid().ToString("N");
+        var toolId2 = Guid.NewGuid().ToString("N");
+
+        var twoToolUses = new CreateMessageResult
+        {
+            Model = "test-model",
+            Role = Role.Assistant,
+            Content =
+            [
+                new ToolUseContentBlock
+                {
+                    Id = toolId1,
+                    Name = "exec",
+                    Input = JsonSerializer.SerializeToElement(new { command = "!threads", args = new[] { 1, 2 } })
+                },
+                new ToolUseContentBlock
+                {
+                    Id = toolId2,
+                    Name = "exec",
+                    Input = JsonSerializer.SerializeToElement(new { command = "!threads", args = new[] { 1, 2 } })
+                }
+            ]
+        };
+
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(twoToolUses)
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Single(debugger.ExecutedCommands);
+        Assert.Equal("!threads", debugger.ExecutedCommands[0]);
+
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Equal(2, result.CommandsExecuted!.Count(c => c.Tool == "exec"));
+        Assert.Contains(result.CommandsExecuted!, c => c.Output.Contains("[cached tool result]", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_InspectTool_WhenClrMdAnalyzerNotAvailable_ReturnsHintJson()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("inspect", new { address = "0x1234", maxDepth = 4 }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c =>
+            c.Tool == "inspect" &&
+            c.Output.Contains("ClrMD analyzer not available", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_GetThreadStack_WhenThreadMissing_ReturnsNotFoundJson()
+    {
+        var report = new CrashAnalysisResult
+        {
+            Threads = new ThreadsInfo
+            {
+                All =
+                [
+                    new ThreadInfo { ThreadId = "1", State = "stopped", IsFaulting = false, TopFunction = "Foo" }
+                ]
+            }
+        };
+
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("get_thread_stack", new { threadId = "999" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            report,
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c =>
+            c.Tool == "get_thread_stack" &&
+            c.Output.Contains("Thread not found", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_GetThreadStack_MatchesOsThreadIdRegardlessOfHexFormatting()
+    {
+        var report = new CrashAnalysisResult
+        {
+            Threads = new ThreadsInfo
+            {
+                All =
+                [
+                    new ThreadInfo
+                    {
+                        ThreadId = "1",
+                        OsThreadId = "0x00000010",
+                        State = "stopped",
+                        IsFaulting = false,
+                        TopFunction = "Foo"
+                    }
+                ]
+            }
+        };
+
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("get_thread_stack", new { threadId = "0x10" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            report,
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c =>
+            c.Tool == "get_thread_stack" &&
+            c.Output.Contains("\"threadId\": \"1\"", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenTraceFileByteLimitExceeded_WritesTruncationMarker()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = new string('a', 10_000)
+            }));
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcpTests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+            {
+                MaxIterations = 1,
+                EnableSamplingTraceFiles = true,
+                SamplingTraceFilesRootDirectory = tempRoot,
+                SamplingTraceLabel = "truncate-test",
+                SamplingTraceMaxFileBytes = 200
+            };
+
+            _ = await orchestrator.AnalyzeCrashAsync(
+                new CrashAnalysisResult(),
+                "{\"x\":1}",
+                new FakeDebuggerManager(),
+                clrMdAnalyzer: null);
+
+            var runDir = Assert.Single(Directory.GetDirectories(tempRoot));
+            var requestPath = Path.Combine(runDir, "iter-0001-request.json");
+            Assert.True(File.Exists(requestPath));
+
+            var content = await File.ReadAllTextAsync(requestPath);
+            Assert.Contains("[truncated, totalBytes=", content, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+        }
+    }
+
     private static CreateMessageResult CreateMessageResultWithText(string text) =>
         new()
         {

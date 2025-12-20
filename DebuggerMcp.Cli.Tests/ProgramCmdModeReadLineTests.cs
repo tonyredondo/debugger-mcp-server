@@ -60,6 +60,177 @@ public class ProgramCmdModeReadLineTests
         Assert.Contains("^C", systemConsole.Output);
     }
 
+    [Fact]
+    public void ReadCmdLineWithHistory_WithDownArrow_MovesForwardInHistory()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+        history.Add("one");
+        history.Add("two");
+
+        var systemConsole = new FakeSystemConsole(
+            Key(ConsoleKey.UpArrow),
+            Key(ConsoleKey.UpArrow),
+            Key(ConsoleKey.DownArrow),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("two", line);
+    }
+
+    [Fact]
+    public void ReadCmdLineWithHistory_WithDownArrowAtEnd_RestoresSavedLine()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+        history.Add("one");
+
+        var systemConsole = new FakeSystemConsole(
+            Key('a'),
+            Key('b'),
+            Key('c'),
+            Key(ConsoleKey.UpArrow),
+            Key(ConsoleKey.DownArrow),
+            Key(ConsoleKey.DownArrow),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("abc", line);
+    }
+
+    [Fact]
+    public void ReadCmdLineWithHistory_WhenCtrlL_ClearsAndContinues()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+
+        var systemConsole = new FakeSystemConsole(
+            Key('a'),
+            Key('b'),
+            Key('c'),
+            Key(ConsoleKey.L, control: true),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("abc", line);
+    }
+
+    [Fact]
+    public void ReadCmdLineWithHistory_WhenBackspace_RemovesPreviousCharacter()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+
+        var systemConsole = new FakeSystemConsole(
+            Key('a'),
+            Key('b'),
+            Key('c'),
+            Key(ConsoleKey.Backspace),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("ab", line);
+    }
+
+    [Fact]
+    public void ReadCmdLineWithHistory_WhenDelete_RemovesCharacterAtCursor()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+
+        var systemConsole = new FakeSystemConsole(
+            Key('a'),
+            Key('b'),
+            Key('c'),
+            Key(ConsoleKey.LeftArrow),
+            Key(ConsoleKey.Delete),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("ab", line);
+    }
+
+    [Fact]
+    public void ReadCmdLineWithHistory_WhenLeftAndRightArrow_MoveCursorWithoutThrowing()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+
+        var systemConsole = new FakeSystemConsole(
+            Key('a'),
+            Key('b'),
+            Key('c'),
+            Key(ConsoleKey.LeftArrow),
+            Key(ConsoleKey.LeftArrow),
+            Key(ConsoleKey.RightArrow),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("abc", line);
+    }
+
+    [Fact]
+    public void ReadCmdLineWithHistory_WhenEscape_ClearsCurrentLine()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+
+        var systemConsole = new FakeSystemConsole(
+            Key('a'),
+            Key('b'),
+            Key('c'),
+            Key(ConsoleKey.Escape),
+            Key('d'),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("d", line);
+    }
+
+    [Fact]
+    public void ReadCmdLineWithHistory_WhenInsertingAtCursor_InsertsInMiddle()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+
+        var systemConsole = new FakeSystemConsole(
+            Key('a'),
+            Key('c'),
+            Key(ConsoleKey.LeftArrow),
+            Key('b'),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("abc", line);
+    }
+
+    [Fact]
+    public void ReadCmdLineWithHistory_WhenHomeAndEnd_MoveCursor()
+    {
+        var ansi = new TestConsole();
+        var history = new CommandHistory();
+
+        var systemConsole = new FakeSystemConsole(
+            Key('b'),
+            Key('c'),
+            Key(ConsoleKey.Home),
+            Key('a'),
+            Key(ConsoleKey.End),
+            Key(ConsoleKey.Enter));
+
+        var line = InvokeReadCmdLineWithHistory(ansi, systemConsole, "(lldb)", history);
+
+        Assert.Equal("abc", line);
+    }
+
     private static string? InvokeReadCmdLineWithHistory(IAnsiConsole ansi, ISystemConsole systemConsole, string prompt, CommandHistory history)
     {
         var method = typeof(DebuggerMcp.Cli.Program).GetMethod(
@@ -127,4 +298,3 @@ public class ProgramCmdModeReadLineTests
         public string Output => _output.ToString();
     }
 }
-

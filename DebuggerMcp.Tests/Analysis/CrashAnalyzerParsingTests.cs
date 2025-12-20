@@ -337,6 +337,18 @@ arm64
         // Should parse without error
     }
 
+    [Fact]
+    public void ParseWinDbgModules_WithDeferredLine_AddsModuleWithoutSymbols()
+    {
+        var output = @"00007ff6`b1230000 00007ff6`b1240000   DeferredMod";
+
+        var result = CreateInitializedResult();
+        _analyzer.TestParseWinDbgModules(output, result);
+
+        Assert.NotNull(result.Modules);
+        Assert.Contains(result.Modules!, m => m.Name == "DeferredMod" && m.HasSymbols == false);
+    }
+
     // ============================================================
     // ParseLldbThreads Tests
     // ============================================================
@@ -444,6 +456,49 @@ arm64
 
         Assert.NotNull(result.Modules);
         Assert.NotEmpty(result.Modules);
+    }
+
+    [Fact]
+    public void ParseLldbModules_WhenAddressHas0xPrefix_ExtractsModuleAndSymbolHint()
+    {
+        var output = @"Current executable set to '/path/to/app' (x86_64).
+[  0] 0x00007FFF12340000 /usr/lib/libSystem.B.dylib.dSYM
+[  1] 0x00007FFF12350000 /usr/lib/libc++.1.dylib
+";
+
+        var result = CreateInitializedResult();
+        _analyzer.TestParseLldbModules(output, result);
+
+        Assert.NotNull(result.Modules);
+        Assert.Contains(result.Modules!, m => m.BaseAddress == "0x00007FFF12340000" && m.HasSymbols == true);
+    }
+
+    [Fact]
+    public void ParseWinDbgBacktraceAll_WhenFramesHaveAltFormat_ParsesFrames()
+    {
+        var output = @".  0  Id: 1234.5678 Suspend: 1 Teb: 000000d5`8d000000 Unfrozen
+00 00007ff6`b1234567 ntdll!NtWaitForSingleObject+0x14
+01 00007ff6`b1234568 KERNELBASE!WaitForSingleObjectEx+0x9e";
+
+        var result = CreateInitializedResult();
+        result.Threads!.All!.Add(new ThreadInfo { ThreadId = "0" });
+
+        _analyzer.TestParseWinDbgBacktraceAll(output, result);
+
+        Assert.NotEmpty(result.Threads.All[0].CallStack);
+        Assert.Contains(result.Threads.All[0].CallStack, f => f.Module.Contains("ntdll", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void ParseWinDbgThreads_WhenSimplePatternPresent_AddsThread()
+    {
+        var output = @"#  1  Id: 1234.5678 Suspend: 1 Teb: 000000d5`8d000000 Unfrozen";
+
+        var result = CreateInitializedResult();
+        _analyzer.TestParseWinDbgThreads(output, result);
+
+        Assert.NotEmpty(result.Threads!.All!);
+        Assert.Contains(result.Threads.All!, t => t.ThreadId.StartsWith("1 (", StringComparison.Ordinal));
     }
 
     // ============================================================

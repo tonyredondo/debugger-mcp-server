@@ -1,3 +1,4 @@
+using DebuggerMcp;
 using DebuggerMcp.ObjectInspection;
 using Xunit;
 
@@ -269,5 +270,163 @@ public class CollectionTypeDetectorTests
         var result = CollectionTypeDetector.CalculateArrayElementAddress("1000", 0, 8, 8);
         Assert.Equal("0x1010", result);
     }
-}
 
+    [Fact]
+    public void GetArrayElementMethodTable_WhenDumpObjAndDumpMtContainElementMethodTable_ReturnsElementMethodTable()
+    {
+        var manager = new FakeDebuggerManager(
+            outputs: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dumpobj 0x1000"] = "MethodTable: 0xDEADBEEF\n",
+                ["dumpmt 0xDEADBEEF"] = "Element Methodtable: 0xFEEDFACE\n",
+            });
+
+        var elementMt = CollectionTypeDetector.GetArrayElementMethodTable(manager, "0x1000");
+
+        Assert.Equal("0xFEEDFACE", elementMt);
+    }
+
+    [Fact]
+    public void GetArrayElementMethodTable_WhenDumpObjHasNoMethodTable_ReturnsNull()
+    {
+        var manager = new FakeDebuggerManager(
+            outputs: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dumpobj 0x1000"] = "Name: System.Int32[]\n",
+            });
+
+        Assert.Null(CollectionTypeDetector.GetArrayElementMethodTable(manager, "0x1000"));
+    }
+
+    [Fact]
+    public void GetPointerSize_WhenPointerSizePropertyExists_ReturnsThatValue()
+    {
+        var manager = new FakeDebuggerManager(outputs: new Dictionary<string, string>())
+        {
+            PointerSize = 4
+        };
+
+        Assert.Equal(4, CollectionTypeDetector.GetPointerSize(manager));
+    }
+
+    [Theory]
+    [InlineData("0x00000000", 4)]
+    [InlineData("0x0000000000000000", 8)]
+    public void GetPointerSize_WhenPointerSizePropertyMissing_UsesEeVersionAddressLength(string addr, int expected)
+    {
+        var manager = new NoPointerSizeDebuggerManager(
+            outputs: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["!eeversion"] = $"JIT: {addr}\n"
+            });
+
+        Assert.Equal(expected, CollectionTypeDetector.GetPointerSize(manager));
+    }
+
+    [Fact]
+    public void GetPointerSize_WhenExecuteCommandThrows_ReturnsDefault8()
+    {
+        var manager = new ThrowingDebuggerManager();
+
+        Assert.Equal(8, CollectionTypeDetector.GetPointerSize(manager));
+    }
+
+    [Fact]
+    public void GetTypeSize_WhenBaseSizeIsPresent_ReturnsBaseSize()
+    {
+        var manager = new FakeDebuggerManager(
+            outputs: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dumpmt 0x1234"] = "BaseSize: 0x30\nComponentSize: 0x0\n"
+            });
+
+        Assert.Equal(0x30, CollectionTypeDetector.GetTypeSize(manager, "0x1234"));
+    }
+
+    [Fact]
+    public void GetTypeSize_WhenOnlyComponentSizeIsPresent_ReturnsComponentSize()
+    {
+        var manager = new FakeDebuggerManager(
+            outputs: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dumpmt 0x1234"] = "ComponentSize: 0x10\n"
+            });
+
+        Assert.Equal(0x10, CollectionTypeDetector.GetTypeSize(manager, "0x1234"));
+    }
+
+    [Fact]
+    public void GetTypeSize_WhenNoSizeMarkersFound_ReturnsMinusOne()
+    {
+        var manager = new FakeDebuggerManager(
+            outputs: new Dictionary<string, string>(StringComparer.Ordinal)
+            {
+                ["dumpmt 0x1234"] = "Name: System.Object\n"
+            });
+
+        Assert.Equal(-1, CollectionTypeDetector.GetTypeSize(manager, "0x1234"));
+    }
+
+    private class FakeDebuggerManager(Dictionary<string, string> outputs) : IDebuggerManager
+    {
+        private readonly Dictionary<string, string> _outputs = outputs;
+
+        public int PointerSize { get; init; } = 8;
+
+        public bool IsInitialized => true;
+        public bool IsDumpOpen => true;
+        public string? CurrentDumpPath => null;
+        public string DebuggerType => "LLDB";
+        public bool IsSosLoaded => true;
+        public bool IsDotNetDump => true;
+
+        public Task InitializeAsync() => Task.CompletedTask;
+        public void OpenDumpFile(string dumpFilePath, string? executablePath = null) { }
+        public void CloseDump() { }
+        public string ExecuteCommand(string command) => _outputs.TryGetValue(command, out var output) ? output : string.Empty;
+        public void LoadSosExtension() { }
+        public void ConfigureSymbolPath(string symbolPath) { }
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class NoPointerSizeDebuggerManager(Dictionary<string, string> outputs) : IDebuggerManager
+    {
+        private readonly Dictionary<string, string> _outputs = outputs;
+
+        public bool IsInitialized => true;
+        public bool IsDumpOpen => true;
+        public string? CurrentDumpPath => null;
+        public string DebuggerType => "LLDB";
+        public bool IsSosLoaded => true;
+        public bool IsDotNetDump => true;
+
+        public Task InitializeAsync() => Task.CompletedTask;
+        public void OpenDumpFile(string dumpFilePath, string? executablePath = null) { }
+        public void CloseDump() { }
+        public string ExecuteCommand(string command) => _outputs.TryGetValue(command, out var output) ? output : string.Empty;
+        public void LoadSosExtension() { }
+        public void ConfigureSymbolPath(string symbolPath) { }
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+
+    private sealed class ThrowingDebuggerManager : IDebuggerManager
+    {
+        public bool IsInitialized => true;
+        public bool IsDumpOpen => true;
+        public string? CurrentDumpPath => null;
+        public string DebuggerType => "LLDB";
+        public bool IsSosLoaded => true;
+        public bool IsDotNetDump => true;
+
+        public Task InitializeAsync() => Task.CompletedTask;
+        public void OpenDumpFile(string dumpFilePath, string? executablePath = null) { }
+        public void CloseDump() { }
+        public string ExecuteCommand(string command) => throw new InvalidOperationException("boom");
+        public void LoadSosExtension() { }
+        public void ConfigureSymbolPath(string symbolPath) { }
+        public void Dispose() { }
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
+}

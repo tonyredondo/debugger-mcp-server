@@ -573,6 +573,53 @@ public class DotNetCrashAnalyzerPrivateCoverageTests
         Assert.Contains(threadBySp.CallStack, f => f.Function == "native2");
     }
 
+    [Theory]
+    [InlineData("libstdc++.so.6", "deadbeef", "libstdc++.so.6", "[Native Code @ 0xdeadbeef]")]
+    [InlineData("ld-linux-aarch64.so.1 + -1", null, "ld-linux-aarch64.so.1", "[ld-linux-aarch64.so.1]")]
+    public void ParseNativeLibraryOnly_ParsesLibraryNameAndFallbackFunction(string callSite, string? ip, string expectedModule, string expectedFunction)
+    {
+        var tuple = (ValueTuple<string, string>)InvokePrivateStatic(typeof(DotNetCrashAnalyzer), "ParseNativeLibraryOnly", callSite, ip);
+        Assert.Equal(expectedModule, tuple.Item1);
+        Assert.Equal(expectedFunction, tuple.Item2);
+    }
+
+    [Fact]
+    public void GetByRefAddress_PrefersLocationWhenHex()
+    {
+        var variable = new LocalVariable
+        {
+            Type = "System.String(ByRef)",
+            Location = "0x0000000000000010",
+            Value = "0x0000000000000020",
+            HasData = true
+        };
+
+        var address = InvokePrivateStatic(typeof(DotNetCrashAnalyzer), "GetByRefAddress", variable) as string;
+        Assert.Equal("0x0000000000000010", address);
+    }
+
+    [Theory]
+    [InlineData("System.String(ByRef)", "System.String")]
+    [InlineData("System.Int32", "System.Int32")]
+    [InlineData(null, "")]
+    public void GetBaseTypeFromByRef_StripsModifier(string? input, string expected)
+    {
+        var actual = InvokePrivateStatic(typeof(DotNetCrashAnalyzer), "GetBaseTypeFromByRef", input) as string;
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public void ExtractStringFromDumpObj_ParsesStringLineAndTruncates()
+    {
+        var value = new string('a', 2000);
+        var output = $"Type: System.String\\nString: {value}\\n";
+
+        var parsed = InvokePrivateStatic(typeof(DotNetCrashAnalyzer), "ExtractStringFromDumpObj", output) as string;
+        Assert.NotNull(parsed);
+        Assert.StartsWith(new string('a', 10), parsed!, StringComparison.Ordinal);
+        Assert.EndsWith("...", parsed, StringComparison.Ordinal);
+    }
+
     private static object InvokePrivateInstance(object instance, string methodName, params object?[] args)
     {
         var method = instance.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.NonPublic);

@@ -56,5 +56,170 @@ public class DatadogSymbolsDownloadRenderingTests
         Assert.Contains("Managed Symbol Paths", console.Output);
         Assert.Contains("Source:", console.Output);
     }
-}
 
+    [Fact]
+    public void RenderDatadogSymbolsResultSummary_WhenShaMismatch_PrintsWarning()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        var json = """
+        {
+          "success": true,
+          "buildId": 1,
+          "buildUrl": "https://example/build/1",
+          "downloadedArtifacts": [],
+          "symbolDirectory": "/s",
+          "filesExtracted": 1,
+          "shaMismatch": true,
+          "error": null
+        }
+        """;
+
+        InvokeRenderSummary(output, json);
+
+        Assert.Contains("SHA mismatch", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderDatadogSymbolsResultSummary_WhenPdbsPatchedAndVerified_PrintsSuccessAndFileList()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        var json = """
+        {
+          "success": true,
+          "buildId": 1,
+          "buildUrl": "https://example/build/1",
+          "downloadedArtifacts": [],
+          "symbolDirectory": "/s",
+          "filesExtracted": 1,
+          "pdbsPatched": {
+            "patched": 2,
+            "verified": 2,
+            "files": [
+              { "file": "a.pdb", "verified": true },
+              { "file": "b.pdb", "verified": true }
+            ]
+          },
+          "error": null
+        }
+        """;
+
+        InvokeRenderSummary(output, json);
+
+        Assert.Contains("Patched and verified", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("✓ a.pdb", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("✓ b.pdb", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderDatadogSymbolsResultSummary_WhenPdbsPatchedPartiallyVerified_PrintsWarning()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        var json = """
+        {
+          "success": true,
+          "buildId": 1,
+          "buildUrl": "https://example/build/1",
+          "downloadedArtifacts": [],
+          "symbolDirectory": "/s",
+          "filesExtracted": 1,
+          "pdbsPatched": {
+            "patched": 3,
+            "verified": 1,
+            "files": [
+              { "file": "a.pdb", "verified": true },
+              { "file": "b.pdb", "verified": false }
+            ]
+          },
+          "error": null
+        }
+        """;
+
+        InvokeRenderSummary(output, json);
+
+        Assert.Contains("only 1 verified", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("✗ b.pdb", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderDatadogSymbolsResultSummary_WhenPdbsPatchedButNotVerified_PrintsError()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        var json = """
+        {
+          "success": true,
+          "buildId": 1,
+          "buildUrl": "https://example/build/1",
+          "downloadedArtifacts": [],
+          "symbolDirectory": "/s",
+          "filesExtracted": 1,
+          "pdbsPatched": {
+            "patched": 1,
+            "verified": 0,
+            "files": [
+              { "file": "a.pdb", "verified": false }
+            ]
+          },
+          "error": null
+        }
+        """;
+
+        InvokeRenderSummary(output, json);
+
+        Assert.Contains("verification failed", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("✗ a.pdb", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderDatadogSymbolsResultSummary_WhenSourceMissing_FallsBackToBuildUrl()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        var json = """
+        {
+          "success": true,
+          "buildId": 1,
+          "buildUrl": "https://example/build/1",
+          "downloadedArtifacts": [],
+          "symbolDirectory": "/s",
+          "filesExtracted": 1,
+          "shaMismatch": false,
+          "error": null
+        }
+        """;
+
+        InvokeRenderSummary(output, json);
+
+        Assert.Contains("Source: https://example/build/1", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderDatadogSymbolsResultSummary_WhenResultIsNotObject_PrintsError()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        InvokeRenderSummary(output, "[]");
+
+        Assert.Contains("Unexpected result format", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void RenderDatadogSymbolsResultSummary_WhenJsonInvalid_PrintsError()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+
+        InvokeRenderSummary(output, "{not json");
+
+        Assert.Contains("Error parsing result", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
+}

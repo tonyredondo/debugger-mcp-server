@@ -112,6 +112,51 @@ public class PrimitiveResolverTests
         Assert.Equal(expected, result);
     }
 
+    [Theory]
+    [InlineData("System.Bool...", "1", true)]
+    [InlineData("System.Byte...", "7B", (byte)0x7B)]
+    [InlineData("System.SByt...", "-7", (sbyte)-7)]
+    [InlineData("System.Int1...", "7B", (short)0x7B)]
+    [InlineData("System.UInt...", "7B", (ushort)0x7B)]
+    [InlineData("System.Int3...", "123", 123)]
+    [InlineData("System.UInt3...", "7B", 123u)]
+    [InlineData("System.Int6...", "7B", 123L)]
+    [InlineData("System.UInt6...", "7B", 123UL)]
+    [InlineData("System.Sing...", "3.5", 3.5f)]
+    [InlineData("System.Doub...", "2.25", 2.25d)]
+    [InlineData("System.Deci...", "1234.56", 1234.56d)]
+    [InlineData("System.Char...", "65", "A")]
+    [InlineData("System.IntP...", "7b", "0x7b")]
+    [InlineData("System.UIntP...", "000000001234", "0x1234")]
+    [InlineData("System.DateT...", "1", "0001-01-01T00:00:00.0000001")]
+    [InlineData("System.TimeS...", "0", "00:00:00")]
+    [InlineData("System.Guid...", "00000000-0000-0000-0000-000000000000", "00000000-0000-0000-0000-000000000000")]
+    public void ResolvePrimitiveValue_TruncatedTypeNames_UsesBestEffortTypeMatch(string typeName, string rawValue, object expected)
+    {
+        var result = PrimitiveResolver.ResolvePrimitiveValue(typeName, rawValue);
+
+        if (expected is float expectedFloat)
+        {
+            Assert.IsType<float>(result);
+            Assert.Equal(expectedFloat, (float)result!, precision: 3);
+        }
+        else if (expected is double expectedDouble && result is decimal decimalResult)
+        {
+            Assert.Equal((decimal)expectedDouble, decimalResult);
+        }
+        else
+        {
+            Assert.Equal(expected, result);
+        }
+    }
+
+    [Fact]
+    public void ResolvePrimitiveValue_WhenSByteParsingFails_ReturnsRawString()
+    {
+        var result = PrimitiveResolver.ResolvePrimitiveValue("System.SByte", "not-a-number");
+        Assert.Equal("not-a-number", result);
+    }
+
     [Fact]
     public void ResolvePrimitiveValue_DateTimeTicks_ReturnsIsoString()
     {

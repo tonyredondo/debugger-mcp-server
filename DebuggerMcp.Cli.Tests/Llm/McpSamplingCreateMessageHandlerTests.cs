@@ -780,4 +780,359 @@ public class McpSamplingCreateMessageHandlerTests
         Assert.NotNull(seenRequest);
         Assert.Null(seenRequest!.ReasoningEffort);
     }
+
+    [Fact]
+    public async Task HandleAsync_WhenReasoningEffortSpecifiedInsideReasoningObject_UsesValue()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test", OpenRouterReasoningEffort = "medium" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "reasoning": { "effort": "high" },
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal("high", seenRequest!.ReasoningEffort);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenMaxTokensProvidedAsMax_tokens_UsesValue()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "max_tokens": 77,
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal(77, seenRequest!.MaxTokens);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenToolChoiceIsString_UsesMode()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "tool_choice": "required",
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.NotNull(seenRequest!.ToolChoice);
+        Assert.Equal("required", seenRequest.ToolChoice!.Mode);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenMessageContentIsObject_PreservesAsText()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": { "a": 1, "b": true } }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Contains("\"a\": 1", seenRequest!.Messages[0].Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenRawContentHasUnknownBlock_EmitsJsonTextBlock()
+    {
+        var settings = new LlmSettings { Provider = "openrouter", OpenRouterModel = "openrouter/test" };
+
+        using var rawDoc = JsonDocument.Parse("""
+        [
+          { "type": "unknown_block", "x": 1 }
+        ]
+        """);
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "ok",
+                    RawMessageContent = rawDoc.RootElement.Clone(),
+                    ToolCalls = []
+                });
+            });
+
+        using var req = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        var result = await handler.HandleAsync(req.RootElement, CancellationToken.None);
+        Assert.Contains(result.Content, b => string.Equals(b.Type, "text", StringComparison.OrdinalIgnoreCase) && b.Text != null && b.Text.Contains("unknown_block", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenRawContentEmpty_FallsBackToNormalizedBlocks()
+    {
+        var settings = new LlmSettings { Provider = "openrouter", OpenRouterModel = "openrouter/test" };
+
+        using var rawDoc = JsonDocument.Parse("[]");
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "ok",
+                    RawMessageContent = rawDoc.RootElement.Clone(),
+                    ToolCalls = [new ChatToolCall("tc1", "exec", "{\"command\":\"bt\"}")]
+                });
+            });
+
+        using var req = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        var result = await handler.HandleAsync(req.RootElement, CancellationToken.None);
+        Assert.Contains(result.Content, b => string.Equals(b.Type, "text", StringComparison.OrdinalIgnoreCase) && b.Text == "ok");
+        Assert.Contains(result.Content, b => string.Equals(b.Type, "tool_use", StringComparison.OrdinalIgnoreCase) && b.Name == "exec");
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenParametersNull_ThrowsArgumentException()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var handler = new McpSamplingCreateMessageHandler(settings, (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }));
+
+        _ = await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(parameters: null, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenModelReturnsEmbeddedToolUseJson_RemovesJsonFromTextAndAddsToolCall()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var progress = new List<string>();
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = """
+                    before
+                    { "type":"tool_use", "id":"tc1", "name":"exec", "input": { "command":"sos clrstack -a" } }
+                    after
+                    """
+                });
+            },
+            progress.Add);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        var result = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.Contains(result.Content, b => string.Equals(b.Type, "tool_use", StringComparison.OrdinalIgnoreCase));
+        var text = string.Join("\n", result.Content.Where(b => string.Equals(b.Type, "text", StringComparison.OrdinalIgnoreCase)).Select(b => b.Text));
+        Assert.Contains("before", text, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("after", text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("\"type\":\"tool_use\"", text, StringComparison.OrdinalIgnoreCase);
+
+        Assert.Contains(progress, p => p.Contains("AI requests tool: exec", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenMessagesShrink_EmitsToolResultAgain()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var progress = new List<string>();
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            progress.Add);
+
+        using var first = JsonDocument.Parse("""
+        {
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                { "type": "tool_use", "id": "tc1", "name": "exec", "input": { "command": "!clrstack" } }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                { "type": "tool_result", "tool_use_id": "tc1", "content": [ { "type": "text", "text": "OUTPUT" } ] }
+              ]
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(first.RootElement, CancellationToken.None);
+
+        using var second = JsonDocument.Parse("""
+        {
+          "messages": [
+            {
+              "role": "user",
+              "content": [
+                { "type": "tool_result", "tool_use_id": "tc1", "content": [ { "type": "text", "text": "OUTPUT" } ] }
+              ]
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(second.RootElement, CancellationToken.None);
+
+        Assert.Equal(2, progress.Count(p => p.Contains("AI tool result", StringComparison.OrdinalIgnoreCase)));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenToolCallArgsInvalidJson_PreservesRawArguments()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "ok",
+                    ToolCalls = [new ChatToolCall("tc1", "exec", "{not-json")]
+                });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        var result = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+        var toolUse = result.Content.Single(b => string.Equals(b.Type, "tool_use", StringComparison.OrdinalIgnoreCase));
+        Assert.True(toolUse.Input.HasValue);
+        Assert.True(toolUse.Input!.Value.TryGetProperty("__raw", out var raw));
+        Assert.Contains("not-json", raw.GetString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenToolCallsHaveDifferentShapes_EmitsUsefulProgressSummaries()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+        var progress = new List<string>();
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "ok",
+                    ToolCalls =
+                    [
+                        new ChatToolCall("c1", "exec", "{\"command\":\"bt\"}"),
+                        new ChatToolCall("c2", "inspect", "{\"address\":\"0x1234\"}"),
+                        new ChatToolCall("c3", "get_thread_stack", "{\"threadId\":\"7\"}"),
+                        new ChatToolCall("c4", "analysis_complete", "{\"rootCause\":\"something\"}"),
+                        // Duplicate id should be suppressed within one response.
+                        new ChatToolCall("c4", "analysis_complete", "{\"rootCause\":\"something\"}")
+                    ]
+                });
+            },
+            progress.Add);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.Contains(progress, p => p.Contains("exec", StringComparison.OrdinalIgnoreCase) && p.Contains("bt", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(progress, p => p.Contains("inspect", StringComparison.OrdinalIgnoreCase) && p.Contains("address=0x1234", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(progress, p => p.Contains("get_thread_stack", StringComparison.OrdinalIgnoreCase) && p.Contains("threadId=7", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(progress, p => p.Contains("analysis_complete", StringComparison.OrdinalIgnoreCase) && p.Contains("rootCause=", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(4, progress.Count(p => p.Contains("AI requests tool:", StringComparison.OrdinalIgnoreCase)));
+    }
 }
