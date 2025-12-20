@@ -84,6 +84,7 @@ symbols datadog config
 ### LLM (`help llm`)
 - `llm <prompt>` - Ask a configured LLM (OpenRouter/OpenAI/Anthropic) using your CLI transcript as context
 - `llm set-agent <true|false>` - Enable/disable tool-using agent mode for `llm`
+- `llm set-agent-confirm <true|false>` - Confirm each tool call in agent mode (also: `llm agent-confirm <true|false>`)
 - `llm reasoning-effort <low|medium|high|unset>` - Set reasoning effort for the current provider/model
 - `llm reset` - Clear LLM context (conversation + transcript context) for the current session/dump
 - `llmagent` - Interactive agent mode (no `llm` prefix required)

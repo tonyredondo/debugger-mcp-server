@@ -688,7 +688,7 @@ dbg-mcp> report -o ./crash-report.md
 | **Interactive Shell** | Rich prompt with context, history, tab completion |
 | **File Operations** | Upload dumps/symbols with progress, wildcard support |
 | **Session Management** | Create, list, attach, close sessions (partial ID matching) |
-| **Analysis Commands** | crash, dotnet, perf, cpu, memory, gc, security |
+| **Analysis Commands** | crash, ai, perf, cpu, memory, gc, threads, security |
 | **Dump Comparison** | Compare heaps, threads, modules between dumps |
 | **Watch Expressions** | Track memory/variables across sessions |
 | **Report Generation** | Markdown, HTML, JSON formats |
@@ -739,6 +739,7 @@ Examples:
 ```bash
 llm Explain the faulting thread in the last report
 llm set-agent true
+llm set-agent-confirm false
 llm reasoning-effort medium
 llmagent
 llmagent> /help

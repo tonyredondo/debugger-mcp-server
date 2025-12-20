@@ -148,6 +148,15 @@ public class DocsContractTests
     }
 
     [Fact]
+    public void Readme_CliAnalysisCommands_DoesNotMentionRemovedDotnetAlias()
+    {
+        var readme = ReadmeEndpointTable.ReadReadmeText();
+
+        // The CLI supports: crash, ai, perf/performance, cpu, memory/allocations, gc, threads/contention, security.
+        Assert.DoesNotContain("crash, dotnet", readme, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void McpToolsDoc_AnalyzeAi_DefaultsMatchExportedToolSignature()
     {
         var root = FindRepoRoot();
