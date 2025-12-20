@@ -203,6 +203,9 @@ public class DocsContractTests
         Assert.Contains("DEBUGGER_MCP_TIMEOUT=600", text, StringComparison.Ordinal);
         Assert.Contains("DEBUGGER_MCP_HISTORY_FILE=~/.dbg-mcp-history", text, StringComparison.Ordinal);
         Assert.Contains("\"timeout\": 600", text, StringComparison.Ordinal);
+
+        // Ensure report CLI usage reflects the implemented flags and formats.
+        Assert.Contains("report -o <file> [-f markdown|html|json] [--summary] [--no-watches]", text, StringComparison.Ordinal);
     }
 
     private static class ApiRouteDiscovery

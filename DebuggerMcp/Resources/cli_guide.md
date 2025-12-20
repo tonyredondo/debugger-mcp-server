@@ -96,7 +96,7 @@ In `llmagent` mode:
 
 ### Advanced (`help advanced`)
 - `watch add/list/eval/remove/clear` - Watch expressions
-- `report -o <file> [--format html|json]` - Generate reports (output file required)
+- `report -o <file> [-f markdown|html|json] [--summary] [--no-watches]` - Generate reports (output file required)
 - `sourcelink <path>` - Resolve to source URL
 
 ## Interactive Features
