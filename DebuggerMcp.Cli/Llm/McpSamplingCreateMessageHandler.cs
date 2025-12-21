@@ -532,7 +532,7 @@ internal sealed class McpSamplingCreateMessageHandler(
             foreach (var toolResult in blocks.ToolResults)
             {
                 var name = toolUseLookup.TryGetValue(toolResult.ToolCallId, out var n) ? n : "tool";
-                var summary = CompactOneLine(toolResult.Content, 160);
+                var summary = SummarizeToolResult(name, toolResult.Content);
                 if (string.IsNullOrWhiteSpace(summary))
                 {
                     summary = "(no output)";
@@ -543,6 +543,163 @@ internal sealed class McpSamplingCreateMessageHandler(
         }
 
         _lastSeenMessageCount = messageCount;
+    }
+
+    private static string SummarizeToolResult(string toolName, string content)
+    {
+        if (string.IsNullOrWhiteSpace(content))
+        {
+            return string.Empty;
+        }
+
+        if (!string.Equals(toolName, "report_get", StringComparison.OrdinalIgnoreCase))
+        {
+            return CompactOneLine(content, 160);
+        }
+
+        if (!TrySummarizeReportGetResult(content, out var summary))
+        {
+            return CompactOneLine(content, 160);
+        }
+
+        return summary;
+    }
+
+    private static bool TrySummarizeReportGetResult(string content, out string summary)
+    {
+        summary = string.Empty;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(content);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var root = doc.RootElement;
+            if (!TryGetPropertyCaseInsensitive(root, "error", out var error) || error.ValueKind != JsonValueKind.Object)
+            {
+                // Successful report_gets can still be quite large; keep a short preview.
+                return false;
+            }
+
+            var code = TryGetString(error, "code") ?? string.Empty;
+            var message = TryGetString(error, "message") ?? string.Empty;
+
+            if (string.Equals(code, "too_large", StringComparison.OrdinalIgnoreCase))
+            {
+                string? estimated = null;
+                var exampleCalls = new List<string>();
+                var suggestedPaths = new List<string>();
+
+                if (TryGetPropertyCaseInsensitive(root, "extra", out var extra) && extra.ValueKind == JsonValueKind.Object)
+                {
+                    if (TryGetPropertyCaseInsensitive(extra, "estimatedChars", out var estimatedChars) &&
+                        estimatedChars.ValueKind == JsonValueKind.Number)
+                    {
+                        estimated = estimatedChars.TryGetInt64(out var e) ? e.ToString() : estimatedChars.ToString();
+                    }
+
+                    if (TryGetPropertyCaseInsensitive(extra, "exampleCalls", out var callsEl) && callsEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var call in callsEl.EnumerateArray())
+                        {
+                            if (call.ValueKind == JsonValueKind.String)
+                            {
+                                var s = call.GetString();
+                                if (!string.IsNullOrWhiteSpace(s))
+                                {
+                                    exampleCalls.Add(s);
+                                }
+                            }
+                            if (exampleCalls.Count >= 2)
+                            {
+                                break;
+                            }
+                        }
+                    }
+
+                    if (TryGetPropertyCaseInsensitive(extra, "suggestedPaths", out var pathsEl) && pathsEl.ValueKind == JsonValueKind.Array)
+                    {
+                        foreach (var p in pathsEl.EnumerateArray())
+                        {
+                            if (p.ValueKind == JsonValueKind.String)
+                            {
+                                var s = p.GetString();
+                                if (!string.IsNullOrWhiteSpace(s))
+                                {
+                                    suggestedPaths.Add(s);
+                                }
+                            }
+                            if (suggestedPaths.Count >= 2)
+                            {
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                var sb = new StringBuilder();
+                sb.Append("too_large");
+                if (!string.IsNullOrWhiteSpace(estimated))
+                {
+                    sb.Append($" (estimatedChars={estimated})");
+                }
+                sb.Append(". ");
+
+                if (exampleCalls.Count > 0)
+                {
+                    sb.Append("Try: ");
+                    sb.Append(string.Join(" | ", exampleCalls));
+                }
+                else if (suggestedPaths.Count > 0)
+                {
+                    sb.Append("Try: ");
+                    sb.Append(string.Join(" | ", suggestedPaths.Select(p => $"report_get(path=\"{p}\")")));
+                }
+                else if (!string.IsNullOrWhiteSpace(message))
+                {
+                    sb.Append(message.Trim());
+                }
+
+                summary = CompactOneLine(sb.ToString(), 280);
+                return true;
+            }
+
+            if (!string.IsNullOrWhiteSpace(code))
+            {
+                summary = CompactOneLine($"{code}: {message}".Trim(), 220);
+                return true;
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool TryGetPropertyCaseInsensitive(JsonElement obj, string name, out JsonElement value)
+    {
+        if (obj.ValueKind != JsonValueKind.Object)
+        {
+            value = default;
+            return false;
+        }
+
+        foreach (var prop in obj.EnumerateObject())
+        {
+            if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+            {
+                value = prop.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private void EmitProgressForRequestedTools(ChatCompletionResult response)

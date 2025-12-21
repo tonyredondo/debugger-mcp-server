@@ -103,6 +103,7 @@ public class ReportSectionApiTests
 
         var json = ReportSectionApi.GetSection(report, "analysis.exception", limit: null, cursor: null, maxChars: 1000);
         Assert.Contains("\"code\": \"too_large\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"suggestedPaths\"", json, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -1246,6 +1246,20 @@ internal static class ReportSectionApi
         if (value.ValueKind == JsonValueKind.Object)
         {
             calls.Add($"report_get(path=\"{path}\", pageKind=\"object\", limit=25)");
+
+            // Provide a concrete projection example for large objects where paging alone may still exceed maxChars.
+            // select on object paths filters the object properties themselves.
+            var propNames = value.EnumerateObject()
+                .Select(p => p.Name)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .Take(6)
+                .ToList();
+            if (propNames.Count > 0)
+            {
+                var selectList = string.Join(",", propNames.Select(p => $"\"{p}\""));
+                calls.Add($"report_get(path=\"{path}\", pageKind=\"object\", limit=25, select=[{selectList}])");
+            }
         }
 
         return calls;

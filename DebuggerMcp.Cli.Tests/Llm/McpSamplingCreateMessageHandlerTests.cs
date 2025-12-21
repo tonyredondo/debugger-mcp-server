@@ -736,6 +736,50 @@ public class McpSamplingCreateMessageHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenReportGetReturnsTooLarge_ProgressIncludesExampleCalls()
+    {
+        var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-5.2" };
+
+        var progress = new List<string>();
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            progress.Add);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            {
+              "role": "assistant",
+              "content": [
+                { "type": "tool_use", "id": "call_1", "name": "report_get", "input": "{\"path\":\"analysis.memory\",\"pageKind\":\"object\",\"limit\":200}" }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                {
+                  "type": "tool_result",
+                  "tool_use_id": "call_1",
+                  "content": [
+                    "{\n  \"path\": \"analysis.memory\",\n  \"error\": { \"code\": \"too_large\", \"message\": \"Response exceeds maxChars (20000).\" },\n  \"extra\": {\n    \"estimatedChars\": 123456,\n    \"exampleCalls\": [\n      \"report_get(path=\\\"analysis.memory\\\", pageKind=\\\"object\\\", limit=25, select=[\\\"gc\\\",\\\"topConsumers\\\"])\",\n      \"report_get(path=\\\"analysis.memory.gc\\\")\"\n    ]\n  }\n}"
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        var line = Assert.Single(progress, p => p.StartsWith("AI tool result: report_get ->", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("too_large", line, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Try:", line, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("report_get(path=\"analysis.memory\"", line, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenToolBlocksOmitType_StillMapsToolCallsAndToolResults()
     {
         var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-5.2" };
