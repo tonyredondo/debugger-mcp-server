@@ -856,54 +856,101 @@ public sealed class AiAnalysisOrchestrator(
                 }
 
                 var sw = Stopwatch.StartNew();
-                string outputForModel;
-                var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
-                if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
+                try
+                {
+                    string outputForModel;
+                    var duration = sw.Elapsed;
+                    var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
+                    if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
+                    {
+                        sw.Stop();
+                        duration = TimeSpan.Zero;
+                        outputForModel = TruncateForModel(
+                            "[cached tool result] Duplicate tool call detected; reusing prior output. Do not repeat identical tool calls.\n\n" +
+                            cached);
+                    }
+                    else
+                    {
+                        var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, report, debugger, clrMdAnalyzer, cancellationToken)
+                            .ConfigureAwait(false);
+                        outputForModel = TruncateForModel(output);
+                        toolResultCache[toolCacheKey] = outputForModel;
+                        sw.Stop();
+                        duration = sw.Elapsed;
+                    }
+
+                    var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+                    toolIndexByIteration[iteration] = toolOrdinal;
+                    commandsExecuted.Add(new ExecutedCommand
+                    {
+                        Tool = toolName,
+                        Input = CloneToolInput(toolInput),
+                        Output = outputForModel,
+                        Iteration = iteration,
+                        Duration = duration.ToString("c")
+                    });
+
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
+                        new { tool = toolName, input = CloneToolInput(toolInput).ToString(), output = outputForModel, isError = false, duration = duration.ToString("c") });
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new ToolResultContentBlock
+                            {
+                                ToolUseId = toolUseId,
+                                IsError = false,
+                                Content =
+                                [
+                                    new TextContentBlock { Text = outputForModel }
+                                ]
+                            }
+                        ]
+                    });
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
                 {
                     sw.Stop();
-                    outputForModel = TruncateForModel(
-                        "[cached tool result] Duplicate tool call detected; reusing prior output. Do not repeat identical tool calls.\n\n" +
-                        cached);
+                    _logger.LogWarning(ex, "[AI] Tool execution failed in pass {Pass}: {Tool}", passName, toolName);
+                    var messageForModel = TruncateForModel(ex.Message);
+
+                    var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+                    toolIndexByIteration[iteration] = toolOrdinal;
+                    commandsExecuted.Add(new ExecutedCommand
+                    {
+                        Tool = toolName,
+                        Input = CloneToolInput(toolInput),
+                        Output = messageForModel,
+                        Iteration = iteration,
+                        Duration = sw.Elapsed.ToString("c")
+                    });
+
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
+                        new { tool = toolName, input = CloneToolInput(toolInput).ToString(), output = messageForModel, isError = true, duration = sw.Elapsed.ToString("c") });
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new ToolResultContentBlock
+                            {
+                                ToolUseId = toolUseId,
+                                IsError = true,
+                                Content =
+                                [
+                                    new TextContentBlock { Text = messageForModel }
+                                ]
+                            }
+                        ]
+                    });
                 }
-                else
-                {
-                    var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, report, debugger, clrMdAnalyzer, cancellationToken)
-                        .ConfigureAwait(false);
-                    outputForModel = TruncateForModel(output);
-                    toolResultCache[toolCacheKey] = outputForModel;
-                    sw.Stop();
-                }
-
-                var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
-                toolIndexByIteration[iteration] = toolOrdinal;
-                commandsExecuted.Add(new ExecutedCommand
-                {
-                    Tool = toolName,
-                    Input = CloneToolInput(toolInput),
-                    Output = outputForModel,
-                    Iteration = iteration,
-                    Duration = sw.Elapsed.ToString("c")
-                });
-
-                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
-                    new { tool = toolName, input = CloneToolInput(toolInput).ToString(), output = outputForModel, isError = false, duration = sw.Elapsed.ToString("c") });
-
-                messages.Add(new SamplingMessage
-                {
-                    Role = Role.User,
-                    Content =
-                    [
-                        new ToolResultContentBlock
-                        {
-                            ToolUseId = toolUseId,
-                            IsError = false,
-                            Content =
-                            [
-                                new TextContentBlock { Text = outputForModel }
-                            ]
-                        }
-                    ]
-                });
             }
 
             if (pendingComplete != null)

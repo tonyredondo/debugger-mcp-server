@@ -680,6 +680,62 @@ public class McpSamplingCreateMessageHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenToolResultMessageAlsoContainsText_EmitsToolMessagesBeforeUserText()
+    {
+        var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-5.2" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" },
+            {
+              "role": "assistant",
+              "content": [
+                { "type": "tool_use", "id": "call_1", "name": "exec", "input": "{\"command\":\"bt\"}" }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                { "type": "text", "text": "NOTE: tool output follows" },
+                { "type": "tool_result", "tool_use_id": "call_1", "content": [ { "type": "text", "text": "OUTPUT" } ] }
+              ]
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+        Assert.Equal(4, seenRequest!.Messages.Count);
+
+        Assert.Equal("user", seenRequest.Messages[0].Role);
+        Assert.Equal("Hello", seenRequest.Messages[0].Content);
+
+        Assert.Equal("assistant", seenRequest.Messages[1].Role);
+        Assert.NotNull(seenRequest.Messages[1].ToolCalls);
+        Assert.Single(seenRequest.Messages[1].ToolCalls!);
+        Assert.Equal("call_1", seenRequest.Messages[1].ToolCalls![0].Id);
+
+        Assert.Equal("tool", seenRequest.Messages[2].Role);
+        Assert.Equal("call_1", seenRequest.Messages[2].ToolCallId);
+        Assert.Contains("OUTPUT", seenRequest.Messages[2].Content, StringComparison.Ordinal);
+
+        Assert.Equal("user", seenRequest.Messages[3].Role);
+        Assert.Contains("NOTE: tool output follows", seenRequest.Messages[3].Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenToolBlocksOmitType_StillMapsToolCallsAndToolResults()
     {
         var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-5.2" };

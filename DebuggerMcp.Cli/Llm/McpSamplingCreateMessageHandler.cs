@@ -1006,11 +1006,27 @@ internal sealed class McpSamplingCreateMessageHandler(
                 continue;
             }
 
+            void AppendToolResults()
+            {
+                foreach (var toolResult in parsed.ToolResults)
+                {
+                    result.Add(new ChatMessage("tool", toolResult.Content, toolResult.ToolCallId, toolCalls: null));
+                }
+            }
+
             if (parsed.ToolCalls.Count > 0 && role == "assistant")
             {
                 result.Add(new ChatMessage("assistant", parsed.Text, toolCallId: null, toolCalls: parsed.ToolCalls));
+                AppendToolResults();
+                continue;
             }
-            else if (role == "tool")
+
+            // Tool result messages (OpenAI-compatible APIs require role=tool messages immediately after tool_calls).
+            // Emit tool results before any user/assistant text derived from the same MCP message to avoid invalid
+            // sequences like: assistant(tool_calls) -> user(text) -> tool(outputs).
+            AppendToolResults();
+
+            if (role == "tool")
             {
                 var toolCallId =
                     TryGetString(msg, "tool_call_id") ??
@@ -1032,11 +1048,6 @@ internal sealed class McpSamplingCreateMessageHandler(
             else if (!string.IsNullOrWhiteSpace(parsed.Text))
             {
                 result.Add(new ChatMessage(role, parsed.Text));
-            }
-
-            foreach (var toolResult in parsed.ToolResults)
-            {
-                result.Add(new ChatMessage("tool", toolResult.Content, toolResult.ToolCallId, toolCalls: null));
             }
         }
 

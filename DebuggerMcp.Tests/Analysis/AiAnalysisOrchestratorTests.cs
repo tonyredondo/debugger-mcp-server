@@ -89,6 +89,41 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task RewriteSummaryAsync_WhenToolExecutionThrows_ReturnsErrorToolResultAndCanStillComplete()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "boom" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_summary_rewrite_complete", new
+            {
+                description = "rewritten",
+                recommendations = new[] { "r1" }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            DebuggerType = "LLDB",
+            CommandHandler = _ => throw new InvalidOperationException("boom")
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5
+        };
+
+        var result = await orchestrator.RewriteSummaryAsync(
+            new CrashAnalysisResult(),
+            "{\"metadata\":{},\"analysis\":{\"summary\":{\"crashType\":\"Managed\"}}}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result);
+        Assert.Equal("rewritten", result!.Description);
+        Assert.Null(result.Error);
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c => c.Tool == "exec" && c.Output.Contains("boom", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task GenerateThreadNarrativeAsync_WhenModelCallsCompletionImmediately_RequiresEvidenceToolBeforeCompleting()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
