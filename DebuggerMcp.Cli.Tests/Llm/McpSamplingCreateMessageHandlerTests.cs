@@ -680,6 +680,55 @@ public class McpSamplingCreateMessageHandlerTests
     }
 
     [Fact]
+    public async Task HandleAsync_WhenToolBlocksOmitType_StillMapsToolCallsAndToolResults()
+    {
+        var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-5.2" };
+
+        ChatCompletionRequest? seenRequest = null;
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (request, _) =>
+            {
+                seenRequest = request;
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" },
+            {
+              "role": "assistant",
+              "content": [
+                { "id": "call_1", "name": "report_get", "input": "{\"path\":\"analysis.exception\",\"maxChars\":12000}" }
+              ]
+            },
+            {
+              "role": "user",
+              "content": [
+                { "tool_use_id": "call_1", "content": [ "ok" ] }
+              ]
+            }
+          ]
+        }
+        """);
+
+        _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.NotNull(seenRequest);
+
+        var assistant = Assert.Single(seenRequest!.Messages, m => string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(assistant.ToolCalls);
+        var call = Assert.Single(assistant.ToolCalls!);
+        Assert.Equal("call_1", call.Id);
+        Assert.Equal("report_get", call.Name);
+
+        var tool = Assert.Single(seenRequest.Messages, m => string.Equals(m.Role, "tool", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("call_1", tool.ToolCallId);
+        Assert.Equal("ok", tool.Content);
+    }
+
+    [Fact]
     public async Task HandleAsync_ToolMessageWithoutToolCallId_PreservesAsUserMessage()
     {
         var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };

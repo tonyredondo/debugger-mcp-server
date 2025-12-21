@@ -58,7 +58,7 @@ internal static class LlmSystemPrompts
         sb.AppendLine("  - Path supports dot-path + optional [index] (e.g., analysis.threads.all[0]).");
         sb.AppendLine("  - Arrays are pageable via limit/cursor; objects can be paged via pageKind=\"object\" + limit/cursor.");
         sb.AppendLine("  - Use select=[...] to project only needed fields; use where={field,equals,caseInsensitive?} for simple array filtering.");
-        sb.AppendLine("  - Prefer omitting maxChars (server default is 20000); if you hit too_large, use the returned suggestedPaths/page cursor hints.");
+        sb.AppendLine("  - Prefer omitting maxChars (server default is 20000); if you hit too_large, use the returned suggestedPaths/page cursor hints (arrays often suggest path[0] and common sub-fields).");
         sb.AppendLine("- exec({command}): run a debugger command in the current session");
         sb.AppendLine("- analyze({kind}): run automated analysis (crash|performance|cpu|allocations|gc|contention|security)");
         sb.AppendLine("- inspect_object({address,maxDepth?}): inspect a .NET object at an address (prefer this over exec \"sos dumpobj\" when available)");

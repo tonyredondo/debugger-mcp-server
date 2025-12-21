@@ -1128,7 +1128,8 @@ internal sealed class McpSamplingCreateMessageHandler(
             return;
         }
 
-        if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase) ||
+            LooksLikeToolUseBlock(item))
         {
             var id = TryGetString(item, "id") ?? string.Empty;
             var name = TryGetString(item, "name") ?? string.Empty;
@@ -1174,7 +1175,8 @@ internal sealed class McpSamplingCreateMessageHandler(
             return;
         }
 
-        if (string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(type, "tool_result", StringComparison.OrdinalIgnoreCase) ||
+            LooksLikeToolResultBlock(item))
         {
             var toolUseId =
                 TryGetString(item, "tool_use_id") ??
@@ -1195,6 +1197,44 @@ internal sealed class McpSamplingCreateMessageHandler(
 
         // Unknown content item: preserve as compact JSON so the model still sees it.
         AppendBlock(textBuffer, item.GetRawText());
+    }
+
+    private static bool LooksLikeToolUseBlock(JsonElement item)
+    {
+        // Some adapters omit/rename type="tool_use". Detect a minimal shape.
+        if (!TryGetProperty(item, "id", out var idProp) || idProp.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        if (!TryGetProperty(item, "name", out var nameProp) || nameProp.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        // input is optional; when absent, treat as {} to let the tool handler decide.
+        return true;
+    }
+
+    private static bool LooksLikeToolResultBlock(JsonElement item)
+    {
+        // Some adapters omit/rename type="tool_result". Detect via tool_use_id/toolUseId/toolCallId.
+        if (TryGetProperty(item, "tool_use_id", out var toolUseId) && toolUseId.ValueKind == JsonValueKind.String)
+        {
+            return true;
+        }
+
+        if (TryGetProperty(item, "toolUseId", out toolUseId) && toolUseId.ValueKind == JsonValueKind.String)
+        {
+            return true;
+        }
+
+        if (TryGetProperty(item, "toolCallId", out toolUseId) && toolUseId.ValueKind == JsonValueKind.String)
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static List<ChatToolCall> ParseOpenAiToolCalls(JsonElement messageObject)

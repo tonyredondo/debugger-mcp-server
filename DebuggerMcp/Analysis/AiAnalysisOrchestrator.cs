@@ -1413,7 +1413,7 @@ report_get notes:
 - Arrays are pageable via limit/cursor.
 - Objects can be paged via pageKind="object" + limit/cursor (useful when a single object is too large).
 - Use select=[...] to project only needed fields (applies to objects and array items).
-- Prefer omitting maxChars (server default is 20000). If you hit too_large, use the returned suggestedPaths/page hints and retry with a narrower request.
+- Prefer omitting maxChars (server default is 20000). If you hit too_large, use the returned suggestedPaths/page hints and retry with a narrower request (arrays often suggest path[0] and common sub-fields).
 
 SOS/.NET debugger command notes:
 - If SOS is loaded (metadata.sosLoaded=true), prefer SOS commands via: exec "!<command> ..." (e.g., !clrthreads, !pe, !clrstack -a, !dumpheap -stat). On LLDB the server strips the leading '!'.

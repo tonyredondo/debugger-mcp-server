@@ -47,6 +47,7 @@ Optional parameters:
 - `maxStackFrames` (default: 0 = all) limits stack frames in `full`.
 - `limit` (get only, optional; default: 50; max: 200) pages array sections.
 - `maxChars` (get only, optional; default: 20000) caps the response size as a guardrail and returns an error if exceeded.
+- If you hit `too_large`, follow the returned `suggestedPaths` (arrays often suggest `path[0]` and common sub-fields) and/or page with `limit/cursor` or `pageKind: "object"`.
 - `pageKind` (get only, optional; default: "array") controls paging behavior: `"array"` pages arrays, `"object"` pages object properties, `"auto"` enables both.
 - `select` (get only, optional) projects object fields (applies to object results and array items that are objects).
 - `whereField` / `whereEquals` (get only, optional; arrays only) filters array items by exact field match; `whereCaseInsensitive` defaults to true.
