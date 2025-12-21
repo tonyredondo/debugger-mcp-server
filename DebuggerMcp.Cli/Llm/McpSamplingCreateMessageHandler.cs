@@ -1021,9 +1021,20 @@ internal sealed class McpSamplingCreateMessageHandler(
                 continue;
             }
 
+            if (role == "assistant")
+            {
+                if (!string.IsNullOrWhiteSpace(parsed.Text))
+                {
+                    result.Add(new ChatMessage("assistant", parsed.Text));
+                }
+
+                AppendToolResults();
+                continue;
+            }
+
             // Tool result messages (OpenAI-compatible APIs require role=tool messages immediately after tool_calls).
-            // Emit tool results before any user/assistant text derived from the same MCP message to avoid invalid
-            // sequences like: assistant(tool_calls) -> user(text) -> tool(outputs).
+            // Emit tool results before any user text derived from the same MCP message to avoid invalid sequences like:
+            // assistant(tool_calls) -> user(text) -> tool(outputs).
             AppendToolResults();
 
             if (role == "tool")
