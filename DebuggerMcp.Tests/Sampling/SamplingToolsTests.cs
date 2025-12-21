@@ -1,3 +1,4 @@
+using System.Linq;
 using DebuggerMcp.Sampling;
 using Xunit;
 
@@ -6,9 +7,9 @@ namespace DebuggerMcp.Tests.Sampling;
 public class SamplingToolsTests
 {
     [Fact]
-    public void GetDebuggerTools_ReturnsExpectedToolNames()
+    public void GetCrashAnalysisTools_ReturnsExpectedToolNames()
     {
-        var tools = SamplingTools.GetDebuggerTools();
+        var tools = SamplingTools.GetCrashAnalysisTools();
 
         Assert.NotNull(tools);
         Assert.NotEmpty(tools);
@@ -21,11 +22,36 @@ public class SamplingToolsTests
     }
 
     [Fact]
-    public void GetDebuggerTools_AllToolsHaveSchemas()
+    public void GetSummaryRewriteTools_ContainsCompletionTool()
     {
-        var tools = SamplingTools.GetDebuggerTools();
+        var tools = SamplingTools.GetSummaryRewriteTools();
 
-        foreach (var tool in tools)
+        var names = tools.Select(t => t.Name).ToList();
+        Assert.Contains("analysis_summary_rewrite_complete", names);
+        Assert.DoesNotContain("analysis_complete", names);
+    }
+
+    [Fact]
+    public void GetThreadNarrativeTools_ContainsCompletionTool()
+    {
+        var tools = SamplingTools.GetThreadNarrativeTools();
+
+        var names = tools.Select(t => t.Name).ToList();
+        Assert.Contains("analysis_thread_narrative_complete", names);
+        Assert.DoesNotContain("analysis_complete", names);
+    }
+
+    [Fact]
+    public void AllSamplingTools_HaveSchemas()
+    {
+        var all = SamplingTools.GetCrashAnalysisTools()
+            .Concat(SamplingTools.GetSummaryRewriteTools())
+            .Concat(SamplingTools.GetThreadNarrativeTools())
+            .GroupBy(t => t.Name)
+            .Select(g => g.First())
+            .ToList();
+
+        foreach (var tool in all)
         {
             Assert.False(string.IsNullOrWhiteSpace(tool.Name));
             Assert.False(string.IsNullOrWhiteSpace(tool.Description));
@@ -33,4 +59,3 @@ public class SamplingToolsTests
         }
     }
 }
-

@@ -138,7 +138,7 @@ public sealed class AiAnalysisOrchestrator(
         var maxIterations = Math.Max(1, MaxIterations);
         var maxTokens = MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024;
         var maxToolCalls = MaxToolCalls > 0 ? MaxToolCalls : 50;
-        var tools = SamplingTools.GetDebuggerTools();
+        var tools = SamplingTools.GetCrashAnalysisTools();
 
         string? lastIterationAssistantText = null;
         bool lastIterationHadToolCalls = false;
@@ -498,6 +498,119 @@ public sealed class AiAnalysisOrchestrator(
         return incomplete;
     }
 
+    /// <summary>
+    /// Uses MCP sampling to rewrite <c>analysis.summary.description</c> and <c>analysis.summary.recommendations</c>
+    /// based on the full crash report (and existing <c>analysis.aiAnalysis</c>, when present).
+    /// </summary>
+    public async Task<AiSummaryRewriteResult?> RewriteSummaryAsync(
+        CrashAnalysisResult report,
+        string fullReportJson,
+        IDebuggerManager debugger,
+        IManagedObjectInspector? clrMdAnalyzer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(fullReportJson);
+        ArgumentNullException.ThrowIfNull(debugger);
+
+        if (!_samplingClient.IsSamplingSupported)
+        {
+            return new AiSummaryRewriteResult
+            {
+                Error = "AI summary rewrite unavailable: MCP client does not support sampling.",
+                Description = string.Empty,
+                Iterations = 0
+            };
+        }
+
+        if (!_samplingClient.IsToolUseSupported)
+        {
+            return new AiSummaryRewriteResult
+            {
+                Error = "AI summary rewrite unavailable: MCP client does not support tool use for sampling.",
+                Description = string.Empty,
+                Iterations = 0
+            };
+        }
+
+        var tools = SamplingTools.GetSummaryRewriteTools();
+        var initialPrompt = BuildSummaryRewritePrompt(report, fullReportJson);
+
+        var traceRunDir = InitializeSamplingTraceDirectory("summary-rewrite");
+
+        return await RunSamplingPassAsync<AiSummaryRewriteResult>(
+                passName: "summary-rewrite",
+                systemPrompt: SummaryRewriteSystemPrompt,
+                initialPrompt: initialPrompt,
+                completionToolName: "analysis_summary_rewrite_complete",
+                tools: tools,
+                fullReportJson: fullReportJson,
+                report: report,
+                debugger: debugger,
+                clrMdAnalyzer: clrMdAnalyzer,
+                traceRunDir: traceRunDir,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Uses MCP sampling to generate an evidence-backed narrative of thread activity at the time of the dump.
+    /// The result is suitable for storing under <c>analysis.aiAnalysis.threadNarrative</c> and
+    /// <c>analysis.threads.summary.description</c>.
+    /// </summary>
+    public async Task<AiThreadNarrativeResult?> GenerateThreadNarrativeAsync(
+        CrashAnalysisResult report,
+        string fullReportJson,
+        IDebuggerManager debugger,
+        IManagedObjectInspector? clrMdAnalyzer,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        ArgumentNullException.ThrowIfNull(fullReportJson);
+        ArgumentNullException.ThrowIfNull(debugger);
+
+        if (!_samplingClient.IsSamplingSupported)
+        {
+            return new AiThreadNarrativeResult
+            {
+                Error = "AI thread narrative unavailable: MCP client does not support sampling.",
+                Description = string.Empty,
+                Confidence = "low",
+                Iterations = 0
+            };
+        }
+
+        if (!_samplingClient.IsToolUseSupported)
+        {
+            return new AiThreadNarrativeResult
+            {
+                Error = "AI thread narrative unavailable: MCP client does not support tool use for sampling.",
+                Description = string.Empty,
+                Confidence = "low",
+                Iterations = 0
+            };
+        }
+
+        var tools = SamplingTools.GetThreadNarrativeTools();
+        var initialPrompt = BuildThreadNarrativePrompt(report, fullReportJson);
+
+        var traceRunDir = InitializeSamplingTraceDirectory("thread-narrative");
+
+        return await RunSamplingPassAsync<AiThreadNarrativeResult>(
+                passName: "thread-narrative",
+                systemPrompt: ThreadNarrativeSystemPrompt,
+                initialPrompt: initialPrompt,
+                completionToolName: "analysis_thread_narrative_complete",
+                tools: tools,
+                fullReportJson: fullReportJson,
+                report: report,
+                debugger: debugger,
+                clrMdAnalyzer: clrMdAnalyzer,
+                traceRunDir: traceRunDir,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     private static bool HasEvidenceToolCalls(List<ExecutedCommand> commandsExecuted)
     {
         foreach (var cmd in commandsExecuted)
@@ -539,6 +652,535 @@ public sealed class AiAnalysisOrchestrator(
         sb.AppendLine("Now call report_get (or exec/inspect/get_thread_stack) to gather evidence, then try analysis_complete again.");
         return sb.ToString().TrimEnd();
     }
+
+    private async Task<T?> RunSamplingPassAsync<T>(
+        string passName,
+        string systemPrompt,
+        string initialPrompt,
+        string completionToolName,
+        IList<Tool> tools,
+        string fullReportJson,
+        CrashAnalysisResult report,
+        IDebuggerManager debugger,
+        IManagedObjectInspector? clrMdAnalyzer,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        var commandsExecuted = new List<ExecutedCommand>();
+        var messages = new List<SamplingMessage>
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = initialPrompt }
+                ]
+            }
+        };
+
+        var maxIterations = Math.Max(1, MaxIterations);
+        var maxTokens = MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024;
+        var maxToolCalls = MaxToolCalls > 0 ? MaxToolCalls : 50;
+
+        string? lastModel = null;
+        var toolIndexByIteration = new Dictionary<int, int>();
+        var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
+        var refusalCount = 0;
+
+        for (var iteration = 1; iteration <= maxIterations; iteration++)
+        {
+            var request = new CreateMessageRequestParams
+            {
+                SystemPrompt = systemPrompt,
+                Messages = messages,
+                MaxTokens = maxTokens,
+                Tools = tools,
+                ToolChoice = new ToolChoice { Mode = "auto" }
+            };
+
+            CreateMessageResult response;
+            try
+            {
+                _logger.LogInformation("[AI] Sampling pass {Pass} iteration {Iteration}...", passName, iteration);
+                LogSamplingRequestSummary(iteration, request);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-request.json", BuildTraceRequest(iteration, request));
+                response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning(ex, "[AI] Sampling pass {Pass} failed at iteration {Iteration}", passName, iteration);
+                return passName switch
+                {
+                    "summary-rewrite" => new AiSummaryRewriteResult
+                    {
+                        Error = "AI summary rewrite failed: sampling request error.",
+                        Description = string.Empty,
+                        Iterations = iteration - 1,
+                        CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                        AnalyzedAt = DateTime.UtcNow
+                    } as T,
+                    "thread-narrative" => new AiThreadNarrativeResult
+                    {
+                        Error = "AI thread narrative failed: sampling request error.",
+                        Description = string.Empty,
+                        Confidence = "low",
+                        Iterations = iteration - 1,
+                        CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                        AnalyzedAt = DateTime.UtcNow
+                    } as T,
+                    _ => null
+                };
+            }
+
+            if (response.Content == null || response.Content.Count == 0)
+            {
+                _logger.LogWarning("[AI] Sampling pass {Pass} returned empty content at iteration {Iteration}", passName, iteration);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
+                return passName switch
+                {
+                    "summary-rewrite" => new AiSummaryRewriteResult
+                    {
+                        Error = "AI summary rewrite failed: empty sampling response.",
+                        Description = string.Empty,
+                        Iterations = iteration - 1,
+                        CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                        Model = response.Model,
+                        AnalyzedAt = DateTime.UtcNow
+                    } as T,
+                    "thread-narrative" => new AiThreadNarrativeResult
+                    {
+                        Error = "AI thread narrative failed: empty sampling response.",
+                        Description = string.Empty,
+                        Confidence = "low",
+                        Iterations = iteration - 1,
+                        CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                        Model = response.Model,
+                        AnalyzedAt = DateTime.UtcNow
+                    } as T,
+                    _ => null
+                };
+            }
+
+            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
+            lastModel = response.Model;
+
+            messages.Add(new SamplingMessage
+            {
+                Role = Role.Assistant,
+                Content = response.Content
+            });
+
+            var toolUses = response.Content?.OfType<ToolUseContentBlock>().ToList() ?? [];
+            if (toolUses.Count == 0)
+            {
+                continue;
+            }
+
+            ToolUseContentBlock? pendingComplete = null;
+            JsonElement pendingCompleteInput = default;
+            string? pendingCompleteId = null;
+            var rewrittenToolUses = new List<(ToolUseContentBlock ToolUse, string Name, JsonElement Input)>(toolUses.Count);
+            foreach (var toolUse in toolUses)
+            {
+                var (effectiveName, effectiveInput) = RewriteToolUseIfNeeded(toolUse, clrMdAnalyzer);
+                rewrittenToolUses.Add((toolUse, effectiveName, effectiveInput));
+            }
+
+            foreach (var (toolUse, toolName, toolInput) in rewrittenToolUses)
+            {
+                LogRequestedToolSummary(iteration, toolUse, toolName, toolInput);
+
+                if (string.Equals(toolName, completionToolName, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (pendingComplete == null)
+                    {
+                        pendingComplete = toolUse;
+                        pendingCompleteInput = toolInput;
+                        pendingCompleteId = toolUse.Id;
+                    }
+                    continue;
+                }
+
+                if (commandsExecuted.Count >= maxToolCalls)
+                {
+                    _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping pass {Pass}.", maxToolCalls, passName);
+                    return passName switch
+                    {
+                        "summary-rewrite" => new AiSummaryRewriteResult
+                        {
+                            Error = "AI summary rewrite incomplete - tool call budget exceeded.",
+                            Description = string.Empty,
+                            Iterations = iteration,
+                            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                            Model = lastModel,
+                            AnalyzedAt = DateTime.UtcNow
+                        } as T,
+                        "thread-narrative" => new AiThreadNarrativeResult
+                        {
+                            Error = "AI thread narrative incomplete - tool call budget exceeded.",
+                            Description = string.Empty,
+                            Confidence = "low",
+                            Iterations = iteration,
+                            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                            Model = lastModel,
+                            AnalyzedAt = DateTime.UtcNow
+                        } as T,
+                        _ => null
+                    };
+                }
+
+                var toolUseId = toolUse.Id;
+                if (string.IsNullOrWhiteSpace(toolUseId))
+                {
+                    var msg = $"Tool call '{toolName}' is missing required id; cannot execute. Please call the tool again with a valid id.";
+                    commandsExecuted.Add(new ExecutedCommand
+                    {
+                        Tool = toolName,
+                        Input = CloneToolInput(toolInput),
+                        Output = msg,
+                        Iteration = iteration,
+                        Duration = TimeSpan.Zero.ToString("c")
+                    });
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new TextContentBlock { Text = msg }
+                        ]
+                    });
+                    continue;
+                }
+
+                var sw = Stopwatch.StartNew();
+                string outputForModel;
+                var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
+                if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
+                {
+                    sw.Stop();
+                    outputForModel = TruncateForModel(
+                        "[cached tool result] Duplicate tool call detected; reusing prior output. Do not repeat identical tool calls.\n\n" +
+                        cached);
+                }
+                else
+                {
+                    var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, report, debugger, clrMdAnalyzer, cancellationToken)
+                        .ConfigureAwait(false);
+                    outputForModel = TruncateForModel(output);
+                    toolResultCache[toolCacheKey] = outputForModel;
+                    sw.Stop();
+                }
+
+                var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+                toolIndexByIteration[iteration] = toolOrdinal;
+                commandsExecuted.Add(new ExecutedCommand
+                {
+                    Tool = toolName,
+                    Input = CloneToolInput(toolInput),
+                    Output = outputForModel,
+                    Iteration = iteration,
+                    Duration = sw.Elapsed.ToString("c")
+                });
+
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
+                    new { tool = toolName, input = CloneToolInput(toolInput).ToString(), output = outputForModel, isError = false, duration = sw.Elapsed.ToString("c") });
+
+                messages.Add(new SamplingMessage
+                {
+                    Role = Role.User,
+                    Content =
+                    [
+                        new ToolResultContentBlock
+                        {
+                            ToolUseId = toolUseId,
+                            IsError = false,
+                            Content =
+                            [
+                                new TextContentBlock { Text = outputForModel }
+                            ]
+                        }
+                    ]
+                });
+            }
+
+            if (pendingComplete != null)
+            {
+                var otherToolsCoissued = rewrittenToolUses.Any(t => !string.Equals(t.Name, completionToolName, StringComparison.OrdinalIgnoreCase));
+
+                if (!HasEvidenceToolCalls(commandsExecuted) || otherToolsCoissued)
+                {
+                    refusalCount++;
+                    var msg = BuildGenericCompletionRefusalMessage(passName, completionToolName, otherToolsCoissued, refusalCount);
+
+                    var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+                    toolIndexByIteration[iteration] = toolOrdinal;
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(completionToolName)}.json",
+                        new { tool = completionToolName, input = CloneToolInput(pendingCompleteInput).ToString(), output = msg, isError = true, duration = TimeSpan.Zero.ToString("c") });
+
+                    if (string.IsNullOrWhiteSpace(pendingCompleteId))
+                    {
+                        messages.Add(new SamplingMessage
+                        {
+                            Role = Role.User,
+                            Content =
+                            [
+                                new TextContentBlock { Text = msg }
+                            ]
+                        });
+                        continue;
+                    }
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new ToolResultContentBlock
+                            {
+                                ToolUseId = pendingCompleteId,
+                                IsError = true,
+                                Content =
+                                [
+                                    new TextContentBlock { Text = TruncateForModel(msg) }
+                                ]
+                            }
+                        ]
+                    });
+                    continue;
+                }
+
+                return ParseCompletionTool<T>(passName, completionToolName, pendingCompleteInput, commandsExecuted, iteration, lastModel);
+            }
+        }
+
+        return passName switch
+        {
+            "summary-rewrite" => new AiSummaryRewriteResult
+            {
+                Error = "AI summary rewrite incomplete - maximum iterations reached.",
+                Description = string.Empty,
+                Iterations = maxIterations,
+                CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                Model = lastModel,
+                AnalyzedAt = DateTime.UtcNow
+            } as T,
+            "thread-narrative" => new AiThreadNarrativeResult
+            {
+                Error = "AI thread narrative incomplete - maximum iterations reached.",
+                Description = string.Empty,
+                Confidence = "low",
+                Iterations = maxIterations,
+                CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                Model = lastModel,
+                AnalyzedAt = DateTime.UtcNow
+            } as T,
+            _ => null
+        };
+    }
+
+    private static T? ParseCompletionTool<T>(
+        string passName,
+        string completionToolName,
+        JsonElement input,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        string? model)
+        where T : class
+        => passName switch
+        {
+            "summary-rewrite" => ParseSummaryRewriteComplete(input, commandsExecuted, iteration, model) as T,
+            "thread-narrative" => ParseThreadNarrativeComplete(input, commandsExecuted, iteration, model) as T,
+            _ => null
+        };
+
+    private static AiSummaryRewriteResult ParseSummaryRewriteComplete(
+        JsonElement input,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        string? model)
+    {
+        var description = TryGetString(input, "description") ?? string.Empty;
+        var recommendations = TryGetStringArray(input, "recommendations");
+
+        var result = new AiSummaryRewriteResult
+        {
+            Description = description,
+            Recommendations = recommendations,
+            Iterations = iteration,
+            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+            Model = model,
+            AnalyzedAt = DateTime.UtcNow
+        };
+
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            result.Error = "Summary rewrite completion returned an empty description.";
+        }
+        else if (recommendations == null || recommendations.Count == 0)
+        {
+            result.Error = "Summary rewrite completion returned no recommendations.";
+        }
+
+        return result;
+    }
+
+    private static AiThreadNarrativeResult ParseThreadNarrativeComplete(
+        JsonElement input,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        string? model)
+    {
+        var description = TryGetString(input, "description") ?? string.Empty;
+        var confidence = TryGetString(input, "confidence") ?? "unknown";
+
+        var result = new AiThreadNarrativeResult
+        {
+            Description = description,
+            Confidence = confidence,
+            Iterations = iteration,
+            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+            Model = model,
+            AnalyzedAt = DateTime.UtcNow
+        };
+
+        if (string.IsNullOrWhiteSpace(description))
+        {
+            result.Error = "Thread narrative completion returned an empty description.";
+        }
+
+        return result;
+    }
+
+    private static string BuildGenericCompletionRefusalMessage(string passName, string completionToolName, bool toolCallsWereCoissued, int refusalCount)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Cannot finalize yet.");
+        sb.AppendLine();
+        sb.AppendLine("Before calling the completion tool, gather at least one additional piece of evidence using tools (report_get/exec/inspect/get_thread_stack).");
+        sb.AppendLine("Minimum recommended sequence:");
+        sb.AppendLine("- report_get(path=\"analysis.summary\")");
+        sb.AppendLine("- report_get(path=\"analysis.exception\", select=[\"type\",\"message\",\"hresult\"])");
+        sb.AppendLine("- report_get(path=\"analysis.threads.faultingThread\")");
+        sb.AppendLine("- report_get(path=\"analysis.environment.platform\")");
+        sb.AppendLine("- report_get(path=\"analysis.environment.runtime\")");
+        sb.AppendLine("- report_get(path=\"analysis.memory\")");
+        sb.AppendLine("- report_get(path=\"analysis.synchronization\")");
+        sb.AppendLine("- report_get(path=\"analysis.async\")");
+        sb.AppendLine();
+        if (toolCallsWereCoissued)
+        {
+            sb.AppendLine($"Also: do not call {completionToolName} in the same message as other tool calls.");
+            sb.AppendLine("Execute evidence-gathering tools first, then call the completion tool in a later message after you've read the tool outputs.");
+            sb.AppendLine();
+        }
+        sb.AppendLine($"Pass: {passName}");
+        sb.AppendLine($"Refusal count: {refusalCount}");
+        sb.AppendLine($"Now call report_get (or exec/inspect/get_thread_stack) to gather evidence, then try {completionToolName} again.");
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string BuildSummaryRewritePrompt(CrashAnalysisResult report, string fullReportJson)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Task: Rewrite the report summary fields for humans.");
+        sb.AppendLine();
+        sb.AppendLine("You must produce an evidence-backed rewrite of:");
+        sb.AppendLine("- analysis.summary.description");
+        sb.AppendLine("- analysis.summary.recommendations (list of actionable items)");
+        sb.AppendLine();
+        sb.AppendLine("You are allowed to read the entire report via report_get (paged). Do not assume missing information.");
+        sb.AppendLine("Do not recommend disabling monitoring/profilers/tracers (e.g., Datadog).");
+        sb.AppendLine();
+        sb.AppendLine("Explicitly check for and incorporate (when supported by evidence):");
+        sb.AppendLine("- Memory leak indicators / top heap consumers / OOM signals (analysis.memory.*)");
+        sb.AppendLine("- Synchronization/lock/contention/deadlock indicators (analysis.synchronization.*, analysis.threads.deadlock, analysis.timeline)");
+        sb.AppendLine("- Async/task/faulted task indicators (analysis.async.*)");
+        sb.AppendLine("- Security findings if present (analysis.security)");
+        sb.AppendLine();
+        sb.AppendLine("When done, call analysis_summary_rewrite_complete with:");
+        sb.AppendLine("{ description: \"...\", recommendations: [\"...\", ...] }");
+        sb.AppendLine("Do not call the completion tool in the same message as other tool calls.");
+        sb.AppendLine();
+        sb.AppendLine("Report index (summary + TOC):");
+        sb.AppendLine(ReportSectionApi.BuildIndex(fullReportJson));
+        sb.AppendLine();
+        sb.AppendLine("Bounded evidence snapshot:");
+        sb.AppendLine(AiSamplingPromptBuilder.Build(report));
+
+        return TruncateInitialPrompt(sb.ToString());
+    }
+
+    private static string BuildThreadNarrativePrompt(CrashAnalysisResult report, string fullReportJson)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Task: Describe what the application/process was doing at the time of the dump.");
+        sb.AppendLine();
+        sb.AppendLine("You must produce an evidence-backed narrative derived from thread stacks/states.");
+        sb.AppendLine("You are allowed to read all threads via report_get (paged) and to use get_thread_stack for full stacks.");
+        sb.AppendLine();
+        sb.AppendLine("Rules:");
+        sb.AppendLine("- Do not claim intent beyond what stacks show; use \"likely\" when uncertain.");
+        sb.AppendLine("- Highlight the faulting thread and other dominant thread groups (threadpool, GC/finalizer, locks/waits).");
+        sb.AppendLine("- Do not recommend disabling monitoring/profilers/tracers.");
+        sb.AppendLine();
+        sb.AppendLine("When done, call analysis_thread_narrative_complete with:");
+        sb.AppendLine("{ description: \"...\", confidence: \"high|medium|low\" }");
+        sb.AppendLine("Do not call the completion tool in the same message as other tool calls.");
+        sb.AppendLine();
+        sb.AppendLine("Report index (summary + TOC):");
+        sb.AppendLine(ReportSectionApi.BuildIndex(fullReportJson));
+        sb.AppendLine();
+        sb.AppendLine("Bounded evidence snapshot:");
+        sb.AppendLine(AiSamplingPromptBuilder.Build(report));
+
+        return TruncateInitialPrompt(sb.ToString());
+    }
+
+    private const string SummaryRewriteSystemPrompt = """
+You are an expert crash report writer. You are given a structured crash report from a memory dump and access to evidence tools.
+
+Your task is to rewrite analysis.summary.description and analysis.summary.recommendations for humans, based strictly on evidence in the report and tool outputs.
+
+IMPORTANT: Do not present speculation as fact. Every claim must be backed by evidence you retrieved.
+IMPORTANT: Prefer report_get over exec whenever possible. Use paging (limit/cursor) and projection (select) to keep responses manageable.
+IMPORTANT: Maintain cumulative facts across iterations; do not reset what you know.
+IMPORTANT: Treat SOS as already loaded unless the report explicitly says otherwise (metadata.sosLoaded).
+IMPORTANT: If metadata.sosLoaded=true, NEVER attempt to load SOS and NEVER claim SOS is not loaded.
+IMPORTANT: Do NOT recommend disabling profilers/tracers/monitoring (e.g., Datadog) as a mitigation or “fix”.
+IMPORTANT: If something looks like a runtime/ReadyToRun/JIT bug, gather enough evidence for an upstream issue instead of hand-waving.
+IMPORTANT: If the report includes source context or Source Link URLs, you may refer to that code as evidence.
+
+Tooling:
+- exec: Run a debugger command (LLDB/WinDbg/SOS)
+- report_get: Fetch a section of the canonical report JSON by path (dot-path + optional [index]) with paging/projection/filtering
+- inspect: Inspect a .NET object by address (when available)
+- get_thread_stack: Fetch a full stack for a thread already present in the report
+- analysis_summary_rewrite_complete: Call when you have the final rewritten summary fields
+""";
+
+    private const string ThreadNarrativeSystemPrompt = """
+You are an expert crash dump analyst focused on thread activity. You are given a structured crash report from a memory dump and access to evidence tools.
+
+Your task is to produce an evidence-backed narrative describing what the process was doing at the time of the dump, based on thread stacks/states and related report sections.
+
+IMPORTANT: Do not present speculation as fact. Every hypothesis must be backed by explicit evidence; use \"likely\" when needed.
+IMPORTANT: Prefer report_get over exec whenever possible. Use paging (limit/cursor) and projection (select) to keep responses manageable.
+IMPORTANT: Maintain cumulative facts across iterations; do not reset what you know.
+IMPORTANT: Treat SOS as already loaded unless the report explicitly says otherwise (metadata.sosLoaded).
+IMPORTANT: If metadata.sosLoaded=true, NEVER attempt to load SOS and NEVER claim SOS is not loaded.
+IMPORTANT: Do NOT recommend disabling profilers/tracers/monitoring (e.g., Datadog) as a mitigation or “fix”.
+IMPORTANT: If the report includes source context or Source Link URLs, you may refer to that code as evidence.
+
+Tooling:
+- exec: Run a debugger command (LLDB/WinDbg/SOS)
+- report_get: Fetch a section of the canonical report JSON by path (dot-path + optional [index]) with paging/projection/filtering
+- inspect: Inspect a .NET object by address (when available)
+- get_thread_stack: Fetch a full stack for a thread already present in the report
+- analysis_thread_narrative_complete: Call when you have the final narrative
+""";
 
     private void LogSamplingRequestSummary(int iteration, CreateMessageRequestParams request)
     {
@@ -703,6 +1345,27 @@ public sealed class AiAnalysisOrchestrator(
         {
             _logger.LogWarning(ex, "[AI] Failed to create sampling trace directory: {Directory}", full);
             return null;
+        }
+    }
+
+    private string? InitializeSamplingTraceDirectory(string? kindSuffix)
+    {
+        if (string.IsNullOrWhiteSpace(kindSuffix))
+        {
+            return InitializeSamplingTraceDirectory();
+        }
+
+        var original = SamplingTraceLabel;
+        try
+        {
+            SamplingTraceLabel = string.IsNullOrWhiteSpace(original)
+                ? kindSuffix
+                : $"{original}-{kindSuffix}";
+            return InitializeSamplingTraceDirectory();
+        }
+        finally
+        {
+            SamplingTraceLabel = original;
         }
     }
 

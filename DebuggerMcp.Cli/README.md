@@ -313,7 +313,7 @@ analyze perf -o ./perf.json
 analyze security
 ```
 
-**AI analysis note**: `analyze ai` uses MCP sampling (`sampling/createMessage`). When using `dbg-mcp` as the connected MCP client, configure an LLM provider first (e.g., `OPENROUTER_API_KEY=...`, `OPENAI_API_KEY=...` + `llm provider openai`, or `ANTHROPIC_API_KEY=...` + `llm provider anthropic`).
+**AI analysis note**: `analyze ai` uses MCP sampling (`sampling/createMessage`). When using `dbg-mcp` as the connected MCP client, configure an LLM provider first (e.g., `OPENROUTER_API_KEY=...`, `OPENAI_API_KEY=...` + `llm provider openai`, or `ANTHROPIC_API_KEY=...` + `llm provider anthropic`). The server enriches the report under `analysis.aiAnalysis` and also rewrites `analysis.summary.description` / `analysis.summary.recommendations` plus adds an evidence-backed thread narrative.
 Note: `analyze crash`, `analyze ai`, and `report -o <file> --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
 
 ### LLM Commands

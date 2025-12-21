@@ -2487,6 +2487,14 @@ public class ThreadSummary
     public int Background { get; set; }
 
     /// <summary>
+    /// Optional AI-generated narrative describing what the process was doing at the time of the dump,
+    /// derived from thread stacks/states.
+    /// </summary>
+    [JsonPropertyName("description")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Description { get; set; }
+
+    /// <summary>
     /// Unstarted thread count.
     /// </summary>
     [JsonPropertyName("unstarted")]

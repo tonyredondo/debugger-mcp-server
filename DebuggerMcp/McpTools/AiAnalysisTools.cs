@@ -135,6 +135,75 @@ public sealed class AiAnalysisTools(
 
         initialReport.AiAnalysis = aiResult;
 
+        // Build a fresh report snapshot that includes analysis.aiAnalysis so subsequent sampling passes can reference it.
+        // This also keeps report_get consistent when the model requests analysis.aiAnalysis.* paths.
+        var reportJsonWithAi = reportServiceForSampling.GenerateReport(
+            initialReport,
+            new ReportOptions { Format = ReportFormat.Json },
+            new ReportMetadata
+            {
+                DumpId = session.CurrentDumpId ?? string.Empty,
+                UserId = sanitizedUserId,
+                GeneratedAt = DateTime.UtcNow,
+                DebuggerType = manager.DebuggerType,
+                Format = ReportFormat.Json
+            });
+
+        // AI rewrite pass: overwrite analysis.summary.description and analysis.summary.recommendations.
+        var summaryRewrite = await orchestrator.RewriteSummaryAsync(
+                initialReport,
+                reportJsonWithAi,
+                manager,
+                session.ClrMdAnalyzer,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (summaryRewrite != null && string.IsNullOrWhiteSpace(summaryRewrite.Error))
+        {
+            initialReport.Summary ??= new AnalysisSummary();
+            initialReport.Summary.Description = summaryRewrite.Description;
+            initialReport.Summary.Recommendations = summaryRewrite.Recommendations;
+            initialReport.AiAnalysis.SummaryRewrite = summaryRewrite;
+        }
+        else if (summaryRewrite != null)
+        {
+            initialReport.AiAnalysis.SummaryRewrite = summaryRewrite;
+        }
+
+        // Build a fresh report snapshot to include the rewritten summary (and any other AI outputs) for later passes.
+        var reportJsonWithAiAndSummary = reportServiceForSampling.GenerateReport(
+            initialReport,
+            new ReportOptions { Format = ReportFormat.Json },
+            new ReportMetadata
+            {
+                DumpId = session.CurrentDumpId ?? string.Empty,
+                UserId = sanitizedUserId,
+                GeneratedAt = DateTime.UtcNow,
+                DebuggerType = manager.DebuggerType,
+                Format = ReportFormat.Json
+            });
+
+        // AI thread narrative pass: populate analysis.threads.summary.description and analysis.aiAnalysis.threadNarrative.
+        var threadNarrative = await orchestrator.GenerateThreadNarrativeAsync(
+                initialReport,
+                reportJsonWithAiAndSummary,
+                manager,
+                session.ClrMdAnalyzer,
+                cancellationToken)
+            .ConfigureAwait(false);
+
+        if (threadNarrative != null && string.IsNullOrWhiteSpace(threadNarrative.Error))
+        {
+            initialReport.Threads ??= new ThreadsInfo();
+            initialReport.Threads.Summary ??= new ThreadSummary();
+            initialReport.Threads.Summary.Description = threadNarrative.Description;
+            initialReport.AiAnalysis.ThreadNarrative = threadNarrative;
+        }
+        else if (threadNarrative != null)
+        {
+            initialReport.AiAnalysis.ThreadNarrative = threadNarrative;
+        }
+
         // Return the canonical report document shape so `analyze(kind=ai)` matches `report -f json`.
         // Other formats should be derived from this JSON document.
         var reportService = new ReportService();

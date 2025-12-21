@@ -142,6 +142,7 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
   - Use `select=[...]` to project only needed fields, `where={field,equals}` for simple array filtering, and `pageKind=\"object\"` to page large objects when needed.
 - To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
 - Output matches `analyze(kind="crash")` plus an `analysis.aiAnalysis` section.
+  - The server also rewrites `analysis.summary.description` / `analysis.summary.recommendations`, and adds `analysis.aiAnalysis.threadNarrative` + `analysis.threads.summary.description`.
 
 **Example Output (excerpt)**:
 ```json
@@ -155,10 +156,27 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
     "serverVersion": "1.0.0"
   },
   "analysis": {
+    "summary": {
+      "crashType": "Managed Exception",
+      "severity": "high",
+      "description": "AI-rewritten summary description...",
+      "recommendations": [ "AI-rewritten recommendation 1", "AI-rewritten recommendation 2" ]
+    },
     "aiAnalysis": {
       "rootCause": "Race condition in UserService.GetCurrentUser() leading to a null dereference during logout.",
       "confidence": "high",
       "reasoning": "The faulting thread dereferenced a field that another thread set to null; no synchronization was present.",
+      "summaryRewrite": {
+        "description": "AI-rewritten summary description...",
+        "recommendations": [ "AI-rewritten recommendation 1", "AI-rewritten recommendation 2" ],
+        "iterations": 2,
+        "commandsExecuted": [ { "tool": "report_get", "input": { "path": "analysis.exception" }, "output": "...", "iteration": 1 } ]
+      },
+      "threadNarrative": {
+        "description": "At the time of the dump, the process was ...",
+        "confidence": "medium",
+        "iterations": 2
+      },
       "iterations": 2,
       "commandsExecuted": [
         { "tool": "exec", "input": { "command": "!threads" }, "output": "...", "iteration": 1, "duration": "00:00:00.123" }

@@ -72,9 +72,9 @@ public static class SamplingTools
         """);
 
     /// <summary>
-    /// Returns the list of tools the LLM may call during AI analysis.
+    /// Returns the list of tools the LLM may call during root-cause AI analysis.
     /// </summary>
-    public static IList<Tool> GetDebuggerTools() =>
+    public static IList<Tool> GetCrashAnalysisTools() =>
         new List<Tool>
         {
             new()
@@ -107,6 +107,54 @@ public static class SamplingTools
                 Description = "Call this when you have gathered enough information to determine the root cause. This ends the analysis loop.",
                 InputSchema = AnalysisCompleteSchema
             }
+        };
+
+    private static readonly JsonElement SummaryRewriteCompleteSchema = ParseSchema("""
+        {
+          "type": "object",
+          "properties": {
+            "description": { "type": "string", "description": "Rewritten analysis.summary.description (human-readable summary; evidence-backed)." },
+            "recommendations": { "type": "array", "items": { "type": "string" }, "description": "Rewritten analysis.summary.recommendations (actionable, evidence-backed)." }
+          },
+          "required": ["description", "recommendations"]
+        }
+        """);
+
+    private static readonly JsonElement ThreadNarrativeCompleteSchema = ParseSchema("""
+        {
+          "type": "object",
+          "properties": {
+            "description": { "type": "string", "description": "Narrative description of what the process was doing at the time of the dump (thread-based; evidence-backed)." },
+            "confidence": { "type": "string", "enum": ["high", "medium", "low"], "description": "Confidence level for the narrative." }
+          },
+          "required": ["description", "confidence"]
+        }
+        """);
+
+    /// <summary>
+    /// Returns the list of tools the LLM may call when rewriting analysis.summary.* fields.
+    /// </summary>
+    public static IList<Tool> GetSummaryRewriteTools() =>
+        new List<Tool>
+        {
+            new() { Name = "exec", Description = "Execute a debugger command (LLDB/WinDbg/SOS) and return the output.", InputSchema = ExecSchema },
+            new() { Name = "report_get", Description = "Fetch a section of the canonical crash report JSON by dot-path (paged for arrays).", InputSchema = ReportGetSchema },
+            new() { Name = "inspect", Description = "Inspect a .NET object at an address and return a JSON summary of fields/values (ClrMD-based when available).", InputSchema = InspectSchema },
+            new() { Name = "get_thread_stack", Description = "Return the full stack trace for a specific thread from the existing crash report.", InputSchema = GetThreadStackSchema },
+            new() { Name = "analysis_summary_rewrite_complete", Description = "Call this when you have rewritten analysis.summary.description and analysis.summary.recommendations.", InputSchema = SummaryRewriteCompleteSchema }
+        };
+
+    /// <summary>
+    /// Returns the list of tools the LLM may call when generating a thread narrative.
+    /// </summary>
+    public static IList<Tool> GetThreadNarrativeTools() =>
+        new List<Tool>
+        {
+            new() { Name = "exec", Description = "Execute a debugger command (LLDB/WinDbg/SOS) and return the output.", InputSchema = ExecSchema },
+            new() { Name = "report_get", Description = "Fetch a section of the canonical crash report JSON by dot-path (paged for arrays).", InputSchema = ReportGetSchema },
+            new() { Name = "inspect", Description = "Inspect a .NET object at an address and return a JSON summary of fields/values (ClrMD-based when available).", InputSchema = InspectSchema },
+            new() { Name = "get_thread_stack", Description = "Return the full stack trace for a specific thread from the existing crash report.", InputSchema = GetThreadStackSchema },
+            new() { Name = "analysis_thread_narrative_complete", Description = "Call this when you have produced an evidence-backed narrative of what the process was doing.", InputSchema = ThreadNarrativeCompleteSchema }
         };
 
     private static JsonElement ParseSchema(string json)

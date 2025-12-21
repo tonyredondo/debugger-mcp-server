@@ -132,7 +132,9 @@ Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
 1. Build an initial structured crash report (JSON)
 2. Use MCP sampling (`sampling/createMessage`) to ask the connected client’s LLM to analyze it
 3. Allow the LLM to request additional evidence via tools (e.g., `report_get`, `exec`, `inspect`, `get_thread_stack`)
-4. Return the original report enriched with `analysis.aiAnalysis`
+4. Return the original report enriched with `analysis.aiAnalysis` (root cause + supporting evidence)
+5. Rewrite `analysis.summary.description` / `analysis.summary.recommendations` using a separate sampling pass over the full report
+6. Add `analysis.aiAnalysis.threadNarrative` and populate `analysis.threads.summary.description` with an evidence-backed “what the process was doing” narrative
 
 ### Prerequisites
 

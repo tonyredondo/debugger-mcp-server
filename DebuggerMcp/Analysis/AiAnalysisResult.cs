@@ -68,6 +68,126 @@ public sealed class AiAnalysisResult
     /// </summary>
     [JsonPropertyName("analyzedAt")]
     public DateTime AnalyzedAt { get; set; } = DateTime.UtcNow;
+
+    /// <summary>
+    /// Optional AI-generated rewrite of the top-level analysis summary fields.
+    /// When present, the report's <c>analysis.summary.description</c> and <c>analysis.summary.recommendations</c>
+    /// may be overwritten with this content.
+    /// </summary>
+    [JsonPropertyName("summaryRewrite")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AiSummaryRewriteResult? SummaryRewrite { get; set; }
+
+    /// <summary>
+    /// Optional AI-generated narrative describing what the process was doing at the time of the dump,
+    /// derived from thread stacks/states.
+    /// </summary>
+    [JsonPropertyName("threadNarrative")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AiThreadNarrativeResult? ThreadNarrative { get; set; }
+}
+
+/// <summary>
+/// AI-generated rewrite payload for the report summary.
+/// </summary>
+public sealed class AiSummaryRewriteResult
+{
+    /// <summary>
+    /// Optional error message when the rewrite failed.
+    /// </summary>
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+
+    /// <summary>
+    /// Rewritten summary description.
+    /// </summary>
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Rewritten recommendations.
+    /// </summary>
+    [JsonPropertyName("recommendations")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Recommendations { get; set; }
+
+    /// <summary>
+    /// Gets or sets the number of sampling iterations performed.
+    /// </summary>
+    [JsonPropertyName("iterations")]
+    public int Iterations { get; set; }
+
+    /// <summary>
+    /// Gets or sets the tools executed during this rewrite.
+    /// </summary>
+    [JsonPropertyName("commandsExecuted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExecutedCommand>? CommandsExecuted { get; set; }
+
+    /// <summary>
+    /// Model used by the client (when reported).
+    /// </summary>
+    [JsonPropertyName("model")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Model { get; set; }
+
+    /// <summary>
+    /// When the rewrite was performed (UTC).
+    /// </summary>
+    [JsonPropertyName("analyzedAt")]
+    public DateTime AnalyzedAt { get; set; } = DateTime.UtcNow;
+}
+
+/// <summary>
+/// AI-generated narrative for thread activity at the time of the dump.
+/// </summary>
+public sealed class AiThreadNarrativeResult
+{
+    /// <summary>
+    /// Optional error message when narrative generation failed.
+    /// </summary>
+    [JsonPropertyName("error")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Error { get; set; }
+
+    /// <summary>
+    /// Narrative description.
+    /// </summary>
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Confidence level ("high", "medium", "low", or "unknown").
+    /// </summary>
+    [JsonPropertyName("confidence")]
+    public string Confidence { get; set; } = "unknown";
+
+    /// <summary>
+    /// Gets or sets the number of sampling iterations performed.
+    /// </summary>
+    [JsonPropertyName("iterations")]
+    public int Iterations { get; set; }
+
+    /// <summary>
+    /// Gets or sets the tools executed during narrative generation.
+    /// </summary>
+    [JsonPropertyName("commandsExecuted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ExecutedCommand>? CommandsExecuted { get; set; }
+
+    /// <summary>
+    /// Model used by the client (when reported).
+    /// </summary>
+    [JsonPropertyName("model")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Model { get; set; }
+
+    /// <summary>
+    /// When the narrative was generated (UTC).
+    /// </summary>
+    [JsonPropertyName("analyzedAt")]
+    public DateTime AnalyzedAt { get; set; } = DateTime.UtcNow;
 }
 
 /// <summary>
@@ -106,4 +226,3 @@ public sealed class ExecutedCommand
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Duration { get; set; }
 }
-

@@ -67,7 +67,8 @@ Run analysis on the currently open dump.
 
 Notes:
 - `kind: "ai"` requires the connected MCP client to support sampling (`sampling/createMessage`) with tools enabled.
-- `kind: "crash"` and `kind: "ai"` return the same canonical JSON report document schema as `report(format: "json")`. For AI runs, the result is enriched under `analysis.aiAnalysis`.
+- `kind: "crash"` and `kind: "ai"` return the same canonical JSON report document schema as `report(format: "json")`.
+- For AI runs, the result is enriched under `analysis.aiAnalysis` and the server also rewrites `analysis.summary.description` / `analysis.summary.recommendations`, plus adds an evidence-backed `analysis.aiAnalysis.threadNarrative` and `analysis.threads.summary.description`.
 - `kind: "crash"` performs .NET crash analysis (SOS/ClrMD); non-.NET dumps are not supported by this tool.
 
 ### 6) `compare`
