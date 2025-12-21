@@ -163,11 +163,11 @@ public sealed class AiAnalysisTools(
             initialReport.Summary ??= new AnalysisSummary();
             initialReport.Summary.Description = summaryRewrite.Description;
             initialReport.Summary.Recommendations = summaryRewrite.Recommendations;
-            initialReport.AiAnalysis.SummaryRewrite = summaryRewrite;
+            initialReport.AiAnalysis.Summary = summaryRewrite;
         }
         else if (summaryRewrite != null)
         {
-            initialReport.AiAnalysis.SummaryRewrite = summaryRewrite;
+            initialReport.AiAnalysis.Summary = summaryRewrite;
         }
 
         // Build a fresh report snapshot to include the rewritten summary (and any other AI outputs) for later passes.

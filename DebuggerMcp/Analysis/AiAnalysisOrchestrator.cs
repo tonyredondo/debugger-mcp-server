@@ -502,7 +502,7 @@ public sealed class AiAnalysisOrchestrator(
     /// Uses MCP sampling to rewrite <c>analysis.summary.description</c> and <c>analysis.summary.recommendations</c>
     /// based on the full crash report (and existing <c>analysis.aiAnalysis</c>, when present).
     /// </summary>
-    public async Task<AiSummaryRewriteResult?> RewriteSummaryAsync(
+    public async Task<AiSummaryResult?> RewriteSummaryAsync(
         CrashAnalysisResult report,
         string fullReportJson,
         IDebuggerManager debugger,
@@ -515,7 +515,7 @@ public sealed class AiAnalysisOrchestrator(
 
         if (!_samplingClient.IsSamplingSupported)
         {
-            return new AiSummaryRewriteResult
+            return new AiSummaryResult
             {
                 Error = "AI summary rewrite unavailable: MCP client does not support sampling.",
                 Description = string.Empty,
@@ -525,7 +525,7 @@ public sealed class AiAnalysisOrchestrator(
 
         if (!_samplingClient.IsToolUseSupported)
         {
-            return new AiSummaryRewriteResult
+            return new AiSummaryResult
             {
                 Error = "AI summary rewrite unavailable: MCP client does not support tool use for sampling.",
                 Description = string.Empty,
@@ -538,7 +538,7 @@ public sealed class AiAnalysisOrchestrator(
 
         var traceRunDir = InitializeSamplingTraceDirectory("summary-rewrite");
 
-        return await RunSamplingPassAsync<AiSummaryRewriteResult>(
+        return await RunSamplingPassAsync<AiSummaryResult>(
                 passName: "summary-rewrite",
                 systemPrompt: SummaryRewriteSystemPrompt,
                 initialPrompt: initialPrompt,
@@ -713,7 +713,7 @@ public sealed class AiAnalysisOrchestrator(
                 _logger.LogWarning(ex, "[AI] Sampling pass {Pass} failed at iteration {Iteration}", passName, iteration);
                 return passName switch
                 {
-                    "summary-rewrite" => new AiSummaryRewriteResult
+                    "summary-rewrite" => new AiSummaryResult
                     {
                         Error = "AI summary rewrite failed: sampling request error.",
                         Description = string.Empty,
@@ -740,7 +740,7 @@ public sealed class AiAnalysisOrchestrator(
                 WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
                 return passName switch
                 {
-                    "summary-rewrite" => new AiSummaryRewriteResult
+                    "summary-rewrite" => new AiSummaryResult
                     {
                         Error = "AI summary rewrite failed: empty sampling response.",
                         Description = string.Empty,
@@ -808,7 +808,7 @@ public sealed class AiAnalysisOrchestrator(
                     _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping pass {Pass}.", maxToolCalls, passName);
                     return passName switch
                     {
-                        "summary-rewrite" => new AiSummaryRewriteResult
+                        "summary-rewrite" => new AiSummaryResult
                         {
                             Error = "AI summary rewrite incomplete - tool call budget exceeded.",
                             Description = string.Empty,
@@ -1005,7 +1005,7 @@ public sealed class AiAnalysisOrchestrator(
 
         return passName switch
         {
-            "summary-rewrite" => new AiSummaryRewriteResult
+            "summary-rewrite" => new AiSummaryResult
             {
                 Error = "AI summary rewrite incomplete - maximum iterations reached.",
                 Description = string.Empty,
@@ -1043,7 +1043,7 @@ public sealed class AiAnalysisOrchestrator(
             _ => null
         };
 
-    private static AiSummaryRewriteResult ParseSummaryRewriteComplete(
+    private static AiSummaryResult ParseSummaryRewriteComplete(
         JsonElement input,
         List<ExecutedCommand> commandsExecuted,
         int iteration,
@@ -1052,7 +1052,7 @@ public sealed class AiAnalysisOrchestrator(
         var description = TryGetString(input, "description") ?? string.Empty;
         var recommendations = TryGetStringArray(input, "recommendations");
 
-        var result = new AiSummaryRewriteResult
+        var result = new AiSummaryResult
         {
             Description = description,
             Recommendations = recommendations,

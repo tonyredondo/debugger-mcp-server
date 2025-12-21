@@ -409,7 +409,7 @@ analyze(kind="crash", sessionId, userId) → Returns the canonical JSON report d
 # AI-assisted crash analysis (requires MCP sampling support in the connected client)
 analyze(kind="ai", sessionId, userId) → Returns the same report enriched with:
   - analysis.aiAnalysis.rootCause / confidence / reasoning
-  - analysis.aiAnalysis.summaryRewrite (and overwrites analysis.summary.description / analysis.summary.recommendations)
+  - analysis.aiAnalysis.summary (and overwrites analysis.summary.description / analysis.summary.recommendations)
   - analysis.aiAnalysis.threadNarrative (and populates analysis.threads.summary.description)
   - analysis.aiAnalysis.commandsExecuted (tools/commands the AI requested; prefer `inspect` over raw `dumpobj` when possible)
 

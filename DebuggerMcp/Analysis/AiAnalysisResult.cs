@@ -74,9 +74,9 @@ public sealed class AiAnalysisResult
     /// When present, the report's <c>analysis.summary.description</c> and <c>analysis.summary.recommendations</c>
     /// may be overwritten with this content.
     /// </summary>
-    [JsonPropertyName("summaryRewrite")]
+    [JsonPropertyName("summary")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public AiSummaryRewriteResult? SummaryRewrite { get; set; }
+    public AiSummaryResult? Summary { get; set; }
 
     /// <summary>
     /// Optional AI-generated narrative describing what the process was doing at the time of the dump,
@@ -90,7 +90,7 @@ public sealed class AiAnalysisResult
 /// <summary>
 /// AI-generated rewrite payload for the report summary.
 /// </summary>
-public sealed class AiSummaryRewriteResult
+public sealed class AiSummaryResult
 {
     /// <summary>
     /// Optional error message when the rewrite failed.

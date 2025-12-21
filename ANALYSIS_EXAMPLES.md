@@ -166,7 +166,7 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
       "rootCause": "Race condition in UserService.GetCurrentUser() leading to a null dereference during logout.",
       "confidence": "high",
       "reasoning": "The faulting thread dereferenced a field that another thread set to null; no synchronization was present.",
-      "summaryRewrite": {
+      "summary": {
         "description": "AI-rewritten summary description...",
         "recommendations": [ "AI-rewritten recommendation 1", "AI-rewritten recommendation 2" ],
         "iterations": 2,
