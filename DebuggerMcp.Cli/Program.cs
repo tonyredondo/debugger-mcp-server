@@ -7768,7 +7768,12 @@ public class Program
 
                 case "ai":
                     await RunAnalysisAsync(output, "AI Crash Analysis",
-                        () => mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId), state, outputFile);
+                        () => RunWithToolResponseTimeoutAsync(
+                            mcpClient,
+                            GetAiAnalyzeToolResponseTimeout(mcpClient.ToolResponseTimeout),
+                            () => mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId)),
+                        state,
+                        outputFile);
                     break;
 
                 case "perf":
@@ -7830,6 +7835,31 @@ public class Program
         catch (Exception ex)
         {
             output.Error($"Analysis failed: {ex.Message}");
+        }
+    }
+
+    private static readonly TimeSpan MinimumAiAnalyzeToolResponseTimeout = TimeSpan.FromMinutes(60);
+
+    private static TimeSpan GetAiAnalyzeToolResponseTimeout(TimeSpan configuredTimeout)
+        => configuredTimeout < MinimumAiAnalyzeToolResponseTimeout ? MinimumAiAnalyzeToolResponseTimeout : configuredTimeout;
+
+    private static async Task<string> RunWithToolResponseTimeoutAsync(
+        McpClient mcpClient,
+        TimeSpan toolResponseTimeout,
+        Func<Task<string>> action)
+    {
+        ArgumentNullException.ThrowIfNull(mcpClient);
+        ArgumentNullException.ThrowIfNull(action);
+
+        var previousTimeout = mcpClient.ToolResponseTimeout;
+        mcpClient.ToolResponseTimeout = toolResponseTimeout;
+        try
+        {
+            return await action().ConfigureAwait(false);
+        }
+        finally
+        {
+            mcpClient.ToolResponseTimeout = previousTimeout;
         }
     }
 

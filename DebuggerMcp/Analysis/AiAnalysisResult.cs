@@ -79,6 +79,25 @@ public sealed class AiAnalysisResult
     public AiSummaryResult? Summary { get; set; }
 
     /// <summary>
+    /// Backwards-compatible alias for older reports that emitted <c>summaryRewrite</c> under <c>analysis.aiAnalysis</c>.
+    /// This property is only used for JSON deserialization and is never written.
+    /// </summary>
+    [JsonPropertyName("summaryRewrite")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    [Obsolete("Use Summary instead. This alias exists only for backwards-compatible JSON deserialization.", false)]
+    public AiSummaryResult? SummaryRewrite
+    {
+        get => null;
+        set
+        {
+            if (Summary == null && value != null)
+            {
+                Summary = value;
+            }
+        }
+    }
+
+    /// <summary>
     /// Optional AI-generated narrative describing what the process was doing at the time of the dump,
     /// derived from thread stacks/states.
     /// </summary>
