@@ -857,6 +857,7 @@ public class AiAnalysisOrchestratorTests
         Assert.NotNull(requests[2].ToolChoice);
         Assert.Equal("required", requests[2].ToolChoice!.Mode);
         Assert.Contains(requests[2].Tools!, t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(512, requests[2].MaxTokens);
 
         Assert.NotNull(requests[3].Messages);
         Assert.NotEmpty(requests[3].Messages);
@@ -904,6 +905,14 @@ public class AiAnalysisOrchestratorTests
         var last = requests.Last();
         var carryText = last.Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
         Assert.Contains("Checkpoint synthesis unavailable", carryText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Ctor_CheckpointMaxTokens_DefaultIs8192()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true);
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance);
+        Assert.Equal(8192, orchestrator.CheckpointMaxTokens);
     }
 
     [Fact]
