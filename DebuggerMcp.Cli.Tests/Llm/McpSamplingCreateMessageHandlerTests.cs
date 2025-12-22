@@ -16,7 +16,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
             var handler = new McpSamplingCreateMessageHandler(
                 settings,
-                (req, _) =>
+                (req, _, _) =>
                 {
                     observedRequest = req;
                     return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -57,7 +57,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
             var handler = new McpSamplingCreateMessageHandler(
                 settings,
-                (req, _) =>
+                (req, _, _) =>
                 {
                     observedRequest = req;
                     return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -105,7 +105,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -139,7 +139,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -172,7 +172,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) => Task.FromResult(new ChatCompletionResult()),
+            (_, _, _) => Task.FromResult(new ChatCompletionResult()),
             progress: null);
 
         using var doc = JsonDocument.Parse("""
@@ -195,7 +195,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) => Task.FromResult(new ChatCompletionResult()),
+            (_, _, _) => Task.FromResult(new ChatCompletionResult()),
             progress: null);
 
         using var doc = JsonDocument.Parse("""
@@ -225,7 +225,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            (_, _, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
             progress.Add);
 
         using var doc = JsonDocument.Parse("""
@@ -264,7 +264,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         var callCount = 0;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 callCount++;
                 var cmd = callCount == 1 ? "sos dumpdomain" : "sos clrstack -a";
@@ -304,7 +304,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult
@@ -376,7 +376,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult
@@ -427,7 +427,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult
@@ -483,7 +483,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -522,7 +522,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -556,7 +556,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult
@@ -606,7 +606,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -644,7 +644,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -680,7 +680,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -744,7 +744,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -807,7 +807,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -863,7 +863,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         var progress = new List<string>();
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            (_, _, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
             progress.Add);
 
         using var doc = JsonDocument.Parse("""
@@ -907,7 +907,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -956,7 +956,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -991,7 +991,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -1025,7 +1025,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -1058,7 +1058,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -1092,7 +1092,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -1121,7 +1121,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -1150,7 +1150,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -1179,7 +1179,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -1209,7 +1209,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _) =>
+            (request, _, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -1242,7 +1242,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -1273,7 +1273,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -1300,7 +1300,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
     public async Task HandleAsync_WhenParametersNull_ThrowsArgumentException()
     {
         var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
-        var handler = new McpSamplingCreateMessageHandler(settings, (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }));
+        var handler = new McpSamplingCreateMessageHandler(settings, (_, _, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }));
 
         _ = await Assert.ThrowsAsync<ArgumentException>(() => handler.HandleAsync(parameters: null, CancellationToken.None));
     }
@@ -1313,7 +1313,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -1353,7 +1353,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            (_, _, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
             progress.Add);
 
         using var first = JsonDocument.Parse("""
@@ -1401,7 +1401,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
         var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -1433,7 +1433,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _) =>
+            (_, _, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {

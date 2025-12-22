@@ -221,6 +221,58 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_WhenSamplingTraceFilesEnabled_AppendsClientDirectiveToSystemPrompt()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.summary" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done"
+            }));
+
+        var tempRoot = Path.Combine(Path.GetTempPath(), "dbg-mcp-ai-trace-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempRoot);
+
+        try
+        {
+            var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+            {
+                MaxIterations = 2,
+                EnableSamplingTraceFiles = true,
+                SamplingTraceFilesRootDirectory = tempRoot,
+                SamplingTraceLabel = "test"
+            };
+
+            _ = await orchestrator.AnalyzeCrashAsync(
+                new CrashAnalysisResult(),
+                "{\"metadata\":{},\"analysis\":{}}",
+                new FakeDebuggerManager(),
+                clrMdAnalyzer: null);
+
+            Assert.NotEmpty(requests);
+            var systemPrompt = requests[0].SystemPrompt ?? string.Empty;
+            Assert.Contains("[dbg-mcp-client-directive]", systemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("[/dbg-mcp-client-directive]", systemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("httpTraceDir", systemPrompt, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("llm-http", systemPrompt, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempRoot, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup.
+            }
+        }
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_WhenVerboseTraceEnabled_EmitsSamplingTraceAtInformation()
     {
         var logs = new List<(LogLevel Level, string Message)>();

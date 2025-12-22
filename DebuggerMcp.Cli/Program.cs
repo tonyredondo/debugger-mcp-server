@@ -2078,9 +2078,10 @@ public class Program
             var progressLock = new object();
             var handler = new McpSamplingCreateMessageHandler(
                 llmSettings,
-                async (request, ct) =>
+                async (request, traceOverride, ct) =>
                 {
-                    using var http = CreateLlmHttpClient(llmSettings, traceStore);
+                    var effectiveTrace = traceOverride ?? traceStore;
+                    using var http = CreateLlmHttpClient(llmSettings, effectiveTrace);
                     switch (llmSettings.GetProviderKind())
                     {
                         case LlmProviderKind.OpenAi:

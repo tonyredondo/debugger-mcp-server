@@ -25,6 +25,7 @@ public sealed class AiAnalysisOrchestrator(
     private readonly ILogger<AiAnalysisOrchestrator> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
     private LogLevel SamplingTraceLevel => EnableVerboseSamplingTrace ? LogLevel.Information : LogLevel.Debug;
+    private const string ClientDirectiveTag = "dbg-mcp-client-directive";
 
     /// <summary>
     /// Gets or sets the maximum number of sampling iterations to perform.
@@ -175,9 +176,10 @@ public sealed class AiAnalysisOrchestrator(
             for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
             {
                 var requestMessages = new List<SamplingMessage>(messages);
+                var effectiveSystemPrompt = AppendClientTraceDirective(SystemPrompt, traceRunDir, passName: "analysis", iteration);
                 var request = new CreateMessageRequestParams
                 {
-                    SystemPrompt = SystemPrompt,
+                    SystemPrompt = effectiveSystemPrompt,
                     Messages = requestMessages,
                     MaxTokens = maxTokens,
                     Tools = tools,
@@ -775,9 +777,10 @@ public sealed class AiAnalysisOrchestrator(
             for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
             {
                 var requestMessages = new List<SamplingMessage>(messages);
+                var effectiveSystemPrompt = AppendClientTraceDirective(systemPrompt, traceRunDir, passName, iteration);
                 var request = new CreateMessageRequestParams
                 {
-                    SystemPrompt = systemPrompt,
+                    SystemPrompt = effectiveSystemPrompt,
                     Messages = requestMessages,
                     MaxTokens = maxTokens,
                     Tools = tools,
@@ -1300,7 +1303,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 
         var request = new CreateMessageRequestParams
         {
-            SystemPrompt = systemPrompt,
+            SystemPrompt = AppendClientTraceDirective(systemPrompt, traceRunDir, passName, iteration),
             Messages = checkpointMessages,
             MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
             Tools = null,
@@ -1764,6 +1767,40 @@ Tooling:
         return ("inspect", doc.RootElement.Clone());
     }
 
+    private string AppendClientTraceDirective(string systemPrompt, string? traceRunDir, string passName, int iteration)
+    {
+        if (string.IsNullOrWhiteSpace(systemPrompt) || string.IsNullOrWhiteSpace(traceRunDir))
+        {
+            return systemPrompt;
+        }
+
+        var trimmed = systemPrompt.TrimEnd();
+        if (trimmed.Contains($"[{ClientDirectiveTag}]", StringComparison.OrdinalIgnoreCase))
+        {
+            return systemPrompt;
+        }
+
+        var httpTraceDir = Path.Combine(traceRunDir, "llm-http");
+        var maxBytes = SamplingTraceMaxFileBytes > 0 ? SamplingTraceMaxFileBytes : 2_000_000;
+
+        try
+        {
+            var directiveJson = JsonSerializer.Serialize(new
+            {
+                httpTraceDir,
+                maxFileBytes = maxBytes,
+                pass = passName,
+                iteration
+            });
+
+            return $"{trimmed}\n\n[{ClientDirectiveTag}]\n{directiveJson}\n[/{ClientDirectiveTag}]\n";
+        }
+        catch
+        {
+            return systemPrompt;
+        }
+    }
+
     private string? InitializeSamplingTraceDirectory()
     {
         if (!EnableSamplingTraceFiles)
@@ -2141,7 +2178,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 
         var request = new CreateMessageRequestParams
         {
-            SystemPrompt = systemPrompt,
+            SystemPrompt = AppendClientTraceDirective(systemPrompt, traceRunDir, passName, iteration),
             Messages =
             [
                 new SamplingMessage
@@ -2240,7 +2277,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 
 	        var request = new CreateMessageRequestParams
 	        {
-	            SystemPrompt = systemPrompt,
+	            SystemPrompt = AppendClientTraceDirective(systemPrompt, traceRunDir, passName: "analysis", iteration),
 	            Messages = finalMessages,
 	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
 	            Tools = null,
@@ -2337,7 +2374,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 
 	        var request = new CreateMessageRequestParams
 	        {
-	            SystemPrompt = systemPrompt,
+	            SystemPrompt = AppendClientTraceDirective(systemPrompt, traceRunDir, passName: "analysis", iteration),
 	            Messages = finalMessages,
 	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
 	            Tools = null,
@@ -2433,7 +2470,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 
 	        var request = new CreateMessageRequestParams
 	        {
-	            SystemPrompt = systemPrompt,
+	            SystemPrompt = AppendClientTraceDirective(systemPrompt, traceRunDir, passName, iteration),
 	            Messages = finalMessages,
 	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
 	            Tools = null,
@@ -2560,7 +2597,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 
 	        var request = new CreateMessageRequestParams
 	        {
-	            SystemPrompt = systemPrompt,
+	            SystemPrompt = AppendClientTraceDirective(systemPrompt, traceRunDir, passName, iteration),
 	            Messages = finalMessages,
 	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
 	            Tools = null,
