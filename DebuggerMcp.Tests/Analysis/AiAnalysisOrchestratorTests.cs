@@ -1455,7 +1455,7 @@ public class AiAnalysisOrchestratorTests
         {
             _requests.Add(request);
 
-            if (request.Tools is { Count: 0 } && request.ToolChoice == null)
+            if ((request.Tools == null || request.Tools.Count == 0) && request.ToolChoice == null)
             {
                 throw new InvalidOperationException("simulated checkpoint failure");
             }

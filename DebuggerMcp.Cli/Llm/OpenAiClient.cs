@@ -70,10 +70,17 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         {
             Model = requestModel,
             Messages = completionRequest.Messages.Select(ToOpenAiMessage).ToList(),
-            Tools = completionRequest.Tools?.Select(ToOpenAiTool).ToList(),
-            ToolChoice = ToOpenAiToolChoice(completionRequest.ToolChoice),
+            Tools = null,
+            ToolChoice = null,
             ReasoningEffort = completionRequest.ReasoningEffort
         };
+
+        var tools = completionRequest.Tools?.Select(ToOpenAiTool).ToList();
+        if (tools is { Count: > 0 })
+        {
+            payload.Tools = tools;
+            payload.ToolChoice = ToOpenAiToolChoice(completionRequest.ToolChoice);
+        }
 
         var maxTokens = completionRequest.MaxTokens;
         if (maxTokens.HasValue)

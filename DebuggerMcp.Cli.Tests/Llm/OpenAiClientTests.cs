@@ -95,6 +95,43 @@ public class OpenAiClientTests
     }
 
     [Fact]
+    public async Task ChatCompletionAsync_DoesNotSendEmptyToolsOrToolChoice()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-4o-mini",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")],
+            Tools = [],
+            ToolChoice = new ChatToolChoice { Mode = "auto" }
+        });
+
+        var requestBody = handler.LastRequestBody!;
+        using var doc = JsonDocument.Parse(requestBody);
+        Assert.False(doc.RootElement.TryGetProperty("tools", out _), requestBody);
+        Assert.False(doc.RootElement.TryGetProperty("tool_choice", out _), requestBody);
+    }
+
+    [Fact]
     public async Task ChatCompletionAsync_InvalidOpenAiModel_ThrowsBeforeSendingRequest()
     {
         var settings = new LlmSettings

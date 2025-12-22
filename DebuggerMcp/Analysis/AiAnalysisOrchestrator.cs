@@ -1303,7 +1303,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             SystemPrompt = systemPrompt,
             Messages = checkpointMessages,
             MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
-            Tools = [],
+            Tools = null,
             ToolChoice = null
         };
 
@@ -1867,12 +1867,14 @@ Tooling:
 	            maxTokens = request.MaxTokens,
 	            toolChoice = request.ToolChoice?.Mode,
 	            systemPrompt = request.SystemPrompt,
-	            tools = request.Tools?.Select(t => new
-	            {
-	                name = t.Name,
-	                description = t.Description,
-	                inputSchema = t.InputSchema.ToString()
-	            }),
+	            tools = request.Tools is { Count: > 0 }
+                    ? request.Tools.Select(t => new
+                    {
+                        name = t.Name,
+                        description = t.Description,
+                        inputSchema = t.InputSchema.ToString()
+                    })
+                    : null,
 	            messages = request.Messages?.Select(m => new
 	            {
 	                role = m.Role.ToString(),
@@ -2152,7 +2154,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
                 }
             ],
             MaxTokens = Math.Max(256, Math.Min(MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024, 2048)),
-            Tools = [],
+            Tools = null,
             ToolChoice = null
         };
 
@@ -2241,7 +2243,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 	            SystemPrompt = systemPrompt,
 	            Messages = finalMessages,
 	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
-	            Tools = [],
+	            Tools = null,
 	            ToolChoice = null
 	        };
 
@@ -2338,7 +2340,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 	            SystemPrompt = systemPrompt,
 	            Messages = finalMessages,
 	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
-	            Tools = [],
+	            Tools = null,
 	            ToolChoice = null
 	        };
 
@@ -2434,7 +2436,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 	            SystemPrompt = systemPrompt,
 	            Messages = finalMessages,
 	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
-	            Tools = [],
+	            Tools = null,
 	            ToolChoice = null
 	        };
 
@@ -2561,7 +2563,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 	            SystemPrompt = systemPrompt,
 	            Messages = finalMessages,
 	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
-	            Tools = [],
+	            Tools = null,
 	            ToolChoice = null
 	        };
 
