@@ -32,6 +32,12 @@ public sealed class AiAnalysisOrchestrator(
     public int MaxIterations { get; set; } = 100;
 
     /// <summary>
+    /// Gets or sets the maximum number of attempts to retry a single sampling request when the client returns an error
+    /// (e.g., transient provider failures or empty responses).
+    /// </summary>
+    public int MaxSamplingRequestAttempts { get; set; } = 3;
+
+    /// <summary>
     /// Gets or sets the maximum number of output tokens to request per sampling call.
     /// </summary>
     public int MaxTokensPerRequest { get; set; } = 4096;
@@ -163,52 +169,79 @@ public sealed class AiAnalysisOrchestrator(
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
-            var requestMessages = new List<SamplingMessage>(messages);
-            var request = new CreateMessageRequestParams
-            {
-                SystemPrompt = SystemPrompt,
-                Messages = requestMessages,
-                MaxTokens = maxTokens,
-                Tools = tools,
-                ToolChoice = new ToolChoice { Mode = "auto" }
-            };
+            CreateMessageResult? response = null;
+            Exception? lastSamplingError = null;
 
-            CreateMessageResult response;
-            try
+            for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
             {
-                _logger.LogInformation("[AI] Sampling iteration {Iteration}...", iteration);
-                LogSamplingRequestSummary(iteration, request);
-                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-request.json", BuildTraceRequest(iteration, request));
-                response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
-            }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
-            {
-                _logger.LogWarning(ex, "[AI] Sampling failed at iteration {Iteration}", iteration);
-                return new AiAnalysisResult
+                var requestMessages = new List<SamplingMessage>(messages);
+                var request = new CreateMessageRequestParams
                 {
-                    RootCause = "AI analysis failed: sampling request error.",
-                    Confidence = "low",
-                    Reasoning = ex.Message,
-                    Iterations = iteration - 1,
-                    CommandsExecuted = commandsExecuted,
-                    AnalyzedAt = DateTime.UtcNow
+                    SystemPrompt = SystemPrompt,
+                    Messages = requestMessages,
+                    MaxTokens = maxTokens,
+                    Tools = tools,
+                    ToolChoice = new ToolChoice { Mode = "auto" }
                 };
+
+                try
+                {
+                    _logger.LogInformation(
+                        "[AI] Sampling iteration {Iteration} (attempt {Attempt}/{MaxAttempts})...",
+                        iteration,
+                        attempt,
+                        MaxSamplingRequestAttempts);
+                    LogSamplingRequestSummary(iteration, request);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-request.json", BuildTraceRequest(iteration, request));
+                    response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+
+                    if (response.Content != null && response.Content.Count > 0)
+                    {
+                        break;
+                    }
+
+                    lastSamplingError = new InvalidOperationException("The sampling client returned an empty response.");
+                    _logger.LogWarning(
+                        "[AI] Sampling returned empty content at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})",
+                        iteration,
+                        attempt,
+                        MaxSamplingRequestAttempts);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    lastSamplingError = ex;
+                    _logger.LogWarning(ex, "[AI] Sampling failed at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", iteration, attempt, MaxSamplingRequestAttempts);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-error.json", new { iteration, attempt, error = ex.ToString(), message = ex.Message });
+                }
+
+                if (attempt < Math.Max(1, MaxSamplingRequestAttempts) && messages.Count > 2)
+                {
+                    var fallbackCheckpoint = BuildDeterministicCheckpointJson(
+                        passName: "analysis",
+                        commandsExecuted: commandsExecuted,
+                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+                    lastCheckpointIteration = iteration;
+                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+                    messages.Clear();
+                    messages.Add(BuildCheckpointCarryForwardMessage(fallbackCheckpoint, passName: "analysis"));
+                }
             }
 
-            if (response.Content == null || response.Content.Count == 0)
+            if (response == null || response.Content == null || response.Content.Count == 0)
             {
-                _logger.LogWarning("[AI] Sampling returned empty content at iteration {Iteration}", iteration);
-                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
-                return new AiAnalysisResult
-                {
-                    RootCause = "AI analysis failed: empty sampling response.",
-                    Confidence = "low",
-                    Reasoning = "The sampling client returned an empty response.",
-                    Iterations = iteration - 1,
-                    CommandsExecuted = commandsExecuted,
-                    Model = response.Model,
-                    AnalyzedAt = DateTime.UtcNow
-                };
+                var samplingFailureResult = await FinalizeAnalysisAfterSamplingFailureAsync(
+                        systemPrompt: SystemPrompt,
+                        passName: "analysis",
+                        commandsExecuted: commandsExecuted,
+                        iteration: iteration,
+                        lastModel: lastModel,
+                        traceRunDir: traceRunDir,
+                        failureMessage: lastSamplingError?.Message,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+                WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", samplingFailureResult);
+                return samplingFailureResult;
             }
 
             WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
@@ -491,20 +524,27 @@ public sealed class AiAnalysisOrchestrator(
                         passName: "analysis",
                         systemPrompt: SystemPrompt,
                         messages: messages,
+                        commandsExecuted: commandsExecuted,
+                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
                         iteration: iteration,
                         maxTokens: CheckpointMaxTokens,
                         traceRunDir: traceRunDir,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
-                if (!string.IsNullOrWhiteSpace(checkpoint))
+                if (string.IsNullOrWhiteSpace(checkpoint))
                 {
-                    lastCheckpointIteration = iteration;
-                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
-
-                    messages.Clear();
-                    messages.Add(BuildCheckpointCarryForwardMessage(checkpoint, passName: "analysis"));
+                    checkpoint = BuildDeterministicCheckpointJson(
+                        passName: "analysis",
+                        commandsExecuted: commandsExecuted,
+                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
                 }
+
+                lastCheckpointIteration = iteration;
+                commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+
+                messages.Clear();
+                messages.Add(BuildCheckpointCarryForwardMessage(checkpoint, passName: "analysis"));
             }
         }
 
@@ -720,27 +760,63 @@ public sealed class AiAnalysisOrchestrator(
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
-            var requestMessages = new List<SamplingMessage>(messages);
-            var request = new CreateMessageRequestParams
-            {
-                SystemPrompt = systemPrompt,
-                Messages = requestMessages,
-                MaxTokens = maxTokens,
-                Tools = tools,
-                ToolChoice = new ToolChoice { Mode = "auto" }
-            };
+            CreateMessageResult? response = null;
+            Exception? lastSamplingError = null;
 
-            CreateMessageResult response;
-            try
+            for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
             {
-                _logger.LogInformation("[AI] Sampling pass {Pass} iteration {Iteration}...", passName, iteration);
-                LogSamplingRequestSummary(iteration, request);
-                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-request.json", BuildTraceRequest(iteration, request));
-                response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+                var requestMessages = new List<SamplingMessage>(messages);
+                var request = new CreateMessageRequestParams
+                {
+                    SystemPrompt = systemPrompt,
+                    Messages = requestMessages,
+                    MaxTokens = maxTokens,
+                    Tools = tools,
+                    ToolChoice = new ToolChoice { Mode = "auto" }
+                };
+
+                try
+                {
+                    _logger.LogInformation(
+                        "[AI] Sampling pass {Pass} iteration {Iteration} (attempt {Attempt}/{MaxAttempts})...",
+                        passName,
+                        iteration,
+                        attempt,
+                        MaxSamplingRequestAttempts);
+                    LogSamplingRequestSummary(iteration, request);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-request.json", BuildTraceRequest(iteration, request));
+                    response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+                    if (response.Content != null && response.Content.Count > 0)
+                    {
+                        break;
+                    }
+
+                    lastSamplingError = new InvalidOperationException("The sampling client returned an empty response.");
+                    _logger.LogWarning("[AI] Sampling pass {Pass} returned empty content at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", passName, iteration, attempt, MaxSamplingRequestAttempts);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    lastSamplingError = ex;
+                    _logger.LogWarning(ex, "[AI] Sampling pass {Pass} failed at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", passName, iteration, attempt, MaxSamplingRequestAttempts);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-error.json", new { passName, iteration, attempt, error = ex.ToString(), message = ex.Message });
+                }
+
+                if (attempt < Math.Max(1, MaxSamplingRequestAttempts) && messages.Count > 2)
+                {
+                    var fallbackCheckpoint = BuildDeterministicCheckpointJson(
+                        passName: passName,
+                        commandsExecuted: commandsExecuted,
+                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+                    lastCheckpointIteration = iteration;
+                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+                    messages.Clear();
+                    messages.Add(BuildCheckpointCarryForwardMessage(fallbackCheckpoint, passName: passName));
+                }
             }
-            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+
+            if (response == null || response.Content == null || response.Content.Count == 0)
             {
-                _logger.LogWarning(ex, "[AI] Sampling pass {Pass} failed at iteration {Iteration}", passName, iteration);
                 return passName switch
                 {
                     "summary-rewrite" => new AiSummaryResult
@@ -758,35 +834,6 @@ public sealed class AiAnalysisOrchestrator(
                         Confidence = "low",
                         Iterations = iteration - 1,
                         CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                        AnalyzedAt = DateTime.UtcNow
-                    } as T,
-                    _ => null
-                };
-            }
-
-            if (response.Content == null || response.Content.Count == 0)
-            {
-                _logger.LogWarning("[AI] Sampling pass {Pass} returned empty content at iteration {Iteration}", passName, iteration);
-                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
-                return passName switch
-                {
-                    "summary-rewrite" => new AiSummaryResult
-                    {
-                        Error = "AI summary rewrite failed: empty sampling response.",
-                        Description = string.Empty,
-                        Iterations = iteration - 1,
-                        CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                        Model = response.Model,
-                        AnalyzedAt = DateTime.UtcNow
-                    } as T,
-                    "thread-narrative" => new AiThreadNarrativeResult
-                    {
-                        Error = "AI thread narrative failed: empty sampling response.",
-                        Description = string.Empty,
-                        Confidence = "low",
-                        Iterations = iteration - 1,
-                        CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                        Model = response.Model,
                         AnalyzedAt = DateTime.UtcNow
                     } as T,
                     _ => null
@@ -1034,20 +1081,27 @@ public sealed class AiAnalysisOrchestrator(
                         passName: passName,
                         systemPrompt: systemPrompt,
                         messages: messages,
+                        commandsExecuted: commandsExecuted,
+                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
                         iteration: iteration,
                         maxTokens: CheckpointMaxTokens,
                         traceRunDir: traceRunDir,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
-                if (!string.IsNullOrWhiteSpace(checkpoint))
+                if (string.IsNullOrWhiteSpace(checkpoint))
                 {
-                    lastCheckpointIteration = iteration;
-                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
-
-                    messages.Clear();
-                    messages.Add(BuildCheckpointCarryForwardMessage(checkpoint, passName: passName));
+                    checkpoint = BuildDeterministicCheckpointJson(
+                        passName: passName,
+                        commandsExecuted: commandsExecuted,
+                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
                 }
+
+                lastCheckpointIteration = iteration;
+                commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+
+                messages.Clear();
+                messages.Add(BuildCheckpointCarryForwardMessage(checkpoint, passName: passName));
             }
         }
 
@@ -1146,6 +1200,8 @@ public sealed class AiAnalysisOrchestrator(
         string passName,
         string systemPrompt,
         List<SamplingMessage> messages,
+        List<ExecutedCommand> commandsExecuted,
+        int commandsExecutedAtLastCheckpoint,
         int iteration,
         int maxTokens,
         string? traceRunDir,
@@ -1197,17 +1253,32 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 {checkpointSchema}
 """;
 
-        var checkpointMessages = new List<SamplingMessage>(messages)
+        var evidence = BuildCheckpointEvidenceSnapshot(
+            passName: passName,
+            commandsExecuted: commandsExecuted,
+            commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+
+        var checkpointMessages = new List<SamplingMessage>();
+
+        // If the conversation has already been pruned to a single checkpoint carry-forward message, include it so the model
+        // can refine/extend rather than restart from scratch.
+        if (messages.Count == 1)
         {
-            new()
+            var t = messages[0].Content?.OfType<TextContentBlock>().Select(b => b.Text).FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(t) && t!.Contains("Checkpoint JSON:", StringComparison.OrdinalIgnoreCase))
             {
-                Role = Role.User,
-                Content =
-                [
-                    new TextContentBlock { Text = prompt }
-                ]
+                checkpointMessages.Add(messages[0]);
             }
-        };
+        }
+
+        checkpointMessages.Add(new SamplingMessage
+        {
+            Role = Role.User,
+            Content =
+            [
+                new TextContentBlock { Text = $"{prompt}\n\nEvidence snapshot:\n{evidence}" }
+            ]
+        });
 
         var request = new CreateMessageRequestParams
         {
@@ -1228,6 +1299,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
             _logger.LogWarning(ex, "[AI] Checkpoint synthesis failed in pass {Pass} at iteration {Iteration}", passName, iteration);
+            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
             return null;
         }
 
@@ -1283,6 +1355,73 @@ Checkpoint JSON:
                 new TextContentBlock { Text = prompt }
             ]
         };
+    }
+
+    private static string BuildCheckpointEvidenceSnapshot(
+        string passName,
+        List<ExecutedCommand> commandsExecuted,
+        int commandsExecutedAtLastCheckpoint)
+    {
+        var start = Math.Clamp(commandsExecutedAtLastCheckpoint, 0, commandsExecuted.Count);
+        var recent = commandsExecuted.Skip(start).ToList();
+        if (recent.Count == 0)
+        {
+            return $"pass={passName}\n(no new tool calls since last checkpoint)";
+        }
+
+        const int maxCommands = 25;
+        const int maxInputChars = 1500;
+        const int maxOutputChars = 4000;
+
+        if (recent.Count > maxCommands)
+        {
+            recent = recent.Skip(recent.Count - maxCommands).ToList();
+        }
+
+        var sb = new StringBuilder();
+        sb.AppendLine($"pass={passName}");
+        sb.AppendLine($"newToolCalls={recent.Count}");
+        sb.AppendLine("toolCalls:");
+
+        var idx = 0;
+        foreach (var c in recent)
+        {
+            idx++;
+            var input = c.Input.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null ? "{}" : c.Input.GetRawText();
+            input = TruncateText(input, maxInputChars);
+            var output = TruncateText(c.Output ?? string.Empty, maxOutputChars);
+            sb.AppendLine($"- [{idx}] iter={c.Iteration} tool={c.Tool}");
+            sb.AppendLine($"  input: {input}");
+            sb.AppendLine($"  output: {output}");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static string BuildDeterministicCheckpointJson(
+        string passName,
+        List<ExecutedCommand> commandsExecuted,
+        int commandsExecutedAtLastCheckpoint)
+    {
+        var evidence = BuildCheckpointEvidenceSnapshot(passName, commandsExecuted, commandsExecutedAtLastCheckpoint);
+        var checkpoint = new
+        {
+            facts = new[]
+            {
+                "Checkpoint synthesis unavailable; using deterministic fallback checkpoint.",
+                $"pass={passName}"
+            },
+            hypotheses = Array.Empty<object>(),
+            evidence = new[]
+            {
+                new { id = "E0", source = "deterministic", finding = TruncateText(evidence, maxChars: 12_000) }
+            },
+            doNotRepeat = Array.Empty<string>(),
+            nextSteps = Array.Empty<object>()
+        };
+
+        var json = JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = false });
+        return json.Length > 20_000 ? TruncateText(json, maxChars: 20_000) : json;
     }
 
     private static AiSummaryResult ParseSummaryRewriteComplete(
@@ -1941,6 +2080,97 @@ Tooling:
         }
 
         return result;
+    }
+
+    private async Task<AiAnalysisResult> FinalizeAnalysisAfterSamplingFailureAsync(
+        string systemPrompt,
+        string passName,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        string? lastModel,
+        string? traceRunDir,
+        string? failureMessage,
+        CancellationToken cancellationToken)
+    {
+        const string analysisSchema = """
+{
+  "rootCause": "string",
+  "confidence": "high|medium|low|unknown",
+  "reasoning": "string",
+  "recommendations": ["string"],
+  "additionalFindings": ["string"]
+}
+""";
+
+        var evidence = BuildCheckpointEvidenceSnapshot(passName, commandsExecuted, commandsExecutedAtLastCheckpoint: 0);
+
+        var finalPrompt = $"""
+Sampling failed during pass "{passName}" at iteration {iteration}. Do not request any tools.
+
+Provide the best-effort final conclusion based ONLY on the evidence snapshot below (which contains tool inputs/outputs).
+If evidence is insufficient, state what is missing and provide the most likely hypotheses.
+
+Failure: {failureMessage ?? "unknown"}
+
+Evidence snapshot:
+{evidence}
+
+Return ONLY valid JSON (no markdown, no code fences) with this schema:
+{analysisSchema}
+""";
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages =
+            [
+                new SamplingMessage
+                {
+                    Role = Role.User,
+                    Content =
+                    [
+                        new TextContentBlock { Text = finalPrompt }
+                    ]
+                }
+            ],
+            MaxTokens = Math.Max(256, Math.Min(MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024, 2048)),
+            Tools = [],
+            ToolChoice = null
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogWarning("[AI] Finalizing analysis after sampling failure at iteration {Iteration}...", iteration);
+            WriteSamplingTraceFile(traceRunDir, $"final-sampling-failure-synthesis-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: $"Sampling failed at iteration {iteration}. Final synthesis request failed: {ex.Message}",
+                text: string.Empty,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: lastModel);
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"final-sampling-failure-synthesis-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response) ?? string.Empty;
+        if (!TryParseFirstJsonObject(text, out var json))
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: $"Sampling failed at iteration {iteration}. Final synthesis produced unstructured output.",
+                text: text,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: response.Model ?? lastModel);
+        }
+
+        var parsed = ParseAnalysisComplete(json, commandsExecuted, iteration, response.Model ?? lastModel);
+        parsed.AnalyzedAt = DateTime.UtcNow;
+        return parsed;
     }
 
     private async Task<AiAnalysisResult> FinalizeAnalysisAfterToolBudgetExceededAsync(

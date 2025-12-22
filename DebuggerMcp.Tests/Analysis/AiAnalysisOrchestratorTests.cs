@@ -294,33 +294,38 @@ public class AiAnalysisOrchestratorTests
     public async Task AnalyzeCrashAsync_WhenSamplingReturnsEmptyContent_DoesNotCountFailedIteration()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
-            .EnqueueResult(new CreateMessageResult
-            {
-                Model = "test",
-                Content =
-                [
-                    new TextContentBlock { Text = "ok" }
-                ]
-            })
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
             .EnqueueResult(new CreateMessageResult
             {
                 Model = "test",
                 Content = []
-            });
+            })
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok"
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
-            MaxIterations = 10
+            MaxIterations = 10,
+            MaxSamplingRequestAttempts = 2
         };
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
             "{}",
-            new FakeDebuggerManager(),
+            debugger,
             clrMdAnalyzer: null);
 
-        Assert.Equal("AI analysis failed: empty sampling response.", result.RootCause);
-        Assert.Equal(1, result.Iterations);
+        Assert.Equal("done", result.RootCause);
+        Assert.Equal(2, result.Iterations);
     }
 
     [Fact]
@@ -784,6 +789,47 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_WhenCheckpointSynthesisThrows_PrunesWithDeterministicCheckpointAndContinues()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new ThrowingCheckpointSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok"
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 2,
+            CheckpointMaxTokens = 128
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("done", result.RootCause);
+        Assert.Equal(2, debugger.ExecutedCommands.Count);
+        Assert.True(requests.Count >= 4);
+
+        var last = requests.Last();
+        var carryText = last.Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
+        Assert.Contains("Checkpoint synthesis unavailable", carryText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_WhenMaxIterationsIsZero_RunsAtLeastOneIteration()
     {
         var requests = new List<CreateMessageRequestParams>();
@@ -813,6 +859,27 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal(2, result.Iterations);
         Assert.Equal("final root cause", result.RootCause);
         Assert.Null(requests.Last().ToolChoice);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenSamplingAlwaysFails_ReturnsFallbackSynthesisInsteadOfHardFailure()
+    {
+        var sampling = new AlwaysThrowSamplingClient();
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 1,
+            MaxSamplingRequestAttempts = 2
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Contains("Sampling failed", result.RootCause, StringComparison.OrdinalIgnoreCase);
+        Assert.NotNull(result.Reasoning);
     }
 
     [Fact]
@@ -1367,6 +1434,49 @@ public class AiAnalysisOrchestratorTests
 
             return Task.FromResult(_results.Dequeue());
         }
+    }
+
+    private sealed class ThrowingCheckpointSamplingClient(List<CreateMessageRequestParams> requests) : ISamplingClient
+    {
+        private readonly Queue<CreateMessageResult> _results = new();
+        private readonly List<CreateMessageRequestParams> _requests = requests;
+
+        public bool IsSamplingSupported => true;
+
+        public bool IsToolUseSupported => true;
+
+        public ThrowingCheckpointSamplingClient EnqueueResult(CreateMessageResult result)
+        {
+            _results.Enqueue(result);
+            return this;
+        }
+
+        public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
+        {
+            _requests.Add(request);
+
+            if (request.Tools is { Count: 0 } && request.ToolChoice == null)
+            {
+                throw new InvalidOperationException("simulated checkpoint failure");
+            }
+
+            if (_results.Count == 0)
+            {
+                return Task.FromResult(CreateMessageResultWithText("no more scripted responses"));
+            }
+
+            return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private sealed class AlwaysThrowSamplingClient : ISamplingClient
+    {
+        public bool IsSamplingSupported => true;
+
+        public bool IsToolUseSupported => true;
+
+        public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("simulated sampling failure");
     }
 
     private sealed class CapturingSamplingClient(Action<CreateMessageRequestParams> onRequest, CreateMessageResult result) : ISamplingClient
