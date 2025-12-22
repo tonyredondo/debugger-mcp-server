@@ -2043,26 +2043,28 @@ public class Program
 
     private static void RegisterMcpSamplingHandlers(ConsoleOutput output, ShellState state, McpClient mcpClient)
     {
-        try
-        {
-            var llmSettings = state.Settings.Llm;
-            llmSettings.ApplyEnvironmentOverrides();
+	        try
+	        {
+	            var llmSettings = state.Settings.Llm;
+	            llmSettings.ApplyEnvironmentOverrides();
 
-            var samplingHttpTraceEnabled =
-                string.Equals(Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE"), "true", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_SAMPLING"), "true", StringComparison.OrdinalIgnoreCase);
-            var samplingHttpTraceMaxFileBytes = 0;
-            var maxBytesEnv = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_MAX_FILE_BYTES");
-            if (!string.IsNullOrWhiteSpace(maxBytesEnv) && int.TryParse(maxBytesEnv, out var parsedMaxBytes) && parsedMaxBytes > 0)
-            {
-                samplingHttpTraceMaxFileBytes = parsedMaxBytes;
-            }
+	            var samplingHttpTraceEnabled =
+	                string.Equals(Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE"), "true", StringComparison.OrdinalIgnoreCase) ||
+	                string.Equals(Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_SAMPLING"), "true", StringComparison.OrdinalIgnoreCase);
+	            var samplingHttpTraceRootDir = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_DIR");
+	            var samplingHttpTraceMaxFileBytes = 0;
+	            var maxBytesEnv = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_MAX_FILE_BYTES");
+	            if (!string.IsNullOrWhiteSpace(maxBytesEnv) && int.TryParse(maxBytesEnv, out var parsedMaxBytes) && parsedMaxBytes > 0)
+	            {
+	                samplingHttpTraceMaxFileBytes = parsedMaxBytes;
+	            }
 
-            var traceStore = samplingHttpTraceEnabled
-                ? LlmTraceStore.TryCreate(
-                    label: $"mcp-sampling-{llmSettings.GetProviderDisplayName()}",
-                    maxFileBytes: samplingHttpTraceMaxFileBytes)
-                : null;
+	            var traceStore = samplingHttpTraceEnabled
+	                ? LlmTraceStore.TryCreate(
+	                    label: $"mcp-sampling-{llmSettings.GetProviderDisplayName()}",
+	                    rootDirectory: samplingHttpTraceRootDir,
+	                    maxFileBytes: samplingHttpTraceMaxFileBytes)
+	                : null;
             if (samplingHttpTraceEnabled)
             {
                 if (traceStore == null)
@@ -4801,14 +4803,38 @@ public class Program
             return;
         }
 
-        try
-        {
-            await ExecuteLlmPromptAsync(rawPrompt, output, state, mcpClient, llmSettings, transcript, cancellationToken: default);
-        }
-        catch (Exception ex)
-        {
-            output.Error(ex.Message);
-            WriteLlmErrorContext(output, llmSettings);
+	        try
+	        {
+	            LlmTraceStore? traceStore = null;
+	            var llmHttpTraceEnabled =
+	                string.Equals(Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE"), "true", StringComparison.OrdinalIgnoreCase);
+	            if (llmHttpTraceEnabled)
+	            {
+	                var traceRootDir = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_DIR");
+	                var maxBytesEnv = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_MAX_FILE_BYTES");
+	                var maxFileBytes = 0;
+	                if (!string.IsNullOrWhiteSpace(maxBytesEnv) && int.TryParse(maxBytesEnv, out var parsedMaxBytes) && parsedMaxBytes > 0)
+	                {
+	                    maxFileBytes = parsedMaxBytes;
+	                }
+
+	                traceStore = LlmTraceStore.TryCreate(
+	                    label: $"{llmSettings.GetProviderDisplayName()}-{llmSettings.GetEffectiveModel()}",
+	                    rootDirectory: traceRootDir,
+	                    maxFileBytes: maxFileBytes);
+	                if (traceStore != null)
+	                {
+	                    output.Dim($"LLM HTTP trace enabled: {traceStore.DirectoryPath}");
+	                    output.Dim("Note: trace files may contain sensitive data; delete when done.");
+	                }
+	            }
+
+	            await ExecuteLlmPromptAsync(rawPrompt, output, state, mcpClient, llmSettings, transcript, cancellationToken: default, traceStore: traceStore);
+	        }
+	        catch (Exception ex)
+	        {
+	            output.Error(ex.Message);
+	            WriteLlmErrorContext(output, llmSettings);
         }
     }
 
@@ -4856,7 +4882,8 @@ public class Program
         output.KeyValue("Agent Confirm", llmSettings.AgentModeConfirmToolCalls ? "enabled" : "disabled");
         output.WriteLine();
 
-        var trace = LlmTraceStore.TryCreate($"{llmSettings.GetProviderDisplayName()}-{llmSettings.GetEffectiveModel()}", maxFileBytes: 0);
+	        var traceRootDir = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_DIR");
+	        var trace = LlmTraceStore.TryCreate($"{llmSettings.GetProviderDisplayName()}-{llmSettings.GetEffectiveModel()}", rootDirectory: traceRootDir, maxFileBytes: 0);
         if (trace != null)
         {
             trace.AppendEvent(new

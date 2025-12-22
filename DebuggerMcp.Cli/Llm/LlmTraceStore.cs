@@ -47,13 +47,26 @@ internal sealed class LlmTraceStore
     /// Creates a new trace store under the default CLI config directory.
     /// </summary>
     /// <param name="label">Human-readable label used in the folder name.</param>
+    /// <param name="rootDirectory">Optional root directory for trace runs. When null/empty, uses the default CLI config directory.</param>
     /// <param name="maxFileBytes">Maximum bytes per file (0 = no cap; default: 0).</param>
     /// <returns>The created store, or null if creation fails.</returns>
     public static LlmTraceStore? TryCreate(string label, int maxFileBytes = 0)
+        => TryCreate(label, rootDirectory: null, maxFileBytes: maxFileBytes);
+
+    /// <summary>
+    /// Creates a new trace store under the provided root directory.
+    /// </summary>
+    /// <param name="label">Human-readable label used in the folder name.</param>
+    /// <param name="rootDirectory">Optional root directory for trace runs. When null/empty, uses the default CLI config directory.</param>
+    /// <param name="maxFileBytes">Maximum bytes per file (0 = no cap; default: 0).</param>
+    /// <returns>The created store, or null if creation fails.</returns>
+    public static LlmTraceStore? TryCreate(string label, string? rootDirectory, int maxFileBytes = 0)
     {
         try
         {
-            var root = Path.Combine(ConnectionSettings.DefaultConfigDirectory, "llmagent-trace");
+            var root = string.IsNullOrWhiteSpace(rootDirectory)
+                ? Path.Combine(ConnectionSettings.DefaultConfigDirectory, "llmagent-trace")
+                : Path.GetFullPath(rootDirectory);
             Directory.CreateDirectory(root);
             var dirName = $"{DateTime.UtcNow:yyyyMMdd-HHmmss}-{SanitizeFileComponent(label)}-{Guid.NewGuid():N}";
             var full = Path.Combine(root, dirName);

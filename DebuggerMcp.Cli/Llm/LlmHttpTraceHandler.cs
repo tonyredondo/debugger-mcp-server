@@ -2,6 +2,7 @@
 
 using System.Net.Http.Headers;
 using System.Text;
+using System.Text.Json;
 
 namespace DebuggerMcp.Cli.Llm;
 
@@ -39,6 +40,7 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
         {
             var requestHeaders = CaptureRequestHeaders(request.Headers);
             var requestContentHeaders = request.Content == null ? null : CaptureHeaders(request.Content.Headers);
+            var requestMetaFile = $"{id:0000}.{_providerLabel}.request.meta.json";
             _trace.AppendEvent(new
             {
                 kind = "llm_http_request",
@@ -49,8 +51,18 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
                 url = request.RequestUri?.ToString() ?? string.Empty,
                 headers = requestHeaders,
                 contentHeaders = requestContentHeaders,
+                metaFile = requestMetaFile,
                 bodyFile = $"{id:0000}.{_providerLabel}.request.json"
             });
+            _trace.WriteJson(
+                requestMetaFile,
+                JsonSerializer.Serialize(new
+                {
+                    method = request.Method.Method,
+                    url = request.RequestUri?.ToString() ?? string.Empty,
+                    headers = requestHeaders,
+                    contentHeaders = requestContentHeaders
+                }));
             _trace.WriteJson($"{id:0000}.{_providerLabel}.request.json", requestBody);
         }
         catch
@@ -104,6 +116,7 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
             var responseText = responseBytes.Length == 0 ? string.Empty : DecodeText(responseBytes, responseCharset);
             var responseHeaders = CaptureHeaders(response.Headers);
             var responseContentHeaders = response.Content == null ? null : CaptureHeaders(response.Content.Headers);
+            var responseMetaFile = $"{id:0000}.{_providerLabel}.response.meta.json";
             _trace.AppendEvent(new
             {
                 kind = "llm_http_response",
@@ -114,8 +127,18 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
                 durationMs = (int)Math.Max(0, (completedUtc - startedUtc).TotalMilliseconds),
                 headers = responseHeaders,
                 contentHeaders = responseContentHeaders,
+                metaFile = responseMetaFile,
                 bodyFile = $"{id:0000}.{_providerLabel}.response.json"
             });
+            _trace.WriteJson(
+                responseMetaFile,
+                JsonSerializer.Serialize(new
+                {
+                    status = (int)response.StatusCode,
+                    durationMs = (int)Math.Max(0, (completedUtc - startedUtc).TotalMilliseconds),
+                    headers = responseHeaders,
+                    contentHeaders = responseContentHeaders
+                }));
             _trace.WriteJson($"{id:0000}.{_providerLabel}.response.json", responseText);
         }
         catch

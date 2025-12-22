@@ -54,6 +54,49 @@ public sealed class LlmHttpTraceHandlerTests
     }
 
     [Fact]
+    public async Task SendAsync_WritesMetaFiles_WithRedactedAuthorization()
+    {
+        var temp = Path.Combine(Path.GetTempPath(), "dbg-mcp-tests", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(temp);
+
+        try
+        {
+            var store = new LlmTraceStore(temp, maxFileBytes: 0);
+
+            var inner = new StubHandler(_ =>
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("{\"ok\":true}", Encoding.UTF8, "application/json")
+                });
+
+            var trace = new LlmHttpTraceHandler(store, "openai") { InnerHandler = inner };
+            using var http = new HttpClient(trace);
+
+            using var req = new HttpRequestMessage(HttpMethod.Post, "https://example.test/chat/completions")
+            {
+                Content = new StringContent("{\"x\":1}", Encoding.UTF8, "application/json")
+            };
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "sk-123");
+
+            var resp = await http.SendAsync(req);
+            _ = await resp.Content.ReadAsStringAsync();
+
+            var requestMetaFile = Directory.GetFiles(temp).Single(f => f.EndsWith(".openai.request.meta.json", StringComparison.OrdinalIgnoreCase));
+            var requestMetaText = await File.ReadAllTextAsync(requestMetaFile);
+            Assert.DoesNotContain("sk-123", requestMetaText, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("Bearer ***", requestMetaText, StringComparison.OrdinalIgnoreCase);
+
+            var responseMetaFile = Directory.GetFiles(temp).Single(f => f.EndsWith(".openai.response.meta.json", StringComparison.OrdinalIgnoreCase));
+            var responseMetaText = await File.ReadAllTextAsync(responseMetaFile);
+            Assert.Contains("\"status\"", responseMetaText, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            try { Directory.Delete(temp, recursive: true); } catch { /* ignore */ }
+        }
+    }
+
+    [Fact]
     public async Task SendAsync_RedactsOpenAiApiKeyEnvVarsAndRawKeyTokens()
     {
         var temp = Path.Combine(Path.GetTempPath(), "dbg-mcp-tests", Guid.NewGuid().ToString("N"));

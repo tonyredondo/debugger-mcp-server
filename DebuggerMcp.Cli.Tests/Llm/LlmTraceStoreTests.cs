@@ -69,6 +69,31 @@ public class LlmTraceStoreTests
     }
 
     [Fact]
+    public void TryCreate_WhenRootDirectoryProvided_CreatesUnderThatRoot()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", nameof(LlmTraceStoreTests), "root", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+
+        var store = LlmTraceStore.TryCreate("sampling", rootDirectory: root, maxFileBytes: 0);
+        if (store == null)
+        {
+            return;
+        }
+
+        try
+        {
+            var fullRoot = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            var fullStore = Path.GetFullPath(store.DirectoryPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            Assert.StartsWith(fullRoot, fullStore, StringComparison.OrdinalIgnoreCase);
+            Assert.True(Directory.Exists(store.DirectoryPath));
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
     public void WriteText_WhenFileNameBlank_DoesNotCreateFile()
     {
         var temp = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Cli.Tests", nameof(LlmTraceStoreTests), Guid.NewGuid().ToString("N"));
