@@ -15,7 +15,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) =>
+            (_, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -52,7 +52,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = """{ "type":"tool_use", "name":"exec", "input": { "command":"bt" } }"""
             }));
@@ -80,7 +80,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = """{ "type":"tool_use", "id":"tc1", "input": { "command":"bt" } }"""
             }));
@@ -107,7 +107,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = """
                 {
@@ -138,7 +138,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = """
                 [
@@ -171,7 +171,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = "I see tool_use mentioned but there is no JSON."
             }));
@@ -198,7 +198,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = """
                 prefix { "type":"tool_use", "id":"tc1", "name":"exec", "input": { "command":"bt" }
@@ -227,7 +227,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = """
                 prefix {"type":"tool_use","id":"tc1","name":"exec","input":{"command":"echo \"tool_use\" { }"}} suffix
@@ -259,7 +259,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
             progress.Add);
 
         using var doc = JsonDocument.Parse("""
@@ -296,7 +296,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _, _) =>
+            (request, _) =>
             {
                 captured = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -336,7 +336,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
             progress.Add);
 
         using var doc1 = JsonDocument.Parse("""
@@ -385,7 +385,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = "ok",
                 ToolCalls =
@@ -420,7 +420,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = "ok",
                 ToolCalls = [new ChatToolCall("tc1", toolName, argsJson)]
@@ -448,7 +448,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = "ok",
                 ToolCalls = [new ChatToolCall("tc1", "exec", "{not-json")]
@@ -485,7 +485,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _, _) =>
+            (request, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });
@@ -516,7 +516,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult { Text = jsonStringValue }));
+            (_, _) => Task.FromResult(new ChatCompletionResult { Text = jsonStringValue }));
 
         using var doc = JsonDocument.Parse("""
         {
@@ -545,7 +545,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) =>
+            (_, _) =>
             {
                 return Task.FromResult(new ChatCompletionResult
                 {
@@ -596,7 +596,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = "ignored",
                 RawMessageContent = rawDoc.RootElement.Clone(),
@@ -631,7 +631,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult
+            (_, _) => Task.FromResult(new ChatCompletionResult
             {
                 Text = "ok",
                 RawMessageContent = rawDoc.RootElement.Clone(),
@@ -660,7 +660,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (_, _, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
+            (_, _) => Task.FromResult(new ChatCompletionResult { Text = "ok" }),
             progress.Add);
 
         using var doc = JsonDocument.Parse("""
@@ -699,7 +699,7 @@ public class McpSamplingCreateMessageHandlerEdgeCaseTests
         ChatCompletionRequest? seenRequest = null;
         var handler = new McpSamplingCreateMessageHandler(
             settings,
-            (request, _, _) =>
+            (request, _) =>
             {
                 seenRequest = request;
                 return Task.FromResult(new ChatCompletionResult { Text = "ok" });

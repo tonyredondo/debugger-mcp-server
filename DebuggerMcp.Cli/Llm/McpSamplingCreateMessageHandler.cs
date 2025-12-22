@@ -10,20 +10,15 @@ namespace DebuggerMcp.Cli.Llm;
 /// </summary>
 internal sealed class McpSamplingCreateMessageHandler(
     LlmSettings settings,
-    Func<ChatCompletionRequest, LlmTraceStore?, CancellationToken, Task<ChatCompletionResult>> complete,
+    Func<ChatCompletionRequest, CancellationToken, Task<ChatCompletionResult>> complete,
     Action<string>? progress = null)
 {
     private readonly LlmSettings _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-    private readonly Func<ChatCompletionRequest, LlmTraceStore?, CancellationToken, Task<ChatCompletionResult>> _complete =
+    private readonly Func<ChatCompletionRequest, CancellationToken, Task<ChatCompletionResult>> _complete =
         complete ?? throw new ArgumentNullException(nameof(complete));
     private readonly Action<string>? _progress = progress;
 
     private int _lastSeenMessageCount;
-    private readonly object _traceStoreGate = new();
-    private readonly Dictionary<string, LlmTraceStore> _traceStoresByDirectory =
-        new(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-
-    private const string ClientDirectiveTag = "dbg-mcp-client-directive";
 
     public async Task<SamplingCreateMessageResult> HandleAsync(JsonElement? parameters, CancellationToken cancellationToken)
     {
@@ -37,11 +32,9 @@ internal sealed class McpSamplingCreateMessageHandler(
         EmitProgressForNewToolResults(parameters.Value);
 
         var systemPrompt = TryGetString(parameters.Value, "systemPrompt") ?? TryGetString(parameters.Value, "SystemPrompt");
-        var (cleanedSystemPrompt, directive) = TryExtractClientDirective(systemPrompt);
-        var traceStore = TryGetTraceStoreForDirective(directive);
-        var request = BuildChatCompletionRequest(cleanedSystemPrompt, parameters.Value);
+        var request = BuildChatCompletionRequest(systemPrompt, parameters.Value);
 
-        var response = await _complete(request, traceStore, cancellationToken).ConfigureAwait(false);
+        var response = await _complete(request, cancellationToken).ConfigureAwait(false);
         response = ApplyMcpToolUseFallback(response);
 
         if (string.IsNullOrWhiteSpace(response.Text) && (response.ToolCalls == null || response.ToolCalls.Count == 0))
@@ -75,181 +68,6 @@ internal sealed class McpSamplingCreateMessageHandler(
             Model = response.Model ?? _settings.GetEffectiveModel(),
             Content = BuildSamplingContentBlocks(response)
         };
-    }
-
-    private sealed record ClientDirective(string? HttpTraceDir, int? MaxFileBytes);
-
-    private static (string? CleanedSystemPrompt, ClientDirective? Directive) TryExtractClientDirective(string? systemPrompt)
-    {
-        if (string.IsNullOrWhiteSpace(systemPrompt))
-        {
-            return (systemPrompt, null);
-        }
-
-        var startTag = $"[{ClientDirectiveTag}]";
-        var endTag = $"[/{ClientDirectiveTag}]";
-
-        var start = systemPrompt.LastIndexOf(startTag, StringComparison.OrdinalIgnoreCase);
-        if (start < 0)
-        {
-            return (systemPrompt, null);
-        }
-
-        var end = systemPrompt.IndexOf(endTag, start + startTag.Length, StringComparison.OrdinalIgnoreCase);
-        if (end < 0)
-        {
-            return (systemPrompt, null);
-        }
-
-        var jsonStart = start + startTag.Length;
-        var json = systemPrompt.Substring(jsonStart, end - jsonStart).Trim();
-        if (json.Length == 0)
-        {
-            return (systemPrompt, null);
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(json);
-            var root = doc.RootElement;
-            var dir = TryGetString(root, "httpTraceDir");
-            var maxFileBytes = TryGetInt32(root, "maxFileBytes");
-
-            var prefix = systemPrompt[..start].TrimEnd();
-            var suffix = systemPrompt[(end + endTag.Length)..].TrimStart();
-            var cleaned = suffix.Length == 0 ? prefix : $"{prefix}\n\n{suffix}";
-
-            return (cleaned, new ClientDirective(dir, maxFileBytes));
-        }
-        catch
-        {
-            return (systemPrompt, null);
-        }
-    }
-
-    private LlmTraceStore? TryGetTraceStoreForDirective(ClientDirective? directive)
-    {
-        if (directive == null || string.IsNullOrWhiteSpace(directive.HttpTraceDir))
-        {
-            return null;
-        }
-
-        if (!TryNormalizeSafeTraceDirectory(directive.HttpTraceDir!, out var fullPath))
-        {
-            _progress?.Invoke($"Ignoring server-provided httpTraceDir (outside allowed roots): {directive.HttpTraceDir}");
-            return null;
-        }
-
-        try
-        {
-            Directory.CreateDirectory(fullPath);
-        }
-        catch
-        {
-            return null;
-        }
-
-        lock (_traceStoreGate)
-        {
-            if (_traceStoresByDirectory.TryGetValue(fullPath, out var existing))
-            {
-                return existing;
-            }
-
-            var maxFileBytes = directive.MaxFileBytes.GetValueOrDefault(0);
-            var created = new LlmTraceStore(fullPath, maxFileBytes);
-            _traceStoresByDirectory[fullPath] = created;
-            _progress?.Invoke($"LLM HTTP trace enabled for this sampling call: {created.DirectoryPath}");
-            return created;
-        }
-    }
-
-    private static bool TryNormalizeSafeTraceDirectory(string traceDir, out string normalized)
-    {
-        normalized = string.Empty;
-        if (string.IsNullOrWhiteSpace(traceDir))
-        {
-            return false;
-        }
-
-        try
-        {
-            normalized = Path.GetFullPath(traceDir.Trim());
-        }
-        catch
-        {
-            return false;
-        }
-
-        var roots = new[]
-        {
-            TryGetFullPathOrNull(Environment.CurrentDirectory),
-            TryGetFullPathOrNull(ConnectionSettings.DefaultConfigDirectory),
-            TryGetFullPathOrNull(Path.GetTempPath())
-        }.Where(r => !string.IsNullOrWhiteSpace(r)).Cast<string>().ToArray();
-
-        var candidate = normalized;
-        return roots.Any(r => IsSubpathOf(candidate, r));
-    }
-
-    private static string? TryGetFullPathOrNull(string? path)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-        {
-            return null;
-        }
-
-        try
-        {
-            return Path.GetFullPath(path);
-        }
-        catch
-        {
-            return null;
-        }
-    }
-
-    private static bool IsSubpathOf(string candidatePath, string rootPath)
-    {
-        if (string.IsNullOrWhiteSpace(candidatePath) || string.IsNullOrWhiteSpace(rootPath))
-        {
-            return false;
-        }
-
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-
-        var root = rootPath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var candidate = candidatePath.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-
-        if (string.Equals(candidate, root, comparison))
-        {
-            return true;
-        }
-
-        var rootWithSep = root + Path.DirectorySeparatorChar;
-        return candidate.StartsWith(rootWithSep, comparison);
-    }
-
-    private static int? TryGetInt32(JsonElement element, string name)
-    {
-        if (!TryGetProperty(element, name, out var prop))
-        {
-            return null;
-        }
-
-        try
-        {
-            return prop.ValueKind switch
-            {
-                JsonValueKind.Number => prop.TryGetInt32(out var v) ? v : null,
-                JsonValueKind.String => int.TryParse(prop.GetString(), out var v) ? v : null,
-                _ => null
-            };
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private static ChatCompletionResult ApplyMcpToolUseFallback(ChatCompletionResult response)
