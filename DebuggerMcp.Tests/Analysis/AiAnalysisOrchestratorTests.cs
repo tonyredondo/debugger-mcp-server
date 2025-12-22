@@ -735,6 +735,73 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_MaxToolCallsReached_AddsSkippedToolResultsBeforeFinalSynthesis()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                ("exec", new { command = "!a" }, "tc_a"),
+                ("exec", new { command = "!b" }, "tc_b")))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "final root cause",
+              "confidence": "low",
+              "reasoning": "final reasoning",
+              "recommendations": [],
+              "additionalFindings": []
+            }
+            """));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10,
+            MaxToolCalls = 1,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("final root cause", result.RootCause);
+        Assert.True(requests.Count >= 2);
+        Assert.Null(requests[^1].ToolChoice);
+
+        var finalMessages = requests[^1].Messages?.ToList();
+        Assert.NotNull(finalMessages);
+        Assert.NotEmpty(finalMessages);
+
+        var assistantIndex = finalMessages.FindIndex(m => m.Role == Role.Assistant && m.Content?.OfType<ToolUseContentBlock>().Any() == true);
+        Assert.True(assistantIndex >= 0, "Expected an assistant message with tool_use blocks.");
+
+        var toolUseIds = finalMessages[assistantIndex].Content!.OfType<ToolUseContentBlock>().Select(t => t.Id).Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
+        Assert.Contains("tc_a", toolUseIds);
+        Assert.Contains("tc_b", toolUseIds);
+
+        // Tool results must appear after the tool-use message and before the next assistant message (or end).
+        var nextAssistantIndex = finalMessages.FindIndex(assistantIndex + 1, m => m.Role == Role.Assistant);
+        var endIndexExclusive = nextAssistantIndex >= 0 ? nextAssistantIndex : finalMessages.Count;
+        var toolResults = finalMessages
+            .Skip(assistantIndex + 1)
+            .Take(endIndexExclusive - assistantIndex - 1)
+            .SelectMany(m => m.Content?.OfType<ToolResultContentBlock>() ?? [])
+            .ToList();
+
+        Assert.Contains(toolResults, tr => tr.ToolUseId == "tc_a");
+        var skipped = Assert.Single(toolResults.Where(tr => tr.ToolUseId == "tc_b"));
+        Assert.True(skipped.IsError);
+        var skippedText = skipped.Content!.OfType<TextContentBlock>().Single().Text;
+        Assert.Contains("skipped", skippedText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_CheckpointEveryIterations_PrunesConversationAndContinues()
     {
         var requests = new List<CreateMessageRequestParams>();
@@ -979,7 +1046,8 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal(2, debugger.ExecutedCommands.Count);
         Assert.DoesNotContain(debugger.ExecutedCommands, c => c.Contains("dumpheap", StringComparison.OrdinalIgnoreCase));
         Assert.NotNull(result.CommandsExecuted);
-        Assert.Equal(2, result.CommandsExecuted!.Count);
+        Assert.Equal(3, result.CommandsExecuted!.Count);
+        Assert.Contains(result.CommandsExecuted, c => c.Output.Contains("skipped", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -1407,6 +1475,28 @@ public class AiAnalysisOrchestratorTests
                     Input = json
                 }
             ]
+        };
+    }
+
+    private static CreateMessageResult CreateMessageResultWithToolUses(params (string Name, object Input, string? Id)[] toolUses)
+    {
+        var blocks = new List<ContentBlock>(toolUses.Length);
+        foreach (var (name, input, id) in toolUses)
+        {
+            var json = JsonSerializer.SerializeToElement(input);
+            blocks.Add(new ToolUseContentBlock
+            {
+                Id = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString("N") : id,
+                Name = name,
+                Input = json
+            });
+        }
+
+        return new CreateMessageResult
+        {
+            Model = "test-model",
+            Role = Role.Assistant,
+            Content = blocks
         };
     }
 

@@ -346,6 +346,8 @@ public sealed class AiAnalysisOrchestrator(
                 rewrittenToolUses.Add((toolUse, effectiveToolName, effectiveToolInput));
             }
 
+            var respondedToolUseIds = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var (toolUse, effectiveToolName, effectiveToolInput) in rewrittenToolUses)
             {
                 LogRequestedToolSummary(iteration, toolUse, effectiveToolName, effectiveToolInput);
@@ -365,6 +367,16 @@ public sealed class AiAnalysisOrchestrator(
                 if (commandsExecuted.Count >= maxToolCalls)
                 {
                     _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping analysis.", maxToolCalls);
+                    AppendSkippedToolResultsForBudgetExceeded(
+                        passName: "analysis",
+                        iteration: iteration,
+                        maxToolCalls: maxToolCalls,
+                        toolUses: rewrittenToolUses,
+                        respondedToolUseIds: respondedToolUseIds,
+                        commandsExecuted: commandsExecuted,
+                        toolIndexByIteration: toolIndexByIteration,
+                        messages: messages,
+                        traceRunDir: traceRunDir);
                     var final = await FinalizeAnalysisAfterToolBudgetExceededAsync(
                             systemPrompt: SystemPrompt,
                             messages: messages,
@@ -465,6 +477,7 @@ public sealed class AiAnalysisOrchestrator(
                             }
                         ]
                     });
+                    respondedToolUseIds.Add(toolUseId);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -509,6 +522,7 @@ public sealed class AiAnalysisOrchestrator(
                             }
                         ]
                     });
+                    respondedToolUseIds.Add(toolUseId);
                 }
             }
 
@@ -561,6 +575,10 @@ public sealed class AiAnalysisOrchestrator(
                             }
                         ]
                     });
+                    if (!string.IsNullOrWhiteSpace(toolUseId))
+                    {
+                        respondedToolUseIds.Add(toolUseId);
+                    }
                     continue;
                 }
 
@@ -622,6 +640,70 @@ public sealed class AiAnalysisOrchestrator(
             .ConfigureAwait(false);
         WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", synthesized);
         return synthesized;
+    }
+
+    private void AppendSkippedToolResultsForBudgetExceeded(
+        string passName,
+        int iteration,
+        int maxToolCalls,
+        IReadOnlyList<(ToolUseContentBlock ToolUse, string Name, JsonElement Input)> toolUses,
+        HashSet<string> respondedToolUseIds,
+        List<ExecutedCommand> commandsExecuted,
+        Dictionary<int, int> toolIndexByIteration,
+        List<SamplingMessage> messages,
+        string? traceRunDir)
+    {
+        ArgumentNullException.ThrowIfNull(passName);
+        ArgumentNullException.ThrowIfNull(toolUses);
+        ArgumentNullException.ThrowIfNull(respondedToolUseIds);
+        ArgumentNullException.ThrowIfNull(commandsExecuted);
+        ArgumentNullException.ThrowIfNull(toolIndexByIteration);
+        ArgumentNullException.ThrowIfNull(messages);
+
+        foreach (var (toolUse, toolName, toolInput) in toolUses)
+        {
+            var toolUseId = toolUse.Id;
+            if (string.IsNullOrWhiteSpace(toolUseId) || respondedToolUseIds.Contains(toolUseId))
+            {
+                continue;
+            }
+
+            var msg = TruncateForModel($"[skipped] Tool call budget exceeded ({maxToolCalls}). Tool '{toolName}' was not executed.");
+            var input = CloneToolInput(toolInput);
+
+            var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+            toolIndexByIteration[iteration] = toolOrdinal;
+            commandsExecuted.Add(new ExecutedCommand
+            {
+                Tool = toolName,
+                Input = input,
+                Output = msg,
+                Iteration = iteration,
+                Duration = TimeSpan.Zero.ToString("c")
+            });
+
+            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
+                new { tool = toolName, input = input.ToString(), output = msg, isError = true, duration = TimeSpan.Zero.ToString("c"), skipped = true, pass = passName });
+
+            messages.Add(new SamplingMessage
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new ToolResultContentBlock
+                    {
+                        ToolUseId = toolUseId,
+                        IsError = true,
+                        Content =
+                        [
+                            new TextContentBlock { Text = msg }
+                        ]
+                    }
+                ]
+            });
+
+            respondedToolUseIds.Add(toolUseId);
+        }
     }
 
     /// <summary>
@@ -933,6 +1015,8 @@ public sealed class AiAnalysisOrchestrator(
                 rewrittenToolUses.Add((toolUse, effectiveName, effectiveInput));
             }
 
+            var respondedToolUseIds = new HashSet<string>(StringComparer.Ordinal);
+
             foreach (var (toolUse, toolName, toolInput) in rewrittenToolUses)
             {
                 LogRequestedToolSummary(iteration, toolUse, toolName, toolInput);
@@ -951,6 +1035,16 @@ public sealed class AiAnalysisOrchestrator(
                 if (commandsExecuted.Count >= maxToolCalls)
                 {
                     _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping pass {Pass}.", maxToolCalls, passName);
+                    AppendSkippedToolResultsForBudgetExceeded(
+                        passName: passName,
+                        iteration: iteration,
+                        maxToolCalls: maxToolCalls,
+                        toolUses: rewrittenToolUses,
+                        respondedToolUseIds: respondedToolUseIds,
+                        commandsExecuted: commandsExecuted,
+                        toolIndexByIteration: toolIndexByIteration,
+                        messages: messages,
+                        traceRunDir: traceRunDir);
                     return await FinalizePassAfterToolBudgetExceededAsync<T>(
                             passName: passName,
                             systemPrompt: systemPrompt,
@@ -978,11 +1072,11 @@ public sealed class AiAnalysisOrchestrator(
                         Duration = TimeSpan.Zero.ToString("c")
                     });
 
-                    messages.Add(new SamplingMessage
-                    {
-                        Role = Role.User,
-                        Content =
-                        [
+                messages.Add(new SamplingMessage
+                {
+                    Role = Role.User,
+                    Content =
+                    [
                             new TextContentBlock { Text = msg }
                         ]
                     });
@@ -1043,11 +1137,12 @@ public sealed class AiAnalysisOrchestrator(
                             }
                         ]
                     });
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
-                }
+                respondedToolUseIds.Add(toolUseId);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
                 catch (Exception ex)
                 {
                     sw.Stop();
@@ -1068,11 +1163,11 @@ public sealed class AiAnalysisOrchestrator(
                     WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
                         new { tool = toolName, input = CloneToolInput(toolInput).ToString(), output = messageForModel, isError = true, duration = sw.Elapsed.ToString("c") });
 
-                    messages.Add(new SamplingMessage
-                    {
-                        Role = Role.User,
-                        Content =
-                        [
+                messages.Add(new SamplingMessage
+                {
+                    Role = Role.User,
+                    Content =
+                    [
                             new ToolResultContentBlock
                             {
                                 ToolUseId = toolUseId,
@@ -1084,8 +1179,9 @@ public sealed class AiAnalysisOrchestrator(
                             }
                         ]
                     });
-                }
+                respondedToolUseIds.Add(toolUseId);
             }
+        }
 
             if (pendingComplete != null)
             {
@@ -1103,11 +1199,11 @@ public sealed class AiAnalysisOrchestrator(
 
                     if (string.IsNullOrWhiteSpace(pendingCompleteId))
                     {
-                        messages.Add(new SamplingMessage
-                        {
-                            Role = Role.User,
-                            Content =
-                            [
+                messages.Add(new SamplingMessage
+                {
+                    Role = Role.User,
+                    Content =
+                    [
                                 new TextContentBlock { Text = msg }
                             ]
                         });
@@ -1130,8 +1226,12 @@ public sealed class AiAnalysisOrchestrator(
                             }
                         ]
                     });
-                    continue;
+                if (!string.IsNullOrWhiteSpace(pendingCompleteId))
+                {
+                    respondedToolUseIds.Add(pendingCompleteId);
                 }
+                continue;
+            }
 
                 return ParseCompletionTool<T>(passName, completionToolName, pendingCompleteInput, commandsExecuted, iteration, lastModel);
             }

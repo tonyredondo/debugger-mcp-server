@@ -79,7 +79,7 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
         if (tools is { Count: > 0 })
         {
             payload.Tools = tools;
-            payload.ToolChoice = ToOpenAiToolChoice(completionRequest.ToolChoice);
+            payload.ToolChoice = ToOpenAiToolChoice(completionRequest.ToolChoice, tools);
         }
 
         var maxTokens = completionRequest.MaxTokens;
@@ -185,10 +185,37 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
                             : argsProp.GetRawText()
                         : string.Empty;
 
+                    if (string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                    {
+                        id = $"call_{Guid.NewGuid():N}";
+                    }
+
                     if (!string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
                     {
                         toolCalls.Add(new ChatToolCall(id, name, args));
                     }
+                }
+            }
+
+            // Some OpenAI-compatible endpoints (or older API variants) may emit a single legacy `function_call`
+            // object instead of `tool_calls`. Preserve it as a synthetic tool call so MCP sampling can continue.
+            if (toolCalls.Count == 0 &&
+                message.TryGetProperty("function_call", out var functionCallProp) &&
+                functionCallProp.ValueKind == JsonValueKind.Object)
+            {
+                var name = functionCallProp.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String
+                    ? nameProp.GetString() ?? string.Empty
+                    : string.Empty;
+
+                var args = functionCallProp.TryGetProperty("arguments", out var argsProp)
+                    ? argsProp.ValueKind == JsonValueKind.String
+                        ? argsProp.GetString() ?? string.Empty
+                        : argsProp.GetRawText()
+                    : string.Empty;
+
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    toolCalls.Add(new ChatToolCall($"call_{Guid.NewGuid():N}", name, args));
                 }
             }
 
@@ -198,6 +225,52 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
             {
                 rawContent = contentProp.Clone();
                 text = OpenRouterClient.ExtractText(contentProp);
+
+                // Some providers/models can emit tool calls as MCP/Anthropic-style blocks in message.content
+                // rather than OpenAI-style message.tool_calls.
+                if (contentProp.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in contentProp.EnumerateArray())
+                    {
+                        if (item.ValueKind != JsonValueKind.Object)
+                        {
+                            continue;
+                        }
+
+                        var type = item.TryGetProperty("type", out var typeProp) && typeProp.ValueKind == JsonValueKind.String
+                            ? typeProp.GetString() ?? string.Empty
+                            : string.Empty;
+
+                        if (!string.Equals(type, "tool_use", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        var id = item.TryGetProperty("id", out var idProp) && idProp.ValueKind == JsonValueKind.String
+                            ? idProp.GetString() ?? string.Empty
+                            : string.Empty;
+
+                        var name = item.TryGetProperty("name", out var nameProp) && nameProp.ValueKind == JsonValueKind.String
+                            ? nameProp.GetString() ?? string.Empty
+                            : string.Empty;
+
+                        var input = item.TryGetProperty("input", out var inputProp)
+                            ? inputProp.GetRawText()
+                            : "{}";
+
+                        if (string.IsNullOrWhiteSpace(id) && !string.IsNullOrWhiteSpace(name))
+                        {
+                            id = $"call_{Guid.NewGuid():N}";
+                        }
+
+                        if (!string.IsNullOrWhiteSpace(id) &&
+                            !string.IsNullOrWhiteSpace(name) &&
+                            !toolCalls.Any(tc => string.Equals(tc.Id, id, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            toolCalls.Add(new ChatToolCall(id, name, input));
+                        }
+                    }
+                }
             }
 
             var providerFields = new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase);
@@ -379,18 +452,49 @@ public sealed class OpenAiClient(HttpClient httpClient, LlmSettings settings)
             }
         };
 
-    private static object? ToOpenAiToolChoice(ChatToolChoice? choice)
-        => choice == null
-            ? null
-            : string.Equals(choice.Mode, "auto", StringComparison.OrdinalIgnoreCase)
-                ? "auto"
-                : string.Equals(choice.Mode, "none", StringComparison.OrdinalIgnoreCase)
-                    ? "none"
-                    : string.Equals(choice.Mode, "required", StringComparison.OrdinalIgnoreCase)
-                        ? "required"
-                        : string.Equals(choice.Mode, "function", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(choice.FunctionName)
-                            ? new { type = "function", function = new { name = choice.FunctionName } }
-                            : "auto";
+    private static object? ToOpenAiToolChoice(ChatToolChoice? choice, IReadOnlyList<OpenAiTool> tools)
+    {
+        if (choice == null)
+        {
+            return null;
+        }
+
+        // Prefer explicitly targeting a tool when a function name is known.
+        if (!string.IsNullOrWhiteSpace(choice.FunctionName))
+        {
+            return new { type = "function", function = new { name = choice.FunctionName } };
+        }
+
+        var mode = choice.Mode ?? "auto";
+        if (string.Equals(mode, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            return "auto";
+        }
+
+        if (string.Equals(mode, "none", StringComparison.OrdinalIgnoreCase))
+        {
+            return "none";
+        }
+
+        if (string.Equals(mode, "required", StringComparison.OrdinalIgnoreCase))
+        {
+            // Chat Completions endpoints are inconsistent about supporting "required". When there is only one tool,
+            // force that tool explicitly to avoid empty/no-op responses.
+            if (tools.Count == 1 && !string.IsNullOrWhiteSpace(tools[0].Function?.Name))
+            {
+                return new { type = "function", function = new { name = tools[0].Function.Name } };
+            }
+
+            return "required";
+        }
+
+        if (string.Equals(mode, "function", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(choice.FunctionName))
+        {
+            return new { type = "function", function = new { name = choice.FunctionName } };
+        }
+
+        return "auto";
+    }
 
     private static async Task<(string Text, bool Truncated)> ReadContentCappedAsync(
         HttpContent content,

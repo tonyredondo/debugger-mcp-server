@@ -226,6 +226,157 @@ public class OpenAiClientTests
     }
 
     [Fact]
+    public async Task ChatCompletionAsync_ToolChoiceRequired_WithSingleTool_ForcesExplicitToolChoiceObject()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-5.2",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        using var schemaDoc = JsonDocument.Parse("{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}}}");
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")],
+            Tools =
+            [
+                new ChatTool
+                {
+                    Name = "exec",
+                    Description = "run a command",
+                    Parameters = schemaDoc.RootElement.Clone()
+                }
+            ],
+            ToolChoice = new ChatToolChoice { Mode = "required" }
+        });
+
+        using var doc = JsonDocument.Parse(handler.LastRequestBody!);
+
+        var toolChoice = doc.RootElement.GetProperty("tool_choice");
+        Assert.Equal("function", toolChoice.GetProperty("type").GetString());
+        Assert.Equal("exec", toolChoice.GetProperty("function").GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenResponseUsesLegacyFunctionCall_ParsesAsToolCall()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-4o-mini",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """
+                       {
+                         "choices": [
+                           {
+                             "message": {
+                               "content": null,
+                               "function_call": {
+                                 "name": "exec",
+                                 "arguments": "{\"command\":\"!clrthreads\"}"
+                               }
+                             }
+                           }
+                         ]
+                       }
+                       """;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        var result = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")]
+        });
+
+        Assert.Null(result.Text);
+        Assert.Single(result.ToolCalls);
+        Assert.StartsWith("call_", result.ToolCalls[0].Id, StringComparison.Ordinal);
+        Assert.Equal("exec", result.ToolCalls[0].Name);
+        Assert.Contains("!clrthreads", result.ToolCalls[0].ArgumentsJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ChatCompletionAsync_WhenResponseUsesContentToolUseBlock_ParsesAsToolCall()
+    {
+        var settings = new LlmSettings
+        {
+            Provider = "openai",
+            OpenAiApiKey = "k",
+            OpenAiModel = "gpt-5.2",
+            OpenAiBaseUrl = "https://api.openai.com/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = """
+                       {
+                         "choices": [
+                           {
+                             "message": {
+                               "content": [
+                                 {
+                                   "type": "tool_use",
+                                   "id": "call_abc123",
+                                   "name": "checkpoint_complete",
+                                   "input": { "facts": ["f1"] }
+                                 }
+                               ]
+                             }
+                           }
+                         ]
+                       }
+                       """;
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenAiClient(http, settings);
+
+        var result = await client.ChatCompletionAsync(new ChatCompletionRequest
+        {
+            Messages = [new ChatMessage("user", "hi")]
+        });
+
+        Assert.Null(result.Text);
+        var call = Assert.Single(result.ToolCalls);
+        Assert.Equal("call_abc123", call.Id);
+        Assert.Equal("checkpoint_complete", call.Name);
+        Assert.Contains("\"facts\"", call.ArgumentsJson, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task ChatCompletionAsync_MaxTokens_WhenServerRejectsMaxTokens_RetriesWithMaxCompletionTokens()
     {
         var settings = new LlmSettings
