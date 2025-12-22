@@ -131,6 +131,11 @@ public sealed class AiAnalysisTools(
             orchestrator.CheckpointEveryIterations = checkpointEveryIterations.Value;
         }
 
+        Logger.LogInformation(
+            "[AI] Sampling checkpoint interval: {CheckpointEveryIterations} (env override: {HasOverride})",
+            orchestrator.CheckpointEveryIterations,
+            checkpointEveryIterations.HasValue);
+
         var aiResult = await orchestrator.AnalyzeCrashAsync(
                 initialReport,
                 fullReportJson,

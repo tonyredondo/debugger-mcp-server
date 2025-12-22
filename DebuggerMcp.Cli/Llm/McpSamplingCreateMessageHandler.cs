@@ -39,6 +39,24 @@ internal sealed class McpSamplingCreateMessageHandler(
 
         if (string.IsNullOrWhiteSpace(response.Text) && (response.ToolCalls == null || response.ToolCalls.Count == 0))
         {
+            // Some models occasionally return empty content on "no-tools" synthesis requests (e.g., checkpointing).
+            // Treat that as a valid-but-empty assistant message so the server can fall back deterministically without aborting the analysis.
+            var isNoToolsRequest = request.Tools == null || request.Tools.Count == 0;
+            var isNoToolChoice = request.ToolChoice == null;
+            if (isNoToolsRequest && isNoToolChoice)
+            {
+                _progress?.Invoke("AI returned empty content for a no-tools request; continuing with an empty assistant message.");
+                return new SamplingCreateMessageResult
+                {
+                    Role = "assistant",
+                    Model = response.Model ?? _settings.GetEffectiveModel(),
+                    Content =
+                    [
+                        new SamplingContentItem { Type = "text", Text = " " }
+                    ]
+                };
+            }
+
             throw new InvalidOperationException("LLM returned empty content and no tool calls.");
         }
 

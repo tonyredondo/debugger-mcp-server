@@ -166,7 +166,7 @@ namespace DebuggerMcp.Cli.Tests.Llm;
     }
 
     [Fact]
-    public async Task HandleAsync_WhenModelReturnsEmptyTextAndNoToolCalls_Throws()
+    public async Task HandleAsync_WhenModelReturnsEmptyTextAndNoToolCallsForNoToolsRequest_ReturnsEmptyAssistantMessage()
     {
         var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
 
@@ -180,6 +180,37 @@ namespace DebuggerMcp.Cli.Tests.Llm;
           "messages": [
             { "role": "user", "content": "Hello" }
           ]
+        }
+        """);
+
+        var result = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+        var text = Assert.Single(result.Content, b => string.Equals(b.Type, "text", StringComparison.OrdinalIgnoreCase));
+        Assert.True(string.IsNullOrWhiteSpace(text.Text));
+    }
+
+    [Fact]
+    public async Task HandleAsync_WhenModelReturnsEmptyTextAndNoToolCallsForToolsRequest_Throws()
+    {
+        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) => Task.FromResult(new ChatCompletionResult()),
+            progress: null);
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ],
+          "tools": [
+            {
+              "name": "exec",
+              "description": "d",
+              "inputSchema": { "type": "object", "properties": { "command": { "type": "string" } } }
+            }
+          ],
+          "tool_choice": { "type": "auto" }
         }
         """);
 
