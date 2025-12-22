@@ -252,6 +252,48 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_WhenToolCallBudgetExceeded_RequestsFinalSynthesisWithoutTools()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception", pageKind = "object" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "final root cause",
+              "confidence": "low",
+              "reasoning": "based on collected evidence",
+              "recommendations": ["do X"],
+              "additionalFindings": ["note Y"]
+            }
+            """));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10,
+            MaxToolCalls = 1
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{\"metadata\":{},\"analysis\":{\"exception\":{\"type\":\"System.Exception\",\"message\":\"boom\"}}}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("final root cause", result.RootCause);
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c => c.Tool == "report_get");
+
+        Assert.True(requests.Count >= 3);
+        var finalRequest = requests[2];
+        Assert.NotNull(finalRequest.ToolChoice);
+        Assert.Equal("none", finalRequest.ToolChoice!.Mode);
+        Assert.NotNull(finalRequest.Tools);
+        Assert.Empty(finalRequest.Tools!);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_WhenSamplingReturnsEmptyContent_DoesNotCountFailedIteration()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
@@ -656,12 +698,22 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public async Task AnalyzeCrashAsync_MaxIterationsReached_ReturnsIncompleteResult()
+    public async Task AnalyzeCrashAsync_MaxIterationsReached_PerformsFinalSynthesisIteration()
     {
-        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
             .EnqueueResult(CreateMessageResultWithText("still thinking"))
             .EnqueueResult(CreateMessageResultWithText("still thinking"))
-            .EnqueueResult(CreateMessageResultWithText("still thinking"));
+            .EnqueueResult(CreateMessageResultWithText("still thinking"))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "final root cause",
+              "confidence": "low",
+              "reasoning": "final reasoning",
+              "recommendations": ["r1"],
+              "additionalFindings": ["f1"]
+            }
+            """));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
@@ -674,16 +726,29 @@ public class AiAnalysisOrchestratorTests
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
-        Assert.Equal("low", result.Confidence);
-        Assert.Contains("did not call analysis_complete", result.RootCause, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal("still thinking", result.Reasoning);
+        Assert.Equal("final root cause", result.RootCause);
+        Assert.Equal(4, result.Iterations);
+        Assert.NotEmpty(requests);
+        Assert.Equal("none", requests.Last().ToolChoice?.Mode);
+        Assert.NotNull(requests.Last().Tools);
+        Assert.Empty(requests.Last().Tools!);
     }
 
     [Fact]
     public async Task AnalyzeCrashAsync_WhenMaxIterationsIsZero_RunsAtLeastOneIteration()
     {
-        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
-            .EnqueueResult(CreateMessageResultWithText("still thinking"));
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithText("still thinking"))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "final root cause",
+              "confidence": "low",
+              "reasoning": "final reasoning",
+              "recommendations": [],
+              "additionalFindings": []
+            }
+            """));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
@@ -696,9 +761,11 @@ public class AiAnalysisOrchestratorTests
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
-        Assert.Equal(1, result.Iterations);
-        Assert.Equal("AI returned an answer but did not call analysis_complete.", result.RootCause);
-        Assert.Equal("still thinking", result.Reasoning);
+        Assert.Equal(2, result.Iterations);
+        Assert.Equal("final root cause", result.RootCause);
+        Assert.Equal("none", requests.Last().ToolChoice?.Mode);
+        Assert.NotNull(requests.Last().Tools);
+        Assert.Empty(requests.Last().Tools!);
     }
 
     [Fact]
@@ -735,11 +802,21 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public async Task AnalyzeCrashAsync_WhenMaxIterationsReachedWithToolCalls_ReturnsMaxIterationsResult()
+    public async Task AnalyzeCrashAsync_WhenMaxIterationsReachedWithToolCalls_PerformsFinalSynthesisIteration()
     {
-        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!threads" }))
-            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack" }));
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack" }))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "final root cause",
+              "confidence": "low",
+              "reasoning": "final reasoning",
+              "recommendations": ["r1"],
+              "additionalFindings": []
+            }
+            """));
 
         var debugger = new FakeDebuggerManager
         {
@@ -757,10 +834,12 @@ public class AiAnalysisOrchestratorTests
             debugger,
             clrMdAnalyzer: null);
 
-        Assert.Equal("low", result.Confidence);
-        Assert.Contains("maximum iterations", result.RootCause, StringComparison.OrdinalIgnoreCase);
-        Assert.NotNull(result.Reasoning);
-        Assert.Contains("did not call analysis_complete", result.Reasoning!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("final root cause", result.RootCause);
+        Assert.Equal(3, result.Iterations);
+        Assert.Equal(2, debugger.ExecutedCommands.Count);
+        Assert.Equal("none", requests.Last().ToolChoice?.Mode);
+        Assert.NotNull(requests.Last().Tools);
+        Assert.Empty(requests.Last().Tools!);
     }
 
     [Fact]
@@ -1168,6 +1247,33 @@ public class AiAnalysisOrchestratorTests
 
         public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
         {
+            if (_results.Count == 0)
+            {
+                return Task.FromResult(CreateMessageResultWithText("no more scripted responses"));
+            }
+
+            return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private sealed class SequencedCapturingSamplingClient(List<CreateMessageRequestParams> requests) : ISamplingClient
+    {
+        private readonly Queue<CreateMessageResult> _results = new();
+        private readonly List<CreateMessageRequestParams> _requests = requests;
+
+        public bool IsSamplingSupported => true;
+
+        public bool IsToolUseSupported => true;
+
+        public SequencedCapturingSamplingClient EnqueueResult(CreateMessageResult result)
+        {
+            _results.Enqueue(result);
+            return this;
+        }
+
+        public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
+        {
+            _requests.Add(request);
             if (_results.Count == 0)
             {
                 return Task.FromResult(CreateMessageResultWithText("no more scripted responses"));

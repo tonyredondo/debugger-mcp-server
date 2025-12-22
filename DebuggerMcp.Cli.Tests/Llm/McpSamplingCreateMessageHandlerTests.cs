@@ -6,13 +6,102 @@ using Xunit;
 namespace DebuggerMcp.Cli.Tests.Llm;
 
 [Collection("NonParallelConsole")]
-public class McpSamplingCreateMessageHandlerTests
-{
-    [Fact]
-    public async Task HandleAsync_WhenModelRequestsTool_EmitsProgress()
+    public class McpSamplingCreateMessageHandlerTests
     {
-        var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
-        var progress = new List<string>();
+        [Fact]
+        public async Task HandleAsync_OpenAi_WhenToolResultIsOrphan_DowngradesToUserMessage()
+        {
+            ChatCompletionRequest? observedRequest = null;
+            var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-5.2" };
+
+            var handler = new McpSamplingCreateMessageHandler(
+                settings,
+                (req, _) =>
+                {
+                    observedRequest = req;
+                    return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+                },
+                progress: null);
+
+            using var doc = JsonDocument.Parse("""
+            {
+              "messages": [
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "tool_result",
+                      "tool_use_id": "tc1",
+                      "content": "{ \"path\": \"analysis.summary\", \"value\": { \"description\": \"hi\" } }"
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+            _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+            Assert.NotNull(observedRequest);
+            Assert.NotNull(observedRequest!.Messages);
+            Assert.DoesNotContain(observedRequest.Messages, m => string.Equals(m.Role, "tool", StringComparison.OrdinalIgnoreCase));
+            Assert.Contains(observedRequest.Messages, m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase) &&
+                                                         m.Content.Contains("orphan tool output", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public async Task HandleAsync_OpenAi_WhenToolResultMatchesPriorToolCalls_LeavesToolMessageIntact()
+        {
+            ChatCompletionRequest? observedRequest = null;
+            var settings = new LlmSettings { Provider = "openai", OpenAiModel = "gpt-5.2" };
+
+            var handler = new McpSamplingCreateMessageHandler(
+                settings,
+                (req, _) =>
+                {
+                    observedRequest = req;
+                    return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+                },
+                progress: null);
+
+            using var doc = JsonDocument.Parse("""
+            {
+              "messages": [
+                {
+                  "role": "assistant",
+                  "content": [
+                    { "type": "tool_use", "id": "tc1", "name": "report_get", "input": { "path": "analysis.summary" } }
+                  ]
+                },
+                {
+                  "role": "user",
+                  "content": [
+                    {
+                      "type": "tool_result",
+                      "tool_use_id": "tc1",
+                      "content": "{ \"path\": \"analysis.summary\", \"value\": { \"description\": \"hi\" } }"
+                    }
+                  ]
+                }
+              ]
+            }
+            """);
+
+            _ = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+            Assert.NotNull(observedRequest);
+            Assert.Contains(observedRequest!.Messages, m => string.Equals(m.Role, "assistant", StringComparison.OrdinalIgnoreCase) &&
+                                                          m.ToolCalls != null &&
+                                                          m.ToolCalls.Any(c => string.Equals(c.Id, "tc1", StringComparison.OrdinalIgnoreCase)));
+            Assert.Contains(observedRequest.Messages, m => string.Equals(m.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
+                                                         string.Equals(m.ToolCallId, "tc1", StringComparison.OrdinalIgnoreCase));
+        }
+
+        [Fact]
+        public async Task HandleAsync_WhenModelRequestsTool_EmitsProgress()
+        {
+            var settings = new LlmSettings { OpenRouterModel = "openrouter/test" };
+            var progress = new List<string>();
 
         var handler = new McpSamplingCreateMessageHandler(
             settings,

@@ -141,7 +141,6 @@ public sealed class AiAnalysisOrchestrator(
         var tools = SamplingTools.GetCrashAnalysisTools();
 
         string? lastIterationAssistantText = null;
-        bool lastIterationHadToolCalls = false;
         string? lastModel = null;
         var toolIndexByIteration = new Dictionary<int, int>();
         var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -201,7 +200,6 @@ public sealed class AiAnalysisOrchestrator(
             WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
 
             lastModel = response.Model;
-            lastIterationHadToolCalls = false;
             lastIterationAssistantText = null;
             var textBlocks = response.Content.OfType<TextContentBlock>()
                 .Select(t => t.Text)
@@ -258,22 +256,22 @@ public sealed class AiAnalysisOrchestrator(
                     continue;
                 }
 
-                lastIterationHadToolCalls = true;
-
                 if (commandsExecuted.Count >= maxToolCalls)
                 {
                     _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping analysis.", maxToolCalls);
-                    return new AiAnalysisResult
-                    {
-                        RootCause = "Analysis incomplete - tool call budget exceeded.",
-                        Confidence = "low",
-                        Reasoning = $"The AI attempted to execute more than {maxToolCalls} tool calls. " +
-                                    "Increase MaxToolCalls if you need a longer investigation loop.",
-                        Iterations = iteration,
-                        CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                        Model = response.Model,
-                        AnalyzedAt = DateTime.UtcNow
-                    };
+                    var final = await FinalizeAnalysisAfterToolBudgetExceededAsync(
+                            systemPrompt: SystemPrompt,
+                            messages: messages,
+                            commandsExecuted: commandsExecuted,
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            maxToolCalls: maxToolCalls,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", final);
+                    return final;
                 }
 
                 var sw = Stopwatch.StartNew();
@@ -415,7 +413,6 @@ public sealed class AiAnalysisOrchestrator(
                 if (!HasEvidenceToolCalls(commandsExecuted) || otherToolsCoissued)
                 {
                     analysisCompleteRefusals++;
-                    lastIterationHadToolCalls = true;
 
                     var msg = BuildAnalysisCompleteRefusalMessage(otherToolsCoissued, analysisCompleteRefusals);
                     var toolName = pendingAnalysisCompleteName ?? "analysis_complete";
@@ -468,34 +465,21 @@ public sealed class AiAnalysisOrchestrator(
             }
         }
 
-        if (!lastIterationHadToolCalls && !string.IsNullOrWhiteSpace(lastIterationAssistantText))
-        {
-            var result = new AiAnalysisResult
-            {
-                RootCause = "AI returned an answer but did not call analysis_complete.",
-                Confidence = "low",
-                Reasoning = lastIterationAssistantText,
-                Iterations = maxIterations,
-                CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                Model = lastModel,
-                AnalyzedAt = DateTime.UtcNow
-            };
-            WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", result);
-            return result;
-        }
-
-        var incomplete = new AiAnalysisResult
-        {
-            RootCause = "Analysis incomplete - maximum iterations reached.",
-            Confidence = "low",
-            Reasoning = $"The AI did not call analysis_complete within {maxIterations} iterations.",
-            Iterations = maxIterations,
-            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-            Model = lastModel,
-            AnalyzedAt = DateTime.UtcNow
-        };
-        WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", incomplete);
-        return incomplete;
+        // Add one final synthesis iteration when the iteration budget is reached.
+        // This asks the model to conclude based on already collected evidence without requesting any more tools.
+        var synthesized = await FinalizeAnalysisAfterMaxIterationsReachedAsync(
+                systemPrompt: SystemPrompt,
+                messages: messages,
+                commandsExecuted: commandsExecuted,
+                iteration: maxIterations + 1,
+                maxTokens: maxTokens,
+                maxIterations: maxIterations,
+                lastModel: lastModel,
+                traceRunDir: traceRunDir,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", synthesized);
+        return synthesized;
     }
 
     /// <summary>
@@ -806,29 +790,18 @@ public sealed class AiAnalysisOrchestrator(
                 if (commandsExecuted.Count >= maxToolCalls)
                 {
                     _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping pass {Pass}.", maxToolCalls, passName);
-                    return passName switch
-                    {
-                        "summary-rewrite" => new AiSummaryResult
-                        {
-                            Error = "AI summary rewrite incomplete - tool call budget exceeded.",
-                            Description = string.Empty,
-                            Iterations = iteration,
-                            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                            Model = lastModel,
-                            AnalyzedAt = DateTime.UtcNow
-                        } as T,
-                        "thread-narrative" => new AiThreadNarrativeResult
-                        {
-                            Error = "AI thread narrative incomplete - tool call budget exceeded.",
-                            Description = string.Empty,
-                            Confidence = "low",
-                            Iterations = iteration,
-                            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                            Model = lastModel,
-                            AnalyzedAt = DateTime.UtcNow
-                        } as T,
-                        _ => null
-                    };
+                    return await FinalizePassAfterToolBudgetExceededAsync<T>(
+                            passName: passName,
+                            systemPrompt: systemPrompt,
+                            messages: messages,
+                            commandsExecuted: commandsExecuted,
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            maxToolCalls: maxToolCalls,
+                            lastModel: lastModel,
+                            traceRunDir: traceRunDir,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
                 }
 
                 var toolUseId = toolUse.Id;
@@ -1003,29 +976,19 @@ public sealed class AiAnalysisOrchestrator(
             }
         }
 
-        return passName switch
-        {
-            "summary-rewrite" => new AiSummaryResult
-            {
-                Error = "AI summary rewrite incomplete - maximum iterations reached.",
-                Description = string.Empty,
-                Iterations = maxIterations,
-                CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                Model = lastModel,
-                AnalyzedAt = DateTime.UtcNow
-            } as T,
-            "thread-narrative" => new AiThreadNarrativeResult
-            {
-                Error = "AI thread narrative incomplete - maximum iterations reached.",
-                Description = string.Empty,
-                Confidence = "low",
-                Iterations = maxIterations,
-                CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
-                Model = lastModel,
-                AnalyzedAt = DateTime.UtcNow
-            } as T,
-            _ => null
-        };
+        // Add one final synthesis iteration when the iteration budget is reached.
+        return await FinalizePassAfterMaxIterationsReachedAsync<T>(
+                passName: passName,
+                systemPrompt: systemPrompt,
+                messages: messages,
+                commandsExecuted: commandsExecuted,
+                iteration: maxIterations + 1,
+                maxTokens: maxTokens,
+                maxIterations: maxIterations,
+                lastModel: lastModel,
+                traceRunDir: traceRunDir,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private static T? ParseCompletionTool<T>(
@@ -1699,6 +1662,640 @@ Tooling:
         }
 
         return result;
+    }
+
+    private async Task<AiAnalysisResult> FinalizeAnalysisAfterToolBudgetExceededAsync(
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        int maxTokens,
+        int maxToolCalls,
+        string? lastModel,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+    {
+        const string analysisSchema = """
+{
+  "rootCause": "string",
+  "confidence": "high|medium|low|unknown",
+  "reasoning": "string",
+  "recommendations": ["string"],
+  "additionalFindings": ["string"]
+}
+""";
+
+	        var finalPrompt = $"""
+	Tool call budget exceeded: you cannot request or use any more tools.
+
+	Based ONLY on the evidence already collected in this conversation (tool outputs already shown), provide your best final conclusion.
+	If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed (due to tool budget) and must be ignored.
+
+	Return ONLY valid JSON (no markdown, no code fences) with this schema:
+	{analysisSchema}
+
+	If uncertain, set confidence to "low" and clearly state what additional evidence would help (but do not request tools).
+""";
+
+        var finalMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = finalPrompt }
+                ]
+            }
+        };
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages = finalMessages,
+            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
+            Tools = [],
+            ToolChoice = new ToolChoice { Mode = "none" }
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation("[AI] Finalizing analysis after tool budget exceeded ({MaxToolCalls})...", maxToolCalls);
+            WriteSamplingTraceFile(traceRunDir, $"final-synthesis-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: $"Tool call budget exceeded ({maxToolCalls}). Final synthesis request failed: {ex.Message}",
+                text: string.Empty,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: lastModel);
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"final-synthesis-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: $"Tool call budget exceeded ({maxToolCalls}). Final synthesis returned empty content.",
+                text: string.Empty,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: response.Model ?? lastModel);
+        }
+
+        if (!TryParseFirstJsonObject(text, out var json))
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: $"Tool call budget exceeded ({maxToolCalls}). Final synthesis produced unstructured output.",
+                text: text,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: response.Model ?? lastModel);
+        }
+
+        var parsed = ParseAnalysisComplete(json, commandsExecuted, iteration, response.Model ?? lastModel);
+        parsed.AnalyzedAt = DateTime.UtcNow;
+        return parsed;
+    }
+
+    private async Task<AiAnalysisResult> FinalizeAnalysisAfterMaxIterationsReachedAsync(
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        int maxTokens,
+        int maxIterations,
+        string? lastModel,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+    {
+        const string analysisSchema = """
+{
+  "rootCause": "string",
+  "confidence": "high|medium|low|unknown",
+  "reasoning": "string",
+  "recommendations": ["string"],
+  "additionalFindings": ["string"]
+}
+""";
+
+	        var finalPrompt = $"""
+	Iteration budget reached ({maxIterations}): this is a final synthesis step. Do not request any tools.
+
+	Based ONLY on the evidence already collected in this conversation (tool outputs already shown), provide your best final conclusion.
+	If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed (due to iteration limit) and must be ignored.
+
+	Return ONLY valid JSON (no markdown, no code fences) with this schema:
+	{analysisSchema}
+	""";
+
+        var finalMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = finalPrompt }
+                ]
+            }
+        };
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages = finalMessages,
+            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
+            Tools = [],
+            ToolChoice = new ToolChoice { Mode = "none" }
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation("[AI] Finalizing analysis after max iterations ({MaxIterations})...", maxIterations);
+            WriteSamplingTraceFile(traceRunDir, $"final-iter-budget-synthesis-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: $"Iteration budget reached ({maxIterations}). Final synthesis request failed: {ex.Message}",
+                text: string.Empty,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: lastModel);
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"final-iter-budget-synthesis-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response) ?? string.Empty;
+        if (!TryParseFirstJsonObject(text, out var json))
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: $"Iteration budget reached ({maxIterations}). Final synthesis produced unstructured output.",
+                text: text,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: response.Model ?? lastModel);
+        }
+
+        var parsed = ParseAnalysisComplete(json, commandsExecuted, iteration, response.Model ?? lastModel);
+        parsed.AnalyzedAt = DateTime.UtcNow;
+        return parsed;
+    }
+
+    private async Task<T?> FinalizePassAfterToolBudgetExceededAsync<T>(
+        string passName,
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        int maxTokens,
+        int maxToolCalls,
+        string? lastModel,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        var expectedSchema = passName switch
+        {
+            "summary-rewrite" => """
+{
+  "description": "string",
+  "recommendations": ["string"]
+}
+""",
+            "thread-narrative" => """
+{
+  "description": "string",
+  "confidence": "high|medium|low|unknown"
+}
+""",
+            _ => "{}"
+        };
+
+	        var finalPrompt = $"""
+	Tool call budget exceeded: you cannot request or use any more tools.
+
+	Based ONLY on the evidence already collected in this conversation (tool outputs already shown), provide the best final result for pass '{passName}'.
+	If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed (due to tool budget) and must be ignored.
+
+	Return ONLY valid JSON (no markdown, no code fences) matching:
+	{expectedSchema}
+	""";
+
+        var finalMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = finalPrompt }
+                ]
+            }
+        };
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages = finalMessages,
+            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
+            Tools = [],
+            ToolChoice = new ToolChoice { Mode = "none" }
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation("[AI] Finalizing pass {Pass} after tool budget exceeded ({MaxToolCalls})...", passName, maxToolCalls);
+            WriteSamplingTraceFile(traceRunDir, $"final-{passName}-synthesis-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return passName switch
+            {
+                "summary-rewrite" => new AiSummaryResult
+                {
+                    Error = $"Tool call budget exceeded ({maxToolCalls}). Final synthesis request failed: {ex.Message}",
+                    Description = string.Empty,
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                "thread-narrative" => new AiThreadNarrativeResult
+                {
+                    Error = $"Tool call budget exceeded ({maxToolCalls}). Final synthesis request failed: {ex.Message}",
+                    Description = string.Empty,
+                    Confidence = "low",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                _ => null
+            };
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"final-{passName}-synthesis-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response);
+        if (string.IsNullOrWhiteSpace(text) || !TryParseFirstJsonObject(text, out var json))
+        {
+            return passName switch
+            {
+                "summary-rewrite" => new AiSummaryResult
+                {
+                    Description = string.IsNullOrWhiteSpace(text) ? string.Empty : text.Trim(),
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = response.Model ?? lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                "thread-narrative" => new AiThreadNarrativeResult
+                {
+                    Description = string.IsNullOrWhiteSpace(text) ? string.Empty : text.Trim(),
+                    Confidence = "low",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = response.Model ?? lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                _ => null
+            };
+        }
+
+        var parsed = ParseCompletionTool<T>(passName, completionToolName: string.Empty, input: json, commandsExecuted, iteration, response.Model ?? lastModel);
+        return parsed;
+    }
+
+    private async Task<T?> FinalizePassAfterMaxIterationsReachedAsync<T>(
+        string passName,
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        int maxTokens,
+        int maxIterations,
+        string? lastModel,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        var expectedSchema = passName switch
+        {
+            "summary-rewrite" => """
+{
+  "description": "string",
+  "recommendations": ["string"]
+}
+""",
+            "thread-narrative" => """
+{
+  "description": "string",
+  "confidence": "high|medium|low|unknown"
+}
+""",
+            _ => "{}"
+        };
+
+	        var finalPrompt = $"""
+	Iteration budget reached ({maxIterations}): this is a final synthesis step. Do not request any tools.
+
+	Based ONLY on the evidence already collected in this conversation (tool outputs already shown), provide the best final result for pass '{passName}'.
+	If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed (due to iteration limit) and must be ignored.
+
+	Return ONLY valid JSON (no markdown, no code fences) matching:
+	{expectedSchema}
+	""";
+
+        var finalMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = finalPrompt }
+                ]
+            }
+        };
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages = finalMessages,
+            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
+            Tools = [],
+            ToolChoice = new ToolChoice { Mode = "none" }
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation("[AI] Finalizing pass {Pass} after max iterations ({MaxIterations})...", passName, maxIterations);
+            WriteSamplingTraceFile(traceRunDir, $"final-{passName}-iter-budget-synthesis-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return passName switch
+            {
+                "summary-rewrite" => new AiSummaryResult
+                {
+                    Error = $"Iteration budget reached ({maxIterations}). Final synthesis request failed: {ex.Message}",
+                    Description = string.Empty,
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                "thread-narrative" => new AiThreadNarrativeResult
+                {
+                    Error = $"Iteration budget reached ({maxIterations}). Final synthesis request failed: {ex.Message}",
+                    Description = string.Empty,
+                    Confidence = "low",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                _ => null
+            };
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"final-{passName}-iter-budget-synthesis-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response) ?? string.Empty;
+        if (!TryParseFirstJsonObject(text, out var json))
+        {
+            return passName switch
+            {
+                "summary-rewrite" => new AiSummaryResult
+                {
+                    Error = $"Iteration budget reached ({maxIterations}). Final synthesis produced unstructured output.",
+                    Description = text.Trim(),
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = response.Model ?? lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                "thread-narrative" => new AiThreadNarrativeResult
+                {
+                    Error = $"Iteration budget reached ({maxIterations}). Final synthesis produced unstructured output.",
+                    Description = text.Trim(),
+                    Confidence = "low",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = response.Model ?? lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                _ => null
+            };
+        }
+
+        return ParseCompletionTool<T>(passName, completionToolName: string.Empty, input: json, commandsExecuted, iteration, response.Model ?? lastModel);
+    }
+
+    private static AiAnalysisResult BuildFallbackSynthesisResult(
+        string prefix,
+        string text,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        string? model)
+    {
+        var trimmed = (text ?? string.Empty).Trim();
+        var rootCause = prefix;
+
+        var rootCauseMatch = Regex.Match(trimmed, @"(?i)\broot\s*cause\s*[:\-]\s*(.+)$", RegexOptions.Multiline);
+        if (rootCauseMatch.Success)
+        {
+            var candidate = rootCauseMatch.Groups[1].Value.Trim();
+            if (!string.IsNullOrWhiteSpace(candidate))
+            {
+                rootCause = candidate;
+            }
+        }
+
+        var confidence = "low";
+        var confidenceMatch = Regex.Match(trimmed, @"(?i)\bconfidence\s*[:\-]\s*(high|medium|low|unknown)\b");
+        if (confidenceMatch.Success)
+        {
+            confidence = confidenceMatch.Groups[1].Value.ToLowerInvariant();
+        }
+
+        var reasoning = string.IsNullOrWhiteSpace(trimmed)
+            ? prefix
+            : $"{prefix}{Environment.NewLine}{Environment.NewLine}{trimmed}";
+
+        return new AiAnalysisResult
+        {
+            RootCause = rootCause,
+            Confidence = confidence,
+            Reasoning = reasoning,
+            Iterations = iteration,
+            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+            Model = model,
+            AnalyzedAt = DateTime.UtcNow
+        };
+    }
+
+    private static string? ExtractAssistantText(CreateMessageResult response)
+    {
+        if (response.Content == null || response.Content.Count == 0)
+        {
+            return null;
+        }
+
+        var texts = response.Content.OfType<TextContentBlock>()
+            .Select(t => t.Text)
+            .Where(t => !string.IsNullOrWhiteSpace(t))
+            .ToList();
+        return texts.Count == 0 ? null : string.Join("\n", texts).Trim();
+    }
+
+    private static bool TryParseFirstJsonObject(string text, out JsonElement json)
+    {
+        json = default;
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var trimmed = text.Trim();
+        if (TryParseJsonObject(trimmed, out json))
+        {
+            return true;
+        }
+
+        // Handle fenced code blocks.
+        trimmed = TrimCodeFences(trimmed);
+        if (TryParseJsonObject(trimmed, out json))
+        {
+            return true;
+        }
+
+        // Find the first JSON object in the text.
+        if (!TryExtractFirstJsonObjectSubstring(trimmed, out var candidate))
+        {
+            return false;
+        }
+
+        return TryParseJsonObject(candidate, out json);
+    }
+
+    private static bool TryParseJsonObject(string candidate, out JsonElement json)
+    {
+        json = default;
+        try
+        {
+            using var doc = JsonDocument.Parse(candidate);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+            json = doc.RootElement.Clone();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static string TrimCodeFences(string text)
+    {
+        var trimmed = text.Trim();
+        if (!trimmed.StartsWith("```", StringComparison.Ordinal))
+        {
+            return trimmed;
+        }
+
+        var firstNewline = trimmed.IndexOf('\n');
+        if (firstNewline < 0)
+        {
+            return trimmed;
+        }
+
+        var withoutFirstLine = trimmed.Substring(firstNewline + 1);
+        var endFence = withoutFirstLine.LastIndexOf("```", StringComparison.Ordinal);
+        if (endFence < 0)
+        {
+            return withoutFirstLine.Trim();
+        }
+
+        return withoutFirstLine.Substring(0, endFence).Trim();
+    }
+
+    private static bool TryExtractFirstJsonObjectSubstring(string text, out string json)
+    {
+        json = string.Empty;
+        var start = text.IndexOf('{');
+        if (start < 0)
+        {
+            return false;
+        }
+
+        var depth = 0;
+        var inString = false;
+        var escape = false;
+        for (var i = start; i < text.Length; i++)
+        {
+            var c = text[i];
+            if (inString)
+            {
+                if (escape)
+                {
+                    escape = false;
+                    continue;
+                }
+
+                if (c == '\\')
+                {
+                    escape = true;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c == '{')
+            {
+                depth++;
+                continue;
+            }
+
+            if (c == '}')
+            {
+                depth--;
+                if (depth == 0)
+                {
+                    json = text.Substring(start, i - start + 1);
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static string? TryGetString(JsonElement element, string name)

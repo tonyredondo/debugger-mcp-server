@@ -875,6 +875,10 @@ internal sealed class McpSamplingCreateMessageHandler(
     {
         var preserveMcpContentBlocks = _settings.GetProviderKind() is LlmProviderKind.OpenRouter or LlmProviderKind.Anthropic;
         var messages = BuildChatMessages(systemPrompt, parameters, preserveMcpContentBlocks);
+        if (_settings.GetProviderKind() == LlmProviderKind.OpenAi)
+        {
+            messages = NormalizeToolMessageOrderingForOpenAi(messages);
+        }
         var tools = ParseTools(parameters);
         var toolChoice = ParseToolChoice(parameters);
         var maxTokens = ParseMaxTokens(parameters);
@@ -888,6 +892,70 @@ internal sealed class McpSamplingCreateMessageHandler(
             MaxTokens = maxTokens,
             ReasoningEffort = reasoningEffort
         };
+    }
+
+    /// <summary>
+    /// Normalizes tool-result message ordering for OpenAI to avoid invalid sequences like orphaned <c>role="tool"</c>
+    /// messages (which OpenAI rejects when they do not follow a prior <c>assistant</c> message with matching
+    /// <c>tool_calls</c>).
+    /// </summary>
+    private static List<ChatMessage> NormalizeToolMessageOrderingForOpenAi(List<ChatMessage> messages)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+
+        if (messages.Count == 0)
+        {
+            return messages;
+        }
+
+        for (var i = 0; i < messages.Count; i++)
+        {
+            var m = messages[i];
+            if (!string.Equals(m.Role, "tool", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var toolCallId = m.ToolCallId;
+            if (string.IsNullOrWhiteSpace(toolCallId))
+            {
+                messages[i] = new ChatMessage(
+                    "user",
+                    $"[tool output missing tool_call_id]{Environment.NewLine}{m.Content}");
+                continue;
+            }
+
+            var anchorIndex = i - 1;
+            while (anchorIndex >= 0 && string.Equals(messages[anchorIndex].Role, "tool", StringComparison.OrdinalIgnoreCase))
+            {
+                anchorIndex--;
+            }
+
+            if (anchorIndex < 0)
+            {
+                messages[i] = new ChatMessage("user", $"[orphan tool output id={toolCallId}]{Environment.NewLine}{m.Content}");
+                continue;
+            }
+
+            var anchor = messages[anchorIndex];
+            if (!string.Equals(anchor.Role, "assistant", StringComparison.OrdinalIgnoreCase) ||
+                anchor.ToolCalls == null ||
+                anchor.ToolCalls.Count == 0)
+            {
+                messages[i] = new ChatMessage("user", $"[orphan tool output id={toolCallId}]{Environment.NewLine}{m.Content}");
+                continue;
+            }
+
+            var matches = anchor.ToolCalls.Any(c => string.Equals(c.Id, toolCallId, StringComparison.OrdinalIgnoreCase));
+            if (!matches)
+            {
+                messages[i] = new ChatMessage(
+                    "user",
+                    $"[tool output id={toolCallId} does not match prior tool_calls]{Environment.NewLine}{m.Content}");
+            }
+        }
+
+        return messages;
     }
 
     private string? GetEffectiveReasoningEffort(JsonElement parameters)
