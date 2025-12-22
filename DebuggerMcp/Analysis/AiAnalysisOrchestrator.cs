@@ -192,7 +192,10 @@ public sealed class AiAnalysisOrchestrator(
                         attempt,
                         MaxSamplingRequestAttempts);
                     LogSamplingRequestSummary(iteration, request);
-                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-request.json", BuildTraceRequest(iteration, request));
+                    var requestFileName = attempt == 1
+                        ? $"iter-{iteration:0000}-request.json"
+                        : $"iter-{iteration:0000}-attempt-{attempt:00}-request.json";
+                    WriteSamplingTraceFile(traceRunDir, requestFileName, BuildTraceRequest(iteration, request));
                     response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
 
                     if (response.Content != null && response.Content.Count > 0)
@@ -206,13 +209,19 @@ public sealed class AiAnalysisOrchestrator(
                         iteration,
                         attempt,
                         MaxSamplingRequestAttempts);
-                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
+                    var responseFileName = attempt == 1
+                        ? $"iter-{iteration:0000}-response.json"
+                        : $"iter-{iteration:0000}-attempt-{attempt:00}-response.json";
+                    WriteSamplingTraceFile(traceRunDir, responseFileName, BuildTraceResponse(iteration, response));
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     lastSamplingError = ex;
                     _logger.LogWarning(ex, "[AI] Sampling failed at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", iteration, attempt, MaxSamplingRequestAttempts);
-                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-error.json", new { iteration, attempt, error = ex.ToString(), message = ex.Message });
+                    var errorFileName = attempt == 1
+                        ? $"iter-{iteration:0000}-error.json"
+                        : $"iter-{iteration:0000}-attempt-{attempt:00}-error.json";
+                    WriteSamplingTraceFile(traceRunDir, errorFileName, new { iteration, attempt, error = ex.ToString(), message = ex.Message });
                 }
 
                 if (attempt < Math.Max(1, MaxSamplingRequestAttempts) && messages.Count > 2)
@@ -784,7 +793,10 @@ public sealed class AiAnalysisOrchestrator(
                         attempt,
                         MaxSamplingRequestAttempts);
                     LogSamplingRequestSummary(iteration, request);
-                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-request.json", BuildTraceRequest(iteration, request));
+                    var requestFileName = attempt == 1
+                        ? $"iter-{iteration:0000}-request.json"
+                        : $"iter-{iteration:0000}-attempt-{attempt:00}-request.json";
+                    WriteSamplingTraceFile(traceRunDir, requestFileName, BuildTraceRequest(iteration, request));
                     response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
                     if (response.Content != null && response.Content.Count > 0)
                     {
@@ -793,13 +805,19 @@ public sealed class AiAnalysisOrchestrator(
 
                     lastSamplingError = new InvalidOperationException("The sampling client returned an empty response.");
                     _logger.LogWarning("[AI] Sampling pass {Pass} returned empty content at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", passName, iteration, attempt, MaxSamplingRequestAttempts);
-                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-response.json", BuildTraceResponse(iteration, response));
+                    var responseFileName = attempt == 1
+                        ? $"iter-{iteration:0000}-response.json"
+                        : $"iter-{iteration:0000}-attempt-{attempt:00}-response.json";
+                    WriteSamplingTraceFile(traceRunDir, responseFileName, BuildTraceResponse(iteration, response));
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     lastSamplingError = ex;
                     _logger.LogWarning(ex, "[AI] Sampling pass {Pass} failed at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", passName, iteration, attempt, MaxSamplingRequestAttempts);
-                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-error.json", new { passName, iteration, attempt, error = ex.ToString(), message = ex.Message });
+                    var errorFileName = attempt == 1
+                        ? $"iter-{iteration:0000}-error.json"
+                        : $"iter-{iteration:0000}-attempt-{attempt:00}-error.json";
+                    WriteSamplingTraceFile(traceRunDir, errorFileName, new { passName, iteration, attempt, error = ex.ToString(), message = ex.Message });
                 }
 
                 if (attempt < Math.Max(1, MaxSamplingRequestAttempts) && messages.Count > 2)
