@@ -42,6 +42,17 @@ public sealed class AiAnalysisOrchestrator(
     public int MaxToolCalls { get; set; } = 50;
 
     /// <summary>
+    /// Number of sampling iterations between internal checkpoint synthesis steps that condense the current findings
+    /// into a compact working memory and prune the conversation history. Set to 0 to disable.
+    /// </summary>
+    public int CheckpointEveryIterations { get; set; } = 4;
+
+    /// <summary>
+    /// Maximum output tokens to request for an internal checkpoint synthesis step.
+    /// </summary>
+    public int CheckpointMaxTokens { get; set; } = 1024;
+
+    /// <summary>
     /// Gets or sets a value indicating whether to emit verbose sampling trace logs (prompts/messages previews).
     /// </summary>
     /// <remarks>
@@ -145,15 +156,18 @@ public sealed class AiAnalysisOrchestrator(
         var toolIndexByIteration = new Dictionary<int, int>();
         var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
         var analysisCompleteRefusals = 0;
+        var lastCheckpointIteration = 0;
+        var commandsExecutedAtLastCheckpoint = 0;
 
         var traceRunDir = InitializeSamplingTraceDirectory();
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
+            var requestMessages = new List<SamplingMessage>(messages);
             var request = new CreateMessageRequestParams
             {
                 SystemPrompt = SystemPrompt,
-                Messages = messages,
+                Messages = requestMessages,
                 MaxTokens = maxTokens,
                 Tools = tools,
                 ToolChoice = new ToolChoice { Mode = "auto" }
@@ -463,6 +477,35 @@ public sealed class AiAnalysisOrchestrator(
                 WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", completed);
                 return completed;
             }
+
+            if (iteration < maxIterations
+                && ShouldCreateCheckpoint(
+                    iteration: iteration,
+                    maxIterations: maxIterations,
+                    checkpointEveryIterations: CheckpointEveryIterations,
+                    lastCheckpointIteration: lastCheckpointIteration,
+                    commandsExecuted: commandsExecuted,
+                    commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint))
+            {
+                var checkpoint = await TryCreateCheckpointAsync(
+                        passName: "analysis",
+                        systemPrompt: SystemPrompt,
+                        messages: messages,
+                        iteration: iteration,
+                        maxTokens: CheckpointMaxTokens,
+                        traceRunDir: traceRunDir,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!string.IsNullOrWhiteSpace(checkpoint))
+                {
+                    lastCheckpointIteration = iteration;
+                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+
+                    messages.Clear();
+                    messages.Add(BuildCheckpointCarryForwardMessage(checkpoint, passName: "analysis"));
+                }
+            }
         }
 
         // Add one final synthesis iteration when the iteration budget is reached.
@@ -672,13 +715,16 @@ public sealed class AiAnalysisOrchestrator(
         var toolIndexByIteration = new Dictionary<int, int>();
         var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
         var refusalCount = 0;
+        var lastCheckpointIteration = 0;
+        var commandsExecutedAtLastCheckpoint = 0;
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
+            var requestMessages = new List<SamplingMessage>(messages);
             var request = new CreateMessageRequestParams
             {
                 SystemPrompt = systemPrompt,
-                Messages = messages,
+                Messages = requestMessages,
                 MaxTokens = maxTokens,
                 Tools = tools,
                 ToolChoice = new ToolChoice { Mode = "auto" }
@@ -974,6 +1020,35 @@ public sealed class AiAnalysisOrchestrator(
 
                 return ParseCompletionTool<T>(passName, completionToolName, pendingCompleteInput, commandsExecuted, iteration, lastModel);
             }
+
+            if (iteration < maxIterations
+                && ShouldCreateCheckpoint(
+                    iteration: iteration,
+                    maxIterations: maxIterations,
+                    checkpointEveryIterations: CheckpointEveryIterations,
+                    lastCheckpointIteration: lastCheckpointIteration,
+                    commandsExecuted: commandsExecuted,
+                    commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint))
+            {
+                var checkpoint = await TryCreateCheckpointAsync(
+                        passName: passName,
+                        systemPrompt: systemPrompt,
+                        messages: messages,
+                        iteration: iteration,
+                        maxTokens: CheckpointMaxTokens,
+                        traceRunDir: traceRunDir,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+
+                if (!string.IsNullOrWhiteSpace(checkpoint))
+                {
+                    lastCheckpointIteration = iteration;
+                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+
+                    messages.Clear();
+                    messages.Add(BuildCheckpointCarryForwardMessage(checkpoint, passName: passName));
+                }
+            }
         }
 
         // Add one final synthesis iteration when the iteration budget is reached.
@@ -1005,6 +1080,210 @@ public sealed class AiAnalysisOrchestrator(
             "thread-narrative" => ParseThreadNarrativeComplete(input, commandsExecuted, iteration, model) as T,
             _ => null
         };
+
+    private static bool ShouldCreateCheckpoint(
+        int iteration,
+        int maxIterations,
+        int checkpointEveryIterations,
+        int lastCheckpointIteration,
+        List<ExecutedCommand> commandsExecuted,
+        int commandsExecutedAtLastCheckpoint)
+    {
+        if (iteration <= 0 || maxIterations <= 0 || iteration >= maxIterations)
+        {
+            return false;
+        }
+
+        if (checkpointEveryIterations <= 0)
+        {
+            return false;
+        }
+
+        if (commandsExecuted.Count <= commandsExecutedAtLastCheckpoint)
+        {
+            return false;
+        }
+
+        if (iteration - lastCheckpointIteration < 1)
+        {
+            return false;
+        }
+
+        var shouldByInterval = iteration % checkpointEveryIterations == 0;
+        if (shouldByInterval)
+        {
+            return true;
+        }
+
+        if (iteration - lastCheckpointIteration < 2)
+        {
+            return false;
+        }
+
+        var newCommandCount = commandsExecuted.Count - commandsExecutedAtLastCheckpoint;
+        if (newCommandCount < 5)
+        {
+            return false;
+        }
+
+        var recent = commandsExecuted.Where(c => c.Iteration == iteration).ToList();
+        if (recent.Count == 0)
+        {
+            return false;
+        }
+
+        var tooLargeCount = recent.Count(c =>
+            c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+            && c.Output.Contains("too_large", StringComparison.OrdinalIgnoreCase));
+
+        var duplicateReuseCount = recent.Count(c =>
+            c.Output.StartsWith("[cached tool result] Duplicate tool call detected", StringComparison.Ordinal));
+
+        return tooLargeCount >= 2 || duplicateReuseCount >= 1;
+    }
+
+    private async Task<string?> TryCreateCheckpointAsync(
+        string passName,
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        int iteration,
+        int maxTokens,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+    {
+        const string checkpointSchema = """
+{
+  "facts": ["string"],
+  "hypotheses": [
+    {
+      "hypothesis": "string",
+      "confidence": "high|medium|low|unknown",
+      "evidence": ["string"],
+      "unknowns": ["string"]
+    }
+  ],
+  "evidence": [
+    {
+      "id": "E1",
+      "source": "tool call summary (e.g., report_get(path=...), exec(cmd=...))",
+      "finding": "string"
+    }
+  ],
+  "doNotRepeat": ["string"],
+  "nextSteps": [
+    {
+      "tool": "report_get|exec|inspect|get_thread_stack",
+      "call": "string",
+      "why": "string"
+    }
+  ]
+}
+""";
+
+        var prompt = $"""
+Create an INTERNAL checkpoint for pass "{passName}".
+
+Goal: preserve a compact working memory so we can prune older tool outputs and avoid repeating tool calls.
+Do NOT request any tools in this step.
+
+Rules:
+- Base this ONLY on evidence already shown in this conversation (tool results already returned).
+- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
+- Be detailed, but bounded: facts<=12, hypotheses<=5, evidence<=12, doNotRepeat<=12, nextSteps<=10.
+- Keep strings concise (prefer <=200 chars each).
+- In nextSteps, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor; prefer smaller paths).
+
+Return ONLY valid JSON (no markdown, no code fences) with this schema:
+{checkpointSchema}
+""";
+
+        var checkpointMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = prompt }
+                ]
+            }
+        };
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages = checkpointMessages,
+            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
+            Tools = [],
+            ToolChoice = null
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation("[AI] Checkpointing pass {Pass} at iteration {Iteration}...", passName, iteration);
+            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "[AI] Checkpoint synthesis failed in pass {Pass} at iteration {Iteration}", passName, iteration);
+            return null;
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            _logger.LogWarning("[AI] Checkpoint synthesis returned empty content in pass {Pass} at iteration {Iteration}", passName, iteration);
+            return null;
+        }
+
+        text = text.Trim();
+        if (!TryParseFirstJsonObject(text, out var json))
+        {
+            _logger.LogWarning("[AI] Checkpoint synthesis returned unstructured output in pass {Pass} at iteration {Iteration}", passName, iteration);
+            return TruncateText(text, maxChars: 20_000);
+        }
+
+        var normalized = JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = false });
+        if (normalized.Length > 20_000)
+        {
+            _logger.LogWarning(
+                "[AI] Checkpoint synthesis output exceeded max chars ({MaxChars}) in pass {Pass} at iteration {Iteration} (chars={Chars}); skipping checkpoint.",
+                20_000,
+                passName,
+                iteration,
+                normalized.Length);
+            return null;
+        }
+
+        return normalized;
+    }
+
+    private static SamplingMessage BuildCheckpointCarryForwardMessage(string checkpointJson, string passName)
+    {
+        var prompt = $"""
+This is the current INTERNAL working memory checkpoint for pass "{passName}".
+Treat it as authoritative.
+
+Older tool outputs may have been pruned to keep context small. Do not repeat tool calls listed in doNotRepeat.
+When you need more evidence, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor).
+
+Checkpoint JSON:
+{checkpointJson}
+""";
+
+        return new SamplingMessage
+        {
+            Role = Role.User,
+            Content =
+            [
+                new TextContentBlock { Text = prompt }
+            ]
+        };
+    }
 
     private static AiSummaryResult ParseSummaryRewriteComplete(
         JsonElement input,
@@ -1709,14 +1988,14 @@ Tooling:
             }
         };
 
-        var request = new CreateMessageRequestParams
-        {
-            SystemPrompt = systemPrompt,
-            Messages = finalMessages,
-            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
-            Tools = [],
-            ToolChoice = new ToolChoice { Mode = "none" }
-        };
+	        var request = new CreateMessageRequestParams
+	        {
+	            SystemPrompt = systemPrompt,
+	            Messages = finalMessages,
+	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
+	            Tools = [],
+	            ToolChoice = null
+	        };
 
         CreateMessageResult response;
         try
@@ -1806,14 +2085,14 @@ Tooling:
             }
         };
 
-        var request = new CreateMessageRequestParams
-        {
-            SystemPrompt = systemPrompt,
-            Messages = finalMessages,
-            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
-            Tools = [],
-            ToolChoice = new ToolChoice { Mode = "none" }
-        };
+	        var request = new CreateMessageRequestParams
+	        {
+	            SystemPrompt = systemPrompt,
+	            Messages = finalMessages,
+	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
+	            Tools = [],
+	            ToolChoice = null
+	        };
 
         CreateMessageResult response;
         try
@@ -1902,14 +2181,14 @@ Tooling:
             }
         };
 
-        var request = new CreateMessageRequestParams
-        {
-            SystemPrompt = systemPrompt,
-            Messages = finalMessages,
-            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
-            Tools = [],
-            ToolChoice = new ToolChoice { Mode = "none" }
-        };
+	        var request = new CreateMessageRequestParams
+	        {
+	            SystemPrompt = systemPrompt,
+	            Messages = finalMessages,
+	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
+	            Tools = [],
+	            ToolChoice = null
+	        };
 
         CreateMessageResult response;
         try
@@ -2029,14 +2308,14 @@ Tooling:
             }
         };
 
-        var request = new CreateMessageRequestParams
-        {
-            SystemPrompt = systemPrompt,
-            Messages = finalMessages,
-            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
-            Tools = [],
-            ToolChoice = new ToolChoice { Mode = "none" }
-        };
+	        var request = new CreateMessageRequestParams
+	        {
+	            SystemPrompt = systemPrompt,
+	            Messages = finalMessages,
+	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
+	            Tools = [],
+	            ToolChoice = null
+	        };
 
         CreateMessageResult response;
         try

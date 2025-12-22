@@ -287,10 +287,7 @@ public class AiAnalysisOrchestratorTests
 
         Assert.True(requests.Count >= 3);
         var finalRequest = requests[2];
-        Assert.NotNull(finalRequest.ToolChoice);
-        Assert.Equal("none", finalRequest.ToolChoice!.Mode);
-        Assert.NotNull(finalRequest.Tools);
-        Assert.Empty(finalRequest.Tools!);
+        Assert.Null(finalRequest.ToolChoice);
     }
 
     [Fact]
@@ -729,9 +726,61 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal("final root cause", result.RootCause);
         Assert.Equal(4, result.Iterations);
         Assert.NotEmpty(requests);
-        Assert.Equal("none", requests.Last().ToolChoice?.Mode);
-        Assert.NotNull(requests.Last().Tools);
-        Assert.Empty(requests.Last().Tools!);
+        Assert.Null(requests.Last().ToolChoice);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_CheckpointEveryIterations_PrunesConversationAndContinues()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "facts": ["f1"],
+              "hypotheses": [{"hypothesis":"h1","confidence":"low","evidence":["e1"],"unknowns":["u1"]}],
+              "evidence": [{"id":"E1","source":"exec(!a)","finding":"x"}],
+              "doNotRepeat": ["exec(!a)"],
+              "nextSteps": [{"tool":"report_get","call":"report_get(path=\"analysis.exception.type\")","why":"confirm"}]
+            }
+            """))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok"
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 2,
+            CheckpointMaxTokens = 512
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("done", result.RootCause);
+        Assert.Equal(2, debugger.ExecutedCommands.Count);
+        Assert.Equal(4, requests.Count);
+
+        Assert.Null(requests[2].ToolChoice);
+
+        Assert.NotNull(requests[3].Messages);
+        Assert.NotEmpty(requests[3].Messages);
+        var checkpointCarry = requests[3].Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
+        Assert.Contains("Checkpoint JSON", checkpointCarry, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"facts\"", checkpointCarry, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -763,9 +812,48 @@ public class AiAnalysisOrchestratorTests
 
         Assert.Equal(2, result.Iterations);
         Assert.Equal("final root cause", result.RootCause);
-        Assert.Equal("none", requests.Last().ToolChoice?.Mode);
-        Assert.NotNull(requests.Last().Tools);
-        Assert.Empty(requests.Last().Tools!);
+        Assert.Null(requests.Last().ToolChoice);
+    }
+
+    [Fact]
+    public async Task RewriteSummaryAsync_CheckpointEveryIterations_PrunesConversationAndContinues()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "facts": ["exceptionType=System.Exception"],
+              "hypotheses": [{"hypothesis":"h1","confidence":"low","evidence":["analysis.exception.type"],"unknowns":[]}],
+              "evidence": [{"id":"E1","source":"report_get(analysis.exception.type)","finding":"System.Exception"}],
+              "doNotRepeat": ["report_get(path=\"analysis.exception\")"],
+              "nextSteps": [{"tool":"analysis_summary_rewrite_complete","call":"(use completion tool)","why":"finish"}]
+            }
+            """))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_summary_rewrite_complete", new
+            {
+                description = "rewritten",
+                recommendations = new[] { "r1" }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 1,
+            CheckpointMaxTokens = 512
+        };
+
+        var result = await orchestrator.RewriteSummaryAsync(
+            new CrashAnalysisResult(),
+            "{\"metadata\":{},\"analysis\":{\"exception\":{\"type\":\"System.Exception\",\"message\":\"boom\"}}}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result);
+        Assert.Equal("rewritten", result!.Description);
+        Assert.Equal(3, requests.Count);
+        Assert.Null(requests[1].ToolChoice);
+        Assert.NotEmpty(requests[2].Messages);
     }
 
     [Fact]
@@ -837,9 +925,7 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal("final root cause", result.RootCause);
         Assert.Equal(3, result.Iterations);
         Assert.Equal(2, debugger.ExecutedCommands.Count);
-        Assert.Equal("none", requests.Last().ToolChoice?.Mode);
-        Assert.NotNull(requests.Last().Tools);
-        Assert.Empty(requests.Last().Tools!);
+        Assert.Null(requests.Last().ToolChoice);
     }
 
     [Fact]
