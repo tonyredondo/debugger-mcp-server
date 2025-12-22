@@ -181,61 +181,15 @@ internal sealed class McpSamplingCreateMessageHandler(
             return false;
         }
 
-        var gitRoot = TryFindGitRoot(Environment.CurrentDirectory);
         var roots = new[]
         {
             TryGetFullPathOrNull(Environment.CurrentDirectory),
-            TryGetFullPathOrNull(gitRoot),
             TryGetFullPathOrNull(ConnectionSettings.DefaultConfigDirectory),
             TryGetFullPathOrNull(Path.GetTempPath())
         }.Where(r => !string.IsNullOrWhiteSpace(r)).Cast<string>().ToArray();
 
         var candidate = normalized;
         return roots.Any(r => IsSubpathOf(candidate, r));
-    }
-
-    private static string? TryFindGitRoot(string? startDirectory)
-    {
-        if (string.IsNullOrWhiteSpace(startDirectory))
-        {
-            return null;
-        }
-
-        string dir;
-        try
-        {
-            dir = Path.GetFullPath(startDirectory);
-        }
-        catch
-        {
-            return null;
-        }
-
-        for (var i = 0; i < 25; i++)
-        {
-            try
-            {
-                var git = Path.Combine(dir, ".git");
-                if (Directory.Exists(git) || File.Exists(git))
-                {
-                    return dir;
-                }
-            }
-            catch
-            {
-                // ignore and continue walking up
-            }
-
-            var parent = Directory.GetParent(dir);
-            if (parent == null)
-            {
-                break;
-            }
-
-            dir = parent.FullName;
-        }
-
-        return null;
     }
 
     private static string? TryGetFullPathOrNull(string? path)
