@@ -741,15 +741,23 @@ public class AiAnalysisOrchestratorTests
         var sampling = new SequencedCapturingSamplingClient(requests)
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
-            .EnqueueResult(CreateMessageResultWithText("""
+            .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
             {
-              "facts": ["f1"],
-              "hypotheses": [{"hypothesis":"h1","confidence":"low","evidence":["e1"],"unknowns":["u1"]}],
-              "evidence": [{"id":"E1","source":"exec(!a)","finding":"x"}],
-              "doNotRepeat": ["exec(!a)"],
-              "nextSteps": [{"tool":"report_get","call":"report_get(path=\"analysis.exception.type\")","why":"confirm"}]
-            }
-            """))
+                facts = new[] { "f1" },
+                hypotheses = new object[]
+                {
+                    new { hypothesis = "h1", confidence = "low", evidence = new[] { "e1" }, unknowns = new[] { "u1" } }
+                },
+                evidence = new object[]
+                {
+                    new { id = "E1", source = "exec(!a)", finding = "x" }
+                },
+                doNotRepeat = new[] { "exec(!a)" },
+                nextSteps = new object[]
+                {
+                    new { tool = "report_get", call = "report_get(path=\"analysis.exception.type\")", why = "confirm" }
+                }
+            }))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {
                 rootCause = "done",
@@ -779,7 +787,9 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal(2, debugger.ExecutedCommands.Count);
         Assert.Equal(4, requests.Count);
 
-        Assert.Null(requests[2].ToolChoice);
+        Assert.NotNull(requests[2].ToolChoice);
+        Assert.Equal("required", requests[2].ToolChoice!.Mode);
+        Assert.Contains(requests[2].Tools!, t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase));
 
         Assert.NotNull(requests[3].Messages);
         Assert.NotEmpty(requests[3].Messages);
@@ -888,15 +898,29 @@ public class AiAnalysisOrchestratorTests
         var requests = new List<CreateMessageRequestParams>();
         var sampling = new SequencedCapturingSamplingClient(requests)
             .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
-            .EnqueueResult(CreateMessageResultWithText("""
+            .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
             {
-              "facts": ["exceptionType=System.Exception"],
-              "hypotheses": [{"hypothesis":"h1","confidence":"low","evidence":["analysis.exception.type"],"unknowns":[]}],
-              "evidence": [{"id":"E1","source":"report_get(analysis.exception.type)","finding":"System.Exception"}],
-              "doNotRepeat": ["report_get(path=\"analysis.exception\")"],
-              "nextSteps": [{"tool":"analysis_summary_rewrite_complete","call":"(use completion tool)","why":"finish"}]
-            }
-            """))
+                facts = new[] { "exceptionType=System.Exception" },
+                hypotheses = new object[]
+                {
+                    new
+                    {
+                        hypothesis = "h1",
+                        confidence = "low",
+                        evidence = new[] { "analysis.exception.type" },
+                        unknowns = Array.Empty<string>()
+                    }
+                },
+                evidence = new object[]
+                {
+                    new { id = "E1", source = "report_get(analysis.exception.type)", finding = "System.Exception" }
+                },
+                doNotRepeat = new[] { "report_get(path=\"analysis.exception\")" },
+                nextSteps = new object[]
+                {
+                    new { tool = "analysis_summary_rewrite_complete", call = "(use completion tool)", why = "finish" }
+                }
+            }))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_summary_rewrite_complete", new
             {
                 description = "rewritten",
@@ -919,7 +943,9 @@ public class AiAnalysisOrchestratorTests
         Assert.NotNull(result);
         Assert.Equal("rewritten", result!.Description);
         Assert.Equal(3, requests.Count);
-        Assert.Null(requests[1].ToolChoice);
+        Assert.NotNull(requests[1].ToolChoice);
+        Assert.Equal("required", requests[1].ToolChoice!.Mode);
+        Assert.Contains(requests[1].Tools!, t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase));
         Assert.NotEmpty(requests[2].Messages);
     }
 
@@ -1455,7 +1481,9 @@ public class AiAnalysisOrchestratorTests
         {
             _requests.Add(request);
 
-            if ((request.Tools == null || request.Tools.Count == 0) && request.ToolChoice == null)
+            if (request.ToolChoice != null &&
+                string.Equals(request.ToolChoice.Mode, "required", StringComparison.OrdinalIgnoreCase) &&
+                request.Tools?.Any(t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase)) == true)
             {
                 throw new InvalidOperationException("simulated checkpoint failure");
             }

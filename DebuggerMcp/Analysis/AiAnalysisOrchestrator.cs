@@ -26,6 +26,56 @@ public sealed class AiAnalysisOrchestrator(
 
     private LogLevel SamplingTraceLevel => EnableVerboseSamplingTrace ? LogLevel.Information : LogLevel.Debug;
 
+    private const string CheckpointCompleteToolName = "checkpoint_complete";
+
+    private static readonly JsonElement CheckpointCompleteSchema = ParseJson("""
+        {
+          "type": "object",
+          "properties": {
+            "facts": { "type": "array", "items": { "type": "string" } },
+            "hypotheses": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "hypothesis": { "type": "string" },
+                  "confidence": { "type": "string", "enum": ["high", "medium", "low", "unknown"] },
+                  "evidence": { "type": "array", "items": { "type": "string" } },
+                  "unknowns": { "type": "array", "items": { "type": "string" } }
+                },
+                "required": ["hypothesis", "confidence"]
+              }
+            },
+            "evidence": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string" },
+                  "source": { "type": "string" },
+                  "finding": { "type": "string" }
+                },
+                "required": ["id", "source", "finding"]
+              }
+            },
+            "doNotRepeat": { "type": "array", "items": { "type": "string" } },
+            "nextSteps": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "tool": { "type": "string" },
+                  "call": { "type": "string" },
+                  "why": { "type": "string" }
+                },
+                "required": ["tool", "call", "why"]
+              }
+            }
+          },
+          "required": ["facts", "hypotheses", "evidence", "doNotRepeat", "nextSteps"]
+        }
+        """);
+
     /// <summary>
     /// Gets or sets the maximum number of sampling iterations to perform.
     /// </summary>
@@ -1225,40 +1275,11 @@ public sealed class AiAnalysisOrchestrator(
         string? traceRunDir,
         CancellationToken cancellationToken)
     {
-        const string checkpointSchema = """
-{
-  "facts": ["string"],
-  "hypotheses": [
-    {
-      "hypothesis": "string",
-      "confidence": "high|medium|low|unknown",
-      "evidence": ["string"],
-      "unknowns": ["string"]
-    }
-  ],
-  "evidence": [
-    {
-      "id": "E1",
-      "source": "tool call summary (e.g., report_get(path=...), exec(cmd=...))",
-      "finding": "string"
-    }
-  ],
-  "doNotRepeat": ["string"],
-  "nextSteps": [
-    {
-      "tool": "report_get|exec|inspect|get_thread_stack",
-      "call": "string",
-      "why": "string"
-    }
-  ]
-}
-""";
-
         var prompt = $"""
 Create an INTERNAL checkpoint for pass "{passName}".
 
 Goal: preserve a compact working memory so we can prune older tool outputs and avoid repeating tool calls.
-Do NOT request any tools in this step.
+Do NOT request any debugger tools in this step.
 
 Rules:
 - Base this ONLY on evidence already shown in this conversation (tool results already returned).
@@ -1267,8 +1288,8 @@ Rules:
 - Keep strings concise (prefer <=200 chars each).
 - In nextSteps, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor; prefer smaller paths).
 
-Return ONLY valid JSON (no markdown, no code fences) with this schema:
-{checkpointSchema}
+Respond by calling the "{CheckpointCompleteToolName}" tool with arguments matching its schema.
+Do NOT output any additional text.
 """;
 
         var evidence = BuildCheckpointEvidenceSnapshot(
@@ -1298,13 +1319,23 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             ]
         });
 
+        var checkpointTools = new List<Tool>
+        {
+            new()
+            {
+                Name = CheckpointCompleteToolName,
+                Description = "Create/extend the internal working-memory checkpoint (facts, hypotheses, evidence, doNotRepeat, nextSteps).",
+                InputSchema = CheckpointCompleteSchema
+            }
+        };
+
         var request = new CreateMessageRequestParams
         {
             SystemPrompt = systemPrompt,
             Messages = checkpointMessages,
             MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
-            Tools = null,
-            ToolChoice = null
+            Tools = checkpointTools,
+            ToolChoice = new ToolChoice { Mode = "required" }
         };
 
         CreateMessageResult response;
@@ -1322,6 +1353,11 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         }
 
         WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-response.json", BuildTraceResponse(iteration, response));
+
+        if (TryExtractCheckpointFromToolUse(response, out var checkpointToolJson))
+        {
+            return checkpointToolJson;
+        }
 
         var text = ExtractAssistantText(response);
         if (string.IsNullOrWhiteSpace(text))
@@ -1350,6 +1386,46 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         }
 
         return normalized;
+    }
+
+    private bool TryExtractCheckpointFromToolUse(CreateMessageResult response, out string checkpointJson)
+    {
+        checkpointJson = string.Empty;
+
+        if (response.Content == null || response.Content.Count == 0)
+        {
+            return false;
+        }
+
+        var toolUse = response.Content
+            .OfType<ToolUseContentBlock>()
+            .FirstOrDefault(b => string.Equals(b.Name, CheckpointCompleteToolName, StringComparison.OrdinalIgnoreCase));
+
+        if (toolUse == null)
+        {
+            return false;
+        }
+
+        var raw = toolUse.Input.ToString() ?? string.Empty;
+        if (!TryParseFirstJsonObject(raw, out var json))
+        {
+            _logger.LogWarning("[AI] Checkpoint tool call returned non-JSON input (tool={Tool})", CheckpointCompleteToolName);
+            return false;
+        }
+
+        var normalized = JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = false });
+        if (normalized.Length > 20_000)
+        {
+            _logger.LogWarning(
+                "[AI] Checkpoint tool call exceeded max chars ({MaxChars}) (tool={Tool} chars={Chars}); skipping checkpoint.",
+                20_000,
+                CheckpointCompleteToolName,
+                normalized.Length);
+            return false;
+        }
+
+        checkpointJson = normalized;
+        return true;
     }
 
     private static SamplingMessage BuildCheckpointCarryForwardMessage(string checkpointJson, string passName)
@@ -3187,6 +3263,12 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         var tail = remaining - head;
 
         return text.Substring(0, head) + marker + text.Substring(text.Length - tail);
+    }
+
+    private static JsonElement ParseJson(string json)
+    {
+        using var doc = JsonDocument.Parse(json);
+        return doc.RootElement.Clone();
     }
 
     private static void EnsureSafeDebuggerCommand(string command)
