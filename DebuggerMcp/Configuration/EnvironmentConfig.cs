@@ -389,6 +389,15 @@ public static class EnvironmentConfig
     public const string AiSamplingTraceMaxFileBytes = "DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES";
 
     /// <summary>
+    /// Environment variable name for overriding the AI sampling checkpoint interval.
+    /// </summary>
+    /// <remarks>
+    /// When set to a positive integer N, the AI sampling orchestrator will attempt to synthesize and prune context
+    /// every N iterations. This is intended for debugging/stabilization of MCP sampling and is not included in the report.
+    /// </remarks>
+    public const string AiSamplingCheckpointEveryIterations = "DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS";
+
+    /// <summary>
     /// Default maximum request body size in GB when environment variable is not set.
     /// </summary>
     public const int DefaultMaxRequestBodySizeGb = 5;
@@ -535,6 +544,21 @@ public static class EnvironmentConfig
     /// <returns>Maximum bytes per file.</returns>
     public static int GetAiSamplingTraceMaxFileBytes()
         => GetInt(AiSamplingTraceMaxFileBytes, 2_000_000);
+
+    /// <summary>
+    /// Gets the configured override for the AI sampling checkpoint interval.
+    /// </summary>
+    /// <returns>A positive integer interval when configured; otherwise null.</returns>
+    public static int? GetAiSamplingCheckpointEveryIterationsOverride()
+    {
+        var value = Environment.GetEnvironmentVariable(AiSamplingCheckpointEveryIterations);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        return int.TryParse(value, out var parsed) && parsed > 0 ? parsed : null;
+    }
 
     /// <summary>
     /// Gets the configured API key, if any.

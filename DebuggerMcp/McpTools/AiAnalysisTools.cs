@@ -125,6 +125,12 @@ public sealed class AiAnalysisTools(
             SamplingTraceLabel = $"{sessionId}-{session.CurrentDumpId ?? "no-dump"}"
         };
 
+        var checkpointEveryIterations = EnvironmentConfig.GetAiSamplingCheckpointEveryIterationsOverride();
+        if (checkpointEveryIterations.HasValue)
+        {
+            orchestrator.CheckpointEveryIterations = checkpointEveryIterations.Value;
+        }
+
         var aiResult = await orchestrator.AnalyzeCrashAsync(
                 initialReport,
                 fullReportJson,

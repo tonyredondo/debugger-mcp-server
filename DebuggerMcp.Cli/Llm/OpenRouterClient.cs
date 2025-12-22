@@ -259,6 +259,17 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
             var sb = new StringBuilder();
             foreach (var item in content.EnumerateArray())
             {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    var s = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(s))
+                    {
+                        if (sb.Length > 0) sb.AppendLine();
+                        sb.Append(s.TrimEnd());
+                    }
+                    continue;
+                }
+
                 if (item.ValueKind != JsonValueKind.Object)
                 {
                     continue;
@@ -266,7 +277,8 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
 
                 if (item.TryGetProperty("type", out var typeProp) &&
                     typeProp.ValueKind == JsonValueKind.String &&
-                    string.Equals(typeProp.GetString(), "text", StringComparison.OrdinalIgnoreCase) &&
+                    (string.Equals(typeProp.GetString(), "text", StringComparison.OrdinalIgnoreCase) ||
+                     string.Equals(typeProp.GetString(), "output_text", StringComparison.OrdinalIgnoreCase)) &&
                     item.TryGetProperty("text", out var textProp) &&
                     textProp.ValueKind == JsonValueKind.String)
                 {

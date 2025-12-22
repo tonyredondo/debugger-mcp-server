@@ -33,6 +33,7 @@ public class EnvironmentConfigTests : IDisposable
         StoreOriginalValue(EnvironmentConfig.AiSamplingTrace);
         StoreOriginalValue(EnvironmentConfig.AiSamplingTraceFiles);
         StoreOriginalValue(EnvironmentConfig.AiSamplingTraceMaxFileBytes);
+        StoreOriginalValue(EnvironmentConfig.AiSamplingCheckpointEveryIterations);
     }
 
     private void StoreOriginalValue(string name)
@@ -168,6 +169,12 @@ public class EnvironmentConfigTests : IDisposable
     public void AiSamplingTraceMaxFileBytes_ConstantName_IsCorrect()
     {
         Assert.Equal("DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES", EnvironmentConfig.AiSamplingTraceMaxFileBytes);
+    }
+
+    [Fact]
+    public void AiSamplingCheckpointEveryIterations_ConstantName_IsCorrect()
+    {
+        Assert.Equal("DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS", EnvironmentConfig.AiSamplingCheckpointEveryIterations);
     }
 
     [Fact]
@@ -975,5 +982,31 @@ public class EnvironmentConfigTests : IDisposable
 
         // Assert
         Assert.Equal(5L * 1024 * 1024 * 1024, result); // 5 GB in bytes
+    }
+
+    [Fact]
+    public void GetAiSamplingCheckpointEveryIterationsOverride_WhenUnset_ReturnsNull()
+    {
+        ClearEnv(EnvironmentConfig.AiSamplingCheckpointEveryIterations);
+        Assert.Null(EnvironmentConfig.GetAiSamplingCheckpointEveryIterationsOverride());
+    }
+
+    [Theory]
+    [InlineData("1", 1)]
+    [InlineData("4", 4)]
+    public void GetAiSamplingCheckpointEveryIterationsOverride_WithPositiveInt_ReturnsValue(string value, int expected)
+    {
+        SetEnv(EnvironmentConfig.AiSamplingCheckpointEveryIterations, value);
+        Assert.Equal(expected, EnvironmentConfig.GetAiSamplingCheckpointEveryIterationsOverride());
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("nope")]
+    public void GetAiSamplingCheckpointEveryIterationsOverride_WithInvalidValue_ReturnsNull(string value)
+    {
+        SetEnv(EnvironmentConfig.AiSamplingCheckpointEveryIterations, value);
+        Assert.Null(EnvironmentConfig.GetAiSamplingCheckpointEveryIterationsOverride());
     }
 }
