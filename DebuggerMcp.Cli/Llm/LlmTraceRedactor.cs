@@ -51,10 +51,25 @@ internal static class LlmTraceRedactor
             "\"$1\":\"***\"",
             RegexOptions.CultureInvariant);
 
+        // Query-string style secrets inside larger strings (e.g., URLs in trace events).
+        // Important: avoid consuming trailing quotes/brackets to keep JSON logs valid.
+        text = Regex.Replace(
+            text,
+            @"(?i)\b(openrouter_api_key|openai_api_key|anthropic_api_key|debugger_mcp_openrouter_api_key|debugger_mcp_openai_api_key|debugger_mcp_anthropic_api_key|api[_-]?key)\b=([^&""\s]+)",
+            "$1=***",
+            RegexOptions.CultureInvariant);
+
         // Header-ish text: "Authorization: Bearer ..."
         text = Regex.Replace(
             text,
             @"(?i)(authorization\s*:\s*bearer)\s+([^\s]+)",
+            "$1 ***",
+            RegexOptions.CultureInvariant);
+
+        // Header-ish bearer tokens sometimes appear in JSON (e.g., ["Bearer ..."]).
+        text = Regex.Replace(
+            text,
+            @"(?i)\b(Bearer)\s+([^\s""\]]+)",
             "$1 ***",
             RegexOptions.CultureInvariant);
 
@@ -65,18 +80,19 @@ internal static class LlmTraceRedactor
             "$1 ***",
             RegexOptions.CultureInvariant);
 
-        // Key=value or key: value pairs (exclude bare "token" to avoid wiping method tokens, etc.)
+        // Key=value or key: value pairs (exclude bare "token" to avoid wiping method tokens, etc.).
+        // Important: avoid consuming trailing quotes/brackets to keep JSON logs valid.
         text = Regex.Replace(
             text,
-            @"(?i)\b(openrouter_api_key|openai_api_key|anthropic_api_key|debugger_mcp_openrouter_api_key|debugger_mcp_openai_api_key|debugger_mcp_anthropic_api_key|api[_-]?key|password|secret)\b\s*[:=]\s*([^\s]+)",
-            "$1=***",
+            @"(?i)\b(openrouter_api_key|openai_api_key|anthropic_api_key|debugger_mcp_openrouter_api_key|debugger_mcp_openai_api_key|debugger_mcp_anthropic_api_key|api[_-]?key|password|secret)\b(\s*[:=]\s*)([^\s""\]\}\),;]+)",
+            "$1$2***",
             RegexOptions.CultureInvariant);
 
         // Env-var style names (underscore-separated) don't match the generic apiKey/token patterns due to word-boundary behavior.
         text = Regex.Replace(
             text,
-            @"(?i)\b(openai_api_key|openrouter_api_key|anthropic_api_key|openai[_-]?api[_-]?key|openrouter[_-]?api[_-]?key|anthropic[_-]?api[_-]?key)\b\s*[:=]\s*([^\s]+)",
-            "$1=***",
+            @"(?i)\b(openai_api_key|openrouter_api_key|anthropic_api_key|openai[_-]?api[_-]?key|openrouter[_-]?api[_-]?key|anthropic[_-]?api[_-]?key)\b(\s*[:=]\s*)([^\s""\]\}\),;]+)",
+            "$1$2***",
             RegexOptions.CultureInvariant);
 
         // Raw key patterns (e.g., OpenAI/OpenRouter keys) sometimes appear outside key/value contexts.

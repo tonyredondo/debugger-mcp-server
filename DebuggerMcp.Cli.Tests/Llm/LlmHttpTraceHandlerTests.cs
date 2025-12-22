@@ -76,6 +76,7 @@ public sealed class LlmHttpTraceHandlerTests
             {
                 Content = new StringContent("OPENAI_API_KEY=sk-123", Encoding.UTF8, "text/plain")
             };
+            req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", "sk-123");
 
             var resp = await http.SendAsync(req);
             _ = await resp.Content.ReadAsStringAsync();
@@ -92,6 +93,8 @@ public sealed class LlmHttpTraceHandlerTests
             var eventsText = await File.ReadAllTextAsync(Path.Combine(temp, "events.jsonl"));
             Assert.DoesNotContain("sk-123", eventsText, StringComparison.OrdinalIgnoreCase);
             Assert.Contains("api_key=***", eventsText, StringComparison.OrdinalIgnoreCase);
+            Assert.True(eventsText.Contains("authorization", StringComparison.OrdinalIgnoreCase), eventsText);
+            Assert.True(eventsText.Contains("Bearer ***", StringComparison.OrdinalIgnoreCase), eventsText);
         }
         finally
         {

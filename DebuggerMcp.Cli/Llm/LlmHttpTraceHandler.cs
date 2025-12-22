@@ -37,6 +37,8 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
 
         try
         {
+            var requestHeaders = CaptureRequestHeaders(request.Headers);
+            var requestContentHeaders = request.Content == null ? null : CaptureHeaders(request.Content.Headers);
             _trace.AppendEvent(new
             {
                 kind = "llm_http_request",
@@ -45,6 +47,8 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
                 provider = _providerLabel,
                 method = request.Method.Method,
                 url = request.RequestUri?.ToString() ?? string.Empty,
+                headers = requestHeaders,
+                contentHeaders = requestContentHeaders,
                 bodyFile = $"{id:0000}.{_providerLabel}.request.json"
             });
             _trace.WriteJson($"{id:0000}.{_providerLabel}.request.json", requestBody);
@@ -98,6 +102,8 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
         {
             var completedUtc = DateTime.UtcNow;
             var responseText = responseBytes.Length == 0 ? string.Empty : DecodeText(responseBytes, responseCharset);
+            var responseHeaders = CaptureHeaders(response.Headers);
+            var responseContentHeaders = response.Content == null ? null : CaptureHeaders(response.Content.Headers);
             _trace.AppendEvent(new
             {
                 kind = "llm_http_response",
@@ -106,6 +112,8 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
                 provider = _providerLabel,
                 status = (int)response.StatusCode,
                 durationMs = (int)Math.Max(0, (completedUtc - startedUtc).TotalMilliseconds),
+                headers = responseHeaders,
+                contentHeaders = responseContentHeaders,
                 bodyFile = $"{id:0000}.{_providerLabel}.response.json"
             });
             _trace.WriteJson($"{id:0000}.{_providerLabel}.response.json", responseText);
@@ -116,6 +124,29 @@ internal sealed class LlmHttpTraceHandler(LlmTraceStore trace, string providerLa
         }
 
         return response;
+    }
+
+    private static Dictionary<string, string[]> CaptureHeaders(System.Net.Http.Headers.HttpHeaders headers)
+    {
+        var map = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        foreach (var h in headers)
+        {
+            map[h.Key] = h.Value.ToArray();
+        }
+        return map;
+    }
+
+    private static Dictionary<string, string[]> CaptureRequestHeaders(System.Net.Http.Headers.HttpRequestHeaders headers)
+    {
+        var map = CaptureHeaders(headers);
+
+        // HttpRequestHeaders.Authorization is not guaranteed to appear in enumeration.
+        if (headers.Authorization != null)
+        {
+            map["Authorization"] = [headers.Authorization.ToString()];
+        }
+
+        return map;
     }
 
     private static string DecodeText(byte[] bytes, string? charset)

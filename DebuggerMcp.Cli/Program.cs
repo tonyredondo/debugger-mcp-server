@@ -2048,12 +2048,39 @@ public class Program
             var llmSettings = state.Settings.Llm;
             llmSettings.ApplyEnvironmentOverrides();
 
+            var samplingHttpTraceEnabled =
+                string.Equals(Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE"), "true", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_SAMPLING"), "true", StringComparison.OrdinalIgnoreCase);
+            var samplingHttpTraceMaxFileBytes = 0;
+            var maxBytesEnv = Environment.GetEnvironmentVariable("DEBUGGER_MCP_LLM_HTTP_TRACE_MAX_FILE_BYTES");
+            if (!string.IsNullOrWhiteSpace(maxBytesEnv) && int.TryParse(maxBytesEnv, out var parsedMaxBytes) && parsedMaxBytes > 0)
+            {
+                samplingHttpTraceMaxFileBytes = parsedMaxBytes;
+            }
+
+            var traceStore = samplingHttpTraceEnabled
+                ? LlmTraceStore.TryCreate(
+                    label: $"mcp-sampling-{llmSettings.GetProviderDisplayName()}",
+                    maxFileBytes: samplingHttpTraceMaxFileBytes)
+                : null;
+            if (samplingHttpTraceEnabled)
+            {
+                if (traceStore == null)
+                {
+                    output.Warning("LLM HTTP trace requested for sampling, but trace store could not be created.");
+                }
+                else
+                {
+                    output.Dim($"LLM HTTP trace (sampling) enabled: {traceStore.DirectoryPath}");
+                }
+            }
+
             var progressLock = new object();
             var handler = new McpSamplingCreateMessageHandler(
                 llmSettings,
                 async (request, ct) =>
                 {
-                    using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(Math.Max(1, llmSettings.TimeoutSeconds)) };
+                    using var http = CreateLlmHttpClient(llmSettings, traceStore);
                     switch (llmSettings.GetProviderKind())
                     {
                         case LlmProviderKind.OpenAi:
