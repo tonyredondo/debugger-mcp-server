@@ -367,17 +367,8 @@ public sealed class AiAnalysisOrchestrator(
 
                 if (commandsExecuted.Count >= maxToolCalls)
                 {
-                    _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping analysis.", maxToolCalls);
-                    AppendSkippedToolResultsForBudgetExceeded(
-                        passName: "analysis",
-                        iteration: iteration,
-                        maxToolCalls: maxToolCalls,
-                        toolUses: rewrittenToolUses,
-                        respondedToolUseIds: respondedToolUseIds,
-                        commandsExecuted: commandsExecuted,
-                        toolIndexByIteration: toolIndexByIteration,
-                        messages: messages,
-                        traceRunDir: traceRunDir);
+                    _logger.LogInformation("[AI] Tool call budget reached ({MaxToolCalls}); finalizing analysis.", maxToolCalls);
+                    PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
                     var final = await FinalizeAnalysisAfterToolBudgetExceededAsync(
                             systemPrompt: SystemPrompt,
                             messages: messages,
@@ -643,68 +634,43 @@ public sealed class AiAnalysisOrchestrator(
         return synthesized;
     }
 
-    private void AppendSkippedToolResultsForBudgetExceeded(
-        string passName,
-        int iteration,
-        int maxToolCalls,
-        IReadOnlyList<(ToolUseContentBlock ToolUse, string Name, JsonElement Input)> toolUses,
-        HashSet<string> respondedToolUseIds,
-        List<ExecutedCommand> commandsExecuted,
-        Dictionary<int, int> toolIndexByIteration,
+    private static void PruneUnrespondedToolUsesFromLastAssistantMessage(
         List<SamplingMessage> messages,
-        string? traceRunDir)
+        HashSet<string> respondedToolUseIds)
     {
-        ArgumentNullException.ThrowIfNull(passName);
-        ArgumentNullException.ThrowIfNull(toolUses);
-        ArgumentNullException.ThrowIfNull(respondedToolUseIds);
-        ArgumentNullException.ThrowIfNull(commandsExecuted);
-        ArgumentNullException.ThrowIfNull(toolIndexByIteration);
         ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(respondedToolUseIds);
 
-        foreach (var (toolUse, toolName, toolInput) in toolUses)
+        if (respondedToolUseIds.Count == 0)
         {
-            var toolUseId = toolUse.Id;
-            if (string.IsNullOrWhiteSpace(toolUseId) || respondedToolUseIds.Contains(toolUseId))
+            // Fast path: remove all tool_use blocks. This avoids orphan tool calls when we're finalizing immediately.
+            var lastAssistantIndex = messages.FindLastIndex(m => m.Role == Role.Assistant);
+            if (lastAssistantIndex < 0 || messages[lastAssistantIndex].Content == null)
             {
-                continue;
+                return;
             }
 
-            var msg = TruncateForModel($"[skipped] Tool call budget exceeded ({maxToolCalls}). Tool '{toolName}' was not executed.");
-            var input = CloneToolInput(toolInput);
+            var contentWithoutToolUses = messages[lastAssistantIndex].Content!
+                .Where(block => block is not ToolUseContentBlock)
+                .ToList();
 
-            var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
-            toolIndexByIteration[iteration] = toolOrdinal;
-            commandsExecuted.Add(new ExecutedCommand
-            {
-                Tool = toolName,
-                Input = input,
-                Output = msg,
-                Iteration = iteration,
-                Duration = TimeSpan.Zero.ToString("c")
-            });
-
-            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
-                new { tool = toolName, input = input.ToString(), output = msg, isError = true, duration = TimeSpan.Zero.ToString("c"), skipped = true, pass = passName });
-
-            messages.Add(new SamplingMessage
-            {
-                Role = Role.User,
-                Content =
-                [
-                    new ToolResultContentBlock
-                    {
-                        ToolUseId = toolUseId,
-                        IsError = true,
-                        Content =
-                        [
-                            new TextContentBlock { Text = msg }
-                        ]
-                    }
-                ]
-            });
-
-            respondedToolUseIds.Add(toolUseId);
+            messages[lastAssistantIndex].Content = contentWithoutToolUses;
+            return;
         }
+
+        // When some tool calls were executed in the current assistant turn, remove any remaining tool_use blocks
+        // that don't have a corresponding tool_result, preserving protocol consistency.
+        var lastAssistantWithToolUsesIndex = messages.FindLastIndex(m => m.Role == Role.Assistant && m.Content?.OfType<ToolUseContentBlock>().Any() == true);
+        if (lastAssistantWithToolUsesIndex < 0 || messages[lastAssistantWithToolUsesIndex].Content == null)
+        {
+            return;
+        }
+
+        var prunedContent = messages[lastAssistantWithToolUsesIndex].Content!
+            .Where(block => block is not ToolUseContentBlock toolUse || !string.IsNullOrWhiteSpace(toolUse.Id) && respondedToolUseIds.Contains(toolUse.Id))
+            .ToList();
+
+        messages[lastAssistantWithToolUsesIndex].Content = prunedContent;
     }
 
     /// <summary>
@@ -1035,17 +1001,8 @@ public sealed class AiAnalysisOrchestrator(
 
                 if (commandsExecuted.Count >= maxToolCalls)
                 {
-                    _logger.LogWarning("[AI] Tool call budget exceeded ({MaxToolCalls}); stopping pass {Pass}.", maxToolCalls, passName);
-                    AppendSkippedToolResultsForBudgetExceeded(
-                        passName: passName,
-                        iteration: iteration,
-                        maxToolCalls: maxToolCalls,
-                        toolUses: rewrittenToolUses,
-                        respondedToolUseIds: respondedToolUseIds,
-                        commandsExecuted: commandsExecuted,
-                        toolIndexByIteration: toolIndexByIteration,
-                        messages: messages,
-                        traceRunDir: traceRunDir);
+                    _logger.LogInformation("[AI] Tool call budget reached ({MaxToolCalls}); finalizing pass {Pass}.", maxToolCalls, passName);
+                    PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
                     return await FinalizePassAfterToolBudgetExceededAsync<T>(
                             passName: passName,
                             systemPrompt: systemPrompt,

@@ -736,7 +736,7 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public async Task AnalyzeCrashAsync_MaxToolCallsReached_AddsSkippedToolResultsBeforeFinalSynthesis()
+    public async Task AnalyzeCrashAsync_MaxToolCallsReached_PrunesUnexecutedToolUsesBeforeFinalSynthesis()
     {
         var requests = new List<CreateMessageRequestParams>();
         var sampling = new SequencedCapturingSamplingClient(requests)
@@ -785,7 +785,7 @@ public class AiAnalysisOrchestratorTests
 
         var toolUseIds = finalMessages[assistantIndex].Content!.OfType<ToolUseContentBlock>().Select(t => t.Id).Where(id => !string.IsNullOrWhiteSpace(id)).ToList();
         Assert.Contains("tc_a", toolUseIds);
-        Assert.Contains("tc_b", toolUseIds);
+        Assert.DoesNotContain("tc_b", toolUseIds);
 
         // Tool results must appear after the tool-use message and before the next assistant message (or end).
         var nextAssistantIndex = finalMessages.FindIndex(assistantIndex + 1, m => m.Role == Role.Assistant);
@@ -797,10 +797,7 @@ public class AiAnalysisOrchestratorTests
             .ToList();
 
         Assert.Contains(toolResults, tr => tr.ToolUseId == "tc_a");
-        var skipped = Assert.Single(toolResults.Where(tr => tr.ToolUseId == "tc_b"));
-        Assert.True(skipped.IsError);
-        var skippedText = skipped.Content!.OfType<TextContentBlock>().Single().Text;
-        Assert.Contains("skipped", skippedText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(toolResults, tr => tr.ToolUseId == "tc_b");
     }
 
     [Fact]
@@ -1202,8 +1199,8 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal(2, debugger.ExecutedCommands.Count);
         Assert.DoesNotContain(debugger.ExecutedCommands, c => c.Contains("dumpheap", StringComparison.OrdinalIgnoreCase));
         Assert.NotNull(result.CommandsExecuted);
-        Assert.Equal(3, result.CommandsExecuted!.Count);
-        Assert.Contains(result.CommandsExecuted, c => c.Output.Contains("skipped", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(2, result.CommandsExecuted!.Count);
+        Assert.DoesNotContain(result.CommandsExecuted, c => c.Output.Contains("skipped", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
