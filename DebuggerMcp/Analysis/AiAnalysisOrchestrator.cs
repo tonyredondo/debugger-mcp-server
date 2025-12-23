@@ -27,6 +27,7 @@ public sealed class AiAnalysisOrchestrator(
     private LogLevel SamplingTraceLevel => EnableVerboseSamplingTrace ? LogLevel.Information : LogLevel.Debug;
 
     private const string CheckpointCompleteToolName = "checkpoint_complete";
+    private const int MaxCheckpointJsonChars = 50_000;
 
     private static readonly JsonElement CheckpointCompleteSchema = ParseJson("""
         {
@@ -1377,22 +1378,22 @@ public sealed class AiAnalysisOrchestrator(
     {
         var priorCheckpointMessage = FindLatestCheckpointCarryForwardMessage(messages, passName);
 
-        var prompt = $"""
-Create an INTERNAL checkpoint for pass "{passName}".
+	        var prompt = $"""
+	Create an INTERNAL checkpoint for pass "{passName}".
 
-Goal: preserve a compact working memory so we can prune older tool outputs and avoid repeating tool calls.
-Do NOT request any debugger tools in this step.
+	Goal: preserve a compact working memory so we can prune older tool outputs and avoid repeating tool calls.
+	Do NOT request any debugger tools in this step.
 
-Rules:
-- Base this ONLY on evidence already shown in this conversation (tool results already returned).
-- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
-- Be detailed, but bounded: facts<=12, hypotheses<=5, evidence<=12, doNotRepeat<=12, nextSteps<=10.
-- Keep strings concise (prefer <=200 chars each).
-- In nextSteps, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor; prefer smaller paths).
+	Rules:
+	- Base this ONLY on evidence already shown in this conversation (tool results already returned).
+	- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
+	- Be detailed, but bounded: facts<=50, hypotheses<=10, evidence<=50, doNotRepeat<=50, nextSteps<=20.
+	- Keep strings concise (prefer <=2048 chars each).
+	- In nextSteps, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor; prefer smaller paths).
 
-Respond by calling the "{CheckpointCompleteToolName}" tool with arguments matching its schema.
-Do NOT output any additional text.
-""";
+	Respond by calling the "{CheckpointCompleteToolName}" tool with arguments matching its schema.
+	Do NOT output any additional text.
+	""";
 
         List<SamplingMessage> checkpointMessages;
         if (priorCheckpointMessage == null)
@@ -1475,23 +1476,23 @@ Do NOT output any additional text.
         }
 
         text = text.Trim();
-        if (!TryParseFirstJsonObject(text, out var json))
-        {
-            _logger.LogWarning("[AI] Checkpoint synthesis returned unstructured output in pass {Pass} at iteration {Iteration}", passName, iteration);
-            return TruncateText(text, maxChars: 20_000);
-        }
+	        if (!TryParseFirstJsonObject(text, out var json))
+	        {
+	            _logger.LogWarning("[AI] Checkpoint synthesis returned unstructured output in pass {Pass} at iteration {Iteration}", passName, iteration);
+	            return TruncateText(text, maxChars: MaxCheckpointJsonChars);
+	        }
 
-        var normalized = JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = false });
-        if (normalized.Length > 20_000)
-        {
-            _logger.LogWarning(
-                "[AI] Checkpoint synthesis output exceeded max chars ({MaxChars}) in pass {Pass} at iteration {Iteration} (chars={Chars}); skipping checkpoint.",
-                20_000,
-                passName,
-                iteration,
-                normalized.Length);
-            return null;
-        }
+	        var normalized = JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = false });
+	        if (normalized.Length > MaxCheckpointJsonChars)
+	        {
+	            _logger.LogWarning(
+	                "[AI] Checkpoint synthesis output exceeded max chars ({MaxChars}) in pass {Pass} at iteration {Iteration} (chars={Chars}); skipping checkpoint.",
+	                MaxCheckpointJsonChars,
+	                passName,
+	                iteration,
+	                normalized.Length);
+	            return null;
+	        }
 
         return normalized;
     }
@@ -1556,16 +1557,16 @@ Do NOT output any additional text.
             return false;
         }
 
-        var normalized = JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = false });
-        if (normalized.Length > 20_000)
-        {
-            _logger.LogWarning(
-                "[AI] Checkpoint tool call exceeded max chars ({MaxChars}) (tool={Tool} chars={Chars}); skipping checkpoint.",
-                20_000,
-                CheckpointCompleteToolName,
-                normalized.Length);
-            return false;
-        }
+	        var normalized = JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = false });
+	        if (normalized.Length > MaxCheckpointJsonChars)
+	        {
+	            _logger.LogWarning(
+	                "[AI] Checkpoint tool call exceeded max chars ({MaxChars}) (tool={Tool} chars={Chars}); skipping checkpoint.",
+	                MaxCheckpointJsonChars,
+	                CheckpointCompleteToolName,
+	                normalized.Length);
+	            return false;
+	        }
 
         checkpointJson = normalized;
         return true;
@@ -1655,11 +1656,11 @@ Checkpoint JSON:
             },
             doNotRepeat = Array.Empty<string>(),
             nextSteps = Array.Empty<object>()
-        };
+	        };
 
-        var json = JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = false });
-        return json.Length > 20_000 ? TruncateText(json, maxChars: 20_000) : json;
-    }
+	        var json = JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = false });
+	        return json.Length > MaxCheckpointJsonChars ? TruncateText(json, maxChars: MaxCheckpointJsonChars) : json;
+	    }
 
     private static AiSummaryResult ParseSummaryRewriteComplete(
         JsonElement input,

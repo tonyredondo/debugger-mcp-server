@@ -870,6 +870,65 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_CheckpointJsonAbove20k_IsAcceptedAndCarriedForward()
+    {
+        var facts = Enumerable.Range(0, 50)
+            .Select(i => $"FACT-{i:D2}:{new string('a', 600)}")
+            .ToArray();
+
+        var checkpointPayload = new
+        {
+            facts,
+            hypotheses = Array.Empty<object>(),
+            evidence = Array.Empty<object>(),
+            doNotRepeat = Array.Empty<string>(),
+            nextSteps = Array.Empty<object>()
+        };
+
+        var checkpointJson = JsonSerializer.Serialize(checkpointPayload, new JsonSerializerOptions { WriteIndented = false });
+        Assert.True(checkpointJson.Length is > 20_000 and < 50_000, $"Expected checkpoint JSON length between 20k and 50k, got {checkpointJson.Length} chars.");
+
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", checkpointPayload))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok"
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 2,
+            CheckpointMaxTokens = 512
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("done", result.RootCause);
+        Assert.Equal(2, debugger.ExecutedCommands.Count);
+        Assert.Equal(4, requests.Count);
+
+        var carryText = requests[3].Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
+        Assert.True(carryText.Length > 20_000, $"Expected carry-forward message to exceed 20k chars, got {carryText.Length}.");
+        Assert.DoesNotContain("Checkpoint synthesis unavailable", carryText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("FACT-49:", carryText, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_WhenCheckpointSynthesisThrows_PrunesWithDeterministicCheckpointAndContinues()
     {
         var requests = new List<CreateMessageRequestParams>();
