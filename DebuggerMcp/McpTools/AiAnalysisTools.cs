@@ -144,6 +144,8 @@ public sealed class AiAnalysisTools(
                 cancellationToken)
             .ConfigureAwait(false);
 
+        // Keep the final report compact: the full tool trace is already available via sampling trace files/logs.
+        aiResult.RemoveCommandTraces();
         initialReport.AiAnalysis = aiResult;
 
         // Build a fresh report snapshot that includes analysis.aiAnalysis so subsequent sampling passes can reference it.
@@ -168,6 +170,11 @@ public sealed class AiAnalysisTools(
                 session.ClrMdAnalyzer,
                 cancellationToken)
             .ConfigureAwait(false);
+
+        if (summaryRewrite != null)
+        {
+            summaryRewrite.CommandsExecuted = null;
+        }
 
         if (summaryRewrite != null && string.IsNullOrWhiteSpace(summaryRewrite.Error))
         {
@@ -203,6 +210,11 @@ public sealed class AiAnalysisTools(
                 cancellationToken)
             .ConfigureAwait(false);
 
+        if (threadNarrative != null)
+        {
+            threadNarrative.CommandsExecuted = null;
+        }
+
         if (threadNarrative != null && string.IsNullOrWhiteSpace(threadNarrative.Error))
         {
             initialReport.Threads ??= new ThreadsInfo();
@@ -214,6 +226,8 @@ public sealed class AiAnalysisTools(
         {
             initialReport.AiAnalysis.ThreadNarrative = threadNarrative;
         }
+
+        initialReport.AiAnalysis?.RemoveCommandTraces();
 
         // Return the canonical report document shape so `analyze(kind=ai)` matches `report -f json`.
         // Other formats should be derived from this JSON document.

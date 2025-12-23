@@ -104,6 +104,27 @@ public sealed class AiAnalysisResult
     [JsonPropertyName("threadNarrative")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public AiThreadNarrativeResult? ThreadNarrative { get; set; }
+
+    /// <summary>
+    /// Removes tool execution traces from this result to keep the serialized report compact.
+    /// </summary>
+    /// <remarks>
+    /// The server can produce large <c>commandsExecuted</c> arrays (including truncated tool outputs). For routine
+    /// usage, this is typically unnecessary since tool outputs are already reflected in the report and transcripts.
+    /// </remarks>
+    public void RemoveCommandTraces()
+    {
+        CommandsExecuted = null;
+        if (Summary != null)
+        {
+            Summary.CommandsExecuted = null;
+        }
+
+        if (ThreadNarrative != null)
+        {
+            ThreadNarrative.CommandsExecuted = null;
+        }
+    }
 }
 
 /// <summary>
