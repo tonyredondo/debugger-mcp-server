@@ -96,6 +96,50 @@ public class OpenRouterClientTests
     }
 
     [Fact]
+    public async Task ChatCompletionAsync_WhenContentJsonIsSingleTextBlock_WrapsAsArray()
+    {
+        var settings = new LlmSettings
+        {
+            OpenRouterApiKey = "k",
+            OpenRouterModel = "openrouter/auto",
+            OpenRouterBaseUrl = "https://openrouter.ai/api/v1",
+            TimeoutSeconds = 10
+        };
+
+        var handler = new CapturingHandler(_ =>
+        {
+            var body = "{\"choices\":[{\"message\":{\"content\":\"ok\"}}]}";
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var http = new HttpClient(handler);
+        var client = new OpenRouterClient(http, settings);
+
+        using var contentDoc = JsonDocument.Parse("{\"type\":\"text\",\"text\":\"hi\"}");
+        var message = new ChatMessage(
+            "user",
+            content: string.Empty,
+            toolCallId: null,
+            toolCalls: null,
+            contentJson: contentDoc.RootElement.Clone(),
+            providerMessageFields: null);
+
+        _ = await client.ChatCompletionAsync(new ChatCompletionRequest { Messages = [message] });
+
+        using var requestDoc = JsonDocument.Parse(handler.LastRequestBody!);
+        var requestMessages = requestDoc.RootElement.GetProperty("messages");
+        Assert.Equal(1, requestMessages.GetArrayLength());
+
+        var content = requestMessages[0].GetProperty("content");
+        Assert.Equal(JsonValueKind.Array, content.ValueKind);
+        Assert.Equal("text", content[0].GetProperty("type").GetString());
+        Assert.Equal("hi", content[0].GetProperty("text").GetString());
+    }
+
+    [Fact]
     public async Task ChatCompletionAsync_SendsToolsAndParsesToolCalls()
     {
         var settings = new LlmSettings

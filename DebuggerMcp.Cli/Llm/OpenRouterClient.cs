@@ -368,7 +368,7 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         var msg = new OpenRouterChatMessage
         {
             Role = message.Role,
-            Content = message.ContentJson.HasValue ? message.ContentJson.Value : message.Content
+            Content = ToOpenRouterContent(message)
         };
 
         if (string.Equals(message.Role, "tool", StringComparison.OrdinalIgnoreCase) &&
@@ -424,6 +424,45 @@ public sealed class OpenRouterClient(HttpClient httpClient, LlmSettings settings
         }
 
         return msg;
+    }
+
+    private static object? ToOpenRouterContent(ChatMessage message)
+    {
+        if (message.ContentJson.HasValue)
+        {
+            var contentJson = message.ContentJson.Value;
+            if (contentJson.ValueKind == JsonValueKind.Array)
+            {
+                return contentJson.Clone();
+            }
+
+            if (contentJson.ValueKind == JsonValueKind.Object)
+            {
+                // OpenAI-compatible APIs expect message.content to be a string or an array of parts.
+                // MCP/Anthropic-style messages sometimes provide a single content block object; wrap it.
+                return new[] { contentJson.Clone() };
+            }
+
+            if (contentJson.ValueKind == JsonValueKind.String)
+            {
+                var s = contentJson.GetString();
+                if (!string.IsNullOrWhiteSpace(s))
+                {
+                    return s;
+                }
+            }
+            else if (contentJson.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+            {
+                // Preserve unknown shapes as JSON text so the request remains valid.
+                var raw = contentJson.GetRawText();
+                if (!string.IsNullOrWhiteSpace(raw))
+                {
+                    return raw;
+                }
+            }
+        }
+
+        return string.IsNullOrWhiteSpace(message.Content) ? null : message.Content;
     }
 
     private static OpenRouterTool ToOpenRouterTool(ChatTool tool)
