@@ -110,6 +110,15 @@ public sealed class AiAnalysisOrchestrator(
     public int CheckpointMaxTokens { get; set; } = 65_000;
 
     /// <summary>
+    /// Maximum output tokens to request for final synthesis steps (when tools are disabled), such as when the
+    /// iteration budget or tool-call budget is reached.
+    /// </summary>
+    /// <remarks>
+    /// Set to 0 to reuse <see cref="MaxTokensPerRequest"/>.
+    /// </remarks>
+    public int FinalSynthesisMaxTokens { get; set; } = 32_000;
+
+    /// <summary>
     /// Gets or sets a value indicating whether to emit verbose sampling trace logs (prompts/messages previews).
     /// </summary>
     /// <remarks>
@@ -2330,7 +2339,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
                     ]
                 }
             ],
-	            MaxTokens = Math.Max(256, MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024),
+	            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024),
 	            Tools = null,
 	            ToolChoice = null
 	        };
@@ -2419,7 +2428,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 		        {
 		            SystemPrompt = systemPrompt,
 		            Messages = finalMessages,
-		            MaxTokens = Math.Max(256, maxTokens),
+		            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: maxTokens),
 		            Tools = null,
 		            ToolChoice = null
 		        };
@@ -2516,7 +2525,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 		        {
 		            SystemPrompt = systemPrompt,
 		            Messages = finalMessages,
-		            MaxTokens = Math.Max(256, maxTokens),
+		            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: maxTokens),
 		            Tools = null,
 		            ToolChoice = null
 		        };
@@ -2612,7 +2621,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 		        {
 		            SystemPrompt = systemPrompt,
 		            Messages = finalMessages,
-		            MaxTokens = Math.Max(256, maxTokens),
+		            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: maxTokens),
 		            Tools = null,
 		            ToolChoice = null
 		        };
@@ -2739,7 +2748,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 		        {
 		            SystemPrompt = systemPrompt,
 		            Messages = finalMessages,
-		            MaxTokens = Math.Max(256, maxTokens),
+		            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: maxTokens),
 		            Tools = null,
 		            ToolChoice = null
 		        };
@@ -2809,6 +2818,12 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         }
 
         return ParseCompletionTool<T>(passName, completionToolName: string.Empty, input: json, commandsExecuted, iteration, response.Model ?? lastModel);
+    }
+
+    private int GetFinalSynthesisMaxTokens(int fallbackMaxTokens)
+    {
+        var preferred = FinalSynthesisMaxTokens > 0 ? FinalSynthesisMaxTokens : fallbackMaxTokens;
+        return Math.Max(256, preferred);
     }
 
     private static AiAnalysisResult BuildFallbackSynthesisResult(

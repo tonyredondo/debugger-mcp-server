@@ -731,7 +731,7 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal("final root cause", result.RootCause);
         Assert.Equal(4, result.Iterations);
         Assert.NotEmpty(requests);
-        Assert.Equal(orchestrator.MaxTokensPerRequest, requests.Last().MaxTokens);
+        Assert.Equal(orchestrator.FinalSynthesisMaxTokens, requests.Last().MaxTokens);
         Assert.Null(requests.Last().ToolChoice);
     }
 
@@ -773,7 +773,7 @@ public class AiAnalysisOrchestratorTests
 
         Assert.Equal("final root cause", result.RootCause);
         Assert.True(requests.Count >= 2);
-        Assert.Equal(orchestrator.MaxTokensPerRequest, requests[^1].MaxTokens);
+        Assert.Equal(orchestrator.FinalSynthesisMaxTokens, requests[^1].MaxTokens);
         Assert.Null(requests[^1].ToolChoice);
 
         var finalMessages = requests[^1].Messages?.ToList();
@@ -1059,6 +1059,14 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public void Ctor_FinalSynthesisMaxTokens_DefaultIs32000()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true);
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance);
+        Assert.Equal(32_000, orchestrator.FinalSynthesisMaxTokens);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_WhenMaxIterationsIsZero_RunsAtLeastOneIteration()
     {
         var requests = new List<CreateMessageRequestParams>();
@@ -1087,7 +1095,7 @@ public class AiAnalysisOrchestratorTests
 
         Assert.Equal(2, result.Iterations);
         Assert.Equal("final root cause", result.RootCause);
-        Assert.Equal(orchestrator.MaxTokensPerRequest, requests.Last().MaxTokens);
+        Assert.Equal(orchestrator.FinalSynthesisMaxTokens, requests.Last().MaxTokens);
         Assert.Null(requests.Last().ToolChoice);
     }
 
