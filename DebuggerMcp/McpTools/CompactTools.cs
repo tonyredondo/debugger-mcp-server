@@ -178,7 +178,7 @@ public sealed class CompactTools
         [Description("Include watches (default: true)")] bool includeWatches = true,
         [Description("Include security analysis (AI only, default: true)")] bool includeSecurity = true,
         [Description("Maximum AI iterations (AI only, default: 100)")] int maxIterations = 100,
-        [Description("Maximum output tokens (AI only, default: 4096)")] int maxTokens = 4096,
+        [Description("Maximum output tokens (AI only, default: 8192)")] int maxTokens = 8192,
         CancellationToken cancellationToken = default)
     {
         return NormalizeRequired(kind, nameof(kind)) switch

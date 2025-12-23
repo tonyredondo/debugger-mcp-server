@@ -56,7 +56,7 @@ Optional parameters:
 Run analysis on the currently open dump.
 
 - **crash**: `analyze(kind: "crash", sessionId: "...", userId: "...")`
-- **ai**: `analyze(kind: "ai", sessionId: "...", userId: "...", maxIterations: 100, maxTokens: 4096, includeWatches: true, includeSecurity: true)`
+- **ai**: `analyze(kind: "ai", sessionId: "...", userId: "...", maxIterations: 100, maxTokens: 8192, includeWatches: true, includeSecurity: true)`
 - **performance**: `analyze(kind: "performance", sessionId: "...", userId: "...")`
 - **cpu**: `analyze(kind: "cpu", sessionId: "...", userId: "...")`
 - **allocations**: `analyze(kind: "allocations", sessionId: "...", userId: "...")`

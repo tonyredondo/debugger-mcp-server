@@ -90,7 +90,7 @@ public sealed class AiAnalysisOrchestrator(
     /// <summary>
     /// Gets or sets the maximum number of output tokens to request per sampling call.
     /// </summary>
-    public int MaxTokensPerRequest { get; set; } = 4096;
+    public int MaxTokensPerRequest { get; set; } = 8192;
 
     /// <summary>
     /// Gets or sets the maximum number of tool calls to execute across all iterations.
@@ -106,7 +106,7 @@ public sealed class AiAnalysisOrchestrator(
     /// <summary>
     /// Maximum output tokens to request for an internal checkpoint synthesis step.
     /// </summary>
-    public int CheckpointMaxTokens { get; set; } = 8192;
+    public int CheckpointMaxTokens { get; set; } = 65_000;
 
     /// <summary>
     /// Gets or sets a value indicating whether to emit verbose sampling trace logs (prompts/messages previews).
@@ -1433,7 +1433,7 @@ Do NOT output any additional text.
         {
             SystemPrompt = systemPrompt,
             Messages = checkpointMessages,
-            MaxTokens = Math.Max(256, Math.Min(maxTokens, 8192)),
+            MaxTokens = Math.Max(256, Math.Min(maxTokens, 65_000)),
             Tools = checkpointTools,
             ToolChoice = new ToolChoice { Mode = "required" }
         };

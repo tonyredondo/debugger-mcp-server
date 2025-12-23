@@ -908,11 +908,19 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public void Ctor_CheckpointMaxTokens_DefaultIs8192()
+    public void Ctor_MaxTokensPerRequest_DefaultIs8192()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true);
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance);
-        Assert.Equal(8192, orchestrator.CheckpointMaxTokens);
+        Assert.Equal(8192, orchestrator.MaxTokensPerRequest);
+    }
+
+    [Fact]
+    public void Ctor_CheckpointMaxTokens_DefaultIs65000()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true);
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance);
+        Assert.Equal(65_000, orchestrator.CheckpointMaxTokens);
     }
 
     [Fact]

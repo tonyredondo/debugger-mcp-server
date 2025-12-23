@@ -48,7 +48,7 @@ public sealed class AiAnalysisTools(
         [Description("Session ID from CreateSession")] string sessionId,
         [Description("User ID that owns the session")] string userId,
         [Description("Maximum analysis iterations (default: 100)")] int maxIterations = 100,
-        [Description("Maximum output tokens per sampling request (default: 4096)")] int maxTokens = 4096,
+        [Description("Maximum output tokens per sampling request (default: 8192)")] int maxTokens = 8192,
         [Description("Include watch expression evaluations in the initial report (default: true)")] bool includeWatches = true,
         [Description("Include security analysis in the initial report (default: true)")] bool includeSecurity = true,
         CancellationToken cancellationToken = default)
