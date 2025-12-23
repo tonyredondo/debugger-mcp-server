@@ -858,6 +858,9 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal("required", requests[2].ToolChoice!.Mode);
         Assert.Contains(requests[2].Tools!, t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase));
         Assert.Equal(512, requests[2].MaxTokens);
+        Assert.Contains(
+            requests[2].Messages!.SelectMany(m => m.Content?.OfType<ToolResultContentBlock>() ?? []),
+            tr => !string.IsNullOrWhiteSpace(tr.ToolUseId));
 
         Assert.NotNull(requests[3].Messages);
         Assert.NotEmpty(requests[3].Messages);
@@ -905,6 +908,80 @@ public class AiAnalysisOrchestratorTests
         var last = requests.Last();
         var carryText = last.Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
         Assert.Contains("Checkpoint synthesis unavailable", carryText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_CheckpointAfterFirst_PrimesFromLastCheckpointInsteadOfFullHistory()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
+            {
+                facts = new[] { "f1" },
+                hypotheses = Array.Empty<object>(),
+                evidence = Array.Empty<object>(),
+                doNotRepeat = new[] { "exec(!a)" },
+                nextSteps = Array.Empty<object>()
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!c" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!d" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
+            {
+                facts = new[] { "f2" },
+                hypotheses = Array.Empty<object>(),
+                evidence = Array.Empty<object>(),
+                doNotRepeat = new[] { "exec(!a)", "exec(!c)" },
+                nextSteps = Array.Empty<object>()
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok"
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 7,
+            CheckpointEveryIterations = 2,
+            CheckpointMaxTokens = 512
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("done", result.RootCause);
+        Assert.Equal(4, debugger.ExecutedCommands.Count);
+        Assert.Equal(7, requests.Count);
+
+        Assert.NotNull(requests[2].Messages);
+        Assert.NotEmpty(requests[2].Messages);
+        Assert.Contains(
+            requests[2].Messages.SelectMany(m => m.Content?.OfType<ToolResultContentBlock>() ?? []),
+            tr => !string.IsNullOrWhiteSpace(tr.ToolUseId));
+
+        var secondCheckpointRequest = requests[5];
+        Assert.NotNull(secondCheckpointRequest.Messages);
+        Assert.Equal(2, secondCheckpointRequest.Messages.Count);
+        Assert.DoesNotContain(
+            secondCheckpointRequest.Messages.SelectMany(m => m.Content?.OfType<ToolResultContentBlock>() ?? []),
+            _ => true);
+
+        var firstMessageText = secondCheckpointRequest.Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
+        Assert.Contains("Checkpoint JSON", firstMessageText, StringComparison.OrdinalIgnoreCase);
+
+        var secondMessageText = secondCheckpointRequest.Messages[1].Content!.OfType<TextContentBlock>().Single().Text;
+        Assert.Contains("Evidence snapshot", secondMessageText, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

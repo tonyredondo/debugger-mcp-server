@@ -1375,6 +1375,8 @@ public sealed class AiAnalysisOrchestrator(
         string? traceRunDir,
         CancellationToken cancellationToken)
     {
+        var priorCheckpointMessage = FindLatestCheckpointCarryForwardMessage(messages, passName);
+
         var prompt = $"""
 Create an INTERNAL checkpoint for pass "{passName}".
 
@@ -1392,32 +1394,38 @@ Respond by calling the "{CheckpointCompleteToolName}" tool with arguments matchi
 Do NOT output any additional text.
 """;
 
-        var evidence = BuildCheckpointEvidenceSnapshot(
-            passName: passName,
-            commandsExecuted: commandsExecuted,
-            commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
-
-        var checkpointMessages = new List<SamplingMessage>();
-
-        // If the conversation has already been pruned to a single checkpoint carry-forward message, include it so the model
-        // can refine/extend rather than restart from scratch.
-        if (messages.Count == 1)
+        List<SamplingMessage> checkpointMessages;
+        if (priorCheckpointMessage == null)
         {
-            var t = messages[0].Content?.OfType<TextContentBlock>().Select(b => b.Text).FirstOrDefault();
-            if (!string.IsNullOrWhiteSpace(t) && t!.Contains("Checkpoint JSON:", StringComparison.OrdinalIgnoreCase))
+            checkpointMessages = new List<SamplingMessage>(messages);
+
+            checkpointMessages.Add(new SamplingMessage
             {
-                checkpointMessages.Add(messages[0]);
-            }
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = prompt }
+                ]
+            });
         }
-
-        checkpointMessages.Add(new SamplingMessage
+        else
         {
-            Role = Role.User,
-            Content =
-            [
-                new TextContentBlock { Text = $"{prompt}\n\nEvidence snapshot:\n{evidence}" }
-            ]
-        });
+            var evidence = BuildCheckpointEvidenceSnapshot(
+                passName: passName,
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+
+            checkpointMessages = [priorCheckpointMessage];
+
+            checkpointMessages.Add(new SamplingMessage
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = $"{prompt}\n\nEvidence snapshot:\n{evidence}" }
+                ]
+            });
+        }
 
         var checkpointTools = new List<Tool>
         {
@@ -1486,6 +1494,41 @@ Do NOT output any additional text.
         }
 
         return normalized;
+    }
+
+    private static SamplingMessage? FindLatestCheckpointCarryForwardMessage(IReadOnlyList<SamplingMessage> messages, string passName)
+    {
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            var message = messages[i];
+            if (message.Role != Role.User)
+            {
+                continue;
+            }
+
+            if (message.Content == null || message.Content.Count == 0)
+            {
+                continue;
+            }
+
+            var text = message.Content
+                .OfType<TextContentBlock>()
+                .Select(b => b.Text)
+                .FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            if (text.Contains("Checkpoint JSON:", StringComparison.OrdinalIgnoreCase)
+                && text.Contains($"pass \"{passName}\"", StringComparison.OrdinalIgnoreCase))
+            {
+                return message;
+            }
+        }
+
+        return null;
     }
 
     private bool TryExtractCheckpointFromToolUse(CreateMessageResult response, out string checkpointJson)
