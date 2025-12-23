@@ -2359,10 +2359,10 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
 {analysisSchema}
 """;
 
-        var request = new CreateMessageRequestParams
-        {
-            SystemPrompt = systemPrompt,
-            Messages =
+	        var request = new CreateMessageRequestParams
+	        {
+	            SystemPrompt = systemPrompt,
+	            Messages =
             [
                 new SamplingMessage
                 {
@@ -2373,10 +2373,10 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
                     ]
                 }
             ],
-            MaxTokens = Math.Max(256, Math.Min(MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024, 2048)),
-            Tools = null,
-            ToolChoice = null
-        };
+	            MaxTokens = Math.Max(256, MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024),
+	            Tools = null,
+	            ToolChoice = null
+	        };
 
         CreateMessageResult response;
         try
@@ -2458,14 +2458,14 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             }
         };
 
-	        var request = new CreateMessageRequestParams
-	        {
-	            SystemPrompt = systemPrompt,
-	            Messages = finalMessages,
-	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
-	            Tools = null,
-	            ToolChoice = null
-	        };
+		        var request = new CreateMessageRequestParams
+		        {
+		            SystemPrompt = systemPrompt,
+		            Messages = finalMessages,
+		            MaxTokens = Math.Max(256, maxTokens),
+		            Tools = null,
+		            ToolChoice = null
+		        };
 
         CreateMessageResult response;
         try
@@ -2555,14 +2555,14 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             }
         };
 
-	        var request = new CreateMessageRequestParams
-	        {
-	            SystemPrompt = systemPrompt,
-	            Messages = finalMessages,
-	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 2048)),
-	            Tools = null,
-	            ToolChoice = null
-	        };
+		        var request = new CreateMessageRequestParams
+		        {
+		            SystemPrompt = systemPrompt,
+		            Messages = finalMessages,
+		            MaxTokens = Math.Max(256, maxTokens),
+		            Tools = null,
+		            ToolChoice = null
+		        };
 
         CreateMessageResult response;
         try
@@ -2651,14 +2651,14 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             }
         };
 
-	        var request = new CreateMessageRequestParams
-	        {
-	            SystemPrompt = systemPrompt,
-	            Messages = finalMessages,
-	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
-	            Tools = null,
-	            ToolChoice = null
-	        };
+		        var request = new CreateMessageRequestParams
+		        {
+		            SystemPrompt = systemPrompt,
+		            Messages = finalMessages,
+		            MaxTokens = Math.Max(256, maxTokens),
+		            Tools = null,
+		            ToolChoice = null
+		        };
 
         CreateMessageResult response;
         try
@@ -2778,14 +2778,14 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             }
         };
 
-	        var request = new CreateMessageRequestParams
-	        {
-	            SystemPrompt = systemPrompt,
-	            Messages = finalMessages,
-	            MaxTokens = Math.Max(256, Math.Min(maxTokens, 1024)),
-	            Tools = null,
-	            ToolChoice = null
-	        };
+		        var request = new CreateMessageRequestParams
+		        {
+		            SystemPrompt = systemPrompt,
+		            Messages = finalMessages,
+		            MaxTokens = Math.Max(256, maxTokens),
+		            Tools = null,
+		            ToolChoice = null
+		        };
 
         CreateMessageResult response;
         try

@@ -731,6 +731,7 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal("final root cause", result.RootCause);
         Assert.Equal(4, result.Iterations);
         Assert.NotEmpty(requests);
+        Assert.Equal(orchestrator.MaxTokensPerRequest, requests.Last().MaxTokens);
         Assert.Null(requests.Last().ToolChoice);
     }
 
@@ -772,6 +773,7 @@ public class AiAnalysisOrchestratorTests
 
         Assert.Equal("final root cause", result.RootCause);
         Assert.True(requests.Count >= 2);
+        Assert.Equal(orchestrator.MaxTokensPerRequest, requests[^1].MaxTokens);
         Assert.Null(requests[^1].ToolChoice);
 
         var finalMessages = requests[^1].Messages?.ToList();
@@ -1088,6 +1090,7 @@ public class AiAnalysisOrchestratorTests
 
         Assert.Equal(2, result.Iterations);
         Assert.Equal("final root cause", result.RootCause);
+        Assert.Equal(orchestrator.MaxTokensPerRequest, requests.Last().MaxTokens);
         Assert.Null(requests.Last().ToolChoice);
     }
 
