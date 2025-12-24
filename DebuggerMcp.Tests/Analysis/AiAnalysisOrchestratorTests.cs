@@ -14,6 +14,41 @@ namespace DebuggerMcp.Tests.Analysis;
 public class AiAnalysisOrchestratorTests
 {
     [Fact]
+    public async Task AnalyzeCrashAsync_WhenAnalysisCompleteIncludesEvidence_PopulatesEvidenceList()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
+            {
+                path = "analysis.exception.type"
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "rc",
+                confidence = "high",
+                reasoning = "because",
+                evidence = new[]
+                {
+                    "report_get(path=\"analysis.exception.type\") -> System.MissingMethodException"
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{\"analysis\":{\"exception\":{\"type\":\"System.MissingMethodException\"}}}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("rc", result.RootCause);
+        Assert.NotNull(result.Evidence);
+        Assert.Contains(result.Evidence!, e => e.Contains("analysis.exception.type", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_WhenModelCallsAnalysisCompleteImmediately_RequiresEvidenceToolBeforeCompleting()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)

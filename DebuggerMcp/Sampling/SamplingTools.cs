@@ -64,10 +64,11 @@ public static class SamplingTools
             "rootCause": { "type": "string", "description": "Identified root cause of the crash." },
             "confidence": { "type": "string", "enum": ["high", "medium", "low"], "description": "Confidence level." },
             "reasoning": { "type": "string", "description": "Step-by-step reasoning and evidence." },
+            "evidence": { "type": "array", "items": { "type": "string" }, "description": "Key evidence supporting rootCause. Each item should cite a tool call or report_get path and the specific finding." },
             "recommendations": { "type": "array", "items": { "type": "string" }, "description": "Recommended fixes or next steps." },
             "additionalFindings": { "type": "array", "items": { "type": "string" }, "description": "Other observations discovered during analysis." }
           },
-          "required": ["rootCause", "confidence", "reasoning"]
+          "required": ["rootCause", "confidence", "reasoning", "evidence"]
         }
         """);
 

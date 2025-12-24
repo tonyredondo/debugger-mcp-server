@@ -30,6 +30,17 @@ public sealed class AiAnalysisResult
     public string? Reasoning { get; set; }
 
     /// <summary>
+    /// Gets or sets key evidence items supporting the root cause conclusion.
+    /// </summary>
+    /// <remarks>
+    /// Each entry should cite a specific tool call or report path and the specific finding (e.g.,
+    /// <c>report_get(path="analysis.exception.message") -> "Method not found: ..."</c>).
+    /// </remarks>
+    [JsonPropertyName("evidence")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Evidence { get; set; }
+
+    /// <summary>
     /// Gets or sets recommended fixes or next steps.
     /// </summary>
     [JsonPropertyName("recommendations")]

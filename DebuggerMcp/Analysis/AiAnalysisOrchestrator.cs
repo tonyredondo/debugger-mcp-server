@@ -2187,6 +2187,7 @@ Tooling:
         sb.AppendLine("You are provided a small report index (summary + table of contents) and a bounded evidence snapshot.");
         sb.AppendLine("If you need more data, call tools (report_get/exec/inspect/get_thread_stack).");
         sb.AppendLine("Do not call analysis_complete until you've executed at least one evidence tool call.");
+        sb.AppendLine("When calling analysis_complete, include an explicit 'evidence' list (each item should cite a tool call or report_get path and the specific finding).");
         sb.AppendLine("Avoid rerunning the same tool calls; reuse prior evidence and expand only the specific sections you need.");
         sb.AppendLine();
         sb.AppendLine("Report index (summary + TOC):");
@@ -2209,6 +2210,7 @@ Tooling:
             RootCause = TryGetString(input, "rootCause") ?? string.Empty,
             Confidence = TryGetString(input, "confidence") ?? "unknown",
             Reasoning = TryGetString(input, "reasoning"),
+            Evidence = TryGetStringArray(input, "evidence"),
             Recommendations = TryGetStringArray(input, "recommendations"),
             AdditionalFindings = TryGetStringArray(input, "additionalFindings"),
             Iterations = iteration,
@@ -2240,6 +2242,7 @@ Tooling:
   "rootCause": "string",
   "confidence": "high|medium|low|unknown",
   "reasoning": "string",
+  "evidence": ["string"],
   "recommendations": ["string"],
   "additionalFindings": ["string"]
 }
@@ -2332,6 +2335,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
   "rootCause": "string",
   "confidence": "high|medium|low|unknown",
   "reasoning": "string",
+  "evidence": ["string"],
   "recommendations": ["string"],
   "additionalFindings": ["string"]
 }
@@ -2431,6 +2435,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
   "rootCause": "string",
   "confidence": "high|medium|low|unknown",
   "reasoning": "string",
+  "evidence": ["string"],
   "recommendations": ["string"],
   "additionalFindings": ["string"]
 }
@@ -3377,7 +3382,7 @@ Available tools:
 - report_get: Fetch a section of the canonical report JSON by path (dot-path + optional [index]) with paging, projection, and simple filtering
 - inspect: Inspect .NET objects by address (when available)
 - get_thread_stack: Get a full stack trace for a specific thread from the report
-- analysis_complete: Call when you've determined the root cause
+- analysis_complete: Call when you've determined the root cause (include an explicit 'evidence' list in the tool input)
 
 report_get notes:
 - Path supports dot-path + optional [index] (e.g., analysis.threads.all[0]). Query expressions like items[?name==...] are NOT supported; use where={field,equals} instead.
