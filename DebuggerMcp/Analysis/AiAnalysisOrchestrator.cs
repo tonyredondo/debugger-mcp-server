@@ -2188,6 +2188,17 @@ Tooling:
         sb.AppendLine("If you need more data, call tools (report_get/exec/inspect/get_thread_stack).");
         sb.AppendLine("Do not call analysis_complete until you've executed at least one evidence tool call.");
         sb.AppendLine("When calling analysis_complete, include an explicit 'evidence' list (each item should cite a tool call or report_get path and the specific finding).");
+        sb.AppendLine();
+        sb.AppendLine("Mandatory baseline evidence (run in order; do NOT hypothesize before completing):");
+        sb.AppendLine("- report_get(path=\"metadata\", pageKind=\"object\", limit=50)");
+        sb.AppendLine("- report_get(path=\"analysis.summary\", pageKind=\"object\", select=[\"crashType\",\"description\",\"recommendations\",\"threadCount\",\"moduleCount\",\"assemblyCount\"])");
+        sb.AppendLine("- report_get(path=\"analysis.environment\", pageKind=\"object\", select=[\"platform\",\"runtime\",\"process\",\"nativeAot\"])");
+        sb.AppendLine("- report_get(path=\"analysis.exception.type\")");
+        sb.AppendLine("- report_get(path=\"analysis.exception.message\")");
+        sb.AppendLine("- report_get(path=\"analysis.exception.hResult\")");
+        sb.AppendLine("- report_get(path=\"analysis.exception.stackTrace\", limit=8, select=[\"frameNumber\",\"instructionPointer\",\"module\",\"function\",\"sourceFile\",\"lineNumber\",\"isManaged\"])");
+        sb.AppendLine("- report_get(path=\"analysis.exception.analysis\", pageKind=\"object\", limit=200)");
+        sb.AppendLine("If any baseline call returns too_large, retry immediately using suggestedPaths and narrower select/limit before continuing.");
         sb.AppendLine("Avoid rerunning the same tool calls; reuse prior evidence and expand only the specific sections you need.");
         sb.AppendLine();
         sb.AppendLine("Report index (summary + TOC):");
@@ -3368,7 +3379,7 @@ IMPORTANT: Do not repeat identical tool calls with the same arguments; reuse pri
 IMPORTANT: Do not assume assembly versions from file paths. Treat paths as hints and verify versions using assembly metadata from the report (prefer report_get for analysis.assemblies/items and analysis.modules where available).
 IMPORTANT: If you suspect a profiler/tracer rewrote IL, VERIFY it: check whether the executing code is IL/JIT vs R2R/NGen, whether the method is JITted, and (when possible) inspect/dump the current IL to confirm rewriting rather than assuming.
 IMPORTANT: Maintain a running, cumulative set of confirmed facts and evidence across iterations; do not “reset” what you know each step.
-IMPORTANT: Treat SOS as already loaded unless the report explicitly says otherwise. The report metadata indicates whether SOS is loaded (metadata.sosLoaded) and is the source of truth.
+IMPORTANT: Treat SOS as already loaded unless the report explicitly says otherwise. The report metadata indicates whether SOS is loaded (metadata.sosLoaded) and is the source of truth. If metadata.sosLoaded is absent, treat SOS load status as unknown and gather evidence (e.g., exec "sos help" and record the exact output/error).
 IMPORTANT: If metadata.sosLoaded=true, NEVER attempt to load SOS and NEVER claim SOS is not loaded. Do not run any "plugin load libsosplugin.so", ".load sos", or similar commands.
 IMPORTANT: Prefer SOS commands via exec "!<command> ..." for portability (e.g., exec "!clrthreads", exec "!pe", exec "!clrstack -a", exec "!dumpheap -stat"). On LLDB the server strips the leading '!'. If needed, try exec "<command> ..." or exec "sos <command> ...".
 IMPORTANT: If metadata.sosLoaded=false (or SOS commands fail), do not guess load steps; instead gather evidence (exec "sos help" and the exact error) and then propose the minimal corrective action.
@@ -3403,6 +3414,19 @@ Managed object inspection notes:
 - Use SOS dumpobj/dumpvc only as a fallback (e.g., inspect unavailable) or to cross-check specific fields.
 
 Investigation approach:
+Phase 1 (MANDATORY): Baseline evidence (do NOT hypothesize before completing these in order)
+- report_get(path="metadata", pageKind="object", limit=50)
+- report_get(path="analysis.summary", pageKind="object", select=["crashType","description","recommendations","threadCount","moduleCount","assemblyCount"])
+- report_get(path="analysis.environment", pageKind="object", select=["platform","runtime","process","nativeAot"])
+- report_get(path="analysis.exception.type")
+- report_get(path="analysis.exception.message")
+- report_get(path="analysis.exception.hResult")
+- report_get(path="analysis.exception.stackTrace", limit=8, select=["frameNumber","instructionPointer","module","function","sourceFile","lineNumber","isManaged"])
+- report_get(path="analysis.exception.analysis", pageKind="object", limit=200)
+
+If any baseline call returns too_large, retry immediately using suggestedPaths and narrower select/limit before proceeding. Do not skip baseline evidence.
+
+Phase 2: General workflow (follow these steps after baseline evidence)
 1. Review the initial crash report carefully
 2. Identify the crashing thread and exception type
 3. Examine the call stack for suspicious patterns
@@ -3413,6 +3437,18 @@ Investigation approach:
 8. Call analysis_complete with your findings
 9. If you are not sure about the root cause, keep gathering evidence and update the report until you have a final root cause or the maximum number of tools requests is reached.
 10. If you have a final root cause, prepare a extended report about your findings and recommendations.
+
+Phase 3: Hypotheses and deep dives (be explicit and falsify alternatives)
+- Form 2-4 competing hypotheses (e.g., trimming/linker, assembly version mismatch, instrumentation/IL rewrite, runtime/ReadyToRun/JIT bug).
+- For each hypothesis, gather discriminating evidence (small, targeted tool calls). Prefer checks that can falsify alternatives.
+
+Phase 4: Finalization (analysis_complete)
+- Always include an explicit evidence list in analysis_complete.evidence; each entry must cite the tool call/report path and the specific finding.
+- Confidence rubric:
+  - high: >=6 independent evidence items AND you explicitly rule out the top competing hypotheses with evidence.
+  - medium: evidence supports a leading hypothesis, but at least one strong alternative remains plausible.
+  - low: evidence is sparse/ambiguous or key checks are missing.
+- Before calling analysis_complete, perform a falsification step: list 2-3 strongest alternative explanations and cite the evidence that contradicts each. If you cannot falsify, do NOT set confidence to "high".
 
 Be thorough but efficient. Don't run unnecessary commands.
 """;

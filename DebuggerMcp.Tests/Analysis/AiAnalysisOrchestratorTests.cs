@@ -384,6 +384,10 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains("Do not assume the .NET runtime is bug-free", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("analysis.sourcecontext", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sourceurl", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Phase 1", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Baseline evidence", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Confidence rubric", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("falsification", seenRequest.SystemPrompt!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
