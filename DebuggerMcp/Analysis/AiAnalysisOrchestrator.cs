@@ -80,7 +80,7 @@ public sealed class AiAnalysisOrchestrator(
     /// <summary>
     /// Gets or sets the maximum number of sampling iterations to perform.
     /// </summary>
-    public int MaxIterations { get; set; } = 120;
+    public int MaxIterations { get; set; } = 100;
 
     /// <summary>
     /// Gets or sets the maximum number of attempts to retry a single sampling request when the client returns an error
@@ -871,7 +871,6 @@ public sealed class AiAnalysisOrchestrator(
         string? lastModel = null;
         var toolIndexByIteration = new Dictionary<int, int>();
         var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
-        var refusalCount = 0;
         var lastCheckpointIteration = 0;
         var commandsExecutedAtLastCheckpoint = 0;
 
@@ -1154,50 +1153,13 @@ public sealed class AiAnalysisOrchestrator(
             {
                 var otherToolsCoissued = rewrittenToolUses.Any(t => !string.Equals(t.Name, completionToolName, StringComparison.OrdinalIgnoreCase));
 
-                if (!HasEvidenceToolCalls(commandsExecuted) || otherToolsCoissued)
+                if (otherToolsCoissued)
                 {
-                    refusalCount++;
-                    var msg = BuildGenericCompletionRefusalMessage(passName, completionToolName, otherToolsCoissued, refusalCount);
-
-                    var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
-                    toolIndexByIteration[iteration] = toolOrdinal;
-                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(completionToolName)}.json",
-                        new { tool = completionToolName, input = CloneToolInput(pendingCompleteInput).ToString(), output = msg, isError = true, duration = TimeSpan.Zero.ToString("c") });
-
-                    if (string.IsNullOrWhiteSpace(pendingCompleteId))
-                    {
-                messages.Add(new SamplingMessage
-                {
-                    Role = Role.User,
-                    Content =
-                    [
-                                new TextContentBlock { Text = msg }
-                            ]
-                        });
-                        continue;
-                    }
-
-                    messages.Add(new SamplingMessage
-                    {
-                        Role = Role.User,
-                        Content =
-                        [
-                            new ToolResultContentBlock
-                            {
-                                ToolUseId = pendingCompleteId,
-                                IsError = true,
-                                Content =
-                                [
-                                    new TextContentBlock { Text = TruncateForModel(msg) }
-                                ]
-                            }
-                        ]
-                    });
-                if (!string.IsNullOrWhiteSpace(pendingCompleteId))
-                {
-                    respondedToolUseIds.Add(pendingCompleteId);
-                }
-                continue;
+                    // Some models will prematurely call the completion tool in the same message as other tool requests.
+                    // Ignore that completion request and let the pass continue with the executed tool outputs.
+                    // This avoids getting stuck in a refusal loop while still enforcing "read tool output before finishing".
+                    PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
+                    continue;
             }
 
                 return ParseCompletionTool<T>(passName, completionToolName, pendingCompleteInput, commandsExecuted, iteration, lastModel);
@@ -1686,34 +1648,6 @@ Checkpoint JSON:
         }
 
         return result;
-    }
-
-    private static string BuildGenericCompletionRefusalMessage(string passName, string completionToolName, bool toolCallsWereCoissued, int refusalCount)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("Cannot finalize yet.");
-        sb.AppendLine();
-        sb.AppendLine("Before calling the completion tool, gather at least one additional piece of evidence using tools (report_get/exec/inspect/get_thread_stack).");
-        sb.AppendLine("Minimum recommended sequence:");
-        sb.AppendLine("- report_get(path=\"analysis.summary\")");
-        sb.AppendLine("- report_get(path=\"analysis.exception\", select=[\"type\",\"message\",\"hresult\"])");
-        sb.AppendLine("- report_get(path=\"analysis.threads.faultingThread\")");
-        sb.AppendLine("- report_get(path=\"analysis.environment.platform\")");
-        sb.AppendLine("- report_get(path=\"analysis.environment.runtime\")");
-        sb.AppendLine("- report_get(path=\"analysis.memory\")");
-        sb.AppendLine("- report_get(path=\"analysis.synchronization\")");
-        sb.AppendLine("- report_get(path=\"analysis.async\")");
-        sb.AppendLine();
-        if (toolCallsWereCoissued)
-        {
-            sb.AppendLine($"Also: do not call {completionToolName} in the same message as other tool calls.");
-            sb.AppendLine("Execute evidence-gathering tools first, then call the completion tool in a later message after you've read the tool outputs.");
-            sb.AppendLine();
-        }
-        sb.AppendLine($"Pass: {passName}");
-        sb.AppendLine($"Refusal count: {refusalCount}");
-        sb.AppendLine($"Now call report_get (or exec/inspect/get_thread_stack) to gather evidence, then try {completionToolName} again.");
-        return sb.ToString().TrimEnd();
     }
 
     private static string BuildSummaryRewritePrompt(CrashAnalysisResult report, string fullReportJson)

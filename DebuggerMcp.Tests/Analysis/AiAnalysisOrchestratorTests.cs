@@ -51,27 +51,18 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public async Task RewriteSummaryAsync_WhenModelCallsCompletionImmediately_RequiresEvidenceToolBeforeCompleting()
+    public async Task RewriteSummaryAsync_WhenModelCallsCompletionImmediately_CompletesWithoutRequiringEvidenceTools()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_summary_rewrite_complete", new
             {
                 description = "premature",
                 recommendations = new[] { "r1" }
-            }))
-            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
-            {
-                path = "analysis.exception"
-            }))
-            .EnqueueResult(CreateMessageResultWithToolUse("analysis_summary_rewrite_complete", new
-            {
-                description = "rewritten",
-                recommendations = new[] { "r1", "r2" }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
-            MaxIterations = 3
+            MaxIterations = 1
         };
 
         var result = await orchestrator.RewriteSummaryAsync(
@@ -81,11 +72,10 @@ public class AiAnalysisOrchestratorTests
             clrMdAnalyzer: null);
 
         Assert.NotNull(result);
-        Assert.Equal("rewritten", result!.Description);
+        Assert.Equal("premature", result!.Description);
         Assert.NotNull(result.Recommendations);
-        Assert.Equal(2, result.Recommendations!.Count);
-        Assert.NotNull(result.CommandsExecuted);
-        Assert.Contains(result.CommandsExecuted!, c => c.Tool == "report_get");
+        Assert.Single(result.Recommendations!);
+        Assert.Null(result.CommandsExecuted);
     }
 
     [Fact]
@@ -124,27 +114,18 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public async Task GenerateThreadNarrativeAsync_WhenModelCallsCompletionImmediately_RequiresEvidenceToolBeforeCompleting()
+    public async Task GenerateThreadNarrativeAsync_WhenModelCallsCompletionImmediately_CompletesWithoutRequiringEvidenceTools()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_thread_narrative_complete", new
             {
                 description = "premature",
                 confidence = "high"
-            }))
-            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
-            {
-                path = "analysis.threads"
-            }))
-            .EnqueueResult(CreateMessageResultWithToolUse("analysis_thread_narrative_complete", new
-            {
-                description = "narrative",
-                confidence = "low"
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
-            MaxIterations = 3
+            MaxIterations = 1
         };
 
         var result = await orchestrator.GenerateThreadNarrativeAsync(
@@ -154,10 +135,9 @@ public class AiAnalysisOrchestratorTests
             clrMdAnalyzer: null);
 
         Assert.NotNull(result);
-        Assert.Equal("narrative", result!.Description);
-        Assert.Equal("low", result.Confidence);
-        Assert.NotNull(result.CommandsExecuted);
-        Assert.Contains(result.CommandsExecuted!, c => c.Tool == "report_get");
+        Assert.Equal("premature", result!.Description);
+        Assert.Equal("high", result.Confidence);
+        Assert.Null(result.CommandsExecuted);
     }
 
     [Fact]
