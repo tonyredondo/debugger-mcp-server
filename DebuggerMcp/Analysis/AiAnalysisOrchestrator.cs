@@ -91,12 +91,12 @@ public sealed class AiAnalysisOrchestrator(
     /// <summary>
     /// Gets or sets the maximum number of output tokens to request per sampling call.
     /// </summary>
-    public int MaxTokensPerRequest { get; set; } = 8192;
+    public int MaxTokensPerRequest { get; set; } = 16384;
 
     /// <summary>
     /// Gets or sets the maximum number of tool calls to execute across all iterations.
     /// </summary>
-    public int MaxToolCalls { get; set; } = 60;
+    public int MaxToolCalls { get; set; } = 100;
 
     /// <summary>
     /// Number of sampling iterations between internal checkpoint synthesis steps that condense the current findings
@@ -116,7 +116,7 @@ public sealed class AiAnalysisOrchestrator(
     /// <remarks>
     /// Set to 0 to reuse <see cref="MaxTokensPerRequest"/>.
     /// </remarks>
-    public int FinalSynthesisMaxTokens { get; set; } = 32_000;
+    public int FinalSynthesisMaxTokens { get; set; } = 65_000;
 
     /// <summary>
     /// Gets or sets a value indicating whether to emit verbose sampling trace logs (prompts/messages previews).
@@ -1319,7 +1319,8 @@ public sealed class AiAnalysisOrchestrator(
 	- Keep strings concise (prefer <=4096 chars each).
 	- In nextSteps, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor; prefer smaller paths).
 	- Remember, this will be the source of truth for the next steps, so be very detailed and specific.
-	- Don't hesitate to create a large summary, you have up to {MaxCheckpointJsonChars} characters to work with.
+	- Don't hesitate to create a large summary, you have up to {MaxCheckpointJsonChars} characters to work with. I encourage you to use this to its full potential.
+	- Keep the result of the last tool call in the checkpoint, it will be used to continue the analysis,
 
 	Respond by calling the "{CheckpointCompleteToolName}" tool with arguments matching its schema.
 	Do NOT output any additional text.

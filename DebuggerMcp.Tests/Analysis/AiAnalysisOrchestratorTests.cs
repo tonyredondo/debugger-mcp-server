@@ -1023,11 +1023,11 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public void Ctor_MaxTokensPerRequest_DefaultIs8192()
+    public void Ctor_MaxTokensPerRequest_DefaultIs16384()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true);
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance);
-        Assert.Equal(8192, orchestrator.MaxTokensPerRequest);
+        Assert.Equal(16_384, orchestrator.MaxTokensPerRequest);
     }
 
     [Fact]
@@ -1039,11 +1039,11 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public void Ctor_FinalSynthesisMaxTokens_DefaultIs32000()
+    public void Ctor_FinalSynthesisMaxTokens_DefaultIs65000()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true);
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance);
-        Assert.Equal(32_000, orchestrator.FinalSynthesisMaxTokens);
+        Assert.Equal(65_000, orchestrator.FinalSynthesisMaxTokens);
     }
 
     [Fact]
