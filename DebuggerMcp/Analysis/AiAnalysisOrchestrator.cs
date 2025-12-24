@@ -80,7 +80,7 @@ public sealed class AiAnalysisOrchestrator(
     /// <summary>
     /// Gets or sets the maximum number of sampling iterations to perform.
     /// </summary>
-    public int MaxIterations { get; set; } = 100;
+    public int MaxIterations { get; set; } = 120;
 
     /// <summary>
     /// Gets or sets the maximum number of attempts to retry a single sampling request when the client returns an error
@@ -96,7 +96,7 @@ public sealed class AiAnalysisOrchestrator(
     /// <summary>
     /// Gets or sets the maximum number of tool calls to execute across all iterations.
     /// </summary>
-    public int MaxToolCalls { get; set; } = 50;
+    public int MaxToolCalls { get; set; } = 60;
 
     /// <summary>
     /// Number of sampling iterations between internal checkpoint synthesis steps that condense the current findings
@@ -433,7 +433,7 @@ public sealed class AiAnalysisOrchestrator(
                         sw.Stop();
                         duration = TimeSpan.Zero;
                         outputForModel = TruncateForModel(
-                            "[cached tool result] Duplicate tool call detected; reusing prior output. Do not repeat identical tool calls.\n\n" +
+                            "[cached tool result] Duplicate tool call detected; reusing prior output. \n\n" +
                             cached);
                     }
                     else
@@ -1347,15 +1347,17 @@ public sealed class AiAnalysisOrchestrator(
 	        var prompt = $"""
 	Create an INTERNAL checkpoint for pass "{passName}".
 
-	Goal: preserve a compact working memory so we can prune older tool outputs and avoid repeating tool calls.
+	Goal: preserve a working memory so we can prune older tool outputs and avoid repeating tool calls.
 	Do NOT request any debugger tools in this step.
 
 	Rules:
 	- Base this ONLY on evidence already shown in this conversation (tool results already returned).
 	- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
 	- Be detailed, but bounded: facts<=50, hypotheses<=10, evidence<=50, doNotRepeat<=50, nextSteps<=20.
-	- Keep strings concise (prefer <=2048 chars each).
+	- Keep strings concise (prefer <=4096 chars each).
 	- In nextSteps, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor; prefer smaller paths).
+	- Remember, this will be the source of truth for the next steps, so be very detailed and specific.
+	- Don't hesitate to create a large summary, you have up to {MaxCheckpointJsonChars} characters to work with.
 
 	Respond by calling the "{CheckpointCompleteToolName}" tool with arguments matching its schema.
 	Do NOT output any additional text.
