@@ -37,13 +37,13 @@ public class AiAnalysisToolsDefaultsTests
     }
 
     [Fact]
-    public void AiAnalysisOrchestrator_DefaultMaxIterations_Is100()
+    public void AiAnalysisOrchestrator_DefaultMaxIterations_Is120()
     {
         var orchestrator = new DebuggerMcp.Analysis.AiAnalysisOrchestrator(
             samplingClient: new StubSamplingClient(),
             logger: NullLogger<DebuggerMcp.Analysis.AiAnalysisOrchestrator>.Instance);
 
-        Assert.Equal(100, orchestrator.MaxIterations);
+        Assert.Equal(120, orchestrator.MaxIterations);
     }
 
     private sealed class StubSamplingClient : ISamplingClient

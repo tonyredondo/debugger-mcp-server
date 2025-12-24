@@ -80,7 +80,7 @@ public sealed class AiAnalysisOrchestrator(
     /// <summary>
     /// Gets or sets the maximum number of sampling iterations to perform.
     /// </summary>
-    public int MaxIterations { get; set; } = 100;
+    public int MaxIterations { get; set; } = 120;
 
     /// <summary>
     /// Gets or sets the maximum number of attempts to retry a single sampling request when the client returns an error
