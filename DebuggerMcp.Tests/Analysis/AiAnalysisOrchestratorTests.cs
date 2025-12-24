@@ -14,7 +14,56 @@ namespace DebuggerMcp.Tests.Analysis;
 public class AiAnalysisOrchestratorTests
 {
     [Fact]
-    public async Task AnalyzeCrashAsync_WhenAnalysisCompleteIncludesEvidence_PopulatesEvidenceList()
+    public async Task AnalyzeCrashAsync_WhenModelRepeatsInvalidHighConfidenceAnalysisComplete_AutoFinalizesWithDowngradedConfidence()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
+            {
+                path = "analysis.exception.type"
+            }))
+            // First attempt: high confidence but insufficient evidence -> validation refusal.
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "rc1",
+                confidence = "high",
+                reasoning = "because",
+                evidence = new[]
+                {
+                    "report_get(path=\"analysis.exception.type\") -> System.MissingMethodException"
+                }
+            }))
+            // Second identical attempt without new evidence: orchestrator should auto-finalize.
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "rc2",
+                confidence = "high",
+                reasoning = "because again",
+                evidence = new[]
+                {
+                    "report_get(path=\"analysis.exception.type\") -> System.MissingMethodException"
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{\"analysis\":{\"exception\":{\"type\":\"System.MissingMethodException\"}}}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("rc2", result.RootCause);
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Evidence);
+        Assert.Contains(result.Evidence!, e => e.Contains("analysis.exception.type", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("auto-finalized", result.Reasoning ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenAnalysisCompleteOmitsEvidence_AutoGeneratesEvidenceAndDownratesHighConfidence()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
             .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
@@ -25,6 +74,39 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "rc",
                 confidence = "high",
+                reasoning = "because"
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{\"analysis\":{\"exception\":{\"type\":\"System.MissingMethodException\"}}}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("rc", result.RootCause);
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Evidence);
+        Assert.Contains(result.Evidence!, e => e.Contains("analysis.exception.type", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("auto-generated", result.Reasoning ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenAnalysisCompleteIncludesEvidence_PopulatesEvidenceList()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
+            {
+                path = "analysis.exception.type"
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "rc",
+                confidence = "low",
                 reasoning = "because",
                 evidence = new[]
                 {
@@ -56,7 +138,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "premature",
                 confidence = "high",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "analysis_complete called without any executed evidence tool calls (this will be refused)"
+                }
             }))
             .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
             {
@@ -66,7 +152,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "root cause after evidence",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "report_get(path=\"analysis.exception\") -> contains exception details"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
@@ -186,7 +276,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "analysis_complete called without evidence tools (this will be refused with MaxIterations=1)"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, logger)
@@ -216,7 +310,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "exec(command=\"!threads\") -> OUTPUT:!threads (cached reuse expected)"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, logger)
@@ -246,7 +344,12 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "exec(command=\"!threads\") -> OUTPUT:!threads",
+                    "exec(command=\"!threads\") -> cached tool result reuse"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, logger)
@@ -319,7 +422,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "done",
                 confidence = "low",
-                reasoning = "ok"
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "exec(command=\"!a\") -> OUTPUT:!a"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -354,7 +461,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "analysis_complete called without evidence tools (this will be refused with MaxIterations=1)"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
@@ -428,15 +539,21 @@ public class AiAnalysisOrchestratorTests
     public async Task AnalyzeCrashAsync_AnalysisCompleteAfterEvidence_ReturnsResult()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
-            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
-            {
-                path = "analysis.exception"
-            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {
                 rootCause = "NullReferenceException in Foo.Bar",
                 confidence = "high",
-                reasoning = "The report shows a null dereference."
+                reasoning = "The report shows a null dereference.",
+                evidence = new[]
+                {
+                    "exec(command=\"!clrstack -a\") -> faulting stack shows a NullReferenceException path",
+                    "exec(command=\"!clrstack -a\") -> evidence item 2",
+                    "exec(command=\"!clrstack -a\") -> evidence item 3",
+                    "exec(command=\"!clrstack -a\") -> evidence item 4",
+                    "exec(command=\"!clrstack -a\") -> evidence item 5",
+                    "exec(command=\"!clrstack -a\") -> evidence item 6"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
@@ -464,7 +581,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Deadlock detected",
                 confidence = "medium",
-                reasoning = "Threads are blocked."
+                reasoning = "Threads are blocked.",
+                evidence = new[]
+                {
+                    "exec(command=\"!threads\") -> thread listing indicates blocked threads"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -498,7 +619,12 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "exec(command=\"!THREADS\") -> executed and produced output (normalized command)",
+                    "exec(command=\"!threads\") -> cached tool result reuse"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -535,7 +661,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "inspect(address=\"0x1234\") -> System.String \"hello\" (rewrite from exec dumpobj)"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -577,7 +707,12 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "exec(command=\"!threads\") -> OUTPUT:!threads",
+                    "exec(command=\"!threads\") -> cached tool result reuse (duplicate tool call)"
+                }
             }));
 
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcpTests", Guid.NewGuid().ToString("N"));
@@ -630,7 +765,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "Blocked unsafe command."
+                reasoning = "Blocked unsafe command.",
+                evidence = new[]
+                {
+                    "exec(command=\".shell whoami\") -> blocked as unsafe; debugger command not executed"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -667,7 +806,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "Blocked unsafe command."
+                reasoning = "Blocked unsafe command.",
+                evidence = new[]
+                {
+                    $"exec(command=\"{blocked}\") -> blocked as unsafe; debugger command not executed"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -847,7 +990,12 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "done",
                 confidence = "low",
-                reasoning = "ok"
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "exec(command=\"!a\") -> OUTPUT:!a",
+                    "exec(command=\"!b\") -> OUTPUT:!b"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -915,7 +1063,12 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "done",
                 confidence = "low",
-                reasoning = "ok"
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "exec(command=\"!a\") -> OUTPUT:!a",
+                    "exec(command=\"!b\") -> OUTPUT:!b"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -957,7 +1110,12 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "done",
                 confidence = "low",
-                reasoning = "ok"
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "exec(command=\"!a\") -> OUTPUT:!a",
+                    "exec(command=\"!b\") -> OUTPUT:!b"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -1016,7 +1174,14 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "done",
                 confidence = "low",
-                reasoning = "ok"
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "exec(command=\"!a\") -> OUTPUT:!a",
+                    "exec(command=\"!b\") -> OUTPUT:!b",
+                    "exec(command=\"!c\") -> OUTPUT:!c",
+                    "exec(command=\"!d\") -> OUTPUT:!d"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -1299,7 +1464,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "Used thread stack."
+                reasoning = "Used thread stack.",
+                evidence = new[]
+                {
+                    "get_thread_stack(threadId=\"17\") -> includes threadId=17 and top frame Foo"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
@@ -1330,6 +1499,10 @@ public class AiAnalysisOrchestratorTests
                 rootCause = "Ok",
                 confidence = "medium",
                 reasoning = "done",
+                evidence = new[]
+                {
+                    "report_get(path=\"analysis.exception\") -> exception present"
+                },
                 additionalFindings = new object?[]
                 {
                     "first",
@@ -1371,7 +1544,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "inspect(address=\"0x1234\") -> returned a hint because ClrMD analyzer was not available"
+                }
             }));
 
         var inspector = new FakeManagedObjectInspector(isOpen: true, address =>
@@ -1399,6 +1576,47 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains(logs, entry =>
             entry.Message.Contains("original:", StringComparison.OrdinalIgnoreCase) ||
             entry.Message.Contains("(original", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenExecUsesSosBangOnLldb_RewritesToValidSosCommand()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new
+            {
+                command = "sos !name2ee System.Private.CoreLib System.String"
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "exec(command=\"sos !name2ee System.Private.CoreLib System.String\") -> invoked SOS type lookup"
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            DebuggerType = "LLDB",
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        _ = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Single(debugger.ExecutedCommands);
+        Assert.StartsWith("sos name2ee", debugger.ExecutedCommands[0], StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("sos !", debugger.ExecutedCommands[0], StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1434,7 +1652,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "exec(command=\"!threads\") -> executed once; duplicate call reused cached tool result"
+                }
             }));
 
         var debugger = new FakeDebuggerManager
@@ -1470,7 +1692,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "inspect(address=\"0x1234\") -> returned a hint because ClrMD analyzer was not available"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
@@ -1510,7 +1736,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "get_thread_stack(threadId=\"999\") -> Thread not found in report"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
@@ -1557,7 +1787,11 @@ public class AiAnalysisOrchestratorTests
             {
                 rootCause = "Ok",
                 confidence = "low",
-                reasoning = "done"
+                reasoning = "done",
+                evidence = new[]
+                {
+                    "get_thread_stack(threadId=\"0x10\") -> matched threadId=1 from report regardless of hex formatting"
+                }
             }));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)

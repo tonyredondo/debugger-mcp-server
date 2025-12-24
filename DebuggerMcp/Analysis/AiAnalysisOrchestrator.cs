@@ -28,6 +28,7 @@ public sealed class AiAnalysisOrchestrator(
 
     private const string CheckpointCompleteToolName = "checkpoint_complete";
     private const int MaxCheckpointJsonChars = 50_000;
+    private const int MinHighConfidenceEvidenceItems = 6;
 
     private static readonly JsonElement CheckpointCompleteSchema = ParseJson("""
         {
@@ -222,6 +223,9 @@ public sealed class AiAnalysisOrchestrator(
         var toolIndexByIteration = new Dictionary<int, int>();
         var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
         var analysisCompleteRefusals = 0;
+        var analysisCompleteValidationRefusals = 0;
+        var consecutiveAnalysisCompleteValidationRefusals = 0;
+        int? commandsExecutedCountAtLastValidationRefusal = null;
         var lastCheckpointIteration = 0;
         var commandsExecutedAtLastCheckpoint = 0;
 
@@ -585,6 +589,82 @@ public sealed class AiAnalysisOrchestrator(
 
                 var completed = ParseAnalysisComplete(pendingAnalysisCompleteInput, commandsExecuted, iteration, response.Model);
                 completed.AnalyzedAt = DateTime.UtcNow;
+                if (TryGetAnalysisCompleteValidationError(completed, commandsExecuted, out var validationError))
+                {
+                    analysisCompleteRefusals++;
+                    analysisCompleteValidationRefusals++;
+
+                    if (commandsExecutedCountAtLastValidationRefusal.HasValue
+                        && commandsExecutedCountAtLastValidationRefusal.Value == commandsExecuted.Count)
+                    {
+                        consecutiveAnalysisCompleteValidationRefusals++;
+                    }
+                    else
+                    {
+                        consecutiveAnalysisCompleteValidationRefusals = 1;
+                        commandsExecutedCountAtLastValidationRefusal = commandsExecuted.Count;
+                    }
+
+                    if (consecutiveAnalysisCompleteValidationRefusals >= 2)
+                    {
+                        var repaired = TryRepairAnalysisCompleteAfterValidationFailure(
+                            completed,
+                            commandsExecuted,
+                            validationError,
+                            consecutiveAnalysisCompleteValidationRefusals);
+
+                        if (repaired != null)
+                        {
+                            WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", repaired);
+                            return repaired;
+                        }
+                    }
+
+                    var msg = BuildAnalysisCompleteValidationRefusalMessage(validationError, analysisCompleteRefusals);
+                    var toolName = pendingAnalysisCompleteName ?? "analysis_complete";
+                    var toolUseId = pendingAnalysisCompleteId;
+
+                    var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
+                    toolIndexByIteration[iteration] = toolOrdinal;
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
+                        new { tool = toolName, input = CloneToolInput(pendingAnalysisCompleteInput).ToString(), output = msg, isError = true, duration = TimeSpan.Zero.ToString("c") });
+
+                    if (string.IsNullOrWhiteSpace(toolUseId))
+                    {
+                        messages.Add(new SamplingMessage
+                        {
+                            Role = Role.User,
+                            Content =
+                            [
+                                new TextContentBlock { Text = msg }
+                            ]
+                        });
+                        continue;
+                    }
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new ToolResultContentBlock
+                            {
+                                ToolUseId = toolUseId,
+                                IsError = true,
+                                Content =
+                                [
+                                    new TextContentBlock
+                                    {
+                                        Text = TruncateForModel(msg)
+                                    }
+                                ]
+                            }
+                        ]
+                    });
+                    respondedToolUseIds.Add(toolUseId);
+                    continue;
+                }
+
                 WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", completed);
                 return completed;
             }
@@ -810,6 +890,364 @@ public sealed class AiAnalysisOrchestrator(
         }
 
         return false;
+    }
+
+    private static bool HasNonReportEvidenceToolCalls(List<ExecutedCommand> commandsExecuted)
+    {
+        foreach (var cmd in commandsExecuted)
+        {
+            var tool = cmd.Tool ?? string.Empty;
+            if (tool.Equals("exec", StringComparison.OrdinalIgnoreCase) ||
+                tool.Equals("inspect", StringComparison.OrdinalIgnoreCase) ||
+                tool.Equals("get_thread_stack", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static string BuildAnalysisCompleteValidationRefusalMessage(string validationError, int refusalCount)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Cannot finalize yet: analysis_complete did not meet proof obligations for the requested confidence.");
+        sb.AppendLine();
+        sb.AppendLine("Fix one of the following:");
+        sb.AppendLine("- Gather additional evidence with tools (report_get/exec/inspect/get_thread_stack), then call analysis_complete again.");
+        sb.AppendLine("- OR lower confidence if key verification steps are missing.");
+        sb.AppendLine("- OR remove/qualify any claims that are not directly supported by tool outputs.");
+        sb.AppendLine();
+        sb.AppendLine("Validation errors:");
+        sb.AppendLine(validationError.TrimEnd());
+        sb.AppendLine();
+        sb.AppendLine($"Refusal count: {refusalCount}");
+        return sb.ToString().TrimEnd();
+    }
+
+    private static bool TryGetAnalysisCompleteValidationError(
+        AiAnalysisResult completed,
+        List<ExecutedCommand> commandsExecuted,
+        out string validationError)
+    {
+        var errors = new List<string>();
+
+        var confidence = (completed.Confidence ?? string.Empty).Trim().ToLowerInvariant();
+        var evidence = completed.Evidence ?? [];
+
+        if (evidence.Count == 0)
+        {
+            errors.Add("- analysis_complete.evidence must be a non-empty list.");
+        }
+        else
+        {
+            var evidenceCitationIssues = GetEvidenceCitationIssues(evidence);
+            if (evidenceCitationIssues.Count > 0)
+            {
+                errors.Add($"- Evidence items must cite a tool call or report_get path. Missing citations in items: {string.Join(", ", evidenceCitationIssues)}.");
+            }
+
+            var corpus = BuildEvidenceCorpus(commandsExecuted);
+            var unsupportedEvidenceItems = GetUnsupportedEvidenceItems(evidence, corpus);
+            if (unsupportedEvidenceItems.Count > 0)
+            {
+                errors.Add($"- Evidence items must be grounded in tool outputs. The following evidence items appear unsupported: {string.Join(", ", unsupportedEvidenceItems)}.");
+            }
+
+            if (confidence == "high" && evidence.Count < MinHighConfidenceEvidenceItems)
+            {
+                errors.Add($"- confidence=high requires at least {MinHighConfidenceEvidenceItems} independent evidence items.");
+            }
+
+            if (confidence == "high")
+            {
+                // High-confidence conclusions must not introduce structured facts (addresses, module names, versions,
+                // fully-qualified symbols, etc.) that do not appear anywhere in the tool outputs.
+                var unsupportedFacts = FindUnsupportedStructuredFacts(completed.RootCause ?? string.Empty, corpus);
+                if (unsupportedFacts.Count > 0)
+                {
+                    errors.Add($"- rootCause contains structured facts not present in any tool output: {string.Join(", ", unsupportedFacts)}.");
+                }
+
+                if (!HasNonReportEvidenceToolCalls(commandsExecuted))
+                {
+                    errors.Add("- confidence=high requires at least one exec/inspect/get_thread_stack verification step (or lower confidence).");
+                }
+            }
+        }
+
+        if (errors.Count == 0)
+        {
+            validationError = string.Empty;
+            return false;
+        }
+
+        validationError = string.Join("\n", errors);
+        return true;
+    }
+
+    private static List<string> GetEvidenceCitationIssues(List<string> evidence)
+    {
+        var issues = new List<string>();
+        for (var i = 0; i < evidence.Count; i++)
+        {
+            if (!LooksLikeToolCitation(evidence[i]))
+            {
+                issues.Add($"#{i + 1}");
+                if (issues.Count >= 5)
+                {
+                    break;
+                }
+            }
+        }
+
+        return issues;
+    }
+
+    private static bool LooksLikeToolCitation(string? evidenceItem)
+    {
+        if (string.IsNullOrWhiteSpace(evidenceItem))
+        {
+            return false;
+        }
+
+        var s = evidenceItem;
+        return s.Contains("report_get", StringComparison.OrdinalIgnoreCase) ||
+               s.Contains("exec", StringComparison.OrdinalIgnoreCase) ||
+               s.Contains("inspect", StringComparison.OrdinalIgnoreCase) ||
+               s.Contains("get_thread_stack", StringComparison.OrdinalIgnoreCase) ||
+               s.Contains("analysis.", StringComparison.OrdinalIgnoreCase) ||
+               s.Contains("metadata", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildEvidenceCorpus(List<ExecutedCommand> commandsExecuted)
+    {
+        // Keep the corpus bounded to avoid pathological memory growth when a provider returns large tool outputs.
+        const int maxChars = 250_000;
+        var sb = new StringBuilder(Math.Min(32_768, maxChars));
+
+        foreach (var cmd in commandsExecuted)
+        {
+            if (sb.Length >= maxChars)
+            {
+                break;
+            }
+
+            sb.AppendLine(cmd.Tool ?? string.Empty);
+            if (cmd.Input.ValueKind != JsonValueKind.Undefined && cmd.Input.ValueKind != JsonValueKind.Null)
+            {
+                sb.AppendLine(cmd.Input.ToString());
+            }
+            sb.AppendLine(cmd.Output ?? string.Empty);
+            sb.AppendLine();
+        }
+
+        return DecodeAsciiUnicodeEscapes(sb.ToString());
+    }
+
+    private static List<string> GetUnsupportedEvidenceItems(List<string> evidence, string corpus)
+    {
+        var unsupported = new List<string>();
+        for (var i = 0; i < evidence.Count; i++)
+        {
+            var item = evidence[i] ?? string.Empty;
+            var facts = ExtractStructuredFacts(item);
+            if (facts.Count == 0)
+            {
+                // If the evidence item contains no structured facts, we can't validate it reliably; allow it.
+                continue;
+            }
+
+            var hasAnyMatch = facts.Any(f => corpus.Contains(f, StringComparison.OrdinalIgnoreCase));
+            if (!hasAnyMatch)
+            {
+                unsupported.Add($"#{i + 1}");
+                if (unsupported.Count >= 5)
+                {
+                    break;
+                }
+            }
+        }
+
+        return unsupported;
+    }
+
+    private static List<string> FindUnsupportedStructuredFacts(string text, string corpus)
+    {
+        var facts = ExtractStructuredFacts(text);
+        if (facts.Count == 0)
+        {
+            return [];
+        }
+
+        var unsupported = new List<string>();
+        foreach (var fact in facts)
+        {
+            if (!corpus.Contains(fact, StringComparison.OrdinalIgnoreCase))
+            {
+                unsupported.Add(fact);
+                if (unsupported.Count >= 10)
+                {
+                    break;
+                }
+            }
+        }
+
+        return unsupported;
+    }
+
+    private static readonly Regex UnicodeEscapeRegex = new(
+        @"\\u(?<hex>[0-9a-fA-F]{4})",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static string DecodeAsciiUnicodeEscapes(string text)
+    {
+        if (string.IsNullOrEmpty(text))
+        {
+            return text;
+        }
+
+        return UnicodeEscapeRegex.Replace(text, m =>
+        {
+            var hex = m.Groups["hex"].Value;
+            if (!int.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var codePoint))
+            {
+                return m.Value;
+            }
+
+            // Only decode ASCII printable range to avoid introducing unexpected Unicode/surrogates.
+            if (codePoint < 0x20 || codePoint > 0x7E)
+            {
+                return m.Value;
+            }
+
+            return ((char)codePoint).ToString();
+        });
+    }
+
+    private static readonly Regex HexAddressRegex = new(
+        @"\b0x[0-9a-fA-F]{6,}\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex BareHexRegex = new(
+        @"\b[0-9a-fA-F]{12,}\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex ModuleFileRegex = new(
+        @"\b[\w\-.]+?\.(dll|so|exe)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex VersionRegex = new(
+        @"\b\d+\.\d+\.\d+(?:\.\d+)?\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex QualifiedSymbolRegex = new(
+        @"\b[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_`+<>]*){2,}\b",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static readonly Regex RiskKeywordRegex = new(
+        @"\b(readytorun|r2r|ngen|publishtrimmed|illink|trimm(?:ed|ing)?|nativeaot|jit)\b",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
+    private static HashSet<string> ExtractStructuredFacts(string? text)
+    {
+        var facts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return facts;
+        }
+
+        foreach (Match m in HexAddressRegex.Matches(text))
+        {
+            facts.Add(m.Value);
+        }
+
+        foreach (Match m in BareHexRegex.Matches(text))
+        {
+            // Avoid treating years/ids as facts by only accepting long hex runs.
+            facts.Add(m.Value);
+        }
+
+        foreach (Match m in ModuleFileRegex.Matches(text))
+        {
+            facts.Add(m.Value);
+        }
+
+        foreach (Match m in VersionRegex.Matches(text))
+        {
+            facts.Add(m.Value);
+        }
+
+        foreach (Match m in QualifiedSymbolRegex.Matches(text))
+        {
+            facts.Add(m.Value);
+        }
+
+        foreach (Match m in RiskKeywordRegex.Matches(text))
+        {
+            facts.Add(m.Value);
+        }
+
+        return facts;
+    }
+
+    private static AiAnalysisResult? TryRepairAnalysisCompleteAfterValidationFailure(
+        AiAnalysisResult completed,
+        List<ExecutedCommand> commandsExecuted,
+        string validationError,
+        int validationRefusalCount)
+    {
+        if (completed == null)
+        {
+            return null;
+        }
+
+        // Only attempt repair when the provider appears stuck repeating analysis_complete without new evidence.
+        // We aim to produce a defensible completion by downgrading confidence and grounding evidence in tool outputs.
+        var repaired = new AiAnalysisResult
+        {
+            RootCause = completed.RootCause,
+            Confidence = completed.Confidence,
+            Reasoning = completed.Reasoning,
+            Recommendations = completed.Recommendations,
+            AdditionalFindings = completed.AdditionalFindings,
+            Iterations = completed.Iterations,
+            CommandsExecuted = completed.CommandsExecuted,
+            Model = completed.Model,
+            AnalyzedAt = completed.AnalyzedAt,
+            Summary = completed.Summary,
+            ThreadNarrative = completed.ThreadNarrative
+        };
+
+        repaired.Evidence = BuildAutoEvidenceList(commandsExecuted);
+
+        if (string.Equals(repaired.Confidence?.Trim(), "high", StringComparison.OrdinalIgnoreCase))
+        {
+            repaired.Confidence = "medium";
+        }
+
+        var note = $"Note: auto-finalized after {validationRefusalCount} consecutive analysis_complete validation refusals without new evidence; confidence may be downgraded and evidence was auto-generated.";
+        if (string.IsNullOrWhiteSpace(repaired.Reasoning))
+        {
+            repaired.Reasoning = note;
+        }
+        else if (!repaired.Reasoning.Contains(note, StringComparison.OrdinalIgnoreCase))
+        {
+            repaired.Reasoning = repaired.Reasoning.TrimEnd() + "\n\n" + note;
+        }
+
+        // Keep the last validation error for troubleshooting, but avoid making the output unbounded.
+        var trimmedValidationError = TruncateText(validationError, maxChars: 2000);
+        var errorNote = "Last validation errors (truncated):\n" + trimmedValidationError;
+        repaired.Reasoning = repaired.Reasoning.TrimEnd() + "\n\n" + errorNote;
+
+        if (TryGetAnalysisCompleteValidationError(repaired, commandsExecuted, out _))
+        {
+            // Repair failed; keep refusing.
+            return null;
+        }
+
+        return repaired;
     }
 
     private static string BuildAnalysisCompleteRefusalMessage(bool toolCallsWereCoissued, int refusalCount)
@@ -2216,12 +2654,15 @@ Tooling:
         int iteration,
         string? model)
     {
+        var providedEvidence = TryGetStringArray(input, "evidence");
+        var evidenceWasAutoGenerated = providedEvidence == null || providedEvidence.Count == 0;
+
         var result = new AiAnalysisResult
         {
             RootCause = TryGetString(input, "rootCause") ?? string.Empty,
             Confidence = TryGetString(input, "confidence") ?? "unknown",
             Reasoning = TryGetString(input, "reasoning"),
-            Evidence = TryGetStringArray(input, "evidence"),
+            Evidence = evidenceWasAutoGenerated ? null : providedEvidence,
             Recommendations = TryGetStringArray(input, "recommendations"),
             AdditionalFindings = TryGetStringArray(input, "additionalFindings"),
             Iterations = iteration,
@@ -2235,7 +2676,114 @@ Tooling:
             result.Confidence = "low";
         }
 
+        if (evidenceWasAutoGenerated)
+        {
+            result.Evidence = BuildAutoEvidenceList(commandsExecuted);
+
+            if (string.Equals(result.Confidence?.Trim(), "high", StringComparison.OrdinalIgnoreCase))
+            {
+                // If the model didn't provide evidence but requested high confidence, downgrade.
+                result.Confidence = "medium";
+            }
+
+            var note = "Note: evidence was auto-generated because the model did not provide analysis_complete.evidence.";
+            if (string.IsNullOrWhiteSpace(result.Reasoning))
+            {
+                result.Reasoning = note;
+            }
+            else if (!result.Reasoning.Contains(note, StringComparison.OrdinalIgnoreCase))
+            {
+                result.Reasoning = result.Reasoning.TrimEnd() + "\n\n" + note;
+            }
+        }
+
         return result;
+    }
+
+    private static List<string> BuildAutoEvidenceList(List<ExecutedCommand> commandsExecuted)
+    {
+        // Keep evidence concise and bounded; this is a fallback when the model doesn't provide citations.
+        const int maxItems = 12;
+        const int maxOutputSnippetChars = 240;
+
+        var evidence = new List<string>(capacity: Math.Min(maxItems, Math.Max(1, commandsExecuted.Count)));
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var cmd in commandsExecuted)
+        {
+            if (evidence.Count >= maxItems)
+            {
+                break;
+            }
+
+            var citation = FormatToolCitation(cmd);
+            if (string.IsNullOrWhiteSpace(citation))
+            {
+                continue;
+            }
+
+            if (!seen.Add(citation))
+            {
+                continue;
+            }
+
+            var snippet = SummarizeToolOutputForEvidence(cmd.Output, maxOutputSnippetChars);
+            evidence.Add($"{citation} -> {snippet}");
+        }
+
+        return evidence;
+    }
+
+    private static string? FormatToolCitation(ExecutedCommand cmd)
+    {
+        var tool = (cmd.Tool ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(tool))
+        {
+            return null;
+        }
+
+        if (tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+        {
+            var path = TryGetString(cmd.Input, "path");
+            return string.IsNullOrWhiteSpace(path) ? "report_get" : $"report_get(path=\"{path}\")";
+        }
+
+        if (tool.Equals("exec", StringComparison.OrdinalIgnoreCase))
+        {
+            var command = TryGetString(cmd.Input, "command");
+            return string.IsNullOrWhiteSpace(command) ? "exec" : $"exec(command=\"{command}\")";
+        }
+
+        if (tool.Equals("inspect", StringComparison.OrdinalIgnoreCase))
+        {
+            var address = TryGetString(cmd.Input, "address");
+            return string.IsNullOrWhiteSpace(address) ? "inspect" : $"inspect(address=\"{address}\")";
+        }
+
+        if (tool.Equals("get_thread_stack", StringComparison.OrdinalIgnoreCase))
+        {
+            var threadId = TryGetString(cmd.Input, "threadId");
+            return string.IsNullOrWhiteSpace(threadId) ? "get_thread_stack" : $"get_thread_stack(threadId=\"{threadId}\")";
+        }
+
+        return tool;
+    }
+
+    private static string SummarizeToolOutputForEvidence(string? output, int maxChars)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return "(no output)";
+        }
+
+        var s = output.Trim();
+        var firstLine = s.Split('\n', 2, StringSplitOptions.None)[0].Trim();
+        if (firstLine.Length > maxChars)
+        {
+            return firstLine.Substring(0, maxChars) + "…";
+        }
+
+        return firstLine;
     }
 
     private async Task<AiAnalysisResult> FinalizeAnalysisAfterSamplingFailureAsync(
@@ -3115,10 +3663,29 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             throw new ArgumentException("exec.command is required.");
         }
 
+        command = NormalizeExecCommand(command, debugger);
         EnsureSafeDebuggerCommand(command);
         cancellationToken.ThrowIfCancellationRequested();
         var output = debugger.ExecuteCommand(command);
         return Task.FromResult(output ?? string.Empty);
+    }
+
+    private static string NormalizeExecCommand(string command, IDebuggerManager debugger)
+    {
+        // Be permissive: models sometimes mix WinDbg-style ("!name2ee") and LLDB SOS style ("sos name2ee").
+        // For LLDB, "sos !name2ee" is invalid (SOS doesn't include the bang), but it's an easy fix.
+        if (!string.Equals(debugger.DebuggerType, "LLDB", StringComparison.OrdinalIgnoreCase))
+        {
+            return command;
+        }
+
+        var trimmed = command.Trim();
+        if (trimmed.StartsWith("sos !", StringComparison.OrdinalIgnoreCase))
+        {
+            return "sos " + trimmed.Substring("sos !".Length);
+        }
+
+        return command;
     }
 
     private static string ExecuteInspect(JsonElement toolInput, IManagedObjectInspector? clrMdAnalyzer)
