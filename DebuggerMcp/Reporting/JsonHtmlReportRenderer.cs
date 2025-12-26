@@ -1346,7 +1346,7 @@ internal static class JsonHtmlReportRenderer
                     var langClass = string.IsNullOrEmpty(lang) ? "language-text" : "language-" + lang;
                     var startLine = GetLongFlexible(sc, "startLine");
                     var focusLine = GetLongFlexible(frame, "lineNumber");
-                    sb.AppendLine("<pre class=\"code source\"><code class=\"" + HttpUtility.HtmlEncode(langClass + " source-code") + "\" data-lang=\"" + HttpUtility.HtmlEncode(string.IsNullOrEmpty(lang) ? "text" : lang) + "\" data-show-linenos=\"true\"" +
+                    sb.Append("<pre class=\"code source\"><code class=\"" + HttpUtility.HtmlEncode(langClass + " source-code") + "\" data-lang=\"" + HttpUtility.HtmlEncode(string.IsNullOrEmpty(lang) ? "text" : lang) + "\" data-show-linenos=\"true\"" +
                                   (startLine.HasValue ? " data-start-line=\"" + HttpUtility.HtmlEncode(startLine.Value.ToString(CultureInfo.InvariantCulture)) + "\"" : string.Empty) +
                                   (focusLine.HasValue ? " data-focus-line=\"" + HttpUtility.HtmlEncode(focusLine.Value.ToString(CultureInfo.InvariantCulture)) + "\"" : string.Empty) +
                                   ">");
@@ -2149,6 +2149,17 @@ internal static class JsonHtmlReportRenderer
             --tok-num: #0f766e;
             --tok-lit: #be123c;
           }
+          :root:not([data-theme="dark"]) .sidebar { background: rgba(255,255,255,0.85); }
+          :root:not([data-theme="dark"]) .nav-link { border-color: rgba(17,24,39,0.12); background: rgba(255,255,255,0.70); }
+          :root:not([data-theme="dark"]) .nav-link:hover { border-color: rgba(37,99,235,0.30); background: rgba(37,99,235,0.06); }
+          :root:not([data-theme="dark"]) .sidebar-meta { border-top-color: rgba(17,24,39,0.10); }
+          :root:not([data-theme="dark"]) .header { background: linear-gradient(180deg, rgba(37,99,235,0.10), rgba(255,255,255,0.92)); }
+          :root:not([data-theme="dark"]) .panel { border-color: rgba(17,24,39,0.10); }
+          :root:not([data-theme="dark"]) .kv td { border-top-color: rgba(17,24,39,0.10); }
+          :root:not([data-theme="dark"]) .table-wrap { border-color: rgba(17,24,39,0.10); }
+          :root:not([data-theme="dark"]) .table th, :root:not([data-theme="dark"]) .table td { border-top-color: rgba(17,24,39,0.10); }
+          :root:not([data-theme="dark"]) .table th { background: rgba(17,24,39,0.03); }
+          :root:not([data-theme="dark"]) .json-children { border-left-color: rgba(17,24,39,0.18); }
         }
         :root[data-theme="light"] {
           --bg: #f6f7fb;
@@ -2169,6 +2180,17 @@ internal static class JsonHtmlReportRenderer
           --tok-num: #0f766e;
           --tok-lit: #be123c;
         }
+        :root[data-theme="light"] .sidebar { background: rgba(255,255,255,0.85); }
+        :root[data-theme="light"] .nav-link { border-color: rgba(17,24,39,0.12); background: rgba(255,255,255,0.70); }
+        :root[data-theme="light"] .nav-link:hover { border-color: rgba(37,99,235,0.30); background: rgba(37,99,235,0.06); }
+        :root[data-theme="light"] .sidebar-meta { border-top-color: rgba(17,24,39,0.10); }
+        :root[data-theme="light"] .header { background: linear-gradient(180deg, rgba(37,99,235,0.10), rgba(255,255,255,0.92)); }
+        :root[data-theme="light"] .panel { border-color: rgba(17,24,39,0.10); }
+        :root[data-theme="light"] .kv td { border-top-color: rgba(17,24,39,0.10); }
+        :root[data-theme="light"] .table-wrap { border-color: rgba(17,24,39,0.10); }
+        :root[data-theme="light"] .table th, :root[data-theme="light"] .table td { border-top-color: rgba(17,24,39,0.10); }
+        :root[data-theme="light"] .table th { background: rgba(17,24,39,0.03); }
+        :root[data-theme="light"] .json-children { border-left-color: rgba(17,24,39,0.18); }
         body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
         .layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
         .sidebar { position: sticky; top: 0; height: 100vh; overflow: auto; border-right: 1px solid var(--border); padding: 18px 14px; background: rgba(18,26,51,0.35); }
