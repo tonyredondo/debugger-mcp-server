@@ -55,6 +55,23 @@ public sealed class AiAnalysisResult
     public List<string>? AdditionalFindings { get; set; }
 
     /// <summary>
+    /// Gets or sets a bounded evidence ledger accumulated during the investigation.
+    /// </summary>
+    /// <remarks>
+    /// This is intended to reduce run-to-run variance by carrying forward a stable set of vetted findings.
+    /// </remarks>
+    [JsonPropertyName("evidenceLedger")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<AiEvidenceLedgerItem>? EvidenceLedger { get; set; }
+
+    /// <summary>
+    /// Gets or sets the competing hypotheses considered during investigation (bounded).
+    /// </summary>
+    [JsonPropertyName("hypotheses")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<AiHypothesis>? Hypotheses { get; set; }
+
+    /// <summary>
     /// Gets or sets the number of analysis iterations performed.
     /// </summary>
     [JsonPropertyName("iterations")]
@@ -136,6 +153,103 @@ public sealed class AiAnalysisResult
             ThreadNarrative.CommandsExecuted = null;
         }
     }
+}
+
+/// <summary>
+/// A single evidence item captured during AI-driven investigation.
+/// </summary>
+public sealed class AiEvidenceLedgerItem
+{
+    /// <summary>
+    /// Gets or sets the evidence ID (e.g., E12).
+    /// </summary>
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets where this evidence came from (e.g., a tool call or report_get path).
+    /// </summary>
+    [JsonPropertyName("source")]
+    public string Source { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the observed finding.
+    /// </summary>
+    [JsonPropertyName("finding")]
+    public string Finding { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets an optional explanation of why this finding matters.
+    /// </summary>
+    [JsonPropertyName("whyItMatters")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? WhyItMatters { get; set; }
+
+    /// <summary>
+    /// Gets or sets optional tags for this evidence item (e.g., trimming, r2r).
+    /// </summary>
+    [JsonPropertyName("tags")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Tags { get; set; }
+}
+
+/// <summary>
+/// A competing hypothesis tracked during AI-driven investigation.
+/// </summary>
+public sealed class AiHypothesis
+{
+    /// <summary>
+    /// Gets or sets the hypothesis ID (e.g., H2).
+    /// </summary>
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the hypothesis statement.
+    /// </summary>
+    [JsonPropertyName("hypothesis")]
+    public string Hypothesis { get; set; } = string.Empty;
+
+    /// <summary>
+    /// Gets or sets the current confidence ("high", "medium", "low", or "unknown").
+    /// </summary>
+    [JsonPropertyName("confidence")]
+    public string Confidence { get; set; } = "unknown";
+
+    /// <summary>
+    /// Gets or sets evidence IDs that support this hypothesis.
+    /// </summary>
+    [JsonPropertyName("supportsEvidenceIds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? SupportsEvidenceIds { get; set; }
+
+    /// <summary>
+    /// Gets or sets evidence IDs that contradict this hypothesis.
+    /// </summary>
+    [JsonPropertyName("contradictsEvidenceIds")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? ContradictsEvidenceIds { get; set; }
+
+    /// <summary>
+    /// Gets or sets key unknowns that must be resolved to confirm or falsify this hypothesis.
+    /// </summary>
+    [JsonPropertyName("unknowns")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Unknowns { get; set; }
+
+    /// <summary>
+    /// Gets or sets optional notes about this hypothesis and why it is ranked as it is.
+    /// </summary>
+    [JsonPropertyName("notes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Notes { get; set; }
+
+    /// <summary>
+    /// Gets or sets suggested next tool calls to test or falsify this hypothesis.
+    /// </summary>
+    [JsonPropertyName("testsToRun")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? TestsToRun { get; set; }
 }
 
 /// <summary>

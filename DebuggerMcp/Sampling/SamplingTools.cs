@@ -72,6 +72,78 @@ public static class SamplingTools
         }
         """);
 
+    private static readonly JsonElement EvidenceAddSchema = ParseSchema("""
+        {
+          "type": "object",
+          "properties": {
+            "items": {
+              "type": "array",
+              "description": "Evidence items to add to the running evidence ledger (bounded). Batch items; do not spam.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "description": "Optional evidence ID (e.g., E12). If omitted, the server assigns one." },
+                  "source": { "type": "string", "description": "Where this evidence came from (e.g., report_get(path=\"analysis.exception.type\"), exec(\"!dumpmt -md 0x...\"))." },
+                  "finding": { "type": "string", "description": "What was observed (short, specific, grounded in tool output)." },
+                  "whyItMatters": { "type": "string", "description": "Optional: why this finding supports/refutes hypotheses." },
+                  "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags (e.g., trimming, r2r, mismatch)." }
+                },
+                "required": ["source", "finding"]
+              }
+            }
+          },
+          "required": ["items"]
+        }
+        """);
+
+    private static readonly JsonElement HypothesisRegisterSchema = ParseSchema("""
+        {
+          "type": "object",
+          "properties": {
+            "hypotheses": {
+              "type": "array",
+              "description": "Register 2-4 competing hypotheses early (bounded). Batch; do not spam.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "description": "Optional hypothesis ID (e.g., H2). If omitted, the server assigns one." },
+                  "hypothesis": { "type": "string", "description": "Hypothesis statement." },
+                  "confidence": { "type": "string", "enum": ["high", "medium", "low", "unknown"], "description": "Current confidence." },
+                  "unknowns": { "type": "array", "items": { "type": "string" }, "description": "Key unknowns to resolve." },
+                  "testsToRun": { "type": "array", "items": { "type": "string" }, "description": "Proposed next tool calls to test/falsify this hypothesis." }
+                },
+                "required": ["hypothesis", "confidence"]
+              }
+            }
+          },
+          "required": ["hypotheses"]
+        }
+        """);
+
+    private static readonly JsonElement HypothesisScoreSchema = ParseSchema("""
+        {
+          "type": "object",
+          "properties": {
+            "updates": {
+              "type": "array",
+              "description": "Update hypothesis confidence and link evidence IDs (bounded). Batch; do not spam.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": { "type": "string", "description": "Hypothesis ID (e.g., H1)." },
+                  "confidence": { "type": "string", "enum": ["high", "medium", "low", "unknown"], "description": "Updated confidence." },
+                  "supportsEvidenceIds": { "type": "array", "items": { "type": "string" }, "description": "Evidence IDs that support this hypothesis." },
+                  "contradictsEvidenceIds": { "type": "array", "items": { "type": "string" }, "description": "Evidence IDs that contradict this hypothesis." },
+                  "notes": { "type": "string", "description": "Optional notes/rationale for the update." }
+                },
+                "required": ["id"]
+              }
+            }
+          },
+          "required": ["updates"]
+        }
+        """);
+
     /// <summary>
     /// Returns the list of tools the LLM may call during root-cause AI analysis.
     /// </summary>
@@ -107,6 +179,24 @@ public static class SamplingTools
                 Name = "analysis_complete",
                 Description = "Call this when you have gathered enough information to determine the root cause. This ends the analysis loop.",
                 InputSchema = AnalysisCompleteSchema
+            },
+            new()
+            {
+                Name = "analysis_evidence_add",
+                Description = "Internal meta tool: add evidence items to a bounded evidence ledger (does not execute debugger commands).",
+                InputSchema = EvidenceAddSchema
+            },
+            new()
+            {
+                Name = "analysis_hypothesis_register",
+                Description = "Internal meta tool: register competing hypotheses (does not execute debugger commands).",
+                InputSchema = HypothesisRegisterSchema
+            },
+            new()
+            {
+                Name = "analysis_hypothesis_score",
+                Description = "Internal meta tool: update hypothesis confidence and link evidence IDs (does not execute debugger commands).",
+                InputSchema = HypothesisScoreSchema
             }
         };
 

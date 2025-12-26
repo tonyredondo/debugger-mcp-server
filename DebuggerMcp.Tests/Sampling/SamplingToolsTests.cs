@@ -16,9 +16,13 @@ public class SamplingToolsTests
 
         var names = tools.Select(t => t.Name).ToList();
         Assert.Contains("exec", names);
+        Assert.Contains("report_get", names);
         Assert.Contains("inspect", names);
         Assert.Contains("get_thread_stack", names);
         Assert.Contains("analysis_complete", names);
+        Assert.Contains("analysis_evidence_add", names);
+        Assert.Contains("analysis_hypothesis_register", names);
+        Assert.Contains("analysis_hypothesis_score", names);
     }
 
     [Fact]

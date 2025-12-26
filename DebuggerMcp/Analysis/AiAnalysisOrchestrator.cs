@@ -27,6 +27,9 @@ public sealed class AiAnalysisOrchestrator(
     private LogLevel SamplingTraceLevel => EnableVerboseSamplingTrace ? LogLevel.Information : LogLevel.Debug;
 
     private const string CheckpointCompleteToolName = "checkpoint_complete";
+    private const string AnalysisEvidenceAddToolName = "analysis_evidence_add";
+    private const string AnalysisHypothesisRegisterToolName = "analysis_hypothesis_register";
+    private const string AnalysisHypothesisScoreToolName = "analysis_hypothesis_score";
     private const int MaxCheckpointJsonChars = 50_000;
     private const int MinHighConfidenceEvidenceItems = 6;
 
@@ -98,6 +101,15 @@ public sealed class AiAnalysisOrchestrator(
     /// Gets or sets the maximum number of tool calls to execute across all iterations.
     /// </summary>
     public int MaxToolCalls { get; set; } = 100;
+
+    /// <summary>
+    /// Gets or sets the maximum number of internal meta-tool calls to execute across all iterations.
+    /// </summary>
+    /// <remarks>
+    /// Meta tools are used to keep a stable working memory (evidence ledger and hypotheses) and should not consume
+    /// the main tool-call budget intended for evidence-gathering tools.
+    /// </remarks>
+    public int MaxMetaToolCalls { get; set; } = 200;
 
     /// <summary>
     /// Number of sampling iterations between internal checkpoint synthesis steps that condense the current findings
@@ -181,6 +193,7 @@ public sealed class AiAnalysisOrchestrator(
                 Confidence = "low",
                 Reasoning = "The connected MCP client did not advertise sampling capability.",
                 Iterations = 0,
+                Hypotheses = [],
                 CommandsExecuted = []
             };
         }
@@ -193,6 +206,7 @@ public sealed class AiAnalysisOrchestrator(
                 Confidence = "low",
                 Reasoning = "The connected MCP client advertises sampling but not tools support. This analysis loop requires tools.",
                 Iterations = 0,
+                Hypotheses = [],
                 CommandsExecuted = []
             };
         }
@@ -216,7 +230,12 @@ public sealed class AiAnalysisOrchestrator(
         var maxIterations = Math.Max(1, MaxIterations);
         var maxTokens = MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024;
         var maxToolCalls = MaxToolCalls > 0 ? MaxToolCalls : 50;
+        var maxMetaToolCalls = MaxMetaToolCalls > 0 ? MaxMetaToolCalls : 200;
         var tools = SamplingTools.GetCrashAnalysisTools();
+
+        var evidenceLedger = new AiEvidenceLedger();
+        var hypothesisTracker = new AiHypothesisTracker(evidenceLedger);
+        var metaToolCallsExecuted = 0;
 
         string? lastIterationAssistantText = null;
         string? lastModel = null;
@@ -225,7 +244,7 @@ public sealed class AiAnalysisOrchestrator(
         var analysisCompleteRefusals = 0;
         var analysisCompleteValidationRefusals = 0;
         var consecutiveAnalysisCompleteValidationRefusals = 0;
-        int? commandsExecutedCountAtLastValidationRefusal = null;
+        int? uniqueToolCallCountAtLastValidationRefusal = null;
         var lastCheckpointIteration = 0;
         var commandsExecutedAtLastCheckpoint = 0;
 
@@ -297,7 +316,10 @@ public sealed class AiAnalysisOrchestrator(
                     lastCheckpointIteration = iteration;
                     commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
                     messages.Clear();
-                    messages.Add(BuildCheckpointCarryForwardMessage(fallbackCheckpoint, passName: "analysis"));
+                    messages.Add(BuildCheckpointCarryForwardMessage(
+                        fallbackCheckpoint,
+                        passName: "analysis",
+                        stateJson: BuildStateSnapshotJson(evidenceLedger, hypothesisTracker)));
                 }
             }
 
@@ -313,6 +335,7 @@ public sealed class AiAnalysisOrchestrator(
                         failureMessage: lastSamplingError?.Message,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
+                AttachInvestigationState(samplingFailureResult, evidenceLedger, hypothesisTracker);
                 WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", samplingFailureResult);
                 return samplingFailureResult;
             }
@@ -378,6 +401,69 @@ public sealed class AiAnalysisOrchestrator(
                     continue;
                 }
 
+                if (IsInternalMetaTool(effectiveToolName))
+                {
+                    var metaSw = Stopwatch.StartNew();
+                    var metaToolName = effectiveToolName ?? string.Empty;
+                    var metaToolInput = CloneToolInput(effectiveToolInput);
+                    var metaToolUseId = toolUse.Id;
+
+                    if (string.IsNullOrWhiteSpace(metaToolUseId))
+                    {
+                        metaSw.Stop();
+                        var msg = $"Tool call '{metaToolName}' is missing required id; cannot execute. Please call the tool again with a valid id.";
+                        messages.Add(new SamplingMessage
+                        {
+                            Role = Role.User,
+                            Content =
+                            [
+                                new TextContentBlock { Text = msg }
+                            ]
+                        });
+                        continue;
+                    }
+
+                    string outputForModel;
+                    if (metaToolCallsExecuted >= maxMetaToolCalls)
+                    {
+                        metaSw.Stop();
+                        outputForModel = TruncateForModel(
+                            JsonSerializer.Serialize(new
+                            {
+                                ignored = true,
+                                reason = "meta_tool_budget_exceeded",
+                                maxMetaToolCalls,
+                                tool = metaToolName
+                            }));
+                    }
+                    else
+                    {
+                        var output = ExecuteInternalMetaTool(metaToolName, metaToolInput, evidenceLedger, hypothesisTracker);
+                        metaToolCallsExecuted++;
+                        metaSw.Stop();
+                        outputForModel = TruncateForModel(output);
+                    }
+
+                    messages.Add(new SamplingMessage
+                    {
+                        Role = Role.User,
+                        Content =
+                        [
+                            new ToolResultContentBlock
+                            {
+                                ToolUseId = metaToolUseId,
+                                IsError = false,
+                                Content =
+                                [
+                                    new TextContentBlock { Text = outputForModel }
+                                ]
+                            }
+                        ]
+                    });
+                    respondedToolUseIds.Add(metaToolUseId);
+                    continue;
+                }
+
                 if (commandsExecuted.Count >= maxToolCalls)
                 {
                     _logger.LogInformation("[AI] Tool call budget reached ({MaxToolCalls}); finalizing analysis.", maxToolCalls);
@@ -393,6 +479,7 @@ public sealed class AiAnalysisOrchestrator(
                             traceRunDir: traceRunDir,
                             cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
+                    AttachInvestigationState(final, evidenceLedger, hypothesisTracker);
                     WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", final);
                     return final;
                 }
@@ -589,20 +676,22 @@ public sealed class AiAnalysisOrchestrator(
 
                 var completed = ParseAnalysisComplete(pendingAnalysisCompleteInput, commandsExecuted, iteration, response.Model);
                 completed.AnalyzedAt = DateTime.UtcNow;
-                if (TryGetAnalysisCompleteValidationError(completed, commandsExecuted, out var validationError))
+                if (TryGetAnalysisCompleteValidationError(completed, commandsExecuted, evidenceLedger, out var validationError))
                 {
                     analysisCompleteRefusals++;
                     analysisCompleteValidationRefusals++;
 
-                    if (commandsExecutedCountAtLastValidationRefusal.HasValue
-                        && commandsExecutedCountAtLastValidationRefusal.Value == commandsExecuted.Count)
+                    // Treat repeated cached tool calls as "no new evidence" for the purpose of breaking out of
+                    // analysis_complete refusal loops (some providers will retry the same tools endlessly).
+                    if (uniqueToolCallCountAtLastValidationRefusal.HasValue
+                        && uniqueToolCallCountAtLastValidationRefusal.Value == toolResultCache.Count)
                     {
                         consecutiveAnalysisCompleteValidationRefusals++;
                     }
                     else
                     {
                         consecutiveAnalysisCompleteValidationRefusals = 1;
-                        commandsExecutedCountAtLastValidationRefusal = commandsExecuted.Count;
+                        uniqueToolCallCountAtLastValidationRefusal = toolResultCache.Count;
                     }
 
                     if (consecutiveAnalysisCompleteValidationRefusals >= 2)
@@ -615,6 +704,7 @@ public sealed class AiAnalysisOrchestrator(
 
                         if (repaired != null)
                         {
+                            AttachInvestigationState(repaired, evidenceLedger, hypothesisTracker);
                             WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", repaired);
                             return repaired;
                         }
@@ -665,6 +755,7 @@ public sealed class AiAnalysisOrchestrator(
                     continue;
                 }
 
+                AttachInvestigationState(completed, evidenceLedger, hypothesisTracker);
                 WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", completed);
                 return completed;
             }
@@ -702,7 +793,11 @@ public sealed class AiAnalysisOrchestrator(
                 commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
 
                 messages.Clear();
-                messages.Add(BuildCheckpointCarryForwardMessage(checkpoint, passName: "analysis"));
+                ApplyCheckpointToStateStores(checkpoint, evidenceLedger, hypothesisTracker);
+                messages.Add(BuildCheckpointCarryForwardMessage(
+                    checkpoint,
+                    passName: "analysis",
+                    stateJson: BuildStateSnapshotJson(evidenceLedger, hypothesisTracker)));
             }
         }
 
@@ -719,6 +814,7 @@ public sealed class AiAnalysisOrchestrator(
                 traceRunDir: traceRunDir,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+        AttachInvestigationState(synthesized, evidenceLedger, hypothesisTracker);
         WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", synthesized);
         return synthesized;
     }
@@ -875,6 +971,184 @@ public sealed class AiAnalysisOrchestrator(
             .ConfigureAwait(false);
     }
 
+    private static bool IsInternalMetaTool(string? toolName)
+    {
+        if (string.IsNullOrWhiteSpace(toolName))
+        {
+            return false;
+        }
+
+        return toolName.Equals(AnalysisEvidenceAddToolName, StringComparison.OrdinalIgnoreCase) ||
+               toolName.Equals(AnalysisHypothesisRegisterToolName, StringComparison.OrdinalIgnoreCase) ||
+               toolName.Equals(AnalysisHypothesisScoreToolName, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ExecuteInternalMetaTool(
+        string toolName,
+        JsonElement toolInput,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker)
+    {
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+
+        try
+        {
+            var normalized = (toolName ?? string.Empty).Trim();
+            if (normalized.Equals(AnalysisEvidenceAddToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                var items = ParseEvidenceLedgerItems(toolInput);
+                var added = evidenceLedger.AddOrUpdate(items);
+                return JsonSerializer.Serialize(new
+                {
+                    added = added.AddedIds,
+                    updated = added.UpdatedIds,
+                    invalidItems = added.InvalidItems,
+                    ignoredDuplicates = added.IgnoredDuplicates,
+                    ignoredDuplicateIds = added.IgnoredDuplicateIds,
+                    ignoredAtCapacity = added.IgnoredAtCapacity,
+                    total = evidenceLedger.Items.Count
+                });
+            }
+
+            if (normalized.Equals(AnalysisHypothesisRegisterToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                var hypotheses = ParseHypotheses(toolInput);
+                var registered = hypothesisTracker.Register(hypotheses);
+                return JsonSerializer.Serialize(new
+                {
+                    added = registered.AddedIds,
+                    updated = registered.UpdatedIds,
+                    invalidItems = registered.InvalidItems,
+                    ignoredDuplicates = registered.IgnoredDuplicates,
+                    ignoredDuplicateIds = registered.IgnoredDuplicateIds,
+                    ignoredAtCapacity = registered.IgnoredAtCapacity,
+                    total = hypothesisTracker.Hypotheses.Count
+                });
+            }
+
+            if (normalized.Equals(AnalysisHypothesisScoreToolName, StringComparison.OrdinalIgnoreCase))
+            {
+                var updates = ParseHypothesisUpdates(toolInput);
+                var updated = hypothesisTracker.Update(updates);
+                return JsonSerializer.Serialize(new
+                {
+                    updated = updated.UpdatedIds,
+                    invalidItems = updated.InvalidItems,
+                    unknownHypothesisIds = updated.UnknownHypothesisIds,
+                    unknownEvidenceIds = updated.UnknownEvidenceIds,
+                    total = hypothesisTracker.Hypotheses.Count
+                });
+            }
+
+            return JsonSerializer.Serialize(new { error = "Unknown meta tool.", tool = toolName });
+        }
+        catch (Exception ex)
+        {
+            return JsonSerializer.Serialize(new { error = ex.Message, tool = toolName });
+        }
+    }
+
+    private static List<AiEvidenceLedgerItem> ParseEvidenceLedgerItems(JsonElement toolInput)
+    {
+        if (toolInput.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("analysis_evidence_add input must be an object.");
+        }
+
+        if (!toolInput.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException("analysis_evidence_add.items is required.");
+        }
+
+        var items = new List<AiEvidenceLedgerItem>();
+        foreach (var item in itemsEl.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var tags = TryGetStringArray(item, "tags");
+            items.Add(new AiEvidenceLedgerItem
+            {
+                Id = TryGetString(item, "id") ?? string.Empty,
+                Source = TryGetString(item, "source") ?? string.Empty,
+                Finding = TryGetString(item, "finding") ?? string.Empty,
+                WhyItMatters = TryGetString(item, "whyItMatters"),
+                Tags = tags
+            });
+        }
+
+        return items;
+    }
+
+    private static List<AiHypothesis> ParseHypotheses(JsonElement toolInput)
+    {
+        if (toolInput.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("analysis_hypothesis_register input must be an object.");
+        }
+
+        if (!toolInput.TryGetProperty("hypotheses", out var hypsEl) || hypsEl.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException("analysis_hypothesis_register.hypotheses is required.");
+        }
+
+        var hypotheses = new List<AiHypothesis>();
+        foreach (var item in hypsEl.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            hypotheses.Add(new AiHypothesis
+            {
+                Id = TryGetString(item, "id") ?? string.Empty,
+                Hypothesis = TryGetString(item, "hypothesis") ?? string.Empty,
+                Confidence = TryGetString(item, "confidence") ?? "unknown",
+                Unknowns = TryGetStringArray(item, "unknowns"),
+                TestsToRun = TryGetStringArray(item, "testsToRun")
+            });
+        }
+
+        return hypotheses;
+    }
+
+    private static List<AiHypothesisUpdate> ParseHypothesisUpdates(JsonElement toolInput)
+    {
+        if (toolInput.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("analysis_hypothesis_score input must be an object.");
+        }
+
+        if (!toolInput.TryGetProperty("updates", out var updatesEl) || updatesEl.ValueKind != JsonValueKind.Array)
+        {
+            throw new ArgumentException("analysis_hypothesis_score.updates is required.");
+        }
+
+        var updates = new List<AiHypothesisUpdate>();
+        foreach (var item in updatesEl.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            updates.Add(new AiHypothesisUpdate
+            {
+                Id = TryGetString(item, "id") ?? string.Empty,
+                Confidence = TryGetString(item, "confidence"),
+                SupportsEvidenceIds = TryGetStringArray(item, "supportsEvidenceIds"),
+                ContradictsEvidenceIds = TryGetStringArray(item, "contradictsEvidenceIds"),
+                Notes = TryGetString(item, "notes")
+            });
+        }
+
+        return updates;
+    }
+
     private static bool HasEvidenceToolCalls(List<ExecutedCommand> commandsExecuted)
     {
         foreach (var cmd in commandsExecuted)
@@ -928,12 +1202,14 @@ public sealed class AiAnalysisOrchestrator(
     private static bool TryGetAnalysisCompleteValidationError(
         AiAnalysisResult completed,
         List<ExecutedCommand> commandsExecuted,
+        AiEvidenceLedger? evidenceLedger,
         out string validationError)
     {
         var errors = new List<string>();
 
         var confidence = (completed.Confidence ?? string.Empty).Trim().ToLowerInvariant();
         var evidence = completed.Evidence ?? [];
+        var validEvidenceIds = BuildValidEvidenceIdSet(evidenceLedger);
 
         if (evidence.Count == 0)
         {
@@ -941,14 +1217,14 @@ public sealed class AiAnalysisOrchestrator(
         }
         else
         {
-            var evidenceCitationIssues = GetEvidenceCitationIssues(evidence);
+            var evidenceCitationIssues = GetEvidenceCitationIssues(evidence, validEvidenceIds);
             if (evidenceCitationIssues.Count > 0)
             {
                 errors.Add($"- Evidence items must cite a tool call or report_get path. Missing citations in items: {string.Join(", ", evidenceCitationIssues)}.");
             }
 
             var corpus = BuildEvidenceCorpus(commandsExecuted);
-            var unsupportedEvidenceItems = GetUnsupportedEvidenceItems(evidence, corpus);
+            var unsupportedEvidenceItems = GetUnsupportedEvidenceItems(evidence, corpus, validEvidenceIds);
             if (unsupportedEvidenceItems.Count > 0)
             {
                 errors.Add($"- Evidence items must be grounded in tool outputs. The following evidence items appear unsupported: {string.Join(", ", unsupportedEvidenceItems)}.");
@@ -986,12 +1262,33 @@ public sealed class AiAnalysisOrchestrator(
         return true;
     }
 
-    private static List<string> GetEvidenceCitationIssues(List<string> evidence)
+    private static HashSet<string> BuildValidEvidenceIdSet(AiEvidenceLedger? evidenceLedger)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (evidenceLedger == null)
+        {
+            return set;
+        }
+
+        foreach (var item in evidenceLedger.Items)
+        {
+            var id = item?.Id;
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                set.Add(id.Trim());
+            }
+        }
+
+        return set;
+    }
+
+    private static List<string> GetEvidenceCitationIssues(List<string> evidence, IReadOnlySet<string> validEvidenceIds)
     {
         var issues = new List<string>();
         for (var i = 0; i < evidence.Count; i++)
         {
-            if (!LooksLikeToolCitation(evidence[i]))
+            var item = evidence[i];
+            if (!LooksLikeToolCitation(item) && !IsValidEvidenceLedgerCitation(item, validEvidenceIds))
             {
                 issues.Add($"#{i + 1}");
                 if (issues.Count >= 5)
@@ -1002,6 +1299,35 @@ public sealed class AiAnalysisOrchestrator(
         }
 
         return issues;
+    }
+
+    private static bool IsValidEvidenceLedgerCitation(string? evidenceItem, IReadOnlySet<string> validEvidenceIds)
+    {
+        if (string.IsNullOrWhiteSpace(evidenceItem) || validEvidenceIds.Count == 0)
+        {
+            return false;
+        }
+
+        var match = Regex.Match(evidenceItem, @"^\s*(E\d+)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var id = match.Groups[1].Value.Trim();
+        if (!Regex.IsMatch(id, @"^E\d+$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant))
+        {
+            return false;
+        }
+
+        // Normalize casing ("e12" -> "E12") for set membership.
+        var normalized = "E" + id.Substring(1).TrimStart('0');
+        if (normalized == "E")
+        {
+            return false;
+        }
+
+        return validEvidenceIds.Contains(normalized) || validEvidenceIds.Contains(id);
     }
 
     private static bool LooksLikeToolCitation(string? evidenceItem)
@@ -1045,12 +1371,17 @@ public sealed class AiAnalysisOrchestrator(
         return DecodeAsciiUnicodeEscapes(sb.ToString());
     }
 
-    private static List<string> GetUnsupportedEvidenceItems(List<string> evidence, string corpus)
+    private static List<string> GetUnsupportedEvidenceItems(List<string> evidence, string corpus, IReadOnlySet<string> validEvidenceIds)
     {
         var unsupported = new List<string>();
         for (var i = 0; i < evidence.Count; i++)
         {
             var item = evidence[i] ?? string.Empty;
+            if (IsValidEvidenceLedgerCitation(item, validEvidenceIds))
+            {
+                continue;
+            }
+
             var facts = ExtractStructuredFacts(item);
             if (facts.Count == 0)
             {
@@ -1241,7 +1572,7 @@ public sealed class AiAnalysisOrchestrator(
         var errorNote = "Last validation errors (truncated):\n" + trimmedValidationError;
         repaired.Reasoning = repaired.Reasoning.TrimEnd() + "\n\n" + errorNote;
 
-        if (TryGetAnalysisCompleteValidationError(repaired, commandsExecuted, out _))
+        if (TryGetAnalysisCompleteValidationError(repaired, commandsExecuted, evidenceLedger: null, out _))
         {
             // Repair failed; keep refusing.
             return null;
@@ -1754,7 +2085,7 @@ public sealed class AiAnalysisOrchestrator(
 	- Base this ONLY on evidence already shown in this conversation (tool results already returned).
 	- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
 	- Be detailed, but bounded: facts<=50, hypotheses<=10, evidence<=50, doNotRepeat<=50, nextSteps<=20.
-	- Keep strings concise (prefer <=4096 chars each).
+	- Keep strings concise (prefer <=2048 chars each).
 	- In nextSteps, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor; prefer smaller paths).
 	- Remember, this will be the source of truth for the next steps, so be very detailed and specific.
 	- Don't hesitate to create a large summary, you have up to {MaxCheckpointJsonChars} characters to work with. I encourage you to use this to its full potential.
@@ -1941,8 +2272,16 @@ public sealed class AiAnalysisOrchestrator(
         return true;
     }
 
-    private static SamplingMessage BuildCheckpointCarryForwardMessage(string checkpointJson, string passName)
+    private static SamplingMessage BuildCheckpointCarryForwardMessage(string checkpointJson, string passName, string? stateJson = null)
     {
+        var stateSection = string.IsNullOrWhiteSpace(stateJson)
+            ? string.Empty
+            : $"""
+
+Stable state JSON (evidence ledger + hypotheses):
+{stateJson}
+""";
+
         var prompt = $"""
 This is the current INTERNAL working memory checkpoint for pass "{passName}".
 Treat it as authoritative.
@@ -1952,6 +2291,7 @@ When you need more evidence, propose narrowly-scoped tool calls (small report_ge
 
 Checkpoint JSON:
 {checkpointJson}
+{stateSection}
 """;
 
         return new SamplingMessage
@@ -1962,6 +2302,241 @@ Checkpoint JSON:
                 new TextContentBlock { Text = prompt }
             ]
         };
+    }
+
+    private static string BuildStateSnapshotJson(AiEvidenceLedger evidenceLedger, AiHypothesisTracker hypothesisTracker)
+    {
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+
+        // Keep this compact: the full checkpoint JSON already contains richer details.
+        const int maxEvidenceSourceChars = 256;
+        const int maxEvidenceFindingChars = 512;
+        const int maxHypothesisChars = 512;
+        const int maxNotesChars = 512;
+
+        var evidence = evidenceLedger.Items
+            .Select(e => new
+            {
+                id = e.Id,
+                source = TruncateText(e.Source ?? string.Empty, maxEvidenceSourceChars),
+                finding = TruncateText(e.Finding ?? string.Empty, maxEvidenceFindingChars),
+                tags = e.Tags
+            })
+            .ToList();
+
+        var hypotheses = hypothesisTracker.Hypotheses
+            .Select(h => new
+            {
+                id = h.Id,
+                hypothesis = TruncateText(h.Hypothesis ?? string.Empty, maxHypothesisChars),
+                confidence = h.Confidence,
+                supportsEvidenceIds = h.SupportsEvidenceIds,
+                contradictsEvidenceIds = h.ContradictsEvidenceIds,
+                notes = string.IsNullOrWhiteSpace(h.Notes) ? null : TruncateText(h.Notes, maxNotesChars)
+            })
+            .ToList();
+
+        var state = new
+        {
+            evidenceLedger = evidence,
+            hypotheses
+        };
+
+        var json = JsonSerializer.Serialize(state, new JsonSerializerOptions
+        {
+            WriteIndented = false
+        });
+
+        return json.Length > MaxCheckpointJsonChars
+            ? JsonSerializer.Serialize(new
+            {
+                evidenceLedger = evidence.Select(e => new { e.id, e.finding }).ToList(),
+                hypotheses = hypotheses.Select(h => new { h.id, h.hypothesis, h.confidence, h.supportsEvidenceIds, h.contradictsEvidenceIds }).ToList()
+            }, new JsonSerializerOptions { WriteIndented = false })
+            : json;
+    }
+
+    private static void ApplyCheckpointToStateStores(string checkpointJson, AiEvidenceLedger evidenceLedger, AiHypothesisTracker hypothesisTracker)
+    {
+        ArgumentNullException.ThrowIfNull(checkpointJson);
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+
+        if (string.IsNullOrWhiteSpace(checkpointJson))
+        {
+            return;
+        }
+
+        JsonDocument? doc = null;
+        try
+        {
+            doc = JsonDocument.Parse(checkpointJson);
+        }
+        catch (JsonException)
+        {
+            // Best-effort only; checkpoints may be synthesized deterministically or truncated.
+            return;
+        }
+
+        using (doc)
+        {
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            if (root.TryGetProperty("evidence", out var evidenceEl) && evidenceEl.ValueKind == JsonValueKind.Array)
+            {
+                var items = new List<AiEvidenceLedgerItem>();
+                foreach (var item in evidenceEl.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var id = TryGetString(item, "id");
+                    var source = TryGetString(item, "source");
+                    var finding = TryGetString(item, "finding");
+
+                    if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(finding))
+                    {
+                        continue;
+                    }
+
+                    items.Add(new AiEvidenceLedgerItem
+                    {
+                        Id = id ?? string.Empty,
+                        Source = source,
+                        Finding = finding
+                    });
+                }
+
+                if (items.Count > 0)
+                {
+                    evidenceLedger.AddOrUpdate(items);
+                }
+            }
+
+            if (root.TryGetProperty("hypotheses", out var hypothesesEl) && hypothesesEl.ValueKind == JsonValueKind.Array)
+            {
+                var list = new List<AiHypothesis>();
+                foreach (var h in hypothesesEl.EnumerateArray())
+                {
+                    if (h.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var hypothesisText = TryGetString(h, "hypothesis");
+                    if (string.IsNullOrWhiteSpace(hypothesisText))
+                    {
+                        continue;
+                    }
+
+                    var confidence = TryGetString(h, "confidence");
+                    var unknowns = TryGetStringArray(h, "unknowns");
+                    var evidenceStrings = TryGetStringArray(h, "evidence");
+
+                    var supportsEvidenceIds = ExtractEvidenceIdsFromStrings(evidenceStrings, evidenceLedger);
+                    var notes = BuildCheckpointHypothesisNotes(evidenceStrings, supportsEvidenceIds);
+
+                    list.Add(new AiHypothesis
+                    {
+                        Hypothesis = hypothesisText,
+                        Confidence = string.IsNullOrWhiteSpace(confidence) ? "unknown" : confidence,
+                        Unknowns = unknowns,
+                        SupportsEvidenceIds = supportsEvidenceIds,
+                        Notes = notes
+                    });
+                }
+
+                if (list.Count > 0)
+                {
+                    hypothesisTracker.Register(list);
+                }
+            }
+        }
+    }
+
+    private static List<string>? ExtractEvidenceIdsFromStrings(List<string>? evidenceStrings, AiEvidenceLedger evidenceLedger)
+    {
+        if (evidenceStrings == null || evidenceStrings.Count == 0)
+        {
+            return null;
+        }
+
+        var ids = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var raw in evidenceStrings)
+        {
+            if (string.IsNullOrWhiteSpace(raw))
+            {
+                continue;
+            }
+
+            var match = Regex.Match(raw.Trim(), @"^(E(?<n>\d+))\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            if (!int.TryParse(match.Groups["n"].Value, out var parsed) || parsed <= 0)
+            {
+                continue;
+            }
+
+            var id = $"E{parsed}";
+            if (!seen.Add(id))
+            {
+                continue;
+            }
+
+            if (evidenceLedger.ContainsEvidenceId(id))
+            {
+                ids.Add(id);
+            }
+        }
+
+        return ids.Count == 0 ? null : ids;
+    }
+
+    private static string? BuildCheckpointHypothesisNotes(List<string>? evidenceStrings, List<string>? supportsEvidenceIds)
+    {
+        if (evidenceStrings == null || evidenceStrings.Count == 0)
+        {
+            return null;
+        }
+
+        var idsSet = supportsEvidenceIds == null ? null : new HashSet<string>(supportsEvidenceIds, StringComparer.OrdinalIgnoreCase);
+        var nonIdEvidence = evidenceStrings
+            .Where(s =>
+            {
+                if (string.IsNullOrWhiteSpace(s))
+                {
+                    return false;
+                }
+
+                if (idsSet == null || idsSet.Count == 0)
+                {
+                    return true;
+                }
+
+                var match = Regex.Match(s.Trim(), @"^(E\d+)\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+                return !match.Success || !idsSet.Contains(match.Groups[1].Value);
+            })
+            .Take(8)
+            .ToList();
+
+        if (nonIdEvidence.Count == 0)
+        {
+            return null;
+        }
+
+        var joined = string.Join("; ", nonIdEvidence);
+        return TruncateText("Checkpoint evidence: " + joined, maxChars: 2048);
     }
 
     private static string BuildCheckpointEvidenceSnapshot(
@@ -2638,6 +3213,11 @@ Tooling:
         sb.AppendLine("- report_get(path=\"analysis.exception.analysis\", pageKind=\"object\", limit=200)");
         sb.AppendLine("If any baseline call returns too_large, retry immediately using suggestedPaths and narrower select/limit before continuing.");
         sb.AppendLine("Avoid rerunning the same tool calls; reuse prior evidence and expand only the specific sections you need.");
+        sb.AppendLine();
+        sb.AppendLine("After baseline evidence, maintain a stable working set:");
+        sb.AppendLine("- Register 2-4 competing hypotheses via analysis_hypothesis_register.");
+        sb.AppendLine("- Log new findings via analysis_evidence_add (batch; do not spam).");
+        sb.AppendLine("- Update hypotheses via analysis_hypothesis_score (link evidence IDs).");
         sb.AppendLine();
         sb.AppendLine("Report index (summary + TOC):");
         sb.AppendLine(ReportSectionApi.BuildIndex(fullReportJson));
@@ -3327,6 +3907,38 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         return Math.Max(256, preferred);
     }
 
+    private static void AttachInvestigationState(AiAnalysisResult result, AiEvidenceLedger evidenceLedger, AiHypothesisTracker hypothesisTracker)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+
+        result.EvidenceLedger = evidenceLedger.Items
+            .Select(i => new AiEvidenceLedgerItem
+            {
+                Id = i.Id,
+                Source = i.Source,
+                Finding = i.Finding,
+                WhyItMatters = i.WhyItMatters,
+                Tags = i.Tags == null ? null : new List<string>(i.Tags)
+            })
+            .ToList();
+
+        result.Hypotheses = hypothesisTracker.Hypotheses
+            .Select(h => new AiHypothesis
+            {
+                Id = h.Id,
+                Hypothesis = h.Hypothesis,
+                Confidence = h.Confidence,
+                SupportsEvidenceIds = h.SupportsEvidenceIds == null ? null : new List<string>(h.SupportsEvidenceIds),
+                ContradictsEvidenceIds = h.ContradictsEvidenceIds == null ? null : new List<string>(h.ContradictsEvidenceIds),
+                Unknowns = h.Unknowns == null ? null : new List<string>(h.Unknowns),
+                Notes = h.Notes,
+                TestsToRun = h.TestsToRun == null ? null : new List<string>(h.TestsToRun)
+            })
+            .ToList();
+    }
+
     private static AiAnalysisResult BuildFallbackSynthesisResult(
         string prefix,
         string text,
@@ -3946,6 +4558,8 @@ IMPORTANT: Do not repeat identical tool calls with the same arguments; reuse pri
 IMPORTANT: Do not assume assembly versions from file paths. Treat paths as hints and verify versions using assembly metadata from the report (prefer report_get for analysis.assemblies/items and analysis.modules where available).
 IMPORTANT: If you suspect a profiler/tracer rewrote IL, VERIFY it: check whether the executing code is IL/JIT vs R2R/NGen, whether the method is JITted, and (when possible) inspect/dump the current IL to confirm rewriting rather than assuming.
 IMPORTANT: Maintain a running, cumulative set of confirmed facts and evidence across iterations; do not “reset” what you know each step.
+IMPORTANT: Use the internal meta tools (analysis_evidence_add / analysis_hypothesis_register / analysis_hypothesis_score) to maintain a stable evidence ledger and competing hypotheses. Batch updates; do not spam (at most once per iteration).
+IMPORTANT: If you cite an evidence ID (E#) in analysis_complete.evidence, it must exist in the evidence ledger.
 IMPORTANT: Treat SOS as already loaded unless the report explicitly says otherwise. The report metadata indicates whether SOS is loaded (metadata.sosLoaded) and is the source of truth. If metadata.sosLoaded is absent, treat SOS load status as unknown and gather evidence (e.g., exec "sos help" and record the exact output/error).
 IMPORTANT: If metadata.sosLoaded=true, NEVER attempt to load SOS and NEVER claim SOS is not loaded. Do not run any "plugin load libsosplugin.so", ".load sos", or similar commands.
 IMPORTANT: Prefer SOS commands via exec "!<command> ..." for portability (e.g., exec "!clrthreads", exec "!pe", exec "!clrstack -a", exec "!dumpheap -stat"). On LLDB the server strips the leading '!'. If needed, try exec "<command> ..." or exec "sos <command> ...".
@@ -3961,6 +4575,11 @@ Available tools:
 - inspect: Inspect .NET objects by address (when available)
 - get_thread_stack: Get a full stack trace for a specific thread from the report
 - analysis_complete: Call when you've determined the root cause (include an explicit 'evidence' list in the tool input)
+
+Internal meta tools (do NOT gather new evidence; keep these concise and batched):
+- analysis_evidence_add: Add new findings to the evidence ledger (server assigns E# IDs when omitted).
+- analysis_hypothesis_register: Register 2-4 competing hypotheses early (server assigns H# IDs when omitted).
+- analysis_hypothesis_score: Update hypothesis confidence and link evidence IDs (supportsEvidenceIds/contradictsEvidenceIds).
 
 report_get notes:
 - Path supports dot-path + optional [index] (e.g., analysis.threads.all[0]). Query expressions like items[?name==...] are NOT supported; use where={field,equals} instead.
