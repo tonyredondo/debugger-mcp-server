@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Spectre.Console;
+using DebuggerMcp.Cli.Analysis;
 using DebuggerMcp.Cli.Client;
 using DebuggerMcp.Cli.Configuration;
 using DebuggerMcp.Cli.Display;
@@ -7774,6 +7775,7 @@ public class Program
 
         var analysisType = args[0].ToLowerInvariant();
         string? outputFile = null;
+        var refreshCache = false;
 
         // Parse output file: analyze <type> -o <file>
         if (args.Length > 1)
@@ -7794,6 +7796,12 @@ public class Program
                     continue;
                 }
 
+                if (a is "--refresh")
+                {
+                    refreshCache = true;
+                    continue;
+                }
+
                 if (a.StartsWith("-", StringComparison.Ordinal))
                 {
                     output.Error($"Unknown option: {a}");
@@ -7811,6 +7819,12 @@ public class Program
             return;
         }
 
+        if (refreshCache && analysisType != "ai")
+        {
+            output.Error("Option '--refresh' is only supported for: analyze ai");
+            return;
+        }
+
         try
         {
             switch (analysisType)
@@ -7821,11 +7835,46 @@ public class Program
                     break;
 
                 case "ai":
+                    if (refreshCache && string.IsNullOrWhiteSpace(state.DumpId))
+                    {
+                        output.Warning("Cache refresh requested, but no dump is loaded; running without cache.");
+                    }
+
+                    if (!refreshCache && !string.IsNullOrWhiteSpace(state.DumpId))
+                    {
+                        var cache = AiAnalysisCache.CreateDefault();
+                        var cacheKey = AiAnalysisCacheKey.Create(state.DumpId!, state.Settings.Llm);
+                        var cached = await cache.TryReadAsync(cacheKey).ConfigureAwait(false);
+                        if (!string.IsNullOrWhiteSpace(cached))
+                        {
+                            output.Dim($"Using cached AI analysis for dump {cacheKey.DumpId} ({cacheKey.Provider}, {cacheKey.Model}, effort={cacheKey.ReasoningEffort}).");
+                            await WriteAnalysisResultAsync(output, "AI Crash Analysis (cached)", cached, state, outputFile).ConfigureAwait(false);
+                            break;
+                        }
+                    }
+
                     await RunAnalysisAsync(output, "AI Crash Analysis",
                         () => RunWithToolResponseTimeoutAsync(
                             mcpClient,
                             GetAiAnalyzeToolResponseTimeout(mcpClient.ToolResponseTimeout),
-                            () => mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId)),
+                            async () =>
+                            {
+                                var result = await mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId).ConfigureAwait(false);
+                                if (!string.IsNullOrWhiteSpace(state.DumpId))
+                                {
+                                    try
+                                    {
+                                        var cache = AiAnalysisCache.CreateDefault();
+                                        var cacheKey = AiAnalysisCacheKey.Create(state.DumpId!, state.Settings.Llm);
+                                        await cache.WriteAsync(cacheKey, result).ConfigureAwait(false);
+                                    }
+                                    catch
+                                    {
+                                        // Cache writes should never abort analysis execution.
+                                    }
+                                }
+                                return result;
+                            }),
                         state,
                         outputFile);
                     break;
@@ -7935,6 +7984,16 @@ public class Program
             $"Analyzing (executing debugger commands)...",
             analyzeFunc);
 
+        await WriteAnalysisResultAsync(output, analysisName, result, state, outputFile).ConfigureAwait(false);
+    }
+
+    private static async Task WriteAnalysisResultAsync(
+        ConsoleOutput output,
+        string analysisName,
+        string result,
+        ShellState? state,
+        string? outputFile)
+    {
         // Save result for copy command
         state?.SetLastResult($"analyze: {analysisName}", result);
 
@@ -7948,7 +8007,7 @@ public class Program
                 Directory.CreateDirectory(dir);
             }
 
-            await File.WriteAllTextAsync(fullPath, result, System.Text.Encoding.UTF8);
+            await File.WriteAllTextAsync(fullPath, result, System.Text.Encoding.UTF8).ConfigureAwait(false);
             output.Success($"Saved to: {fullPath}");
             output.Dim("Tip: Use 'copy' to copy the full result.");
             return;
