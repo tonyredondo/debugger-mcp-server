@@ -37,6 +37,65 @@ public class JsonHtmlReportRendererCoverageTests
         Assert.Contains("<pre class=\"code\"><code class=\"language-json\">", html, StringComparison.Ordinal); // raw JSON / code blocks
     }
 
+    [Fact]
+    public void Render_DoesNotReferenceHighlightJsCdn()
+    {
+        var reportJson = JsonMarkdownReportRendererCoverageTests.BuildCanonicalReportJson();
+
+        var options = ReportOptions.FullReport;
+        options.Format = ReportFormat.Html;
+        options.IncludeRawJsonDetails = true;
+
+        var html = JsonHtmlReportRenderer.Render(reportJson, options);
+
+        Assert.DoesNotContain("cdnjs.cloudflare.com/ajax/libs/highlight.js", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("highlight.min.js", html, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Render_WhenAiAnalysisPresent_RendersAiSectionBeforeAtAGlance()
+    {
+        var root = System.Text.Json.Nodes.JsonNode.Parse(JsonMarkdownReportRendererCoverageTests.BuildCanonicalReportJson())!.AsObject();
+        var analysis = root["analysis"]!.AsObject();
+        analysis["aiAnalysis"] = System.Text.Json.Nodes.JsonNode.Parse("""
+        {
+          "rootCause": "x",
+          "confidence": "high",
+          "reasoning": "r",
+          "recommendations": ["a"],
+          "evidence": ["e"]
+        }
+        """);
+
+        var options = ReportOptions.FullReport;
+        options.Format = ReportFormat.Html;
+        options.IncludeRawJsonDetails = false;
+
+        var html = JsonHtmlReportRenderer.Render(root.ToJsonString(), options);
+
+        var aiIndex = html.IndexOf("id=\"ai-analysis\"", StringComparison.Ordinal);
+        var glanceIndex = html.IndexOf("id=\"at-a-glance\"", StringComparison.Ordinal);
+        Assert.True(aiIndex >= 0, "Expected AI section to be present.");
+        Assert.True(glanceIndex >= 0, "Expected At a glance section to be present.");
+        Assert.True(aiIndex < glanceIndex, "Expected AI section to appear before At a glance.");
+
+        Assert.Contains("#ai-analysis", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Render_WhenRawJsonDetailsDisabled_OmitsRawJsonExplorer()
+    {
+        var reportJson = JsonMarkdownReportRendererCoverageTests.BuildCanonicalReportJson();
+
+        var options = ReportOptions.SummaryReport;
+        options.Format = ReportFormat.Html;
+
+        var html = JsonHtmlReportRenderer.Render(reportJson, options);
+
+        Assert.DoesNotContain("id=\"raw-json\"", html, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("<script id=\"dbg-mcp-report-json-b64\"", html, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Theory]
     [InlineData("a.cs", "csharp")]
     [InlineData("a.fs", "fsharp")]

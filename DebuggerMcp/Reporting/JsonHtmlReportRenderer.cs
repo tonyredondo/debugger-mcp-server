@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -22,6 +23,7 @@ internal static class JsonHtmlReportRenderer
     {
         ArgumentNullException.ThrowIfNull(options);
 
+        reportJson = StripUtf8Bom(reportJson);
         using var doc = JsonDocument.Parse(reportJson);
         var root = doc.RootElement;
         var includeJsonDetails = options.IncludeRawJsonDetails;
@@ -32,17 +34,13 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("<head>");
         sb.AppendLine("<meta charset=\"UTF-8\">");
         sb.AppendLine("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">");
+        sb.AppendLine("<meta name=\"color-scheme\" content=\"dark light\">");
         sb.AppendLine("<title>Debugger MCP Report</title>");
-        sb.AppendLine("<link rel=\"preconnect\" href=\"https://cdnjs.cloudflare.com\">");
-        sb.AppendLine("<link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css\">");
         sb.AppendLine("<style>");
         sb.AppendLine(GetCss());
         sb.AppendLine("</style>");
-        sb.AppendLine("<script src=\"https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js\" defer></script>");
         sb.AppendLine("<script defer>");
-        sb.AppendLine("document.addEventListener('DOMContentLoaded', () => {");
-        sb.AppendLine("  try { if (window.hljs) { document.querySelectorAll('pre code').forEach((el) => window.hljs.highlightElement(el)); } } catch (e) {}");
-        sb.AppendLine("});");
+        sb.AppendLine(GetJs());
         sb.AppendLine("</script>");
         sb.AppendLine("</head>");
         sb.AppendLine("<body>");
@@ -54,6 +52,12 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("<main class=\"main\">");
 
         RenderHeader(sb, root, options);
+        if (TryGetAnalysis(root, out var analysisForAi) &&
+            analysisForAi.TryGetProperty("aiAnalysis", out var aiAnalysis) &&
+            aiAnalysis.ValueKind == JsonValueKind.Object)
+        {
+            RenderAiAnalysis(sb, root, includeJsonDetails);
+        }
         RenderAtAGlance(sb, root);
 
         if (options.IncludeCallStacks)
@@ -112,6 +116,11 @@ internal static class JsonHtmlReportRenderer
             RenderSignature(sb, root, includeJsonDetails);
         }
 
+        if (includeJsonDetails)
+        {
+            RenderRawJsonExplorer(sb, reportJson);
+        }
+
         sb.AppendLine("</main>");
         sb.AppendLine("</div>");
 
@@ -125,8 +134,15 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("<div class=\"brand\">Debugger MCP</div>");
         sb.AppendLine("<div class=\"brand-sub\">Report</div>");
         sb.AppendLine("<div class=\"brand-note\">Rendered from canonical JSON</div>");
+        sb.AppendLine("<button class=\"btn\" type=\"button\" data-action=\"toggle-theme\">Toggle theme</button>");
 
         sb.AppendLine("<nav class=\"nav\">");
+        if (TryGetAnalysis(root, out var analysis) &&
+            analysis.TryGetProperty("aiAnalysis", out var ai) &&
+            ai.ValueKind == JsonValueKind.Object)
+        {
+            AppendNavLink(sb, "AI analysis", "#ai-analysis");
+        }
         AppendNavLink(sb, "At a glance", "#at-a-glance");
         if (options.IncludeCallStacks)
         {
@@ -173,6 +189,10 @@ internal static class JsonHtmlReportRenderer
             AppendNavLink(sb, "Source context index", "#source-context-index");
             AppendNavLink(sb, "Signature", "#signature");
         }
+        if (options.IncludeRawJsonDetails)
+        {
+            AppendNavLink(sb, "Raw JSON", "#raw-json");
+        }
         sb.AppendLine("</nav>");
 
         if (root.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object)
@@ -194,7 +214,163 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("<header class=\"header\">");
         sb.AppendLine("<div class=\"header-title\">Debugger MCP Report</div>");
         sb.AppendLine("<div class=\"header-subtitle\">Requested format: <code>" + HttpUtility.HtmlEncode(options.Format.ToString()) + "</code></div>");
+
+        if (root.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object)
+        {
+            sb.AppendLine("<div class=\"header-meta\">");
+            sb.AppendLine("<div class=\"meta-chip\"><span class=\"meta-k\">Dump</span><span class=\"meta-v\"><code>" + HttpUtility.HtmlEncode(GetString(metadata, "dumpId")) + "</code></span></div>");
+            sb.AppendLine("<div class=\"meta-chip\"><span class=\"meta-k\">Generated</span><span class=\"meta-v\"><code>" + HttpUtility.HtmlEncode(GetString(metadata, "generatedAt")) + "</code></span></div>");
+            sb.AppendLine("<div class=\"meta-chip\"><span class=\"meta-k\">Debugger</span><span class=\"meta-v\"><code>" + HttpUtility.HtmlEncode(GetString(metadata, "debuggerType")) + "</code></span></div>");
+            sb.AppendLine("<div class=\"meta-chip\"><span class=\"meta-k\">Server</span><span class=\"meta-v\"><code>" + HttpUtility.HtmlEncode(GetString(metadata, "serverVersion")) + "</code></span></div>");
+            sb.AppendLine("</div>");
+        }
         sb.AppendLine("</header>");
+    }
+
+    private static void RenderAiAnalysis(StringBuilder sb, JsonElement root, bool includeJsonDetails)
+    {
+        sb.AppendLine("<section class=\"card\" id=\"ai-analysis\">");
+        sb.AppendLine("<div class=\"section-title-row\">");
+        sb.AppendLine("<h2>AI analysis</h2>");
+
+        if (TryGetAnalysis(root, out var analysis) &&
+            analysis.TryGetProperty("aiAnalysis", out var aiObj) &&
+            aiObj.ValueKind == JsonValueKind.Object)
+        {
+            var confidence = GetString(aiObj, "confidence");
+            var confidenceClass = GetConfidenceClass(confidence);
+            if (!string.IsNullOrWhiteSpace(confidence))
+            {
+                sb.AppendLine("<span class=\"pill " + HttpUtility.HtmlEncode(confidenceClass) + "\">Confidence: <code>" + HttpUtility.HtmlEncode(confidence) + "</code></span>");
+            }
+        }
+        sb.AppendLine("</div>");
+
+        if (!TryGetAnalysis(root, out var analysisRoot) ||
+            !analysisRoot.TryGetProperty("aiAnalysis", out var ai) ||
+            ai.ValueKind != JsonValueKind.Object)
+        {
+            sb.AppendLine("<div class=\"muted\">No AI analysis available.</div>");
+            sb.AppendLine("</section>");
+            return;
+        }
+
+        var rootCause = GetString(ai, "rootCause");
+        if (!string.IsNullOrWhiteSpace(rootCause))
+        {
+            sb.AppendLine("<div class=\"callout\">");
+            sb.AppendLine("<div class=\"callout-title\">Root cause</div>");
+            sb.AppendLine("<div class=\"prose\"><pre class=\"prose-pre\">" + HttpUtility.HtmlEncode(rootCause) + "</pre></div>");
+            sb.AppendLine("</div>");
+        }
+        else
+        {
+            sb.AppendLine("<div class=\"muted\">AI root cause not available.</div>");
+        }
+
+        sb.AppendLine("<div class=\"grid2\">");
+        sb.AppendLine("<div class=\"panel\">");
+        sb.AppendLine("<div class=\"panel-title\">Model &amp; run</div>");
+        sb.AppendLine("<table class=\"kv\">");
+        WriteKvRow(sb, "Model", ai, "model");
+        WriteKvRow(sb, "Analyzed at (UTC)", ai, "analyzedAt");
+        WriteKvRow(sb, "Iterations", ai, "iterations");
+        sb.AppendLine("</table>");
+        sb.AppendLine("</div>");
+
+        sb.AppendLine("<div class=\"panel\">");
+        sb.AppendLine("<div class=\"panel-title\">Notes</div>");
+        var additionalFindings = GetArrayOrNull(ai, "additionalFindings");
+        if (additionalFindings.HasValue && additionalFindings.Value.ValueKind == JsonValueKind.Array && additionalFindings.Value.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<ul class=\"list\">");
+            foreach (var finding in additionalFindings.Value.EnumerateArray())
+            {
+                var txt = finding.GetString();
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    sb.AppendLine("<li>" + HttpUtility.HtmlEncode(txt) + "</li>");
+                }
+            }
+            sb.AppendLine("</ul>");
+        }
+        else
+        {
+            sb.AppendLine("<div class=\"muted\">(none)</div>");
+        }
+        sb.AppendLine("</div>");
+        sb.AppendLine("</div>");
+
+        var reasoning = GetString(ai, "reasoning");
+        if (!string.IsNullOrWhiteSpace(reasoning))
+        {
+            sb.AppendLine("<details class=\"details\" open>");
+            sb.AppendLine("<summary>Reasoning</summary>");
+            sb.AppendLine("<pre class=\"code\"><code class=\"language-text\">" + HttpUtility.HtmlEncode(reasoning) + "</code></pre>");
+            sb.AppendLine("</details>");
+        }
+
+        if (ai.TryGetProperty("recommendations", out var recs) && recs.ValueKind == JsonValueKind.Array && recs.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<details class=\"details\" open>");
+            sb.AppendLine("<summary>Recommendations</summary>");
+            sb.AppendLine("<ul class=\"list\">");
+            foreach (var rec in recs.EnumerateArray())
+            {
+                var txt = rec.GetString();
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    sb.AppendLine("<li>" + HttpUtility.HtmlEncode(txt) + "</li>");
+                }
+            }
+            sb.AppendLine("</ul>");
+            sb.AppendLine("</details>");
+        }
+
+        if (ai.TryGetProperty("evidence", out var evidence) && evidence.ValueKind == JsonValueKind.Array && evidence.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<details class=\"details\">");
+            sb.AppendLine("<summary>Evidence</summary>");
+            sb.AppendLine("<ul class=\"list\">");
+            foreach (var item in evidence.EnumerateArray())
+            {
+                var txt = item.GetString();
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    sb.AppendLine("<li>" + HttpUtility.HtmlEncode(txt) + "</li>");
+                }
+            }
+            sb.AppendLine("</ul>");
+            sb.AppendLine("</details>");
+        }
+
+        if (ai.TryGetProperty("hypotheses", out var hypotheses) && hypotheses.ValueKind == JsonValueKind.Array && hypotheses.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<details class=\"details\">");
+            sb.AppendLine("<summary>Hypotheses</summary>");
+            sb.AppendLine("<div class=\"table-wrap\">");
+            sb.AppendLine("<table class=\"table\">");
+            sb.AppendLine("<thead><tr><th>ID</th><th>Confidence</th><th>Hypothesis</th><th>Notes</th></tr></thead>");
+            sb.AppendLine("<tbody>");
+            foreach (var h in hypotheses.EnumerateArray())
+            {
+                if (h.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+                sb.AppendLine("<tr>");
+                sb.AppendLine("<td><code>" + HttpUtility.HtmlEncode(GetString(h, "id")) + "</code></td>");
+                sb.AppendLine("<td><code>" + HttpUtility.HtmlEncode(GetString(h, "confidence")) + "</code></td>");
+                sb.AppendLine("<td>" + HttpUtility.HtmlEncode(GetString(h, "hypothesis")) + "</td>");
+                sb.AppendLine("<td class=\"mono\">" + HttpUtility.HtmlEncode(GetString(h, "notes")) + "</td>");
+                sb.AppendLine("</tr>");
+            }
+            sb.AppendLine("</tbody></table></div>");
+            sb.AppendLine("</details>");
+        }
+
+        MaybeRenderJsonDetails(sb, "AI analysis JSON", ai, includeJsonDetails);
+        sb.AppendLine("</section>");
     }
 
     private static void RenderAtAGlance(StringBuilder sb, JsonElement root)
@@ -258,6 +434,329 @@ internal static class JsonHtmlReportRenderer
 
         sb.AppendLine("</section>");
     }
+
+    private static void RenderRawJsonExplorer(StringBuilder sb, string reportJson)
+    {
+        var base64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(reportJson));
+
+        sb.AppendLine("<section class=\"card\" id=\"raw-json\">");
+        sb.AppendLine("<div class=\"section-title-row\">");
+        sb.AppendLine("<h2>Raw JSON</h2>");
+        sb.AppendLine("<span class=\"pill\">Tip: use <code>Ctrl</code>+<code>F</code> to search in the raw view.</span>");
+        sb.AppendLine("</div>");
+
+        sb.AppendLine("<div class=\"toolbar\">");
+        sb.AppendLine("<button class=\"btn-inline\" type=\"button\" data-action=\"json-copy\">Copy JSON</button>");
+        sb.AppendLine("<button class=\"btn-inline\" type=\"button\" data-action=\"json-download\">Download JSON</button>");
+        sb.AppendLine("<button class=\"btn-inline\" type=\"button\" data-action=\"json-expand\">Expand tree</button>");
+        sb.AppendLine("<button class=\"btn-inline\" type=\"button\" data-action=\"json-collapse\">Collapse tree</button>");
+        sb.AppendLine("</div>");
+
+        sb.AppendLine("<div class=\"tabs\" role=\"tablist\" aria-label=\"Raw JSON views\">");
+        sb.AppendLine("<button class=\"tab\" type=\"button\" role=\"tab\" aria-selected=\"true\" data-tab=\"tree\">Tree</button>");
+        sb.AppendLine("<button class=\"tab\" type=\"button\" role=\"tab\" aria-selected=\"false\" data-tab=\"raw\">Raw</button>");
+        sb.AppendLine("</div>");
+
+        sb.AppendLine("<div class=\"tab-panels\">");
+        sb.AppendLine("<div class=\"tab-panel\" data-panel=\"tree\">");
+        sb.AppendLine("<div id=\"json-tree\" class=\"json-tree\" aria-label=\"JSON tree\"></div>");
+        sb.AppendLine("</div>");
+        sb.AppendLine("<div class=\"tab-panel\" data-panel=\"raw\" hidden>");
+        sb.AppendLine("<pre id=\"json-raw\" class=\"code\"><code class=\"language-json\"></code></pre>");
+        sb.AppendLine("</div>");
+        sb.AppendLine("</div>");
+
+        sb.AppendLine("<script id=\"dbg-mcp-report-json-b64\" type=\"text/plain\">" + base64 + "</script>");
+        sb.AppendLine("</section>");
+    }
+
+    private static string StripUtf8Bom(string value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return value;
+        }
+
+        return value.Length > 0 && value[0] == '\uFEFF' ? value[1..] : value;
+    }
+
+    private static string GetConfidenceClass(string confidence)
+    {
+        if (string.IsNullOrWhiteSpace(confidence))
+        {
+            return "conf-unknown";
+        }
+
+        return confidence.Trim().ToLowerInvariant() switch
+        {
+            "high" => "conf-high",
+            "medium" => "conf-medium",
+            "low" => "conf-low",
+            _ => "conf-unknown"
+        };
+    }
+
+    private static string GetJs() =>
+        """
+        (() => {
+          const THEME_KEY = "dbgMcpReportTheme";
+          const html = document.documentElement;
+          let reportJsonText = null;
+          let reportJsonObject = null;
+
+          function setTheme(theme) {
+            html.dataset.theme = theme;
+            try { localStorage.setItem(THEME_KEY, theme); } catch {}
+          }
+
+          function initTheme() {
+            try {
+              const saved = localStorage.getItem(THEME_KEY);
+              if (saved === "light" || saved === "dark") { setTheme(saved); return; }
+            } catch {}
+            // default: prefer OS setting (CSS handles)
+          }
+
+          function wireThemeToggle() {
+            const btn = document.querySelector("[data-action='toggle-theme']");
+            if (!btn) return;
+            btn.addEventListener("click", () => {
+              const current = html.dataset.theme;
+              setTheme(current === "light" ? "dark" : "light");
+            });
+          }
+
+          function wireCopyButtons() {
+            document.addEventListener("click", async (e) => {
+              const target = e.target;
+              if (!(target instanceof HTMLElement)) return;
+              const btn = target.closest("[data-copy]");
+              if (!(btn instanceof HTMLElement)) return;
+              const text = btn.getAttribute("data-copy") || "";
+              if (!text) return;
+              try {
+                await navigator.clipboard.writeText(text);
+                btn.setAttribute("data-copied", "true");
+                setTimeout(() => btn.removeAttribute("data-copied"), 1200);
+              } catch {}
+            });
+          }
+
+          function decodeBase64Utf8(base64) {
+            const binary = atob(base64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            return new TextDecoder("utf-8").decode(bytes);
+          }
+
+          function loadEmbeddedJson() {
+            const script = document.getElementById("dbg-mcp-report-json-b64");
+            if (!script) return;
+            const base64 = (script.textContent || "").trim();
+            if (!base64) return;
+            try {
+              reportJsonText = decodeBase64Utf8(base64);
+              reportJsonObject = JSON.parse(reportJsonText);
+            } catch {
+              reportJsonText = null;
+              reportJsonObject = null;
+            }
+          }
+
+          function setTab(active) {
+            document.querySelectorAll(".tab").forEach((t) => {
+              const isActive = t.getAttribute("data-tab") === active;
+              t.setAttribute("aria-selected", isActive ? "true" : "false");
+              t.classList.toggle("active", isActive);
+            });
+            document.querySelectorAll(".tab-panel").forEach((p) => {
+              const isActive = p.getAttribute("data-panel") === active;
+              if (isActive) p.removeAttribute("hidden");
+              else p.setAttribute("hidden", "");
+            });
+          }
+
+          function wireTabs() {
+            document.addEventListener("click", (e) => {
+              const el = e.target;
+              if (!(el instanceof HTMLElement)) return;
+              const tab = el.closest(".tab");
+              if (!(tab instanceof HTMLElement)) return;
+              const name = tab.getAttribute("data-tab");
+              if (name) setTab(name);
+            });
+          }
+
+          function summarizeValue(value) {
+            if (value === null) return "null";
+            if (Array.isArray(value)) return `Array(${value.length})`;
+            const t = typeof value;
+            if (t === "string") return value.length > 80 ? JSON.stringify(value.slice(0, 77) + "...") : JSON.stringify(value);
+            if (t === "number" || t === "boolean") return String(value);
+            if (t === "object") return "Object";
+            return t;
+          }
+
+          function buildCopyPathButton(path, stopToggle) {
+            const btn = document.createElement("button");
+            btn.className = "json-copy";
+            btn.type = "button";
+            btn.textContent = "copy path";
+            btn.addEventListener("click", (e) => {
+              if (stopToggle) {
+                e.preventDefault();
+                e.stopPropagation();
+              }
+              const toCopy = path || "$";
+              navigator.clipboard?.writeText(toCopy).catch(() => {});
+            });
+            return btn;
+          }
+
+          function buildLeafRow(key, value, path) {
+            const row = document.createElement("div");
+            row.className = "json-row";
+
+            const keyEl = document.createElement("span");
+            keyEl.className = "json-key";
+            keyEl.textContent = key;
+
+            const previewEl = document.createElement("span");
+            previewEl.className = "json-preview";
+            previewEl.textContent = summarizeValue(value);
+
+            const copyBtn = buildCopyPathButton(path, false);
+            row.append(keyEl, previewEl, copyBtn);
+            return row;
+          }
+
+          function buildTreeNode(key, value, path) {
+            if (value === null || typeof value !== "object") {
+              return buildLeafRow(key, value, path);
+            }
+
+            const details = document.createElement("details");
+            details.className = "json-node";
+
+            const summary = document.createElement("summary");
+            summary.className = "json-summary";
+
+            const keyEl = document.createElement("span");
+            keyEl.className = "json-key";
+            keyEl.textContent = key;
+
+            const previewEl = document.createElement("span");
+            previewEl.className = "json-preview";
+            previewEl.textContent = summarizeValue(value);
+
+            const copyBtn = buildCopyPathButton(path, true);
+            summary.append(keyEl, previewEl, copyBtn);
+            details.append(summary);
+
+            const children = document.createElement("div");
+            children.className = "json-children";
+            details.append(children);
+
+            function renderChildrenOnce() {
+              if (details.dataset.rendered === "true") return;
+              details.dataset.rendered = "true";
+
+              if (Array.isArray(value)) {
+                for (let i = 0; i < value.length; i++) {
+                  const childKey = `[${i}]`;
+                  const childPath = (path || "$") + childKey;
+                  children.append(buildTreeNode(childKey, value[i], childPath));
+                }
+                return;
+              }
+
+              const keys = Object.keys(value);
+              keys.sort();
+              for (const k of keys) {
+                const childPath = (path || "$") + "." + k;
+                children.append(buildTreeNode(k, value[k], childPath));
+              }
+            }
+
+            details.addEventListener("toggle", () => {
+              if (details.open) renderChildrenOnce();
+            });
+
+            return details;
+          }
+
+          function renderRawJson() {
+            const code = document.querySelector("#json-raw code");
+            if (!code || !reportJsonText) return;
+            try {
+              const pretty = JSON.stringify(reportJsonObject, null, 2);
+              code.textContent = pretty;
+            } catch {
+              code.textContent = reportJsonText;
+            }
+          }
+
+          function renderJsonTree() {
+            const container = document.getElementById("json-tree");
+            if (!container || !reportJsonObject) return;
+            container.textContent = "";
+            const rootNode = buildTreeNode("root", reportJsonObject, "$");
+            container.append(rootNode);
+            if (rootNode instanceof HTMLDetailsElement) {
+              rootNode.open = true;
+              // Ensure first render happens even if the browser doesn't fire toggle for programmatic open.
+              rootNode.dispatchEvent(new Event("toggle"));
+            }
+          }
+
+          function wireJsonToolbar() {
+            document.addEventListener("click", async (e) => {
+              const el = e.target;
+              if (!(el instanceof HTMLElement)) return;
+              const action = el.getAttribute("data-action");
+              if (!action) return;
+
+              if (action === "json-copy") {
+                if (!reportJsonText) return;
+                try { await navigator.clipboard.writeText(reportJsonText); } catch {}
+              } else if (action === "json-download") {
+                if (!reportJsonText) return;
+                const blob = new Blob([reportJsonText], { type: "application/json" });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = "debugger-mcp-report.json";
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+              } else if (action === "json-expand") {
+                document.querySelectorAll("#json-tree details").forEach((d) => {
+                  if (!d.open) {
+                    d.open = true;
+                    d.dispatchEvent(new Event("toggle"));
+                  }
+                });
+              } else if (action === "json-collapse") {
+                document.querySelectorAll("#json-tree details").forEach((d) => { d.open = false; });
+                const root = document.querySelector("#json-tree details");
+                if (root) root.open = true;
+              }
+            });
+          }
+
+          document.addEventListener("DOMContentLoaded", () => {
+            initTheme();
+            wireThemeToggle();
+            wireCopyButtons();
+            wireTabs();
+            wireJsonToolbar();
+            loadEmbeddedJson();
+            renderRawJson();
+            renderJsonTree();
+          });
+        })();
+        """;
 
     private static void RenderFaultingThread(StringBuilder sb, JsonElement root, bool includeJsonDetails)
     {
@@ -343,6 +842,25 @@ internal static class JsonHtmlReportRenderer
             WriteKvRow(sb, "Dead", summary, "dead");
             WriteKvRow(sb, "Pending", summary, "pending");
             sb.AppendLine("</table>");
+
+            var total = GetLongFlexible(summary, "total") ?? 0;
+            var foreground = GetLongFlexible(summary, "foreground") ?? 0;
+            var background = GetLongFlexible(summary, "background") ?? 0;
+            var dead = GetLongFlexible(summary, "dead") ?? 0;
+            var unstarted = GetLongFlexible(summary, "unstarted") ?? 0;
+            var pending = GetLongFlexible(summary, "pending") ?? 0;
+
+            if (total > 0)
+            {
+                sb.AppendLine("<div class=\"chart\" aria-label=\"Thread distribution\">");
+                if (foreground > 0) RenderBarRow(sb, "Foreground", foreground, total, "ok");
+                if (background > 0) RenderBarRow(sb, "Background", background, total, "");
+                if (dead > 0) RenderBarRow(sb, "Dead", dead, total, "danger");
+                if (unstarted > 0) RenderBarRow(sb, "Unstarted", unstarted, total, "warn");
+                if (pending > 0) RenderBarRow(sb, "Pending", pending, total, "warn");
+                sb.AppendLine("</div>");
+            }
+
             sb.AppendLine("</div>");
         }
 
@@ -463,11 +981,25 @@ internal static class JsonHtmlReportRenderer
 
         if (!string.IsNullOrWhiteSpace(sourceUrl))
         {
-            sb.AppendLine("<div class=\"muted\">Source URL: <a href=\"" + HttpUtility.HtmlEncode(sourceUrl) + "\" target=\"_blank\" rel=\"noreferrer\">" + HttpUtility.HtmlEncode(sourceUrl) + "</a></div>");
+            if (IsSafeExternalUrl(sourceUrl))
+            {
+                sb.AppendLine("<div class=\"muted\">Source URL: <a href=\"" + HttpUtility.HtmlEncode(sourceUrl) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + HttpUtility.HtmlEncode(sourceUrl) + "</a></div>");
+            }
+            else
+            {
+                sb.AppendLine("<div class=\"muted\">Source URL: <code>" + HttpUtility.HtmlEncode(sourceUrl) + "</code></div>");
+            }
         }
         if (!string.IsNullOrWhiteSpace(sourceRawUrl))
         {
-            sb.AppendLine("<div class=\"muted\">Raw URL: <a href=\"" + HttpUtility.HtmlEncode(sourceRawUrl) + "\" target=\"_blank\" rel=\"noreferrer\">" + HttpUtility.HtmlEncode(sourceRawUrl) + "</a></div>");
+            if (IsSafeExternalUrl(sourceRawUrl))
+            {
+                sb.AppendLine("<div class=\"muted\">Raw URL: <a href=\"" + HttpUtility.HtmlEncode(sourceRawUrl) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + HttpUtility.HtmlEncode(sourceRawUrl) + "</a></div>");
+            }
+            else
+            {
+                sb.AppendLine("<div class=\"muted\">Raw URL: <code>" + HttpUtility.HtmlEncode(sourceRawUrl) + "</code></div>");
+            }
         }
 
         if (includeSourceContext &&
@@ -620,6 +1152,30 @@ internal static class JsonHtmlReportRenderer
             WriteKvRow(sb, "Fragmentation bytes", gc, "fragmentationBytes");
             WriteKvRow(sb, "Finalizable objects", gc, "finalizableObjectCount");
             sb.AppendLine("</table>");
+
+            var generationSizes = GetObjectOrNull(gc.Value, "generationSizes");
+            if (generationSizes.HasValue)
+            {
+                var gen0 = GetDoubleFlexible(generationSizes.Value, "gen0") ?? 0;
+                var gen1 = GetDoubleFlexible(generationSizes.Value, "gen1") ?? 0;
+                var gen2 = GetDoubleFlexible(generationSizes.Value, "gen2") ?? 0;
+                var loh = GetDoubleFlexible(generationSizes.Value, "loh") ?? 0;
+                var poh = GetDoubleFlexible(generationSizes.Value, "poh") ?? 0;
+                var total = gen0 + gen1 + gen2 + loh + poh;
+
+                if (total > 0)
+                {
+                    sb.AppendLine("<div class=\"panel-sub\">Generation sizes (bytes)</div>");
+                    sb.AppendLine("<div class=\"chart\" aria-label=\"GC generation sizes\">");
+                    if (gen0 > 0) RenderBarRow(sb, "Gen0", gen0, total, "");
+                    if (gen1 > 0) RenderBarRow(sb, "Gen1", gen1, total, "");
+                    if (gen2 > 0) RenderBarRow(sb, "Gen2", gen2, total, "");
+                    if (loh > 0) RenderBarRow(sb, "LOH", loh, total, "warn");
+                    if (poh > 0) RenderBarRow(sb, "POH", poh, total, "warn");
+                    sb.AppendLine("</div>");
+                }
+            }
+
             sb.AppendLine("</div>");
         }
 
@@ -745,7 +1301,14 @@ internal static class JsonHtmlReportRenderer
             var url = GetString(asm, "sourceUrl");
             if (!string.IsNullOrWhiteSpace(url))
             {
-                sb.AppendLine("<td><a href=\"" + HttpUtility.HtmlEncode(url) + "\" target=\"_blank\" rel=\"noreferrer\">" + HttpUtility.HtmlEncode(url) + "</a></td>");
+                if (IsSafeExternalUrl(url))
+                {
+                    sb.AppendLine("<td><a href=\"" + HttpUtility.HtmlEncode(url) + "\" target=\"_blank\" rel=\"noopener noreferrer\">" + HttpUtility.HtmlEncode(url) + "</a></td>");
+                }
+                else
+                {
+                    sb.AppendLine("<td><code>" + HttpUtility.HtmlEncode(url) + "</code></td>");
+                }
             }
             else
             {
@@ -1033,6 +1596,18 @@ internal static class JsonHtmlReportRenderer
         return null;
     }
 
+    private static JsonElement? GetArrayOrNull(JsonElement obj, string property)
+    {
+        if (obj.ValueKind == JsonValueKind.Object &&
+            obj.TryGetProperty(property, out var v) &&
+            v.ValueKind == JsonValueKind.Array)
+        {
+            return v;
+        }
+
+        return null;
+    }
+
     private static string GetString(JsonElement obj, string property)
     {
         if (obj.ValueKind == JsonValueKind.Object && obj.TryGetProperty(property, out var v))
@@ -1061,8 +1636,81 @@ internal static class JsonHtmlReportRenderer
         return null;
     }
 
+    private static long? GetLongFlexible(JsonElement obj, string property)
+    {
+        if (obj.ValueKind != JsonValueKind.Object || !obj.TryGetProperty(property, out var v))
+        {
+            return null;
+        }
+
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetInt64(out var n))
+        {
+            return n;
+        }
+
+        if (v.ValueKind == JsonValueKind.String &&
+            long.TryParse(v.GetString(), NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static double? GetDoubleFlexible(JsonElement obj, string property)
+    {
+        if (obj.ValueKind != JsonValueKind.Object || !obj.TryGetProperty(property, out var v))
+        {
+            return null;
+        }
+
+        if (v.ValueKind == JsonValueKind.Number && v.TryGetDouble(out var n))
+        {
+            return n;
+        }
+
+        if (v.ValueKind == JsonValueKind.String &&
+            double.TryParse(v.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+        {
+            return parsed;
+        }
+
+        return null;
+    }
+
+    private static void RenderBarRow(StringBuilder sb, string label, double value, double total, string styleClass)
+    {
+        if (total <= 0)
+        {
+            return;
+        }
+
+        var pct = Math.Clamp((value / total) * 100.0, 0, 100);
+        sb.AppendLine("<div class=\"bar-row\">");
+        sb.AppendLine("<div class=\"bar-label\">" + HttpUtility.HtmlEncode(label) + "</div>");
+        sb.AppendLine("<div class=\"bar-track\"><div class=\"bar-fill " + HttpUtility.HtmlEncode(styleClass) + "\" style=\"width:" + pct.ToString("0.##", CultureInfo.InvariantCulture) + "%\"></div></div>");
+        sb.AppendLine("<div class=\"bar-value\">" + HttpUtility.HtmlEncode(value.ToString("0", CultureInfo.InvariantCulture)) + "</div>");
+        sb.AppendLine("</div>");
+    }
+
     private static string SerializeIndented(JsonElement element) =>
         JsonSerializer.Serialize(element, new JsonSerializerOptions { WriteIndented = true });
+
+    private static bool IsSafeExternalUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return false;
+        }
+
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        return uri.Scheme.Equals(Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) ||
+               uri.Scheme.Equals(Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase);
+    }
 
     private static void MaybeRenderJsonDetails(StringBuilder sb, string title, JsonElement element, bool include)
     {
@@ -1128,6 +1776,7 @@ internal static class JsonHtmlReportRenderer
 
     private static string GetCss() =>
         """
+        html { scroll-behavior: smooth; }
         :root {
           --bg: #0b1020;
           --card: #121a33;
@@ -1138,6 +1787,33 @@ internal static class JsonHtmlReportRenderer
           --accent: #7aa2ff;
           --ok: #2dd4bf;
           --warn: #fbbf24;
+          --danger: #fb7185;
+        }
+        @media (prefers-color-scheme: light) {
+          :root:not([data-theme="dark"]) {
+            --bg: #f6f7fb;
+            --card: #ffffff;
+            --panel: rgba(17,24,39,0.04);
+            --text: #0b1020;
+            --muted: #4b5563;
+            --border: #e5e7eb;
+            --accent: #2563eb;
+            --ok: #0f766e;
+            --warn: #b45309;
+            --danger: #be123c;
+          }
+        }
+        :root[data-theme="light"] {
+          --bg: #f6f7fb;
+          --card: #ffffff;
+          --panel: rgba(17,24,39,0.04);
+          --text: #0b1020;
+          --muted: #4b5563;
+          --border: #e5e7eb;
+          --accent: #2563eb;
+          --ok: #0f766e;
+          --warn: #b45309;
+          --danger: #be123c;
         }
         body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); }
         .layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
@@ -1146,6 +1822,10 @@ internal static class JsonHtmlReportRenderer
         .brand { font-size: 14px; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
         .brand-sub { margin-top: 6px; font-size: 18px; font-weight: 800; }
         .brand-note { margin-top: 8px; color: var(--muted); font-size: 12px; }
+        .btn { margin-top: 12px; display: inline-flex; align-items: center; justify-content: center; width: 100%; padding: 10px 12px; border-radius: 12px; border: 1px solid rgba(37,48,90,0.35); background: rgba(11,16,32,0.25); color: var(--text); cursor: pointer; }
+        :root[data-theme="light"] .btn { border-color: rgba(17,24,39,0.12); background: rgba(17,24,39,0.03); }
+        .btn:hover { border-color: rgba(122,162,255,0.35); background: rgba(122,162,255,0.08); }
+        :root[data-theme="light"] .btn:hover { border-color: rgba(37,99,235,0.30); background: rgba(37,99,235,0.06); }
         .nav { margin-top: 16px; display: flex; flex-direction: column; gap: 6px; }
         .nav-link { display: block; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(37,48,90,0.35); background: rgba(11,16,32,0.25); color: var(--text); }
         .nav-link:hover { border-color: rgba(122,162,255,0.35); background: rgba(122,162,255,0.08); }
@@ -1157,6 +1837,11 @@ internal static class JsonHtmlReportRenderer
         .header { padding: 18px 20px; border: 1px solid var(--border); border-radius: 14px; background: linear-gradient(180deg, rgba(122,162,255,0.12), rgba(18,26,51,0.85)); }
         .header-title { font-size: 22px; font-weight: 700; }
         .header-subtitle { margin-top: 6px; color: var(--muted); }
+        .header-meta { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+        .meta-chip { display: inline-flex; gap: 8px; align-items: center; padding: 8px 10px; border-radius: 12px; border: 1px solid rgba(37,48,90,0.35); background: rgba(11,16,32,0.25); }
+        :root[data-theme="light"] .meta-chip { border-color: rgba(17,24,39,0.12); background: rgba(17,24,39,0.03); }
+        .meta-k { color: var(--muted); font-size: 12px; font-weight: 600; }
+        .meta-v { font-size: 12px; }
         h2 { margin: 0 0 12px 0; font-size: 18px; }
         .card { margin-top: 18px; padding: 16px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--card); }
         .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -1171,8 +1856,53 @@ internal static class JsonHtmlReportRenderer
         .v { word-break: break-word; }
         .muted { color: var(--muted); margin-top: 6px; }
         .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; background: rgba(122,162,255,0.18); border: 1px solid rgba(122,162,255,0.28); }
+        .pill.conf-high { background: rgba(45,212,191,0.15); border-color: rgba(45,212,191,0.35); }
+        .pill.conf-medium { background: rgba(251,191,36,0.12); border-color: rgba(251,191,36,0.35); }
+        .pill.conf-low { background: rgba(251,113,133,0.10); border-color: rgba(251,113,133,0.35); }
+        .pill.conf-unknown { background: rgba(167,176,214,0.10); border-color: rgba(167,176,214,0.25); }
+        .section-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+        .callout { margin-top: 10px; padding: 14px 14px; border-radius: 14px; border: 1px solid rgba(122,162,255,0.25); background: linear-gradient(180deg, rgba(122,162,255,0.10), rgba(18,26,51,0.10)); }
+        :root[data-theme="light"] .callout { background: linear-gradient(180deg, rgba(37,99,235,0.08), rgba(17,24,39,0.02)); border-color: rgba(37,99,235,0.18); }
+        .callout-title { font-weight: 800; letter-spacing: 0.02em; margin-bottom: 8px; }
+        .prose-pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: system-ui, -apple-system, Segoe UI, sans-serif; }
         .details { margin-top: 10px; }
         .details > summary { cursor: pointer; color: var(--accent); }
+        .list { margin: 10px 0 0 18px; padding: 0; }
+        .list li { margin: 6px 0; }
+        .chart { margin-top: 12px; display: flex; flex-direction: column; gap: 10px; }
+        .bar-row { display: grid; grid-template-columns: 140px 1fr 74px; gap: 10px; align-items: center; }
+        @media (max-width: 980px) { .bar-row { grid-template-columns: 120px 1fr 64px; } }
+        .bar-label { color: var(--muted); font-size: 12px; }
+        .bar-track { height: 10px; border-radius: 999px; border: 1px solid rgba(37,48,90,0.55); background: rgba(11,16,32,0.25); overflow: hidden; }
+        :root[data-theme="light"] .bar-track { border-color: rgba(17,24,39,0.10); background: rgba(17,24,39,0.04); }
+        .bar-fill { height: 100%; border-radius: 999px; background: var(--accent); width: 0%; }
+        .bar-fill.ok { background: rgba(45,212,191,0.9); }
+        .bar-fill.warn { background: rgba(251,191,36,0.9); }
+        .bar-fill.danger { background: rgba(251,113,133,0.9); }
+        .bar-value { text-align: right; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; color: var(--muted); }
+        .toolbar { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+        .btn-inline { display: inline-flex; align-items: center; justify-content: center; padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(37,48,90,0.35); background: rgba(11,16,32,0.25); color: var(--text); cursor: pointer; }
+        :root[data-theme="light"] .btn-inline { border-color: rgba(17,24,39,0.12); background: rgba(17,24,39,0.03); }
+        .btn-inline:hover { border-color: rgba(122,162,255,0.35); background: rgba(122,162,255,0.08); }
+        :root[data-theme="light"] .btn-inline:hover { border-color: rgba(37,99,235,0.30); background: rgba(37,99,235,0.06); }
+        .tabs { margin-top: 12px; display: inline-flex; gap: 8px; }
+        .tab { padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(37,48,90,0.35); background: rgba(11,16,32,0.12); color: var(--text); cursor: pointer; }
+        .tab.active, .tab[aria-selected="true"] { background: rgba(122,162,255,0.16); border-color: rgba(122,162,255,0.28); }
+        .tab-panels { margin-top: 12px; }
+        .json-tree { display: flex; flex-direction: column; gap: 8px; margin-top: 6px; }
+        details.json-node { border: 1px solid rgba(37,48,90,0.55); border-radius: 12px; background: rgba(11,16,32,0.18); padding: 8px 10px; }
+        :root[data-theme="light"] details.json-node { border-color: rgba(17,24,39,0.10); background: rgba(17,24,39,0.02); }
+        details.json-node > summary { list-style: none; cursor: pointer; }
+        details.json-node > summary::-webkit-details-marker { display: none; }
+        .json-summary { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+        .json-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; padding: 8px 10px; border: 1px solid rgba(37,48,90,0.55); border-radius: 12px; background: rgba(11,16,32,0.18); }
+        :root[data-theme="light"] .json-row { border-color: rgba(17,24,39,0.10); background: rgba(17,24,39,0.02); }
+        .json-key { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-weight: 700; }
+        .json-preview { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; color: var(--muted); font-size: 12px; }
+        .json-copy { margin-left: auto; padding: 6px 8px; border-radius: 10px; border: 1px solid rgba(37,48,90,0.35); background: rgba(11,16,32,0.25); color: var(--muted); cursor: pointer; }
+        :root[data-theme="light"] .json-copy { border-color: rgba(17,24,39,0.12); background: rgba(17,24,39,0.03); }
+        .json-copy:hover { color: var(--text); border-color: rgba(122,162,255,0.35); }
+        .json-children { margin-top: 10px; padding-left: 12px; border-left: 1px dashed rgba(37,48,90,0.55); display: flex; flex-direction: column; gap: 8px; }
         .stack { margin: 12px 0 0 20px; padding: 0; }
         .frame { margin: 10px 0; }
         .frame-title { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
@@ -1180,6 +1910,7 @@ internal static class JsonHtmlReportRenderer
         .badge.managed { border-color: rgba(45,212,191,0.5); color: var(--ok); }
         .badge.native { border-color: rgba(251,191,36,0.5); color: var(--warn); }
         .code { overflow: auto; padding: 12px; border-radius: 10px; border: 1px solid var(--border); background: rgba(11,16,32,0.6); }
+        :root[data-theme="light"] .code { background: rgba(17,24,39,0.03); }
         code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12.5px; }
         a { color: var(--accent); text-decoration: none; }
         a:hover { text-decoration: underline; }
