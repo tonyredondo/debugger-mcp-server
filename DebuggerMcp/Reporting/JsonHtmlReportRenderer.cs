@@ -709,6 +709,266 @@ internal static class JsonHtmlReportRenderer
             }
           }
 
+          function tokenizeCSharp(text) {
+            const keywords = new Set([
+              "abstract","as","base","bool","break","byte","case","catch","char","checked","class","const","continue","decimal","default","delegate","do","double","else","enum","event","explicit","extern",
+              "false","finally","fixed","float","for","foreach","goto","if","implicit","in","int","interface","internal","is","lock","long","namespace","new","null","object","operator","out","override",
+              "params","private","protected","public","readonly","ref","return","sbyte","sealed","short","sizeof","stackalloc","static","string","struct","switch","this","throw","true","try","typeof",
+              "uint","ulong","unchecked","unsafe","ushort","using","virtual","void","volatile","while",
+              "async","await","record","init","with","when","yield","var"
+            ]);
+
+            function push(tokens, cls, value) {
+              if (!value) return;
+              const last = tokens.length ? tokens[tokens.length - 1] : null;
+              if (last && last[0] === cls) { last[1] += value; return; }
+              tokens.push([cls, value]);
+            }
+
+            function readUntilNewline(start) {
+              let end = text.indexOf("\n", start);
+              if (end === -1) end = text.length;
+              return end;
+            }
+
+            function readBlockComment(start) {
+              const end = text.indexOf("*/", start + 2);
+              return end === -1 ? text.length : end + 2;
+            }
+
+            function readNormalString(start, quote) {
+              let i = start + 1;
+              while (i < text.length) {
+                const ch = text[i];
+                if (ch === "\\\\") { i += 2; continue; }
+                if (ch === quote) return i + 1;
+                i++;
+              }
+              return text.length;
+            }
+
+            function readVerbatimString(start) {
+              // start at @"
+              let i = start + 2;
+              while (i < text.length) {
+                if (text[i] === "\"" && text[i + 1] === "\"") { i += 2; continue; }
+                if (text[i] === "\"") return i + 1;
+                i++;
+              }
+              return text.length;
+            }
+
+            function readIdentifier(start) {
+              let i = start;
+              if (text[i] === "@") i++;
+              while (i < text.length) {
+                const ch = text[i];
+                if ((ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || (ch >= "0" && ch <= "9") || ch === "_") { i++; continue; }
+                break;
+              }
+              return i;
+            }
+
+            function readNumber(start) {
+              let i = start;
+              if (text[i] === "0" && (text[i + 1] === "x" || text[i + 1] === "X")) {
+                i += 2;
+                while (i < text.length) {
+                  const ch = text[i];
+                  if ((ch >= "0" && ch <= "9") || (ch >= "a" && ch <= "f") || (ch >= "A" && ch <= "F") || ch === "_") { i++; continue; }
+                  break;
+                }
+                return i;
+              }
+              while (i < text.length) {
+                const ch = text[i];
+                if ((ch >= "0" && ch <= "9") || ch === "_" || ch === ".") { i++; continue; }
+                if (ch === "e" || ch === "E") {
+                  i++;
+                  if (text[i] === "+" || text[i] === "-") i++;
+                  continue;
+                }
+                break;
+              }
+              return i;
+            }
+
+            const tokens = [];
+            let i = 0;
+            while (i < text.length) {
+              const ch = text[i];
+
+              // Comments
+              if (ch === "/" && text[i + 1] === "/") {
+                const end = readUntilNewline(i);
+                push(tokens, "tok-com", text.slice(i, end));
+                i = end;
+                continue;
+              }
+              if (ch === "/" && text[i + 1] === "*") {
+                const end = readBlockComment(i);
+                push(tokens, "tok-com", text.slice(i, end));
+                i = end;
+                continue;
+              }
+
+              // Strings
+              if (ch === "@" && text[i + 1] === "\"") {
+                const end = readVerbatimString(i);
+                push(tokens, "tok-str", text.slice(i, end));
+                i = end;
+                continue;
+              }
+              if (ch === "$" && text[i + 1] === "\"") {
+                const end = readNormalString(i + 1, "\"");
+                push(tokens, "tok-str", text.slice(i, end));
+                i = end;
+                continue;
+              }
+              if (ch === "$" && text[i + 1] === "@" && text[i + 2] === "\"") {
+                const end = readVerbatimString(i + 1);
+                push(tokens, "tok-str", text.slice(i, end));
+                i = end;
+                continue;
+              }
+              if (ch === "\"" || ch === "'") {
+                const end = readNormalString(i, ch);
+                push(tokens, "tok-str", text.slice(i, end));
+                i = end;
+                continue;
+              }
+
+              // Numbers
+              if (ch >= "0" && ch <= "9") {
+                const end = readNumber(i);
+                push(tokens, "tok-num", text.slice(i, end));
+                i = end;
+                continue;
+              }
+
+              // Identifiers/keywords
+              const isIdentStart = (ch >= "a" && ch <= "z") || (ch >= "A" && ch <= "Z") || ch === "_" || (ch === "@" && (((text[i + 1] >= "a" && text[i + 1] <= "z") || (text[i + 1] >= "A" && text[i + 1] <= "Z") || text[i + 1] === "_")));
+              if (isIdentStart) {
+                const end = readIdentifier(i);
+                const raw = text.slice(i, end);
+                const word = raw.startsWith("@") ? raw.slice(1) : raw;
+                if (word === "true" || word === "false" || word === "null") {
+                  push(tokens, "tok-lit", raw);
+                } else if (keywords.has(word)) {
+                  push(tokens, "tok-kw", raw);
+                } else if (word.length && word[0] >= "A" && word[0] <= "Z") {
+                  push(tokens, "tok-type", raw);
+                } else {
+                  push(tokens, null, raw);
+                }
+                i = end;
+                continue;
+              }
+
+              push(tokens, null, ch);
+              i++;
+            }
+
+            return tokens;
+          }
+
+          function tokenizeJson(text) {
+            function push(tokens, cls, value) {
+              if (!value) return;
+              const last = tokens.length ? tokens[tokens.length - 1] : null;
+              if (last && last[0] === cls) { last[1] += value; return; }
+              tokens.push([cls, value]);
+            }
+
+            function readString(start) {
+              let i = start + 1;
+              while (i < text.length) {
+                const ch = text[i];
+                if (ch === "\\\\") { i += 2; continue; }
+                if (ch === "\"") return i + 1;
+                i++;
+              }
+              return text.length;
+            }
+
+            function readNumber(start) {
+              let i = start;
+              if (text[i] === "-") i++;
+              while (i < text.length && text[i] >= "0" && text[i] <= "9") i++;
+              if (text[i] === ".") { i++; while (i < text.length && text[i] >= "0" && text[i] <= "9") i++; }
+              if (text[i] === "e" || text[i] === "E") {
+                i++;
+                if (text[i] === "+" || text[i] === "-") i++;
+                while (i < text.length && text[i] >= "0" && text[i] <= "9") i++;
+              }
+              return i;
+            }
+
+            const tokens = [];
+            let i = 0;
+            while (i < text.length) {
+              const ch = text[i];
+              if (ch === "\"") {
+                const end = readString(i);
+                push(tokens, "tok-str", text.slice(i, end));
+                i = end;
+                continue;
+              }
+              if (ch === "-" || (ch >= "0" && ch <= "9")) {
+                const end = readNumber(i);
+                push(tokens, "tok-num", text.slice(i, end));
+                i = end;
+                continue;
+              }
+              if (text.startsWith("true", i) || text.startsWith("false", i) || text.startsWith("null", i)) {
+                const lit = text.startsWith("true", i) ? "true" : (text.startsWith("false", i) ? "false" : "null");
+                push(tokens, "tok-lit", lit);
+                i += lit.length;
+                continue;
+              }
+              if ("{}[]:,".includes(ch)) {
+                push(tokens, "tok-punc", ch);
+                i++;
+                continue;
+              }
+              push(tokens, null, ch);
+              i++;
+            }
+            return tokens;
+          }
+
+          function renderTokens(code, tokens) {
+            code.textContent = "";
+            for (const t of tokens) {
+              const cls = t[0];
+              const val = t[1];
+              if (!cls) {
+                code.appendChild(document.createTextNode(val));
+                continue;
+              }
+              const span = document.createElement("span");
+              span.className = cls;
+              span.textContent = val;
+              code.appendChild(span);
+            }
+          }
+
+          function highlightSourceCode() {
+            document.querySelectorAll("code.source-code").forEach((code) => {
+              if (!(code instanceof HTMLElement)) return;
+              if (code.dataset.highlighted === "true") return;
+              const lang = (code.dataset.lang || "").toLowerCase();
+              if (!lang || lang === "text") return;
+              const text = code.textContent || "";
+              let tokens = null;
+              if (lang === "csharp") tokens = tokenizeCSharp(text);
+              else if (lang === "json") tokens = tokenizeJson(text);
+              if (!tokens) return;
+              renderTokens(code, tokens);
+              code.dataset.highlighted = "true";
+            });
+          }
+
           function wireJsonToolbar() {
             document.addEventListener("click", async (e) => {
               const el = e.target;
@@ -754,6 +1014,7 @@ internal static class JsonHtmlReportRenderer
             loadEmbeddedJson();
             renderRawJson();
             renderJsonTree();
+            highlightSourceCode();
           });
         })();
         """;
@@ -1016,12 +1277,13 @@ internal static class JsonHtmlReportRenderer
                 var lang = GuessFenceLanguage(frame);
                 if (sc.TryGetProperty("lines", out var linesElem) && linesElem.ValueKind == JsonValueKind.Array)
                 {
-                    sb.AppendLine("<pre class=\"code\"><code class=\"" + HttpUtility.HtmlEncode(string.IsNullOrEmpty(lang) ? "language-text" : "language-" + lang) + "\">");
-                    foreach (var line in linesElem.EnumerateArray())
-                    {
-                        sb.AppendLine(HttpUtility.HtmlEncode(line.GetString() ?? string.Empty));
-                    }
-                    sb.AppendLine("</code></pre>");
+                var langClass = string.IsNullOrEmpty(lang) ? "language-text" : "language-" + lang;
+                sb.AppendLine("<pre class=\"code source\"><code class=\"" + HttpUtility.HtmlEncode(langClass + " source-code") + "\" data-lang=\"" + HttpUtility.HtmlEncode(string.IsNullOrEmpty(lang) ? "text" : lang) + "\">");
+                foreach (var line in linesElem.EnumerateArray())
+                {
+                    sb.AppendLine(HttpUtility.HtmlEncode(line.GetString() ?? string.Empty));
+                }
+                sb.AppendLine("</code></pre>");
                 }
                 else if (sc.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String)
                 {
@@ -1788,6 +2050,13 @@ internal static class JsonHtmlReportRenderer
           --ok: #2dd4bf;
           --warn: #fbbf24;
           --danger: #fb7185;
+          --sep: rgba(37,48,90,0.35);
+          --tok-kw: #7aa2ff;
+          --tok-type: #c084fc;
+          --tok-str: #fbbf24;
+          --tok-com: rgba(167,176,214,0.85);
+          --tok-num: #2dd4bf;
+          --tok-lit: #fb7185;
         }
         @media (prefers-color-scheme: light) {
           :root:not([data-theme="dark"]) {
@@ -1801,6 +2070,13 @@ internal static class JsonHtmlReportRenderer
             --ok: #0f766e;
             --warn: #b45309;
             --danger: #be123c;
+            --sep: rgba(17,24,39,0.10);
+            --tok-kw: #1d4ed8;
+            --tok-type: #7c3aed;
+            --tok-str: #b45309;
+            --tok-com: rgba(75,85,99,0.85);
+            --tok-num: #0f766e;
+            --tok-lit: #be123c;
           }
         }
         :root[data-theme="light"] {
@@ -1814,6 +2090,13 @@ internal static class JsonHtmlReportRenderer
           --ok: #0f766e;
           --warn: #b45309;
           --danger: #be123c;
+          --sep: rgba(17,24,39,0.10);
+          --tok-kw: #1d4ed8;
+          --tok-type: #7c3aed;
+          --tok-str: #b45309;
+          --tok-com: rgba(75,85,99,0.85);
+          --tok-num: #0f766e;
+          --tok-lit: #be123c;
         }
         body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, sans-serif; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.5; }
         .layout { display: grid; grid-template-columns: 260px 1fr; min-height: 100vh; }
@@ -1904,7 +2187,8 @@ internal static class JsonHtmlReportRenderer
         .json-copy:hover { color: var(--text); border-color: rgba(122,162,255,0.35); }
         .json-children { margin-top: 10px; padding-left: 12px; border-left: 1px dashed rgba(37,48,90,0.55); display: flex; flex-direction: column; gap: 8px; }
         .stack { margin: 12px 0 0 20px; padding: 0; }
-        .frame { margin: 10px 0; }
+        .frame { margin: 0; padding: 12px 0; border-top: 1px solid var(--sep); }
+        .frame:first-child { border-top: none; }
         .frame-title { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; overflow-wrap: anywhere; word-break: break-word; }
         .frame-title code { overflow-wrap: anywhere; word-break: break-word; }
         .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); }
@@ -1918,6 +2202,13 @@ internal static class JsonHtmlReportRenderer
         code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
         a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; word-break: break-word; }
         a:hover { text-decoration: underline; }
+        .tok-kw { color: var(--tok-kw); font-weight: 650; }
+        .tok-type { color: var(--tok-type); }
+        .tok-str { color: var(--tok-str); }
+        .tok-com { color: var(--tok-com); font-style: italic; }
+        .tok-num { color: var(--tok-num); }
+        .tok-lit { color: var(--tok-lit); font-weight: 650; }
+        .tok-punc { color: var(--muted); }
         .alert { margin-top: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(251,191,36,0.5); background: rgba(251,191,36,0.1); }
         .table-wrap { overflow: auto; border: 1px solid rgba(37,48,90,0.55); border-radius: 12px; margin-top: 10px; }
         .table { width: 100%; border-collapse: collapse; min-width: 860px; }
