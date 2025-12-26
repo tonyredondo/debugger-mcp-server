@@ -84,14 +84,51 @@ internal sealed class AiHypothesisTracker
             {
                 if (_hypothesesById.TryGetValue(providedId, out var existing))
                 {
+                    if (_idByDedupeKey.TryGetValue(dedupeKey, out var idForKey)
+                        && !idForKey.Equals(providedId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.IgnoredDuplicates++;
+                        result.IgnoredDuplicateIds.Add(idForKey);
+                        continue;
+                    }
+
+                    RemoveAllDedupeKeysForId(providedId);
                     existing.Hypothesis = hypothesisText;
                     existing.Confidence = confidence;
-                    existing.Unknowns = unknowns;
-                    existing.TestsToRun = testsToRun;
-                    existing.Notes = notes;
-                    existing.SupportsEvidenceIds = supportsEvidenceIds;
-                    existing.ContradictsEvidenceIds = contradictsEvidenceIds;
+                    if (unknowns != null)
+                    {
+                        existing.Unknowns = unknowns;
+                    }
+
+                    if (testsToRun != null)
+                    {
+                        existing.TestsToRun = testsToRun;
+                    }
+
+                    if (notes != null)
+                    {
+                        existing.Notes = notes;
+                    }
+
+                    if (supportsEvidenceIds != null)
+                    {
+                        existing.SupportsEvidenceIds = supportsEvidenceIds;
+                    }
+
+                    if (contradictsEvidenceIds != null)
+                    {
+                        existing.ContradictsEvidenceIds = contradictsEvidenceIds;
+                    }
+
+                    _idByDedupeKey[dedupeKey] = providedId;
                     result.UpdatedIds.Add(providedId);
+                    continue;
+                }
+
+                if (_idByDedupeKey.TryGetValue(dedupeKey, out var existingIdForKey))
+                {
+                    result.IgnoredDuplicates++;
+                    result.IgnoredDuplicateIds.Add(existingIdForKey);
                     continue;
                 }
 
@@ -158,6 +195,34 @@ internal sealed class AiHypothesisTracker
         }
 
         return result;
+    }
+
+    private void RemoveAllDedupeKeysForId(string hypothesisId)
+    {
+        if (_idByDedupeKey.Count == 0)
+        {
+            return;
+        }
+
+        List<string>? keysToRemove = null;
+        foreach (var kvp in _idByDedupeKey)
+        {
+            if (kvp.Value.Equals(hypothesisId, StringComparison.OrdinalIgnoreCase))
+            {
+                keysToRemove ??= [];
+                keysToRemove.Add(kvp.Key);
+            }
+        }
+
+        if (keysToRemove == null)
+        {
+            return;
+        }
+
+        foreach (var key in keysToRemove)
+        {
+            _idByDedupeKey.Remove(key);
+        }
     }
 
     /// <summary>

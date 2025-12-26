@@ -66,4 +66,50 @@ public class AiEvidenceLedgerTests
         Assert.True(ledger.ContainsEvidenceId("E10"));
         Assert.True(ledger.ContainsEvidenceId("e010"));
     }
+
+    [Fact]
+    public void AddOrUpdate_WhenUpdatingId_ChangesDedupeKey_AllowsOldKeyToBeAddedAgain()
+    {
+        var ledger = new AiEvidenceLedger(maxItems: 10);
+
+        ledger.AddOrUpdate(
+        [
+            new AiEvidenceLedgerItem { Id = "E1", Source = "s1", Finding = "f1" }
+        ]);
+
+        ledger.AddOrUpdate(
+        [
+            new AiEvidenceLedgerItem { Id = "E1", Source = "s2", Finding = "f2" }
+        ]);
+
+        var result = ledger.AddOrUpdate(
+        [
+            new AiEvidenceLedgerItem { Source = "s1", Finding = "f1" }
+        ]);
+
+        Assert.Equal(["E2"], result.AddedIds);
+        Assert.Equal(2, ledger.Items.Count);
+    }
+
+    [Fact]
+    public void AddOrUpdate_WhenProvidingIdForExistingSourceFinding_IgnoresDuplicate()
+    {
+        var ledger = new AiEvidenceLedger(maxItems: 10);
+
+        ledger.AddOrUpdate(
+        [
+            new AiEvidenceLedgerItem { Source = "s", Finding = "f" }
+        ]);
+
+        var result = ledger.AddOrUpdate(
+        [
+            new AiEvidenceLedgerItem { Id = "E99", Source = "s", Finding = "f" }
+        ]);
+
+        Assert.Empty(result.AddedIds);
+        Assert.Equal(1, result.IgnoredDuplicates);
+        Assert.Contains("E1", result.IgnoredDuplicateIds);
+        Assert.Single(ledger.Items);
+        Assert.False(ledger.ContainsEvidenceId("E99"));
+    }
 }

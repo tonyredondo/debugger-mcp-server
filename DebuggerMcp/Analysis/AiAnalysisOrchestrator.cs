@@ -236,6 +236,9 @@ public sealed class AiAnalysisOrchestrator(
         var evidenceLedger = new AiEvidenceLedger();
         var hypothesisTracker = new AiHypothesisTracker(evidenceLedger);
         var metaToolCallsExecuted = 0;
+        var baselineTracker = new BaselineEvidenceTracker();
+        var baselineCompleteLogged = false;
+        var metaBookkeepingDone = false;
 
         string? lastIterationAssistantText = null;
         string? lastModel = null;
@@ -537,6 +540,16 @@ public sealed class AiAnalysisOrchestrator(
                         duration = sw.Elapsed;
                     }
 
+                    if (toolName.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+                    {
+                        baselineTracker.ObserveReportGet(toolInput, outputForModel);
+                        if (!baselineCompleteLogged && baselineTracker.IsComplete)
+                        {
+                            baselineCompleteLogged = true;
+                            _logger.LogInformation("[AI] Baseline evidence completed at iteration {Iteration}.", iteration);
+                        }
+                    }
+
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
                     toolIndexByIteration[iteration] = toolOrdinal;
                     commandsExecuted.Add(new ExecutedCommand
@@ -620,7 +633,9 @@ public sealed class AiAnalysisOrchestrator(
 
             if (pendingAnalysisComplete != null)
             {
-                var otherToolsCoissued = rewrittenToolUses.Any(t => !string.Equals(t.Name, "analysis_complete", StringComparison.OrdinalIgnoreCase));
+                var otherToolsCoissued = rewrittenToolUses.Any(t =>
+                    !string.Equals(t.Name, "analysis_complete", StringComparison.OrdinalIgnoreCase)
+                    && !IsInternalMetaTool(t.Name));
 
                 if (!HasEvidenceToolCalls(commandsExecuted) || otherToolsCoissued)
                 {
@@ -760,7 +775,28 @@ public sealed class AiAnalysisOrchestrator(
                 return completed;
             }
 
+            if (!metaBookkeepingDone && baselineTracker.IsComplete)
+            {
+                var metaBookkeepingResult = await TryRunMetaBookkeepingAsync(
+                        passName: "analysis",
+                        systemPrompt: SystemPrompt,
+                        messages: messages,
+                        evidenceLedger: evidenceLedger,
+                        hypothesisTracker: hypothesisTracker,
+                        metaToolCallsExecuted: metaToolCallsExecuted,
+                        maxMetaToolCalls: maxMetaToolCalls,
+                        iteration: iteration,
+                        maxTokens: maxTokens,
+                        traceRunDir: traceRunDir,
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+
+                metaToolCallsExecuted = metaBookkeepingResult.MetaToolCallsExecuted;
+                metaBookkeepingDone = metaBookkeepingResult.Done;
+            }
+
             if (iteration < maxIterations
+                && baselineTracker.IsComplete
                 && ShouldCreateCheckpoint(
                     iteration: iteration,
                     maxIterations: maxIterations,
@@ -817,6 +853,286 @@ public sealed class AiAnalysisOrchestrator(
         AttachInvestigationState(synthesized, evidenceLedger, hypothesisTracker);
         WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", synthesized);
         return synthesized;
+    }
+
+    private static bool TryParseReportGetResponseHasError(string outputForModel, out bool hasError)
+    {
+        hasError = false;
+        if (string.IsNullOrWhiteSpace(outputForModel))
+        {
+            return false;
+        }
+
+        if (!TryParseFirstJsonObject(outputForModel, out var json))
+        {
+            return false;
+        }
+
+        hasError = json.TryGetProperty("error", out _);
+        return true;
+    }
+
+    private sealed class BaselineEvidenceTracker
+    {
+        private static readonly string[] RequiredPaths =
+        [
+            "metadata",
+            "analysis.summary",
+            "analysis.environment",
+            "analysis.exception.type",
+            "analysis.exception.message",
+            "analysis.exception.hResult",
+            "analysis.exception.stackTrace",
+            "analysis.exception.analysis"
+        ];
+
+        private readonly Dictionary<string, bool> _seen = new(StringComparer.OrdinalIgnoreCase);
+
+        public BaselineEvidenceTracker()
+        {
+            foreach (var path in RequiredPaths)
+            {
+                _seen[path] = false;
+            }
+        }
+
+        public bool IsComplete => _seen.Values.All(v => v);
+
+        public void ObserveReportGet(JsonElement toolInput, string outputForModel)
+        {
+            if (toolInput.ValueKind != JsonValueKind.Object)
+            {
+                return;
+            }
+
+            if (!toolInput.TryGetProperty("path", out var pathEl) || pathEl.ValueKind != JsonValueKind.String)
+            {
+                return;
+            }
+
+            var path = pathEl.GetString();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                return;
+            }
+
+            path = path.Trim();
+            if (!_seen.ContainsKey(path))
+            {
+                return;
+            }
+
+            if (!TryParseReportGetResponseHasError(outputForModel, out var hasError))
+            {
+                return;
+            }
+
+            if (hasError)
+            {
+                return;
+            }
+
+            _seen[path] = true;
+        }
+    }
+
+    private readonly record struct MetaBookkeepingResult(bool Done, int MetaToolCallsExecuted);
+
+    private async Task<MetaBookkeepingResult> TryRunMetaBookkeepingAsync(
+        string passName,
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker,
+        int metaToolCallsExecuted,
+        int maxMetaToolCalls,
+        int iteration,
+        int maxTokens,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(passName);
+        ArgumentNullException.ThrowIfNull(systemPrompt);
+        ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+
+        if (metaToolCallsExecuted >= maxMetaToolCalls)
+        {
+            _logger.LogDebug("[AI] Skipping meta bookkeeping: meta tool budget exceeded ({Used}/{Max}).", metaToolCallsExecuted, maxMetaToolCalls);
+            return new MetaBookkeepingResult(Done: true, MetaToolCallsExecuted: metaToolCallsExecuted);
+        }
+
+        var metaTools = SamplingTools
+            .GetCrashAnalysisTools()
+            .Where(t => IsInternalMetaTool(t.Name))
+            .ToList();
+
+        if (metaTools.Count == 0)
+        {
+            _logger.LogWarning("[AI] Skipping meta bookkeeping: no meta tools are registered.");
+            return new MetaBookkeepingResult(Done: true, MetaToolCallsExecuted: metaToolCallsExecuted);
+        }
+
+        var evidenceCountBefore = evidenceLedger.Items.Count;
+        var hypothesisCountBefore = hypothesisTracker.Hypotheses.Count;
+
+        var stateSnapshot = BuildStateSnapshotJson(evidenceLedger, hypothesisTracker);
+        var metaPrompt = $"""
+INTERNAL: Meta bookkeeping step for pass "{passName}".
+
+Goal: stabilize the investigation across iterations by maintaining a bounded evidence ledger and competing hypotheses.
+Do NOT gather new evidence in this step: do not call exec/report_get/inspect/get_thread_stack/analysis_complete.
+
+Use the meta tools to:
+1) Register 2-4 competing hypotheses (if none exist yet).
+2) Add evidence items for baseline findings already observed (exception type/message/hResult, top stack frame/IP, environment/runtime, etc.).
+3) Score/update hypotheses by linking supports/contradicts evidence IDs.
+
+Constraints:
+- Batch updates; do not spam (single assistant message with multiple tool calls is preferred).
+- Be grounded: cite sources from already executed tool calls (e.g., report_get(...) or exec(...)).
+- Keep strings concise (<=2048 chars each). Evidence<=15 items for this step.
+
+Current state snapshot (JSON):
+{stateSnapshot}
+""";
+
+        var requestMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = metaPrompt }
+                ]
+            }
+        };
+
+        CreateMessageResult? response = null;
+        Exception? lastError = null;
+
+        for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
+        {
+            var request = new CreateMessageRequestParams
+            {
+                SystemPrompt = systemPrompt,
+                Messages = requestMessages,
+                MaxTokens = maxTokens,
+                Tools = metaTools,
+                ToolChoice = new ToolChoice { Mode = "required" }
+            };
+
+            try
+            {
+                _logger.LogInformation("[AI] Meta bookkeeping at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})...", iteration, attempt, MaxSamplingRequestAttempts);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-meta-bookkeeping-request.json", BuildTraceRequest(iteration, request));
+                response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-meta-bookkeeping-response.json", BuildTraceResponse(iteration, response));
+
+                if (response.Content != null && response.Content.Count > 0)
+                {
+                    break;
+                }
+
+                lastError = new InvalidOperationException("Meta bookkeeping returned empty content.");
+            }
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+            {
+                lastError = ex;
+                _logger.LogWarning(ex, "[AI] Meta bookkeeping failed at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", iteration, attempt, MaxSamplingRequestAttempts);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-meta-bookkeeping-error.json", new { passName, iteration, attempt, error = ex.ToString(), message = ex.Message });
+            }
+        }
+
+        if (response?.Content == null || response.Content.Count == 0)
+        {
+            _logger.LogWarning("[AI] Meta bookkeeping skipped: no response content. Error={Message}", lastError?.Message);
+            return new MetaBookkeepingResult(Done: false, MetaToolCallsExecuted: metaToolCallsExecuted);
+        }
+
+        messages.Add(new SamplingMessage
+        {
+            Role = Role.Assistant,
+            Content = response.Content
+        });
+
+        var toolUses = response.Content.OfType<ToolUseContentBlock>().ToList();
+        if (toolUses.Count == 0)
+        {
+            _logger.LogWarning("[AI] Meta bookkeeping response contained no tool calls.");
+            return new MetaBookkeepingResult(Done: false, MetaToolCallsExecuted: metaToolCallsExecuted);
+        }
+
+        var respondedToolUseIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var toolUse in toolUses)
+        {
+            var toolName = (toolUse.Name ?? string.Empty).Trim();
+            if (!IsInternalMetaTool(toolName))
+            {
+                continue;
+            }
+
+            var toolUseId = toolUse.Id;
+            if (string.IsNullOrWhiteSpace(toolUseId))
+            {
+                continue;
+            }
+
+            string outputForModel;
+            if (metaToolCallsExecuted >= maxMetaToolCalls)
+            {
+                outputForModel = TruncateForModel(
+                    JsonSerializer.Serialize(new
+                    {
+                        ignored = true,
+                        reason = "meta_tool_budget_exceeded",
+                        maxMetaToolCalls,
+                        tool = toolName
+                    }));
+            }
+            else
+            {
+                var output = ExecuteInternalMetaTool(toolName, toolUse.Input, evidenceLedger, hypothesisTracker);
+                metaToolCallsExecuted++;
+                outputForModel = TruncateForModel(output);
+            }
+
+            messages.Add(new SamplingMessage
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new ToolResultContentBlock
+                    {
+                        ToolUseId = toolUseId,
+                        IsError = false,
+                        Content =
+                        [
+                            new TextContentBlock { Text = outputForModel }
+                        ]
+                    }
+                ]
+            });
+
+            respondedToolUseIds.Add(toolUseId);
+        }
+
+        PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
+
+        var changed = evidenceLedger.Items.Count != evidenceCountBefore || hypothesisTracker.Hypotheses.Count != hypothesisCountBefore;
+        if (!changed)
+        {
+            _logger.LogWarning(
+                "[AI] Meta bookkeeping did not change state (evidence {EvidenceBefore}->{EvidenceAfter}, hypotheses {HypBefore}->{HypAfter}).",
+                evidenceCountBefore,
+                evidenceLedger.Items.Count,
+                hypothesisCountBefore,
+                hypothesisTracker.Hypotheses.Count);
+        }
+
+        return new MetaBookkeepingResult(Done: true, MetaToolCallsExecuted: metaToolCallsExecuted);
     }
 
     private static void PruneUnrespondedToolUsesFromLastAssistantMessage(

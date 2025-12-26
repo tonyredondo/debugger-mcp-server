@@ -13,6 +13,225 @@ namespace DebuggerMcp.Tests.Analysis;
 
 public class AiAnalysisOrchestratorTests
 {
+    private const string MinimalBaselineReportJson = """
+    {
+      "metadata": { "debuggerType": "LLDB" },
+      "analysis": {
+        "summary": {
+          "crashType": ".NET Managed Exception",
+          "description": "x",
+          "recommendations": [],
+          "threadCount": 1,
+          "moduleCount": 1,
+          "assemblyCount": 1
+        },
+        "environment": {
+          "platform": { "os": "Linux" },
+          "runtime": { "type": "CoreCLR" },
+          "process": { "arguments": ["dotnet"] },
+          "nativeAot": { "isNativeAot": false }
+        },
+        "exception": {
+          "type": "System.Exception",
+          "message": "boom",
+          "hResult": "0x1",
+          "stackTrace": [],
+          "analysis": {}
+        }
+      }
+    }
+    """;
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenBaselineEvidenceCompletes_ForcesMetaBookkeepingWithMetaToolsOnly()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { hypothesis = "Assembly version mismatch", confidence = "unknown" },
+                        new { hypothesis = "ReadyToRun/JIT bug", confidence = "unknown" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { source = "report_get(path=\"analysis.exception.type\")", finding = "Exception type is System.Exception" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "report_get(path=\"analysis.exception.type\") -> System.Exception"
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var fullReportJson = """
+        {
+          "metadata": { "debuggerType": "LLDB" },
+          "analysis": {
+            "summary": {
+              "crashType": ".NET Managed Exception",
+              "description": "x",
+              "recommendations": [],
+              "threadCount": 1,
+              "moduleCount": 1,
+              "assemblyCount": 1
+            },
+            "environment": {
+              "platform": { "os": "Linux" },
+              "runtime": { "type": "CoreCLR" },
+              "process": { "arguments": ["dotnet"] },
+              "nativeAot": { "isNativeAot": false }
+            },
+            "exception": {
+              "type": "System.Exception",
+              "message": "boom",
+              "hResult": "0x1",
+              "stackTrace": [
+                {
+                  "frameNumber": 0,
+                  "instructionPointer": "0x1",
+                  "module": "a",
+                  "function": "f",
+                  "sourceFile": "x.cs",
+                  "lineNumber": 1,
+                  "isManaged": true
+                }
+              ],
+              "analysis": { "message": "boom" }
+            }
+          }
+        }
+        """;
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            fullReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("done", result.RootCause);
+        Assert.NotNull(result.EvidenceLedger);
+        Assert.NotEmpty(result.EvidenceLedger!);
+        Assert.NotNull(result.Hypotheses);
+        Assert.True(result.Hypotheses!.Count >= 1);
+
+        Assert.True(requests.Count >= 2);
+        var metaRequest = requests[1];
+        Assert.NotNull(metaRequest.ToolChoice);
+        Assert.Equal("required", metaRequest.ToolChoice!.Mode);
+        Assert.NotNull(metaRequest.Tools);
+        var toolNames = metaRequest.Tools!.Select(t => t.Name).ToList();
+        Assert.Equal(3, toolNames.Count);
+        Assert.Contains(toolNames, name => string.Equals("analysis_evidence_add", name, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(toolNames, name => string.Equals("analysis_hypothesis_register", name, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(toolNames, name => string.Equals("analysis_hypothesis_score", name, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(toolNames, name => string.Equals("report_get", name, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(toolNames, name => string.Equals("exec", name, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(toolNames, name => string.Equals("analysis_complete", name, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenMetaToolsPopulateEvidenceAndHypotheses_AttachesStateAndAcceptsEvidenceIds()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new
+            {
+                path = "analysis.exception.type"
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new
+                        {
+                            source = "report_get(path=\"analysis.exception.type\")",
+                            finding = "System.MissingMethodException"
+                        }
+                    }
+                }, Id: null),
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new
+                        {
+                            hypothesis = "Assembly mismatch caused MissingMethodException",
+                            confidence = "unknown"
+                        }
+                    }
+                }, Id: null),
+                (Name: "analysis_complete", Input: new
+                {
+                    rootCause = "rc",
+                    confidence = "low",
+                    reasoning = "because",
+                    evidence = new[] { "E1" }
+                }, Id: null)));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{\"analysis\":{\"exception\":{\"type\":\"System.MissingMethodException\"}}}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("rc", result.RootCause);
+        Assert.NotNull(result.Evidence);
+        Assert.Contains(result.Evidence!, e => e.StartsWith("E1", StringComparison.OrdinalIgnoreCase));
+
+        Assert.NotNull(result.EvidenceLedger);
+        Assert.Contains(result.EvidenceLedger!, e => string.Equals("E1", e.Id, StringComparison.OrdinalIgnoreCase));
+
+        Assert.NotNull(result.Hypotheses);
+        Assert.Contains(result.Hypotheses!, h => string.Equals("H1", h.Id, StringComparison.OrdinalIgnoreCase));
+    }
+
     [Fact]
     public async Task AnalyzeCrashAsync_WhenModelRepeatsInvalidHighConfidenceAnalysisComplete_AutoFinalizesWithDowngradedConfidence()
     {
@@ -967,7 +1186,32 @@ public class AiAnalysisOrchestratorTests
     {
         var requests = new List<CreateMessageRequestParams>();
         var sampling = new SequencedCapturingSamplingClient(requests)
-            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_evidence_add", new { items = Array.Empty<object>() }))
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
             .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
             {
@@ -1012,25 +1256,25 @@ public class AiAnalysisOrchestratorTests
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            "{}",
+            MinimalBaselineReportJson,
             debugger,
             clrMdAnalyzer: null);
 
         Assert.Equal("done", result.RootCause);
         Assert.Equal(2, debugger.ExecutedCommands.Count);
-        Assert.Equal(4, requests.Count);
+        Assert.Equal(5, requests.Count);
 
-        Assert.NotNull(requests[2].ToolChoice);
-        Assert.Equal("required", requests[2].ToolChoice!.Mode);
-        Assert.Contains(requests[2].Tools!, t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase));
-        Assert.Equal(512, requests[2].MaxTokens);
+        Assert.NotNull(requests[3].ToolChoice);
+        Assert.Equal("required", requests[3].ToolChoice!.Mode);
+        Assert.Contains(requests[3].Tools!, t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal(512, requests[3].MaxTokens);
         Assert.Contains(
-            requests[2].Messages!.SelectMany(m => m.Content?.OfType<ToolResultContentBlock>() ?? []),
+            requests[3].Messages!.SelectMany(m => m.Content?.OfType<ToolResultContentBlock>() ?? []),
             tr => !string.IsNullOrWhiteSpace(tr.ToolUseId));
 
-        Assert.NotNull(requests[3].Messages);
-        Assert.NotEmpty(requests[3].Messages);
-        var checkpointCarry = requests[3].Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
+        Assert.NotNull(requests[4].Messages);
+        Assert.NotEmpty(requests[4].Messages);
+        var checkpointCarry = requests[4].Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
         Assert.Contains("Checkpoint JSON", checkpointCarry, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"facts\"", checkpointCarry, StringComparison.Ordinal);
     }
@@ -1056,7 +1300,32 @@ public class AiAnalysisOrchestratorTests
 
         var requests = new List<CreateMessageRequestParams>();
         var sampling = new SequencedCapturingSamplingClient(requests)
-            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_evidence_add", new { items = Array.Empty<object>() }))
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
             .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", checkpointPayload))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
@@ -1085,18 +1354,143 @@ public class AiAnalysisOrchestratorTests
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            "{}",
+            MinimalBaselineReportJson,
             debugger,
             clrMdAnalyzer: null);
 
         Assert.Equal("done", result.RootCause);
         Assert.Equal(2, debugger.ExecutedCommands.Count);
-        Assert.Equal(4, requests.Count);
+        Assert.Equal(5, requests.Count);
 
-        var carryText = requests[3].Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
+        var carryText = requests[4].Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
         Assert.True(carryText.Length > 20_000, $"Expected carry-forward message to exceed 20k chars, got {carryText.Length}.");
         Assert.DoesNotContain("Checkpoint synthesis unavailable", carryText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("FACT-49:", carryText, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_CheckpointCarryForward_IncludesStableStateSnapshot()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            // Iteration 1: gather evidence + populate internal state (E1/H1).
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.type"
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new
+                        {
+                            source = "report_get(path=\"analysis.exception.type\")",
+                            finding = "System.MissingMethodException"
+                        }
+                    }
+                }, Id: null),
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new
+                        {
+                            hypothesis = "Assembly mismatch caused MissingMethodException",
+                            confidence = "unknown"
+                        }
+                    }
+                }, Id: null)))
+            // Forced meta bookkeeping request (meta tools only).
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_hypothesis_score", new
+            {
+                updates = new object[]
+                {
+                    new
+                    {
+                        id = "H1",
+                        confidence = "unknown",
+                        supportsEvidenceIds = new[] { "E1" },
+                        notes = "Carry forward baseline findings."
+                    }
+                }
+            }))
+            // Checkpoint synthesis request.
+            .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
+            {
+                facts = new[] { "f1" },
+                hypotheses = new object[]
+                {
+                    new { hypothesis = "Assembly mismatch caused MissingMethodException", confidence = "unknown", evidence = Array.Empty<string>(), unknowns = Array.Empty<string>() }
+                },
+                evidence = new object[]
+                {
+                    new { id = "E1", source = "report_get(path=\"analysis.exception.type\")", finding = "System.MissingMethodException" }
+                },
+                doNotRepeat = new[] { "report_get(path=\"analysis.exception.type\")" },
+                nextSteps = new object[]
+                {
+                    new { tool = "report_get", call = "report_get(path=\"analysis.exception.stackTrace\", limit=10)", why = "Confirm crash context" }
+                }
+            }))
+            // Iteration 2: finish.
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[] { "E1" }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 2,
+            CheckpointEveryIterations = 1,
+            CheckpointMaxTokens = 256
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("done", result.RootCause);
+        Assert.Equal(4, requests.Count);
+
+        var iteration2 = requests[3];
+        Assert.NotNull(iteration2.Messages);
+        Assert.NotEmpty(iteration2.Messages);
+
+        var carryForward = iteration2.Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
+        Assert.Contains("Checkpoint JSON", carryForward, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Stable state JSON (evidence ledger + hypotheses):", carryForward, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"evidenceLedger\"", carryForward, StringComparison.Ordinal);
+        Assert.Contains("\"hypotheses\"", carryForward, StringComparison.Ordinal);
+        Assert.Contains("\"id\":\"E1\"", carryForward, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("\"id\":\"H1\"", carryForward, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -1104,7 +1498,32 @@ public class AiAnalysisOrchestratorTests
     {
         var requests = new List<CreateMessageRequestParams>();
         var sampling = new ThrowingCheckpointSamplingClient(requests)
-            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_evidence_add", new { items = Array.Empty<object>() }))
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {
@@ -1132,13 +1551,13 @@ public class AiAnalysisOrchestratorTests
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            "{}",
+            MinimalBaselineReportJson,
             debugger,
             clrMdAnalyzer: null);
 
         Assert.Equal("done", result.RootCause);
         Assert.Equal(2, debugger.ExecutedCommands.Count);
-        Assert.True(requests.Count >= 4);
+        Assert.True(requests.Count >= 5);
 
         var last = requests.Last();
         var carryText = last.Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
@@ -1150,7 +1569,32 @@ public class AiAnalysisOrchestratorTests
     {
         var requests = new List<CreateMessageRequestParams>();
         var sampling = new SequencedCapturingSamplingClient(requests)
-            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_evidence_add", new { items = Array.Empty<object>() }))
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!b" }))
             .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
             {
@@ -1198,21 +1642,21 @@ public class AiAnalysisOrchestratorTests
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            "{}",
+            MinimalBaselineReportJson,
             debugger,
             clrMdAnalyzer: null);
 
         Assert.Equal("done", result.RootCause);
         Assert.Equal(4, debugger.ExecutedCommands.Count);
-        Assert.Equal(7, requests.Count);
+        Assert.Equal(8, requests.Count);
 
-        Assert.NotNull(requests[2].Messages);
-        Assert.NotEmpty(requests[2].Messages);
+        Assert.NotNull(requests[3].Messages);
+        Assert.NotEmpty(requests[3].Messages);
         Assert.Contains(
-            requests[2].Messages.SelectMany(m => m.Content?.OfType<ToolResultContentBlock>() ?? []),
+            requests[3].Messages.SelectMany(m => m.Content?.OfType<ToolResultContentBlock>() ?? []),
             tr => !string.IsNullOrWhiteSpace(tr.ToolUseId));
 
-        var secondCheckpointRequest = requests[5];
+        var secondCheckpointRequest = requests[6];
         Assert.NotNull(secondCheckpointRequest.Messages);
         Assert.Equal(2, secondCheckpointRequest.Messages.Count);
         Assert.DoesNotContain(

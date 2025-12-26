@@ -82,5 +82,51 @@ public class AiHypothesisTrackerTests
         Assert.Equal(["E2"], h.ContradictsEvidenceIds);
         Assert.Equal("Updated after reviewing evidence", h.Notes);
     }
-}
 
+    [Fact]
+    public void Register_WhenUpdatingId_ChangesDedupeKey_AllowsOldHypothesisAgain()
+    {
+        var ledger = new AiEvidenceLedger(maxItems: 10);
+        var tracker = new AiHypothesisTracker(ledger, maxHypotheses: 10);
+
+        tracker.Register(
+        [
+            new AiHypothesis { Id = "H1", Hypothesis = "Hypothesis A", Confidence = "low" }
+        ]);
+
+        tracker.Register(
+        [
+            new AiHypothesis { Id = "H1", Hypothesis = "Hypothesis B", Confidence = "low" }
+        ]);
+
+        var result = tracker.Register(
+        [
+            new AiHypothesis { Hypothesis = "Hypothesis A", Confidence = "low" }
+        ]);
+
+        Assert.Equal(["H2"], result.AddedIds);
+        Assert.Equal(2, tracker.Hypotheses.Count);
+    }
+
+    [Fact]
+    public void Register_WhenProvidingNewIdForDuplicateHypothesis_IgnoresDuplicate()
+    {
+        var ledger = new AiEvidenceLedger(maxItems: 10);
+        var tracker = new AiHypothesisTracker(ledger, maxHypotheses: 10);
+
+        tracker.Register(
+        [
+            new AiHypothesis { Hypothesis = "Hypothesis A", Confidence = "low" }
+        ]);
+
+        var result = tracker.Register(
+        [
+            new AiHypothesis { Id = "H99", Hypothesis = "Hypothesis A", Confidence = "low" }
+        ]);
+
+        Assert.Empty(result.AddedIds);
+        Assert.Equal(1, result.IgnoredDuplicates);
+        Assert.Contains("H1", result.IgnoredDuplicateIds);
+        Assert.Single(tracker.Hypotheses);
+    }
+}

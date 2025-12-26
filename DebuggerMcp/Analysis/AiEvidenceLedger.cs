@@ -82,9 +82,25 @@ internal sealed class AiEvidenceLedger
             {
                 if (_itemsById.TryGetValue(providedId, out var existing))
                 {
+                    if (_idByDedupeKey.TryGetValue(dedupeKey, out var idForKey)
+                        && !idForKey.Equals(providedId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        result.IgnoredDuplicates++;
+                        result.IgnoredDuplicateIds.Add(idForKey);
+                        continue;
+                    }
+
+                    RemoveAllDedupeKeysForId(providedId);
                     UpdateExisting(existing, source, finding, whyItMatters, tags);
                     _idByDedupeKey[dedupeKey] = providedId;
                     result.UpdatedIds.Add(providedId);
+                    continue;
+                }
+
+                if (_idByDedupeKey.TryGetValue(dedupeKey, out var existingIdForKey))
+                {
+                    result.IgnoredDuplicates++;
+                    result.IgnoredDuplicateIds.Add(existingIdForKey);
                     continue;
                 }
 
@@ -118,6 +134,11 @@ internal sealed class AiEvidenceLedger
 
             if (_idByDedupeKey.TryGetValue(dedupeKey, out var existingId))
             {
+                if (_itemsById.TryGetValue(existingId, out var existing))
+                {
+                    UpdateExisting(existing, source, finding, whyItMatters, tags);
+                }
+
                 result.IgnoredDuplicates++;
                 result.IgnoredDuplicateIds.Add(existingId);
                 continue;
@@ -148,12 +169,92 @@ internal sealed class AiEvidenceLedger
         return result;
     }
 
+    private void RemoveAllDedupeKeysForId(string evidenceId)
+    {
+        if (_idByDedupeKey.Count == 0)
+        {
+            return;
+        }
+
+        List<string>? keysToRemove = null;
+        foreach (var kvp in _idByDedupeKey)
+        {
+            if (kvp.Value.Equals(evidenceId, StringComparison.OrdinalIgnoreCase))
+            {
+                keysToRemove ??= [];
+                keysToRemove.Add(kvp.Key);
+            }
+        }
+
+        if (keysToRemove == null)
+        {
+            return;
+        }
+
+        foreach (var key in keysToRemove)
+        {
+            _idByDedupeKey.Remove(key);
+        }
+    }
+
     private static void UpdateExisting(AiEvidenceLedgerItem target, string source, string finding, string? whyItMatters, List<string>? tags)
     {
         target.Source = source;
         target.Finding = finding;
-        target.WhyItMatters = whyItMatters;
-        target.Tags = tags;
+
+        if (whyItMatters != null)
+        {
+            target.WhyItMatters = whyItMatters;
+        }
+
+        if (tags != null)
+        {
+            target.Tags = MergeTags(target.Tags, tags);
+        }
+    }
+
+    private static List<string>? MergeTags(List<string>? existing, List<string> incoming)
+    {
+        if (incoming.Count == 0)
+        {
+            return existing;
+        }
+
+        if (existing == null || existing.Count == 0)
+        {
+            return incoming;
+        }
+
+        var merged = new List<string>(existing.Count + incoming.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var t in existing)
+        {
+            if (string.IsNullOrWhiteSpace(t))
+            {
+                continue;
+            }
+
+            if (seen.Add(t))
+            {
+                merged.Add(t);
+            }
+        }
+
+        foreach (var t in incoming)
+        {
+            if (string.IsNullOrWhiteSpace(t))
+            {
+                continue;
+            }
+
+            if (seen.Add(t))
+            {
+                merged.Add(t);
+            }
+        }
+
+        return merged.Count == 0 ? null : merged;
     }
 
     private static string NormalizeField(string? value, int maxChars)
@@ -317,4 +418,3 @@ internal sealed class AiEvidenceLedgerAddResult
     /// </summary>
     public int IgnoredAtCapacity { get; set; }
 }
-
