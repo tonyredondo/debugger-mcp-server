@@ -187,6 +187,63 @@ public class JsonHtmlReportRendererCoverageTests
     }
 
     [Fact]
+    public void Render_WhenFrameHasSourceContextStartLine_EmitsLineNumberAttributes()
+    {
+        var reportJson = """
+        {
+          "metadata": { "dumpId": "d1", "debuggerType": "LLDB" },
+          "analysis": {
+            "summary": { "crashType": ".NET Managed Exception", "description": "x" },
+            "threads": {
+              "faultingThread": {
+                "threadId": "t1",
+                "managedThreadId": 1,
+                "osThreadId": "123",
+                "state": "SIGABRT",
+                "callStack": [
+                  {
+                    "frameNumber": 0,
+                    "instructionPointer": "0x1",
+                    "module": "System.Private.CoreLib",
+                    "function": "System.Runtime.EH.DispatchEx(System.Runtime.StackFrameIterator ByRef, ExInfo ByRef)",
+                    "isManaged": true,
+                    "sourceFile": "/_/src/coreclr/nativeaot/Runtime.Base/src/System/Runtime/ExceptionHandling.cs",
+                    "lineNumber": 865,
+                    "sourceContext": {
+                      "status": "remote",
+                      "startLine": 862,
+                      "endLine": 868,
+                      "lines": [
+                        "line 862",
+                        "line 863",
+                        "line 864",
+                        "line 865",
+                        "line 866",
+                        "line 867",
+                        "line 868"
+                      ]
+                    }
+                  }
+                ]
+              },
+              "all": []
+            }
+          }
+        }
+        """;
+
+        var options = ReportOptions.FullReport;
+        options.Format = ReportFormat.Html;
+        options.IncludeRawJsonDetails = false;
+
+        var html = JsonHtmlReportRenderer.Render(reportJson, options);
+
+        Assert.Contains("data-show-linenos=\"true\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-start-line=\"862\"", html, StringComparison.Ordinal);
+        Assert.Contains("data-focus-line=\"865\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Render_WhenArraysContainNonObjectEntries_SkipsThoseElements()
     {
         var root = System.Text.Json.Nodes.JsonNode.Parse(JsonMarkdownReportRendererCoverageTests.BuildCanonicalReportJson())!.AsObject();

@@ -953,18 +953,89 @@ internal static class JsonHtmlReportRenderer
             }
           }
 
+          function parseIntOrNull(value) {
+            if (value === null || value === undefined) return null;
+            const n = Number.parseInt(String(value), 10);
+            return Number.isFinite(n) ? n : null;
+          }
+
+          function splitTokensToLines(tokens) {
+            const lines = [[]];
+            for (const t of tokens) {
+              const cls = t[0];
+              const val = t[1] ?? "";
+              const parts = String(val).split("\n");
+              for (let i = 0; i < parts.length; i++) {
+                const part = parts[i];
+                if (part) lines[lines.length - 1].push([cls, part]);
+                if (i < parts.length - 1) lines.push([]);
+              }
+            }
+
+            // Drop trailing empty line caused by ending newline.
+            if (lines.length > 1 && lines[lines.length - 1].length === 0) lines.pop();
+            return lines;
+          }
+
+          function renderTokensWithLineNumbers(code, tokens, startLine, focusLine) {
+            code.textContent = "";
+            code.classList.add("with-linenos");
+
+            const lines = splitTokensToLines(tokens);
+            const base = Number.isFinite(startLine) ? startLine : 1;
+            const focus = Number.isFinite(focusLine) ? focusLine : null;
+
+            for (let i = 0; i < lines.length; i++) {
+              const lineNo = base + i;
+              const row = document.createElement("div");
+              row.className = "code-line";
+              row.dataset.line = String(lineNo);
+              if (focus !== null && lineNo === focus) row.classList.add("focus");
+
+              const ln = document.createElement("span");
+              ln.className = "code-lineno";
+              ln.textContent = String(lineNo);
+
+              const content = document.createElement("span");
+              content.className = "code-content";
+
+              for (const t of lines[i]) {
+                const cls = t[0];
+                const val = t[1];
+                if (!cls) {
+                  content.appendChild(document.createTextNode(val));
+                  continue;
+                }
+                const span = document.createElement("span");
+                span.className = cls;
+                span.textContent = val;
+                content.appendChild(span);
+              }
+
+              row.appendChild(ln);
+              row.appendChild(content);
+              code.appendChild(row);
+            }
+          }
+
           function highlightSourceCode() {
             document.querySelectorAll("code.source-code").forEach((code) => {
               if (!(code instanceof HTMLElement)) return;
               if (code.dataset.highlighted === "true") return;
               const lang = (code.dataset.lang || "").toLowerCase();
-              if (!lang || lang === "text") return;
+              const showLineNos = (code.dataset.showLinenos || "").toLowerCase() === "true";
               const text = code.textContent || "";
               let tokens = null;
               if (lang === "csharp") tokens = tokenizeCSharp(text);
               else if (lang === "json") tokens = tokenizeJson(text);
+              else if (showLineNos) tokens = [[null, text]];
               if (!tokens) return;
-              renderTokens(code, tokens);
+
+              const startLine = parseIntOrNull(code.dataset.startLine);
+              const focusLine = parseIntOrNull(code.dataset.focusLine);
+              if (showLineNos) renderTokensWithLineNumbers(code, tokens, startLine, focusLine);
+              else renderTokens(code, tokens);
+
               code.dataset.highlighted = "true";
             });
           }
@@ -1204,7 +1275,6 @@ internal static class JsonHtmlReportRenderer
             return;
         }
 
-        var frameNumber = GetString(frame, "frameNumber");
         var module = GetString(frame, "module");
         var function = GetString(frame, "function");
         var ip = GetString(frame, "instructionPointer");
@@ -1218,10 +1288,6 @@ internal static class JsonHtmlReportRenderer
         sb.AppendLine("<div class=\"frame-title\">");
         sb.AppendLine("<span class=\"badge " + (managed ? "managed" : "native") + "\">" + (managed ? "managed" : "native") + "</span>");
         sb.AppendLine("<code>" + HttpUtility.HtmlEncode(module) + "!" + HttpUtility.HtmlEncode(function) + "</code>");
-        if (!string.IsNullOrWhiteSpace(frameNumber))
-        {
-            sb.AppendLine("<span class=\"muted\">#</span><code>" + HttpUtility.HtmlEncode(frameNumber) + "</code>");
-        }
         sb.AppendLine("</div>");
 
         var hasIp = !string.IsNullOrWhiteSpace(ip);
@@ -1277,13 +1343,18 @@ internal static class JsonHtmlReportRenderer
                 var lang = GuessFenceLanguage(frame);
                 if (sc.TryGetProperty("lines", out var linesElem) && linesElem.ValueKind == JsonValueKind.Array)
                 {
-                var langClass = string.IsNullOrEmpty(lang) ? "language-text" : "language-" + lang;
-                sb.AppendLine("<pre class=\"code source\"><code class=\"" + HttpUtility.HtmlEncode(langClass + " source-code") + "\" data-lang=\"" + HttpUtility.HtmlEncode(string.IsNullOrEmpty(lang) ? "text" : lang) + "\">");
-                foreach (var line in linesElem.EnumerateArray())
-                {
-                    sb.AppendLine(HttpUtility.HtmlEncode(line.GetString() ?? string.Empty));
-                }
-                sb.AppendLine("</code></pre>");
+                    var langClass = string.IsNullOrEmpty(lang) ? "language-text" : "language-" + lang;
+                    var startLine = GetLongFlexible(sc, "startLine");
+                    var focusLine = GetLongFlexible(frame, "lineNumber");
+                    sb.AppendLine("<pre class=\"code source\"><code class=\"" + HttpUtility.HtmlEncode(langClass + " source-code") + "\" data-lang=\"" + HttpUtility.HtmlEncode(string.IsNullOrEmpty(lang) ? "text" : lang) + "\" data-show-linenos=\"true\"" +
+                                  (startLine.HasValue ? " data-start-line=\"" + HttpUtility.HtmlEncode(startLine.Value.ToString(CultureInfo.InvariantCulture)) + "\"" : string.Empty) +
+                                  (focusLine.HasValue ? " data-focus-line=\"" + HttpUtility.HtmlEncode(focusLine.Value.ToString(CultureInfo.InvariantCulture)) + "\"" : string.Empty) +
+                                  ">");
+                    foreach (var line in linesElem.EnumerateArray())
+                    {
+                        sb.AppendLine(HttpUtility.HtmlEncode(line.GetString() ?? string.Empty));
+                    }
+                    sb.AppendLine("</code></pre>");
                 }
                 else if (sc.TryGetProperty("error", out var err) && err.ValueKind == JsonValueKind.String)
                 {
@@ -2199,6 +2270,13 @@ internal static class JsonHtmlReportRenderer
         pre.code code { font-size: inherit; }
         .code.wrap { white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
         .code.wrap code { white-space: pre-wrap; }
+        pre.code.source code.with-linenos { display: block; }
+        pre.code.source code.with-linenos .code-line { display: grid; grid-template-columns: 56px 1fr; gap: 12px; align-items: start; padding: 2px 8px; border-radius: 8px; }
+        pre.code.source code.with-linenos .code-line.focus { background: rgba(122,162,255,0.10); }
+        :root[data-theme="light"] pre.code.source code.with-linenos .code-line.focus { background: rgba(37,99,235,0.08); }
+        pre.code.source code.with-linenos .code-lineno { color: var(--muted); text-align: right; user-select: none; font-variant-numeric: tabular-nums; padding-right: 10px; border-right: 1px solid rgba(37,48,90,0.55); }
+        :root[data-theme="light"] pre.code.source code.with-linenos .code-lineno { border-right-color: rgba(17,24,39,0.12); }
+        pre.code.source code.with-linenos .code-content { white-space: pre; overflow-wrap: normal; word-break: normal; }
         code { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; }
         a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; word-break: break-word; }
         a:hover { text-decoration: underline; }
