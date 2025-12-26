@@ -5,6 +5,7 @@ using DebuggerMcp.Security;
 using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace DebuggerMcp.McpTools;
 
@@ -27,6 +28,10 @@ public class ReportTools(
     ILogger<ReportTools> logger)
     : DebuggerToolsBase(sessionManager, symbolManager, watchStore, logger)
 {
+    private readonly AiAnalysisDiskCache _aiDiskCache = new(
+        sessionManager.GetDumpStoragePath(),
+        NullLogger<AiAnalysisDiskCache>.Instance);
+
     /// <summary>
     /// Generates a comprehensive crash analysis report.
     /// </summary>
@@ -98,6 +103,14 @@ public class ReportTools(
             IncludeCharts = true,
             MaxCallStackFrames = maxStackFrames
         };
+
+        // For markdown/html, render from an existing canonical JSON report when possible.
+        // This allows reuse of AI-enriched reports (analysis.aiAnalysis + rewritten summary) without rerunning analysis.
+        if (reportFormat != ReportFormat.Json)
+        {
+            var reportJson = await EnsureCachedCanonicalReportJsonAsync(sessionId, sanitizedUserId, session, includeWatches, includeSecurity).ConfigureAwait(false);
+            return new ReportService().RenderFromJson(reportJson, options);
+        }
 
         // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
@@ -250,6 +263,29 @@ public class ReportTools(
         if (session.TryGetCachedReport(dumpId, requireWatches: includeWatches, requireSecurity: includeSecurity, requireAllFrames: true, out var cached))
         {
             return cached;
+        }
+
+        var aiCached = await _aiDiskCache.TryReadAsync(
+                userId,
+                dumpId,
+                llmKey: null,
+                requireWatches: includeWatches,
+                requireSecurity: includeSecurity,
+                requireAllFrames: true)
+            .ConfigureAwait(false);
+
+        if (aiCached != null)
+        {
+            session.SetCachedReport(
+                aiCached.Metadata.DumpId,
+                aiCached.Metadata.GeneratedAtUtc,
+                aiCached.ReportJson,
+                includesWatches: aiCached.Metadata.IncludesWatches,
+                includesSecurity: aiCached.Metadata.IncludesSecurity,
+                maxStackFrames: aiCached.Metadata.MaxStackFrames,
+                includesAiAnalysis: aiCached.Metadata.IncludesAiAnalysis);
+
+            return aiCached.ReportJson;
         }
 
         // Fall back to generating a canonical report document and caching it.

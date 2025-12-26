@@ -973,14 +973,39 @@ public class McpClient : IMcpClient
     }
 
     /// <inheritdoc/>
-    public async Task<string> AnalyzeAiAsync(string sessionId, string userId, CancellationToken cancellationToken = default)
+    public async Task<string> AnalyzeAiAsync(
+        string sessionId,
+        string userId,
+        bool refreshCache = false,
+        string? llmProvider = null,
+        string? llmModel = null,
+        string? llmReasoningEffort = null,
+        CancellationToken cancellationToken = default)
     {
-        return await CallToolAsync("analyze", new Dictionary<string, object?>
+        var args = new Dictionary<string, object?>
         {
             ["kind"] = "ai",
             ["sessionId"] = sessionId,
-            ["userId"] = userId
-        }, cancellationToken);
+            ["userId"] = userId,
+            ["refreshCache"] = refreshCache
+        };
+
+        if (!string.IsNullOrWhiteSpace(llmProvider))
+        {
+            args["llmProvider"] = llmProvider;
+        }
+
+        if (!string.IsNullOrWhiteSpace(llmModel))
+        {
+            args["llmModel"] = llmModel;
+        }
+
+        if (!string.IsNullOrWhiteSpace(llmReasoningEffort))
+        {
+            args["llmReasoningEffort"] = llmReasoningEffort;
+        }
+
+        return await CallToolAsync("analyze", args, cancellationToken);
     }
 
 

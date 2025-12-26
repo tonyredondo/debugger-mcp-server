@@ -30,6 +30,9 @@ public sealed class AiAnalysisTools(
     : DebuggerToolsBase(sessionManager, symbolManager, watchStore, logger)
 {
     private readonly ILoggerFactory _loggerFactory = loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory));
+    private readonly AiAnalysisDiskCache _diskCache = new(
+        sessionManager.GetDumpStoragePath(),
+        (loggerFactory ?? throw new ArgumentNullException(nameof(loggerFactory))).CreateLogger<AiAnalysisDiskCache>());
 
     /// <summary>
     /// Performs AI-powered deep crash analysis using a server-driven sampling loop.
@@ -51,6 +54,10 @@ public sealed class AiAnalysisTools(
         [Description("Maximum output tokens per sampling request (default: 8192)")] int maxTokens = 8192,
         [Description("Include watch expression evaluations in the initial report (default: true)")] bool includeWatches = true,
         [Description("Include security analysis in the initial report (default: true)")] bool includeSecurity = true,
+        [Description("Refresh cached AI analysis for this dump (default: false)")] bool refreshCache = false,
+        [Description("LLM provider for caching (optional; e.g. openai/openrouter)")] string? llmProvider = null,
+        [Description("LLM model identifier for caching (optional)")] string? llmModel = null,
+        [Description("LLM reasoning effort for caching (optional; e.g. low/medium/high/default)")] string? llmReasoningEffort = null,
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(server);
@@ -61,6 +68,40 @@ public sealed class AiAnalysisTools(
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
         ValidateDumpIsOpen(manager);
+
+        var llmKey = AiAnalysisDiskCacheLlmKey.TryCreate(llmProvider, llmModel, llmReasoningEffort);
+
+        if (!refreshCache && !string.IsNullOrWhiteSpace(session.CurrentDumpId))
+        {
+            var cached = await _diskCache.TryReadAsync(
+                    sanitizedUserId,
+                    session.CurrentDumpId,
+                    llmKey,
+                    requireWatches: includeWatches,
+                    requireSecurity: includeSecurity,
+                    requireAllFrames: true,
+                    cancellationToken)
+                .ConfigureAwait(false);
+
+            if (cached != null)
+            {
+                Logger.LogInformation(
+                    "[AI] Using cached AI analysis report (disk) for dump {DumpId} (generatedAt={GeneratedAt})",
+                    cached.Metadata.DumpId,
+                    cached.Metadata.GeneratedAtUtc);
+
+                session.SetCachedReport(
+                    cached.Metadata.DumpId,
+                    cached.Metadata.GeneratedAtUtc,
+                    cached.ReportJson,
+                    includesWatches: cached.Metadata.IncludesWatches,
+                    includesSecurity: cached.Metadata.IncludesSecurity,
+                    maxStackFrames: cached.Metadata.MaxStackFrames,
+                    includesAiAnalysis: cached.Metadata.IncludesAiAnalysis);
+
+                return cached.ReportJson;
+            }
+        }
 
         var sourceLinkResolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId);
 
@@ -253,6 +294,30 @@ public sealed class AiAnalysisTools(
                 includesSecurity: includeSecurity,
                 maxStackFrames: 0,
                 includesAiAnalysis: true);
+
+            try
+            {
+                await _diskCache.WriteAsync(
+                        sanitizedUserId,
+                        metadata.DumpId,
+                        llmKey,
+                        new AiAnalysisDiskCacheMetadata
+                        {
+                            GeneratedAtUtc = metadata.GeneratedAt,
+                            IncludesWatches = includeWatches,
+                            IncludesSecurity = includeSecurity,
+                            MaxStackFrames = 0,
+                            IncludesAiAnalysis = true,
+                            Model = initialReport.AiAnalysis?.Model
+                        },
+                        finalJson,
+                        cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "[AI] Failed to persist AI analysis cache for dump {DumpId}", metadata.DumpId);
+            }
         }
 
         return finalJson;

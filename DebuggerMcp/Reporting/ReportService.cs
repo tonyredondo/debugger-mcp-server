@@ -56,12 +56,26 @@ public class ReportService
 
         var json = _jsonGenerator.Generate(analysis, canonicalOptions, canonicalMetadata);
 
+        return RenderFromJson(json, options);
+    }
+
+    /// <summary>
+    /// Renders a report from a canonical JSON report document.
+    /// </summary>
+    /// <remarks>
+    /// The JSON document is treated as the source of truth. This API exists to allow server-side tooling
+    /// (including cached AI analysis) to render Markdown/HTML without re-running crash analysis.
+    /// </remarks>
+    public string RenderFromJson(string reportJson, ReportOptions options)
+    {
+        options ??= ReportOptions.FullReport;
+
         if (options.Format == ReportFormat.Json)
         {
-            return options.MaxCallStackFrames > 0 ? ApplyJsonOutputLimits(json, options, applyListLimits: false) : json;
+            return options.MaxCallStackFrames > 0 ? ApplyJsonOutputLimits(reportJson, options, applyListLimits: false) : reportJson;
         }
 
-        var jsonForRendering = ApplyJsonOutputLimits(json, options, applyListLimits: true);
+        var jsonForRendering = ApplyJsonOutputLimits(reportJson, options, applyListLimits: true);
         return options.Format switch
         {
             ReportFormat.Markdown => JsonMarkdownReportRenderer.Render(jsonForRendering, options),

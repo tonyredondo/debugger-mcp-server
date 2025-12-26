@@ -7840,40 +7840,26 @@ public class Program
                         output.Warning("Cache refresh requested, but no dump is loaded; running without cache.");
                     }
 
-                    if (!refreshCache && !string.IsNullOrWhiteSpace(state.DumpId))
-                    {
-                        var cache = AiAnalysisCache.CreateDefault();
-                        var cacheKey = AiAnalysisCacheKey.Create(state.DumpId!, state.Settings.Llm);
-                        var cached = await cache.TryReadAsync(cacheKey).ConfigureAwait(false);
-                        if (!string.IsNullOrWhiteSpace(cached))
-                        {
-                            output.Dim($"Using cached AI analysis for dump {cacheKey.DumpId} ({cacheKey.Provider}, {cacheKey.Model}, effort={cacheKey.ReasoningEffort}).");
-                            await WriteAnalysisResultAsync(output, "AI Crash Analysis (cached)", cached, state, outputFile).ConfigureAwait(false);
-                            break;
-                        }
-                    }
-
                     await RunAnalysisAsync(output, "AI Crash Analysis",
                         () => RunWithToolResponseTimeoutAsync(
                             mcpClient,
                             GetAiAnalyzeToolResponseTimeout(mcpClient.ToolResponseTimeout),
                             async () =>
                             {
-                                var result = await mcpClient.AnalyzeAiAsync(state.SessionId!, state.Settings.UserId).ConfigureAwait(false);
-                                if (!string.IsNullOrWhiteSpace(state.DumpId))
-                                {
-                                    try
-                                    {
-                                        var cache = AiAnalysisCache.CreateDefault();
-                                        var cacheKey = AiAnalysisCacheKey.Create(state.DumpId!, state.Settings.Llm);
-                                        await cache.WriteAsync(cacheKey, result).ConfigureAwait(false);
-                                    }
-                                    catch
-                                    {
-                                        // Cache writes should never abort analysis execution.
-                                    }
-                                }
-                                return result;
+                                var llmProvider = LlmSettings.NormalizeProvider(state.Settings.Llm.Provider);
+                                var llmModel = state.Settings.Llm.GetEffectiveModel();
+                                var llmReasoningEffort =
+                                    LlmSettings.NormalizeReasoningEffort(state.Settings.Llm.GetEffectiveReasoningEffort()) ??
+                                    "default";
+
+                                return await mcpClient.AnalyzeAiAsync(
+                                        state.SessionId!,
+                                        state.Settings.UserId,
+                                        refreshCache: refreshCache,
+                                        llmProvider: llmProvider,
+                                        llmModel: llmModel,
+                                        llmReasoningEffort: llmReasoningEffort)
+                                    .ConfigureAwait(false);
                             }),
                         state,
                         outputFile);

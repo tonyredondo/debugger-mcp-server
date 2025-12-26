@@ -129,9 +129,20 @@ public interface IMcpClient : IAsyncDisposable
     /// </summary>
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID.</param>
+    /// <param name="refreshCache">When true, bypass server-side cache and refresh it for this LLM configuration.</param>
+    /// <param name="llmProvider">LLM provider identifier used for server-side cache keying (optional).</param>
+    /// <param name="llmModel">LLM model identifier used for server-side cache keying (optional).</param>
+    /// <param name="llmReasoningEffort">LLM reasoning effort used for server-side cache keying (optional).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Crash analysis results enriched with AI findings.</returns>
-    Task<string> AnalyzeAiAsync(string sessionId, string userId, CancellationToken cancellationToken = default);
+    Task<string> AnalyzeAiAsync(
+        string sessionId,
+        string userId,
+        bool refreshCache = false,
+        string? llmProvider = null,
+        string? llmModel = null,
+        string? llmReasoningEffort = null,
+        CancellationToken cancellationToken = default);
 
 
 

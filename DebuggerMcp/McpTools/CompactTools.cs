@@ -179,6 +179,10 @@ public sealed class CompactTools
         [Description("Include security analysis (AI only, default: true)")] bool includeSecurity = true,
         [Description("Maximum AI iterations (AI only, default: 100)")] int maxIterations = 100,
         [Description("Maximum output tokens (AI only, default: 8192)")] int maxTokens = 8192,
+        [Description("Refresh cached AI analysis for this dump (AI only, default: false)")] bool refreshCache = false,
+        [Description("LLM provider for AI cache key (AI only, optional; e.g. openai/openrouter)")] string? llmProvider = null,
+        [Description("LLM model identifier for AI cache key (AI only, optional)")] string? llmModel = null,
+        [Description("LLM reasoning effort for AI cache key (AI only, optional; low/medium/high/default)")] string? llmReasoningEffort = null,
         CancellationToken cancellationToken = default)
     {
         return NormalizeRequired(kind, nameof(kind)) switch
@@ -192,6 +196,10 @@ public sealed class CompactTools
                 maxTokens: maxTokens,
                 includeWatches: includeWatches,
                 includeSecurity: includeSecurity,
+                refreshCache: refreshCache,
+                llmProvider: llmProvider,
+                llmModel: llmModel,
+                llmReasoningEffort: llmReasoningEffort,
                 cancellationToken: cancellationToken),
             "performance" => _performanceTools.AnalyzePerformance(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId)), includeWatches),
             "cpu" or "cpu_usage" => _performanceTools.AnalyzeCpuUsage(Require(sessionId, nameof(sessionId)), Require(userId, nameof(userId))),
