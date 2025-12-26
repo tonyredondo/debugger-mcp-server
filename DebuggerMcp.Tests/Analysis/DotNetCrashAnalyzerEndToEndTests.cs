@@ -227,6 +227,87 @@ public class DotNetCrashAnalyzerEndToEndTests
     }
 
     [Fact]
+    public async Task AnalyzeDotNetCrashAsync_WhenIp2MdReturnsRejitId_PopulatesIsRejittedOnManagedFrames()
+    {
+        var original = Environment.GetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED");
+        Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", "false");
+
+        try
+        {
+            var ip = "0x0000f75587765ab4";
+            var sp = "0x0000ffffefcb76a0";
+
+            var outputs = new Dictionary<string, string>
+            {
+                // Base LLDB analysis.
+                ["thread list"] = "* thread #1: tid = 0x8954, 0x0000000100000000 dotnet`abort, name = 'dotnet', stop reason = signal SIGABRT",
+                ["bt all"] =
+                    "* thread #1, name = 'dotnet', stop reason = signal SIGABRT\n" +
+                    $"  * frame #0: {ip} SP={sp} dotnet`[JIT Code @ 0x0000]\n",
+                ["image list"] =
+                    "[  0] 12345678-1234-1234-1234-123456789ABC 0x0000000100000000 /usr/lib/dyld\n",
+
+                // ProcessInfoExtractor memory read / string reads (argv + envp, split by NULL sentinel).
+                ["memory read"] =
+                    "0xffffefcba618: 0x0000ffffefcbbb24\n" +
+                    "0xffffefcba620: 0x0000000000000000\n",
+                ["expr -- (char*)0x0000ffffefcbbb24"] = "(char *) $1 = 0x0000ffffefcbbb24 \"dotnet\"",
+
+                // .NET analysis commands (minimal).
+                ["!eeversion"] = "CLR Version: 9.0.10.0",
+                ["clrstack -a -r -all"] =
+                    "OS Thread Id: 0x8954 (1)\n" +
+                    "Child SP         IP               Call Site\n" +
+                    "0000FFFFEFCB76A0 0000F75587765AB4 System.Runtime.EH.DispatchEx(System.Runtime.StackFrameIterator ByRef, ExInfo ByRef)\n",
+                ["!pe -nested"] =
+                    "Exception object: 00007ff6b1234567\n" +
+                    "Exception type:   System.MissingMethodException\n" +
+                    "Message:          Method not found\n",
+
+                ["!dumpheap -stat"] = "Total 0 objects, 0 bytes\n",
+                ["!clrthreads"] = "ThreadCount:      0\n",
+                ["!finalizequeue"] = "generation 0 has 0 finalizable objects\n",
+                ["!syncblk"] = string.Empty,
+                ["!threadpool"] = string.Empty,
+                ["!ti"] = string.Empty,
+                ["!analyzeoom"] = "There was no managed OOM\n",
+                ["!crashinfo"] = "No crash info\n",
+                ["!dumpdomain"] = string.Empty,
+
+                // ReJIT status enrichment.
+                [$"!ip2md {ip}"] =
+                    "MethodDesc:   0000f75588520520\n" +
+                    "Version History:\n" +
+                    "  ReJIT ID:           3\n"
+            };
+
+            var manager = new StubDebuggerManager("LLDB", outputs);
+            manager.OpenDumpFile("/tmp/dump.dmp");
+            var analyzer = new DotNetCrashAnalyzer(manager, sourceLinkResolver: null, clrMdAnalyzer: null);
+
+            var result = await analyzer.AnalyzeDotNetCrashAsync();
+
+            Assert.NotNull(result.Threads);
+            Assert.NotNull(result.Threads!.All);
+            Assert.NotEmpty(result.Threads.All!);
+
+            var framesAtIp = result.Threads.All!
+                .SelectMany(t => t.CallStack)
+                .Where(f => f.IsManaged && string.Equals(f.InstructionPointer, ip, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            Assert.NotEmpty(framesAtIp);
+            Assert.All(framesAtIp, f => Assert.True(f.IsRejitted));
+
+            Assert.Contains($"!ip2md {ip}", manager.ExecutedCommands);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED", original);
+        }
+    }
+
+    [Fact]
     public async Task AnalyzeDotNetCrashAsync_WithMissingMethodException_PopulatesTypeResolutionAnalysis()
     {
         var original = Environment.GetEnvironmentVariable("DATADOG_TRACE_SYMBOLS_ENABLED");

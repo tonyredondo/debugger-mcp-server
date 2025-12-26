@@ -155,6 +155,48 @@ public class StackFrame
     public string Function { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets the MethodDesc for managed frames (SOS/ClrMD).
+    /// </summary>
+    [JsonPropertyName("methodDesc")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MethodDesc { get; set; }
+
+    /// <summary>
+    /// Gets or sets the metadata token for managed frames (SOS/ClrMD), formatted as hex (e.g. 0x06001234).
+    /// </summary>
+    [JsonPropertyName("mdToken")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? MdToken { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether the managed method has native code (JIT/ReadyToRun), if known.
+    /// </summary>
+    [JsonPropertyName("isJitted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IsJitted { get; set; }
+
+    /// <summary>
+    /// Gets or sets the start address of the managed method's current native code, if known.
+    /// </summary>
+    [JsonPropertyName("codeAddress")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? CodeAddress { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether the managed method was ReJITted, if known.
+    /// </summary>
+    [JsonPropertyName("isRejitted")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IsRejitted { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether the managed method is executing ReadyToRun/precompiled code, if known.
+    /// </summary>
+    [JsonPropertyName("isR2R")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? IsR2R { get; set; }
+
+    /// <summary>
     /// Gets or sets the source file and line if available (combined display string).
     /// </summary>
     [JsonPropertyName("source")]

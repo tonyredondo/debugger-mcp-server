@@ -247,6 +247,53 @@ public class ReportSectionApiTests
     }
 
     [Fact]
+    public void GetSection_WhenSelectingManagedFrameMetadata_ProjectsFields()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": {
+            "exception": {
+              "stackTrace": [
+                {
+                  "frameNumber": 0,
+                  "instructionPointer": "0x0000000000000001",
+                  "module": "System.Private.CoreLib",
+                  "function": "System.Runtime.EH.DispatchEx(System.Runtime.StackFrameIterator ByRef, ExInfo ByRef)",
+                  "isManaged": true,
+                  "methodDesc": "0x0000000000000002",
+                  "mdToken": "0x06004816",
+                  "isJitted": true,
+                  "codeAddress": "0x0000000000000003",
+                  "isR2R": true
+                }
+              ]
+            }
+          }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(
+            report,
+            "analysis.exception.stackTrace",
+            limit: 10,
+            cursor: null,
+            maxChars: 50_000,
+            select: new[] { "function", "methodDesc", "mdToken", "isJitted", "codeAddress", "isR2R" });
+
+        using var doc = JsonDocument.Parse(json);
+        var value = doc.RootElement.GetProperty("value");
+        Assert.Equal(1, value.GetArrayLength());
+
+        var frame = value[0];
+        Assert.Equal("0x0000000000000002", frame.GetProperty("methodDesc").GetString());
+        Assert.Equal("0x06004816", frame.GetProperty("mdToken").GetString());
+        Assert.True(frame.GetProperty("isJitted").GetBoolean());
+        Assert.Equal("0x0000000000000003", frame.GetProperty("codeAddress").GetString());
+        Assert.True(frame.GetProperty("isR2R").GetBoolean());
+    }
+
+    [Fact]
     public void GetSection_WhenObjectPagingEnabled_PagesObjectProperties()
     {
         var report = """

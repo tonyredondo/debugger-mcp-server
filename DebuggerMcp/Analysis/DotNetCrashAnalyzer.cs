@@ -5,6 +5,7 @@ using System.IO;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using DebuggerMcp.SourceLink;
+using Microsoft.Diagnostics.Runtime;
 using Microsoft.Extensions.Logging;
 
 namespace DebuggerMcp.Analysis;
@@ -17,6 +18,11 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 {
     private readonly ClrMdAnalyzer? _clrMdAnalyzer;
     private readonly ILogger? _logger;
+
+    /// <summary>
+    /// Maximum number of SOS <c>ip2md</c> calls to use when enriching ReJIT state for stack frames.
+    /// </summary>
+    private const int MaxIp2MdCallsForRejitEnrichment = 50;
     
     /// <summary>
     /// Initializes a new instance of the <see cref="DotNetCrashAnalyzer"/> class.
@@ -229,6 +235,27 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                                          clrFrame.Method.AssemblyName,
                                          clrFrame.Method.TypeName)
                                      ?? string.Empty;
+
+                        frame.MethodDesc = clrFrame.Method.MethodDesc != 0
+                            ? $"0x{clrFrame.Method.MethodDesc:x16}"
+                            : null;
+
+                        frame.MdToken = clrFrame.Method.MetadataToken != 0
+                            ? $"0x{clrFrame.Method.MetadataToken:X8}"
+                            : null;
+
+                        frame.CodeAddress = clrFrame.Method.NativeCode != 0
+                            ? $"0x{clrFrame.Method.NativeCode:x16}"
+                            : null;
+
+                        frame.IsJitted = clrFrame.Method.NativeCode != 0;
+
+                        frame.IsR2R = clrFrame.Method.CompilationType switch
+                        {
+                            MethodCompilationType.Ngen => true,
+                            MethodCompilationType.Jit => false,
+                            _ => null
+                        };
 
                         // Source location from sequence points
                         if (clrFrame.SourceLocation != null)
@@ -655,6 +682,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 nativeFrame.LineNumber = managedFrame.LineNumber;
                 nativeFrame.Source = managedFrame.Source;
                 nativeFrame.IsManaged = true;
+                nativeFrame.MethodDesc = managedFrame.MethodDesc;
+                nativeFrame.MdToken = managedFrame.MdToken;
+                nativeFrame.IsJitted = managedFrame.IsJitted;
+                nativeFrame.CodeAddress = managedFrame.CodeAddress;
+                nativeFrame.IsRejitted = managedFrame.IsRejitted;
+                nativeFrame.IsR2R = managedFrame.IsR2R;
                 nativeFrame.Registers = managedFrame.Registers;
                 nativeFrame.Parameters = managedFrame.Parameters;
                 nativeFrame.Locals = managedFrame.Locals;
@@ -989,6 +1022,9 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             
             // Try to enrich exception stack frames with source info from thread stacks
             EnrichExceptionStackWithSourceInfo(result);
+
+            // Populate ReJIT status using SOS ip2md (ClrMD 3.x does not expose ReJIT ID).
+            await EnrichIsRejittedFromIp2MdAsync(result);
             
             // For MissingMethodException, TypeLoadException, etc. - analyze what methods exist
             await AnalyzeTypeResolutionAsync(result);
@@ -2313,14 +2349,29 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         if (exceptionStackTrace == null || exceptionStackTrace.Count == 0)
             return;
         
-        // Build a lookup dictionary from all thread stack frames
-        // Key: function name (normalized), Value: frame with full info
+        // Build lookups from all thread stack frames:
+        // - InstructionPointer-based lookup (most reliable)
+        // - Function-name lookup (fallback when IP matching is unavailable)
+        var ipLookup = new Dictionary<ulong, StackFrame>();
         var frameLookup = new Dictionary<string, StackFrame>(StringComparer.OrdinalIgnoreCase);
         
         var threads = result.Threads?.All;
         if (threads == null)
         {
             return;
+        }
+
+        static ulong? TryParsePointer(string? value)
+        {
+            var hex = ExtractHexAddress(value);
+            if (hex == null)
+            {
+                return null;
+            }
+
+            return ulong.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var result)
+                ? result
+                : null;
         }
 
         foreach (var thread in threads)
@@ -2331,6 +2382,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
             {
                 if (string.IsNullOrEmpty(frame.Function))
                     continue;
+
+                var ip = TryParsePointer(frame.InstructionPointer);
+                if (ip.HasValue && ip.Value != 0 && !ipLookup.ContainsKey(ip.Value))
+                {
+                    ipLookup[ip.Value] = frame;
+                }
                 
                 // Normalize function name by removing parameter types for better matching
                 var normalizedFunc = NormalizeFunctionName(frame.Function);
@@ -2346,10 +2403,19 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
         {
             if (string.IsNullOrEmpty(exFrame.Function))
                 continue;
-            
+
+            StackFrame? matchingFrame = null;
+
+            var exIp = TryParsePointer(exFrame.InstructionPointer);
+            if (exIp.HasValue && exIp.Value != 0)
+            {
+                ipLookup.TryGetValue(exIp.Value, out matchingFrame);
+            }
+
             var normalizedFunc = NormalizeFunctionName(exFrame.Function);
-            
-            if (frameLookup.TryGetValue(normalizedFunc, out var matchingFrame))
+            matchingFrame ??= frameLookup.TryGetValue(normalizedFunc, out var fallbackFrame) ? fallbackFrame : null;
+
+            if (matchingFrame != null)
             {
                 // Copy source info
                 exFrame.SourceFile = matchingFrame.SourceFile;
@@ -2357,6 +2423,14 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 exFrame.SourceUrl = matchingFrame.SourceUrl;
                 exFrame.SourceRawUrl = matchingFrame.SourceRawUrl;
                 exFrame.SourceProvider = matchingFrame.SourceProvider;
+
+                // Copy managed method identity/codegen metadata
+                exFrame.MethodDesc = matchingFrame.MethodDesc;
+                exFrame.MdToken = matchingFrame.MdToken;
+                exFrame.IsJitted = matchingFrame.IsJitted;
+                exFrame.CodeAddress = matchingFrame.CodeAddress;
+                exFrame.IsRejitted = matchingFrame.IsRejitted;
+                exFrame.IsR2R = matchingFrame.IsR2R;
                 
                 // Copy parameters and locals
                 exFrame.Parameters = matchingFrame.Parameters;
@@ -2366,6 +2440,161 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
                 exFrame.Registers = matchingFrame.Registers;
             }
         }
+    }
+
+    /// <summary>
+    /// Enriches managed stack frames with ReJIT state by querying SOS <c>ip2md</c> for their instruction pointers.
+    /// Uses a bounded number of calls and applies results by IP match across all threads and the exception stack.
+    /// </summary>
+    private async Task EnrichIsRejittedFromIp2MdAsync(CrashAnalysisResult result)
+    {
+        if (!_debuggerManager.IsSosLoaded)
+        {
+            return;
+        }
+
+        var candidates = new List<StackFrame>();
+
+        var faultingCallStack = result.Threads?.FaultingThread?.CallStack;
+        if (faultingCallStack != null)
+        {
+            candidates.AddRange(faultingCallStack.Where(f => f.IsManaged && f.IsRejitted == null));
+        }
+
+        var exceptionStack = result.Exception?.StackTrace;
+        if (exceptionStack != null)
+        {
+            candidates.AddRange(exceptionStack.Where(f => f.IsManaged && f.IsRejitted == null));
+        }
+
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var ipsToQuery = new List<ulong>();
+        var seenIps = new HashSet<ulong>();
+
+        foreach (var frame in candidates)
+        {
+            var ip = TryParsePointer(frame.InstructionPointer);
+            if (!ip.HasValue || ip.Value == 0)
+            {
+                continue;
+            }
+
+            if (seenIps.Add(ip.Value))
+            {
+                ipsToQuery.Add(ip.Value);
+                if (ipsToQuery.Count >= MaxIp2MdCallsForRejitEnrichment)
+                {
+                    break;
+                }
+            }
+        }
+
+        if (ipsToQuery.Count == 0)
+        {
+            return;
+        }
+
+        var ipToIsRejitted = new Dictionary<ulong, bool>();
+
+        foreach (var ip in ipsToQuery)
+        {
+            var ipString = $"0x{ip:x16}";
+            try
+            {
+                var output = await ExecuteCommandAsync($"!ip2md {ipString}");
+                var isRejitted = ParseIsRejittedFromIp2MdOutput(output);
+                if (isRejitted.HasValue)
+                {
+                    ipToIsRejitted[ip] = isRejitted.Value;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogDebug(ex, "ip2md failed for {InstructionPointer}", ipString);
+            }
+        }
+
+        if (ipToIsRejitted.Count == 0)
+        {
+            return;
+        }
+
+        void ApplyToFrames(List<StackFrame>? frames)
+        {
+            if (frames == null)
+            {
+                return;
+            }
+
+            foreach (var frame in frames)
+            {
+                if (!frame.IsManaged || frame.IsRejitted != null)
+                {
+                    continue;
+                }
+
+                var ip = TryParsePointer(frame.InstructionPointer);
+                if (!ip.HasValue)
+                {
+                    continue;
+                }
+
+                if (ipToIsRejitted.TryGetValue(ip.Value, out var value))
+                {
+                    frame.IsRejitted = value;
+                }
+            }
+        }
+
+        ApplyToFrames(result.Exception?.StackTrace);
+
+        var threads = result.Threads?.All;
+        if (threads != null)
+        {
+            foreach (var thread in threads)
+            {
+                ApplyToFrames(thread.CallStack);
+            }
+        }
+
+        static ulong? TryParsePointer(string? value)
+        {
+            var hex = ExtractHexAddress(value);
+            if (hex == null)
+            {
+                return null;
+            }
+
+            return ulong.TryParse(hex, System.Globalization.NumberStyles.HexNumber, null, out var result)
+                ? result
+                : null;
+        }
+    }
+
+    /// <summary>
+    /// Parses ReJIT state from SOS <c>ip2md</c> output.
+    /// Returns <c>true</c> when ReJIT ID is non-zero; <c>false</c> when ReJIT ID is zero; otherwise <c>null</c>.
+    /// </summary>
+    internal static bool? ParseIsRejittedFromIp2MdOutput(string? output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return null;
+        }
+
+        var match = Regex.Match(output, @"^\s*ReJIT\s*ID:\s*(\d+)\s*$", RegexOptions.IgnoreCase | RegexOptions.Multiline);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        return int.TryParse(match.Groups[1].Value, out var rejitId)
+            ? rejitId != 0
+            : null;
     }
     
     /// <summary>

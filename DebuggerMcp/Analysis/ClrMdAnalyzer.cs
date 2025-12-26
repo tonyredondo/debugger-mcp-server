@@ -4099,12 +4099,14 @@ public class ClrMdAnalyzer : IDisposable
                                     var clrModule = frame.Method.Type?.Module;
                                     frameInfo.Method = new ClrMethodInfo
                                     {
+                                        MethodDesc = frame.Method.MethodDesc,
                                         Signature = frame.Method.Signature,
                                         TypeName = frame.Method.Type?.Name,
                                         ModuleName = clrModule?.Name,
                                         AssemblyName = clrModule?.AssemblyName,
                                         MethodName = frame.Method.Name,
                                         MetadataToken = (uint)frame.Method.MetadataToken,
+                                        CompilationType = frame.Method.CompilationType,
                                         NativeCode = frame.Method.NativeCode,
                                         ILOffset = GetILOffset(frame)
                                     };
@@ -5215,6 +5217,12 @@ public class ClrFrameInfo
 public class ClrMethodInfo
 {
     /// <summary>
+    /// MethodDesc address.
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("methodDesc")]
+    public ulong MethodDesc { get; set; }
+
+    /// <summary>
     /// Full method signature.
     /// </summary>
     [System.Text.Json.Serialization.JsonPropertyName("signature")]
@@ -5255,6 +5263,12 @@ public class ClrMethodInfo
     /// </summary>
     [System.Text.Json.Serialization.JsonPropertyName("metadataToken")]
     public uint MetadataToken { get; set; }
+
+    /// <summary>
+    /// Indicates how the method was compiled (JIT, ReadyToRun/NGen, etc).
+    /// </summary>
+    [System.Text.Json.Serialization.JsonPropertyName("compilationType")]
+    public MethodCompilationType CompilationType { get; set; }
 
     /// <summary>
     /// Native code address.

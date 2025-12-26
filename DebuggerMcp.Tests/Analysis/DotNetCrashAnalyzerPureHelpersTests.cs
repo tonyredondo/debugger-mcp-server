@@ -92,6 +92,25 @@ public class DotNetCrashAnalyzerPureHelpersTests
         Assert.Equal(expected, DotNetCrashAnalyzer.FormatHResult(input));
     }
 
+    [Theory]
+    [InlineData("  ReJIT ID:           0\n", false)]
+    [InlineData("ReJIT ID:           3", true)]
+    [InlineData("  ReJIT    ID: 1  \n", true)]
+    public void ParseIsRejittedFromIp2MdOutput_WhenRejitIdPresent_ReturnsExpected(string output, bool expected)
+    {
+        Assert.Equal(expected, DotNetCrashAnalyzer.ParseIsRejittedFromIp2MdOutput(output));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("MethodDesc:   00007ffd00000002")]
+    [InlineData("ReJIT: 0")]
+    public void ParseIsRejittedFromIp2MdOutput_WhenRejitIdMissing_ReturnsNull(string? output)
+    {
+        Assert.Null(DotNetCrashAnalyzer.ParseIsRejittedFromIp2MdOutput(output));
+    }
+
     [Fact]
     public void IsSosErrorOutput_RecognizesSosNotLoaded()
     {
