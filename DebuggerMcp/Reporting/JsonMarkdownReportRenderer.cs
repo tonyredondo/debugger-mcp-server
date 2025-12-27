@@ -26,8 +26,17 @@ internal static class JsonMarkdownReportRenderer
         var sb = new StringBuilder();
         var includeJsonDetails = options.IncludeRawJsonDetails;
 
+        var hasAiAnalysis = TryGetAnalysis(root, out var analysisForAi) &&
+            analysisForAi.TryGetProperty("aiAnalysis", out var aiAnalysis) &&
+            aiAnalysis.ValueKind == JsonValueKind.Object;
+
         AppendTitle(sb, root, options);
-        AppendTableOfContents(sb, options);
+        AppendTableOfContents(sb, options, hasAiAnalysis);
+
+        if (hasAiAnalysis)
+        {
+            AppendAiAnalysis(sb, root, includeJsonDetails);
+        }
 
         AppendAtAGlance(sb, root);
 
@@ -131,11 +140,15 @@ internal static class JsonMarkdownReportRenderer
         sb.AppendLine();
     }
 
-    private static void AppendTableOfContents(StringBuilder sb, ReportOptions options)
+    private static void AppendTableOfContents(StringBuilder sb, ReportOptions options, bool includeAiAnalysis)
     {
         sb.AppendLine("## Table of Contents");
         sb.AppendLine();
 
+        if (includeAiAnalysis)
+        {
+            sb.AppendLine("- [AI analysis](#ai-analysis)");
+        }
         sb.AppendLine("- [At a glance](#at-a-glance)");
         if (options.IncludeCallStacks)
         {
@@ -183,6 +196,241 @@ internal static class JsonMarkdownReportRenderer
             sb.AppendLine("- [Signature](#signature)");
         }
         sb.AppendLine();
+    }
+
+    private static void AppendAiAnalysis(StringBuilder sb, JsonElement root, bool includeJsonDetails)
+    {
+        sb.AppendLine("## AI analysis");
+        sb.AppendLine();
+
+        if (!TryGetAnalysis(root, out var analysis) ||
+            !analysis.TryGetProperty("aiAnalysis", out var ai) ||
+            ai.ValueKind != JsonValueKind.Object)
+        {
+            sb.AppendLine("_No AI analysis available._");
+            sb.AppendLine();
+            return;
+        }
+
+        sb.AppendLine("### Root cause");
+        sb.AppendLine();
+        var rootCause = GetString(ai, "rootCause");
+        if (!string.IsNullOrWhiteSpace(rootCause))
+        {
+            sb.AppendLine(EscapeText(rootCause));
+        }
+        else
+        {
+            sb.AppendLine("_No root cause provided._");
+        }
+        sb.AppendLine();
+
+        sb.AppendLine("| Key | Value |");
+        sb.AppendLine("|---|---|");
+        AppendTableRow(sb, "Confidence", GetString(ai, "confidence"));
+        AppendTableRow(sb, "Model", GetString(ai, "model"));
+        AppendTableRow(sb, "Analyzed at (UTC)", GetString(ai, "analyzedAt"));
+        AppendTableRow(sb, "Iterations", GetString(ai, "iterations"));
+        sb.AppendLine();
+
+        if (ai.TryGetProperty("reasoning", out var reasoningElem) && reasoningElem.ValueKind == JsonValueKind.String)
+        {
+            var reasoning = reasoningElem.GetString();
+            if (!string.IsNullOrWhiteSpace(reasoning))
+            {
+                sb.AppendLine("<details><summary>Reasoning</summary>");
+                sb.AppendLine();
+                sb.AppendLine("```text");
+                sb.AppendLine(reasoning);
+                sb.AppendLine("```");
+                sb.AppendLine();
+                sb.AppendLine("</details>");
+                sb.AppendLine();
+            }
+        }
+
+        if (ai.TryGetProperty("recommendations", out var recs) && recs.ValueKind == JsonValueKind.Array && recs.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<details><summary>Recommendations</summary>");
+            sb.AppendLine();
+            foreach (var r in recs.EnumerateArray())
+            {
+                var txt = r.GetString();
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    sb.AppendLine("- " + EscapeText(txt));
+                }
+            }
+            sb.AppendLine();
+            sb.AppendLine("</details>");
+            sb.AppendLine();
+        }
+
+        if (ai.TryGetProperty("additionalFindings", out var findings) && findings.ValueKind == JsonValueKind.Array && findings.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<details><summary>Additional findings</summary>");
+            sb.AppendLine();
+            foreach (var f in findings.EnumerateArray())
+            {
+                var txt = f.GetString();
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    sb.AppendLine("- " + EscapeText(txt));
+                }
+            }
+            sb.AppendLine();
+            sb.AppendLine("</details>");
+            sb.AppendLine();
+        }
+
+        if (ai.TryGetProperty("evidence", out var evidence) && evidence.ValueKind == JsonValueKind.Array && evidence.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<details><summary>Evidence</summary>");
+            sb.AppendLine();
+            foreach (var e in evidence.EnumerateArray())
+            {
+                var txt = e.GetString();
+                if (!string.IsNullOrWhiteSpace(txt))
+                {
+                    sb.AppendLine("- " + EscapeText(txt));
+                }
+            }
+            sb.AppendLine();
+            sb.AppendLine("</details>");
+            sb.AppendLine();
+        }
+
+        if (ai.TryGetProperty("hypotheses", out var hypotheses) && hypotheses.ValueKind == JsonValueKind.Array && hypotheses.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<details><summary>Hypotheses</summary>");
+            sb.AppendLine();
+            sb.AppendLine("| ID | Confidence | Hypothesis | Notes |");
+            sb.AppendLine("|---|---|---|---|");
+            foreach (var h in hypotheses.EnumerateArray())
+            {
+                if (h.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var id = GetString(h, "id");
+                var confidence = GetString(h, "confidence");
+                var hypothesis = GetString(h, "hypothesis");
+                var notes = GetString(h, "notes");
+                var hypothesisCell = string.IsNullOrWhiteSpace(hypothesis) ? string.Empty : EscapeCell(hypothesis);
+                var notesCell = string.IsNullOrWhiteSpace(notes) ? string.Empty : EscapeCell(notes);
+                sb.AppendLine($"| `{EscapeInline(id)}` | `{EscapeInline(confidence)}` | {hypothesisCell} | {notesCell} |");
+            }
+            sb.AppendLine();
+            sb.AppendLine("</details>");
+            sb.AppendLine();
+        }
+
+        if (ai.TryGetProperty("evidenceLedger", out var ledger) && ledger.ValueKind == JsonValueKind.Array && ledger.GetArrayLength() > 0)
+        {
+            sb.AppendLine("<details><summary>Evidence ledger</summary>");
+            sb.AppendLine();
+            sb.AppendLine("| ID | Source | Finding | Tags |");
+            sb.AppendLine("|---|---|---|---|");
+            foreach (var item in ledger.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                var id = GetString(item, "id");
+                var source = GetString(item, "source");
+                var finding = GetString(item, "finding");
+                var tags = item.TryGetProperty("tags", out var tagsElem) && tagsElem.ValueKind == JsonValueKind.Array
+                    ? string.Join(", ", tagsElem.EnumerateArray().Select(t => t.GetString()).Where(t => !string.IsNullOrWhiteSpace(t)))
+                    : string.Empty;
+
+                var sourceCell = string.IsNullOrWhiteSpace(source) ? string.Empty : EscapeCell(source);
+                var findingCell = string.IsNullOrWhiteSpace(finding) ? string.Empty : EscapeCell(finding);
+                var tagsCell = string.IsNullOrWhiteSpace(tags) ? string.Empty : EscapeCell(tags);
+                sb.AppendLine($"| `{EscapeInline(id)}` | {sourceCell} | {findingCell} | {tagsCell} |");
+            }
+            sb.AppendLine();
+            sb.AppendLine("</details>");
+            sb.AppendLine();
+        }
+
+        if (ai.TryGetProperty("summary", out var summary) && summary.ValueKind == JsonValueKind.Object)
+        {
+            var desc = GetString(summary, "description");
+            var err = GetString(summary, "error");
+            var hasDesc = !string.IsNullOrWhiteSpace(desc);
+            var hasErr = !string.IsNullOrWhiteSpace(err);
+            if (hasDesc || hasErr)
+            {
+                sb.AppendLine("<details><summary>AI summary rewrite</summary>");
+                sb.AppendLine();
+                if (hasErr)
+                {
+                    sb.AppendLine("- Error: " + EscapeText(err));
+                    sb.AppendLine();
+                }
+                if (hasDesc)
+                {
+                    sb.AppendLine(EscapeText(desc));
+                    sb.AppendLine();
+                }
+                if (summary.TryGetProperty("recommendations", out var summaryRecs) &&
+                    summaryRecs.ValueKind == JsonValueKind.Array &&
+                    summaryRecs.GetArrayLength() > 0)
+                {
+                    sb.AppendLine("**Recommendations**");
+                    sb.AppendLine();
+                    foreach (var r in summaryRecs.EnumerateArray())
+                    {
+                        var txt = r.GetString();
+                        if (!string.IsNullOrWhiteSpace(txt))
+                        {
+                            sb.AppendLine("- " + EscapeText(txt));
+                        }
+                    }
+                    sb.AppendLine();
+                }
+                sb.AppendLine("</details>");
+                sb.AppendLine();
+            }
+        }
+
+        if (ai.TryGetProperty("threadNarrative", out var narrative) && narrative.ValueKind == JsonValueKind.Object)
+        {
+            var desc = GetString(narrative, "description");
+            var err = GetString(narrative, "error");
+            var hasDesc = !string.IsNullOrWhiteSpace(desc);
+            var hasErr = !string.IsNullOrWhiteSpace(err);
+            if (hasDesc || hasErr)
+            {
+                sb.AppendLine("<details><summary>Thread narrative</summary>");
+                sb.AppendLine();
+                if (hasErr)
+                {
+                    sb.AppendLine("- Error: " + EscapeText(err));
+                }
+                if (!string.IsNullOrWhiteSpace(GetString(narrative, "confidence")))
+                {
+                    sb.AppendLine("- Confidence: `" + EscapeInline(GetString(narrative, "confidence")) + "`");
+                }
+                sb.AppendLine();
+                if (hasDesc)
+                {
+                    sb.AppendLine(EscapeText(desc));
+                }
+                sb.AppendLine();
+                sb.AppendLine("</details>");
+                sb.AppendLine();
+            }
+        }
+
+        MaybeAppendJsonDetails(sb, "AI analysis JSON", ai, includeJsonDetails);
+        if (includeJsonDetails)
+        {
+            sb.AppendLine();
+        }
     }
 
     private static void AppendAtAGlance(StringBuilder sb, JsonElement root)

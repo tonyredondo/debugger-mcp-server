@@ -44,6 +44,44 @@ public class JsonMarkdownReportRendererCoverageTests
         Assert.Contains("\\`", markdown, StringComparison.Ordinal);     // backtick escaping
     }
 
+    [Fact]
+    public void Render_WhenAiAnalysisPresent_RendersAiSectionBeforeAtAGlance()
+    {
+        var root = JsonNode.Parse(BuildCanonicalReportJson())!.AsObject();
+        var analysis = root["analysis"]!.AsObject();
+        analysis["aiAnalysis"] = JsonNode.Parse("""
+        {
+          "rootCause": "x",
+          "confidence": "high",
+          "reasoning": "r",
+          "recommendations": ["a"],
+          "evidence": ["e"],
+          "hypotheses": [
+            { "id": "H1", "confidence": "low", "hypothesis": "h", "notes": "n" }
+          ],
+          "evidenceLedger": [
+            { "id": "E1", "source": "report_get(path=\"analysis.summary\")", "finding": "f", "tags": ["t1", "t2"] }
+          ]
+        }
+        """);
+
+        var options = ReportOptions.FullReport;
+        options.Format = ReportFormat.Markdown;
+        options.IncludeRawJsonDetails = false;
+
+        var markdown = JsonMarkdownReportRenderer.Render(root.ToJsonString(), options);
+
+        var aiIndex = markdown.IndexOf("## AI analysis", StringComparison.Ordinal);
+        var glanceIndex = markdown.IndexOf("## At a glance", StringComparison.Ordinal);
+        Assert.True(aiIndex >= 0, "Expected AI section to be present.");
+        Assert.True(glanceIndex >= 0, "Expected At a glance section to be present.");
+        Assert.True(aiIndex < glanceIndex, "Expected AI section to appear before At a glance.");
+
+        Assert.Contains("- [AI analysis](#ai-analysis)", markdown, StringComparison.Ordinal);
+        Assert.Contains("### Root cause", markdown, StringComparison.Ordinal);
+        Assert.Contains("x", markdown, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("a.cs", "csharp")]
     [InlineData("a.fs", "fsharp")]
