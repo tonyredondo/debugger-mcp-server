@@ -94,7 +94,7 @@ public static class HelpSystem
         ],
         ["advanced"] = [
             new("watch", "<subcommand>", "Manage watch expressions (add, list, eval, remove, clear)", ["watch add @rsp", "watch list", "watch eval", "watch remove w1", "watch clear"]),
-            new("report", "-o <file> [[options]]", "Generate analysis reports (requires -o output)", ["report -o ./report.md", "report -o ./report.html -f html", "report -o ./summary.json --summary -f json"]),
+            new("report", "-o <file> [[options]]", "Generate analysis reports (requires -o output)", ["report -o ./report.md", "report -o ./report.html -f html", "report -o ./summary.json --summary -f json", "report -o ./report.md --refresh"]),
             new("sourcelink", "<subcommand>", "Source Link integration (resolve, info)", ["sourcelink /src/Program.cs", "sourcelink resolve /src/Program.cs", "sl info"])
         ],
         ["general"] = [

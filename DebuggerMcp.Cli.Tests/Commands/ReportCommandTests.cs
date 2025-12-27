@@ -13,6 +13,26 @@ namespace DebuggerMcp.Cli.Tests.Commands;
 public class ReportCommandTests
 {
     [Fact]
+    public void ParseReportCommandOptions_WithRefresh_SetsRefreshFlag()
+    {
+        var options = InvokePrivate(
+            "ParseReportCommandOptions",
+            new object?[] { new[] { "--refresh", "-o", "./out.md" } });
+
+        var refreshProp = options.GetType().GetProperty("RefreshAiAnalysis");
+        Assert.NotNull(refreshProp);
+        Assert.True((bool)refreshProp!.GetValue(options)!);
+
+        var outputFileProp = options.GetType().GetProperty("OutputFile");
+        Assert.NotNull(outputFileProp);
+        Assert.Equal("./out.md", outputFileProp!.GetValue(options));
+
+        var formatProp = options.GetType().GetProperty("Format");
+        Assert.NotNull(formatProp);
+        Assert.Equal("markdown", formatProp!.GetValue(options));
+    }
+
+    [Fact]
     public async Task HandleReportAsync_WithoutOutputFile_PrintsErrorAndDoesNotAttemptReport()
     {
         var console = new TestConsole();
@@ -66,4 +86,3 @@ public class ReportCommandTests
         return method!.Invoke(null, args)!;
     }
 }
-

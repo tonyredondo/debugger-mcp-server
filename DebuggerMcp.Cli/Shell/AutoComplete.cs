@@ -30,31 +30,31 @@ public class AutoComplete
     /// <summary>
     /// Subcommands for each command.
     /// </summary>
-	    private static readonly Dictionary<string, string[]> Subcommands = new(StringComparer.OrdinalIgnoreCase)
-	    {
-	        ["session"] = ["create", "list", "close", "info", "use"],
-	        ["dumps"] = ["upload", "list", "info", "delete"],
-	        ["symbols"] = ["upload", "list", "servers", "add", "clear"],
-	        ["analyze"] = ["crash", "ai", "perf", "cpu", "memory", "gc", "contention", "security"],
-	        ["compare"] = ["all", "heap", "threads", "modules"],
-	        ["watch"] = ["add", "list", "eval", "remove", "clear"],
-	        ["report"] = ["--format", "--output", "--summary", "markdown", "html", "json"],
-	        ["sourcelink"] = ["resolve", "info"],
-        ["llm"] = ["provider", "set-provider", "model", "reasoning-effort", "effort", "set-key", "set-agent", "agent", "set-agent-confirm", "agent-confirm", "reset"],
-        ["set"] = ["verbose", "output", "timeout", "user"],
-        ["history"] = ["clear", "search"]
-    };
+		    private static readonly Dictionary<string, string[]> Subcommands = new(StringComparer.OrdinalIgnoreCase)
+		    {
+		        ["session"] = ["create", "list", "close", "info", "use"],
+		        ["dumps"] = ["upload", "list", "info", "delete"],
+		        ["symbols"] = ["upload", "list", "servers", "add", "clear"],
+		        ["analyze"] = ["crash", "ai", "perf", "cpu", "memory", "gc", "contention", "security"],
+		        ["compare"] = ["all", "heap", "threads", "modules"],
+		        ["watch"] = ["add", "list", "eval", "remove", "clear"],
+		        ["report"] = ["--format", "--output", "--summary", "--no-watches", "--refresh", "markdown", "html", "json"],
+		        ["sourcelink"] = ["resolve", "info"],
+	        ["llm"] = ["provider", "set-provider", "model", "reasoning-effort", "effort", "set-key", "set-agent", "agent", "set-agent-confirm", "agent-confirm", "reset"],
+	        ["set"] = ["verbose", "output", "timeout", "user"],
+	        ["history"] = ["clear", "search"]
+	    };
 
     /// <summary>
     /// Options for each command.
     /// </summary>
-    private static readonly Dictionary<string, string[]> Options = new(StringComparer.OrdinalIgnoreCase)
-    {
-        ["dumps"] = ["--description"],
-        ["symbols"] = ["--dump-id"],
-        ["report"] = ["--format", "--output", "--include-watches", "--include-comparison"],
-        ["set"] = ["true", "false", "text", "json"]
-    };
+	    private static readonly Dictionary<string, string[]> Options = new(StringComparer.OrdinalIgnoreCase)
+	    {
+	        ["dumps"] = ["--description"],
+	        ["symbols"] = ["--dump-id"],
+	        ["report"] = ["--format", "--output", "--summary", "--no-watches", "--refresh"],
+	        ["set"] = ["true", "false", "text", "json"]
+	    };
 
     private readonly ShellState _state;
     private Func<Task<IEnumerable<string>>>? _getDumpIds;

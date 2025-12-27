@@ -1574,6 +1574,7 @@ public class Program
                     output.Markup("  [cyan]--output, -o[/]    Output file path (required)");
                     output.Markup("  [cyan]--summary, -s[/]   Summary report only");
                     output.Markup("  [cyan]--no-watches[/]    Exclude watch expressions");
+                    output.Markup("  [cyan]--refresh[/]       Refresh AI analysis before report");
                     output.WriteLine();
                     output.Markup("[bold]INCLUDED ANALYSIS[/]");
                     output.Markup("  Reports automatically include:");
@@ -1592,6 +1593,7 @@ public class Program
                     output.Markup("  [yellow]report -o ./report.md[/]      Save to file");
                     output.Markup("  [yellow]report -o ./r.html -f html[/] Save HTML");
                     output.Markup("  [yellow]report -o ./summary.json --summary -f json[/]   JSON summary");
+                    output.Markup("  [yellow]report -o ./report.md --refresh[/]   Re-run AI analysis");
                     break;
 
                 case "sourcelink":
@@ -8387,41 +8389,12 @@ public class Program
         }
 
         // Parse options
-        var format = "markdown";
-        var outputFile = (string?)null;
-        var summary = false;
-        var includeWatches = true;
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            switch (args[i].ToLowerInvariant())
-            {
-                case "--format" or "-f" when i + 1 < args.Length:
-                    format = args[++i].ToLowerInvariant();
-                    break;
-                case "--output" or "-o" when i + 1 < args.Length:
-                    outputFile = args[++i];
-                    break;
-                case "--summary" or "-s":
-                    summary = true;
-                    break;
-                case "--no-watches":
-                    includeWatches = false;
-                    break;
-                case "summary":
-                    summary = true;
-                    break;
-                case "markdown" or "md":
-                    format = "markdown";
-                    break;
-                case "html":
-                    format = "html";
-                    break;
-                case "json":
-                    format = "json";
-                    break;
-            }
-        }
+        var options = ParseReportCommandOptions(args);
+        var format = options.Format;
+        var outputFile = options.OutputFile;
+        var summary = options.Summary;
+        var includeWatches = options.IncludeWatches;
+        var refreshAiAnalysis = options.RefreshAiAnalysis;
 
         // Validate format
         if (format is not ("markdown" or "html" or "json"))
@@ -8433,13 +8406,18 @@ public class Program
         if (string.IsNullOrWhiteSpace(outputFile))
         {
             output.Error("Output file is required. Reports are too large to display in the terminal.");
-            output.Dim("Usage: report -o <file> [-f markdown|html|json] [--summary] [--no-watches]");
+            output.Dim("Usage: report -o <file> [-f markdown|html|json] [--summary] [--no-watches] [--refresh]");
             output.Dim("Examples: report -o ./report.md | report -o ./report.json -f json | report -o ./summary.json --summary -f json");
             return;
         }
 
         try
         {
+            if (refreshAiAnalysis)
+            {
+                await RefreshAiAnalysisAsync(output, state, mcpClient).ConfigureAwait(false);
+            }
+
             string result;
             var spinnerText = summary ? "Generating summary report..." : "Generating full report...";
                 
@@ -8472,6 +8450,119 @@ public class Program
         {
             output.Error($"Report generation failed: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Command line options for the report command.
+    /// </summary>
+    private sealed record ReportCommandOptions(
+        string Format,
+        string? OutputFile,
+        bool Summary,
+        bool IncludeWatches,
+        bool RefreshAiAnalysis);
+
+    /// <summary>
+    /// Parses report command options.
+    /// </summary>
+    private static ReportCommandOptions ParseReportCommandOptions(string[] args)
+    {
+        var format = "markdown";
+        string? outputFile = null;
+        var summary = false;
+        var includeWatches = true;
+        var refreshAiAnalysis = false;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i].ToLowerInvariant())
+            {
+                case "--format" or "-f" when i + 1 < args.Length:
+                    format = args[++i].ToLowerInvariant();
+                    break;
+                case "--output" or "-o" when i + 1 < args.Length:
+                    outputFile = args[++i];
+                    break;
+                case "--summary" or "-s":
+                    summary = true;
+                    break;
+                case "--no-watches":
+                    includeWatches = false;
+                    break;
+                case "--refresh" or "-refresh" or "-r":
+                    refreshAiAnalysis = true;
+                    break;
+                case "summary":
+                    summary = true;
+                    break;
+                case "markdown" or "md":
+                    format = "markdown";
+                    break;
+                case "html":
+                    format = "html";
+                    break;
+                case "json":
+                    format = "json";
+                    break;
+            }
+        }
+
+        return new ReportCommandOptions(
+            Format: format,
+            OutputFile: outputFile,
+            Summary: summary,
+            IncludeWatches: includeWatches,
+            RefreshAiAnalysis: refreshAiAnalysis);
+    }
+
+    /// <summary>
+    /// Refreshes AI analysis before generating a report.
+    /// </summary>
+    private static async Task RefreshAiAnalysisAsync(
+        ConsoleOutput output,
+        ShellState state,
+        McpClient mcpClient)
+    {
+        if (string.IsNullOrWhiteSpace(state.SessionId))
+        {
+            throw new InvalidOperationException("No active session. Use 'open <dumpId>' first.");
+        }
+
+        output.Dim("Starting AI Crash Analysis...");
+        output.Dim("This involves executing debugger commands and parsing output.");
+        output.WriteLine();
+
+        if (string.IsNullOrWhiteSpace(state.DumpId))
+        {
+            output.Warning("Cache refresh requested, but no dump is loaded; running without cache.");
+        }
+
+        _ = await output.WithSpinnerAsync(
+                "Analyzing (executing debugger commands)...",
+                () => RunWithToolResponseTimeoutAsync(
+                    mcpClient,
+                    GetAiAnalyzeToolResponseTimeout(mcpClient.ToolResponseTimeout),
+                    async () =>
+                    {
+                        var llmProvider = LlmSettings.NormalizeProvider(state.Settings.Llm.Provider);
+                        var llmModel = state.Settings.Llm.GetEffectiveModel();
+                        var llmReasoningEffort =
+                            LlmSettings.NormalizeReasoningEffort(state.Settings.Llm.GetEffectiveReasoningEffort()) ??
+                            "default";
+
+                        return await mcpClient.AnalyzeAiAsync(
+                                state.SessionId!,
+                                state.Settings.UserId,
+                                refreshCache: true,
+                                llmProvider: llmProvider,
+                                llmModel: llmModel,
+                                llmReasoningEffort: llmReasoningEffort)
+                            .ConfigureAwait(false);
+                    }))
+            .ConfigureAwait(false);
+
+        output.Success("AI Crash Analysis complete!");
+        output.WriteLine();
     }
 
     /// <summary>

@@ -390,7 +390,8 @@ watch remove w1
 | `report -o <file>` | Generate report (required) |
 | `report -o <file> --format html` | Generate HTML report |
 | `report -o <file> --format json` | Generate JSON report |
-| `report --summary` | Generate summary only |
+| `report -o <file> --summary` | Generate summary only |
+| `report -o <file> --refresh` | Re-run AI analysis before report |
 
 **Examples:**
 ```bash
@@ -398,6 +399,7 @@ report -o ./crash-report.md
 report -o ./crash-report.html --format html
 report -o ./crash-report.json --format json
 report -o ./summary.json --summary --format json
+report -o ./crash-report.md --refresh
 ```
 
 ### Source Link Commands
