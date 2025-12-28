@@ -148,6 +148,7 @@ public sealed class AiAnalysisTools(
             UserId = sanitizedUserId,
             GeneratedAt = DateTime.UtcNow,
             DebuggerType = manager.DebuggerType,
+            SosLoaded = manager.IsDotNetDump ? manager.IsSosLoaded : null,
             Format = ReportFormat.Json
         };
         var fullReportJson = reportServiceForSampling.GenerateReport(initialReport, new ReportOptions { Format = ReportFormat.Json }, initialMetadata);
@@ -200,6 +201,7 @@ public sealed class AiAnalysisTools(
                 UserId = sanitizedUserId,
                 GeneratedAt = DateTime.UtcNow,
                 DebuggerType = manager.DebuggerType,
+                SosLoaded = manager.IsDotNetDump ? manager.IsSosLoaded : null,
                 Format = ReportFormat.Json
             });
 
@@ -239,6 +241,7 @@ public sealed class AiAnalysisTools(
                 UserId = sanitizedUserId,
                 GeneratedAt = DateTime.UtcNow,
                 DebuggerType = manager.DebuggerType,
+                SosLoaded = manager.IsDotNetDump ? manager.IsSosLoaded : null,
                 Format = ReportFormat.Json
             });
 
@@ -279,6 +282,7 @@ public sealed class AiAnalysisTools(
             UserId = sanitizedUserId,
             GeneratedAt = DateTime.UtcNow,
             DebuggerType = manager.DebuggerType,
+            SosLoaded = manager.IsDotNetDump ? manager.IsSosLoaded : null,
             Format = ReportFormat.Json
         };
 

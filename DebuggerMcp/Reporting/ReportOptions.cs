@@ -220,6 +220,16 @@ public class ReportMetadata
     public string DebuggerType { get; set; } = string.Empty;
 
     /// <summary>
+    /// Gets or sets whether SOS is loaded in the debugger session.
+    /// </summary>
+    /// <remarks>
+    /// When <c>null</c>, the SOS load status is unknown or not applicable (for example, non-.NET dumps).
+    /// </remarks>
+    [JsonPropertyName("sosLoaded")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? SosLoaded { get; set; }
+
+    /// <summary>
     /// Gets or sets the server version.
     /// </summary>
     [JsonPropertyName("serverVersion")]

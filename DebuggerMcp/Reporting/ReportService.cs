@@ -50,6 +50,7 @@ public class ReportService
             UserId = metadata.UserId,
             GeneratedAt = metadata.GeneratedAt,
             DebuggerType = metadata.DebuggerType,
+            SosLoaded = metadata.SosLoaded,
             ServerVersion = metadata.ServerVersion,
             Format = ReportFormat.Json
         };

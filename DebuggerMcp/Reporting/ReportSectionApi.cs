@@ -67,7 +67,7 @@ internal static class ReportSectionApi
             howToExpand = new[]
             {
                 "Sampling/agent: report_get(path=\"analysis.exception\"); MCP: report(action=\"get\", path=\"analysis.exception\")",
-                "Sampling/agent: report_get(path=\"analysis.exception\", select=[\"type\",\"message\",\"hresult\"])",
+                "Sampling/agent: report_get(path=\"analysis.exception\", select=[\"type\",\"message\",\"hResult\"])",
                 "Sampling/agent: report_get(path=\"analysis.threads.faultingThread\"); MCP: report(action=\"get\", path=\"analysis.threads.faultingThread\")",
                 "Sampling/agent: report_get(path=\"analysis.threads.all\", limit=25, cursor=null); MCP: report(action=\"get\", path=\"analysis.threads.all\", limit=25)",
                 "Sampling/agent: report_get(path=\"analysis.assemblies.items\", limit=50, cursor=null, select=[\"name\",\"assemblyVersion\",\"path\"])",
@@ -1172,7 +1172,7 @@ internal static class ReportSectionApi
     {
         var preferredNames = new[]
         {
-            "type", "message", "hresult", "signalName", "inner", "stackTrace",
+            "type", "message", "hResult", "hasInnerException", "innerException", "signalName", "stackTrace",
             "platform", "runtime", "process",
             "faultingThread", "threads", "modules", "assemblies", "items"
         };

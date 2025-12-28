@@ -155,7 +155,8 @@ public class ReportTools(
             UserId = sanitizedUserId,
             GeneratedAt = DateTime.UtcNow,
             Format = reportFormat,
-            DebuggerType = manager.DebuggerType
+            DebuggerType = manager.DebuggerType,
+            SosLoaded = manager.IsDotNetDump ? manager.IsSosLoaded : null
         };
 
         var reportService = new ReportService();
@@ -367,7 +368,8 @@ public class ReportTools(
             UserId = sanitizedUserId,
             GeneratedAt = DateTime.UtcNow,
             Format = reportFormat,
-            DebuggerType = manager.DebuggerType
+            DebuggerType = manager.DebuggerType,
+            SosLoaded = manager.IsDotNetDump ? manager.IsSosLoaded : null
         };
 
         var reportService = new ReportService();
@@ -384,6 +386,7 @@ public class ReportTools(
                     UserId = metadata.UserId,
                     GeneratedAt = metadata.GeneratedAt,
                     DebuggerType = metadata.DebuggerType,
+                    SosLoaded = metadata.SosLoaded,
                     ServerVersion = metadata.ServerVersion,
                     Format = ReportFormat.Json
                 });

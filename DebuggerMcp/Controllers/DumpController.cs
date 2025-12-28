@@ -1072,6 +1072,7 @@ public class DumpController : ControllerBase
                 DumpId = sanitizedDumpId,
                 UserId = sanitizedUserId,
                 DebuggerType = manager.DebuggerType,
+                SosLoaded = manager.IsDotNetDump ? manager.IsSosLoaded : null,
                 GeneratedAt = DateTime.UtcNow
             };
 

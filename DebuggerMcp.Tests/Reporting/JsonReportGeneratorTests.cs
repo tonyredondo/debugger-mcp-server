@@ -31,6 +31,7 @@ public class JsonReportGeneratorTests
             GeneratedAt = new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc),
             Format = ReportFormat.Json,
             DebuggerType = "LLDB",
+            SosLoaded = true,
             ServerVersion = "9.9.9"
         };
 
@@ -48,6 +49,7 @@ public class JsonReportGeneratorTests
         Assert.Equal("user-456", metadataElement.GetProperty("userId").GetString());
         Assert.Equal("LLDB", metadataElement.GetProperty("debuggerType").GetString());
         Assert.Equal("Json", metadataElement.GetProperty("format").GetString());
+        Assert.True(metadataElement.GetProperty("sosLoaded").GetBoolean());
 
         Assert.True(root.TryGetProperty("analysis", out var analysisElement));
         Assert.Equal("AccessViolation", analysisElement.GetProperty("summary").GetProperty("crashType").GetString());

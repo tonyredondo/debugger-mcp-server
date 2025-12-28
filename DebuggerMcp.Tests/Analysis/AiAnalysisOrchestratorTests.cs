@@ -1931,6 +1931,52 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_GetThreadStack_WhenInputIsThreadIndex_MatchesLeadingThreadIdNumber()
+    {
+        var report = new CrashAnalysisResult
+        {
+            Threads = new ThreadsInfo
+            {
+                All =
+                [
+                    // Intentionally put a managedThreadId match first to ensure thread-index matching takes precedence.
+                    new ThreadInfo { ThreadId = "99", ManagedThreadId = 16, State = "stopped", IsFaulting = false, TopFunction = "WrongThread" },
+                    new ThreadInfo { ThreadId = "16 (tid: 35176)", ManagedThreadId = 100, State = "stopped", IsFaulting = false, TopFunction = "RightThread" }
+                ]
+            }
+        };
+
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("get_thread_stack", new { threadId = "16" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "Used thread stack.",
+                evidence = new[]
+                {
+                    "get_thread_stack(threadId=\"16\") -> matched by thread index"
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            report,
+            "{}",
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Contains(result.CommandsExecuted!, c =>
+            c.Tool == "get_thread_stack" &&
+            c.Output.Contains("\"threadId\": \"16 (tid: 35176)\"", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_AnalysisCompleteWithAdditionalFindings_ParsesStringArrayAndSkipsEmptyValues()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
@@ -2022,13 +2068,17 @@ public class AiAnalysisOrchestratorTests
             entry.Message.Contains("(original", StringComparison.OrdinalIgnoreCase));
     }
 
-    [Fact]
-    public async Task AnalyzeCrashAsync_WhenExecUsesSosBangOnLldb_RewritesToValidSosCommand()
+    [Theory]
+    [InlineData("sos !name2ee System.Private.CoreLib System.String")]
+    [InlineData("sos  !name2ee System.Private.CoreLib System.String")]
+    [InlineData("sos\t!name2ee System.Private.CoreLib System.String")]
+    [InlineData("  SOS \t !name2ee System.Private.CoreLib System.String  ")]
+    public async Task AnalyzeCrashAsync_WhenExecUsesSosBangOnLldb_RewritesToValidSosCommand(string command)
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new
             {
-                command = "sos !name2ee System.Private.CoreLib System.String"
+                command
             }))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {

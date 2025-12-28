@@ -132,6 +132,7 @@ public class AnalysisTools(
             UserId = userId,
             GeneratedAt = DateTime.UtcNow,
             DebuggerType = debuggerType,
+            SosLoaded = session.Manager?.IsDotNetDump == true ? session.Manager.IsSosLoaded : null,
             Format = ReportFormat.Json
         };
 

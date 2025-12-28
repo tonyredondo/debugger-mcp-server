@@ -28,6 +28,8 @@ public class ReportSectionApiTests
         Assert.Contains("\"howToExpand\"", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("report_get", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("MCP: report(action=", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hResult", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("hresult", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -43,6 +45,22 @@ public class ReportSectionApiTests
         var json = ReportSectionApi.GetSection(report, "analysis.exception", limit: null, cursor: null, maxChars: 50_000);
         Assert.Contains("\"path\": \"analysis.exception\"", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"type\": \"System.Exception\"", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetSection_WhenMetadataSosLoadedRequested_ReturnsValue()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1", "sosLoaded": true },
+          "analysis": { }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(report, "metadata.sosLoaded", limit: null, cursor: null, maxChars: 50_000);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("metadata.sosLoaded", doc.RootElement.GetProperty("path").GetString());
+        Assert.True(doc.RootElement.GetProperty("value").GetBoolean());
     }
 
     [Fact]
@@ -96,7 +114,7 @@ public class ReportSectionApiTests
         var report = """
         {
           "metadata": { "dumpId":"d1" },
-          "analysis": { "exception": { "type":"System.Exception", "message":"boom", "data":"__LONG__" } }
+          "analysis": { "exception": { "type":"System.Exception", "message":"boom", "hResult":"0x80131513", "data":"__LONG__" } }
         }
         """;
         report = report.Replace("__LONG__", longText, StringComparison.Ordinal);
@@ -104,6 +122,8 @@ public class ReportSectionApiTests
         var json = ReportSectionApi.GetSection(report, "analysis.exception", limit: null, cursor: null, maxChars: 1000);
         Assert.Contains("\"code\": \"too_large\"", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"suggestedPaths\"", json, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("analysis.exception.hResult", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("analysis.exception.hresult", json, StringComparison.Ordinal);
     }
 
     [Fact]

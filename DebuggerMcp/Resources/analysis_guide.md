@@ -155,7 +155,7 @@ analyze(kind: "ai", sessionId: "your-session-id", userId: "your-user-id")
 During AI sampling, the model has access to evidence-gathering tools (`report_get`, `exec`, `inspect`, `get_thread_stack`) plus orchestration/meta tools (`analysis_complete`, `checkpoint_complete`, `analysis_evidence_add`, `analysis_hypothesis_register`, `analysis_hypothesis_score`).
 
 When the AI asks for more evidence, prefer:
-- `report_get(path: "analysis.exception", select: ["type","message","hresult"])` and `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
+- `report_get(path: "analysis.exception", select: ["type","message","hResult"])` and `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
 - If a section is too large, use the returned `suggestedPaths` and retry with a narrower path (arrays often suggest `path[0]` and common sub-fields), or page objects via `pageKind: "object"` + `limit/cursor`.
 - For arrays, page via `limit/cursor`, and reduce payload via `select: [...]` and (when applicable) `where: { field: "...", equals: "..." }`.
 - `inspect(address: "0x...", maxDepth: 3)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).

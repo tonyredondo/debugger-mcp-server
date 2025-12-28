@@ -1905,7 +1905,7 @@ Current state snapshot (JSON):
         sb.AppendLine("Before calling analysis_complete, gather at least one additional piece of evidence using tools.");
         sb.AppendLine("Minimum recommended sequence:");
         sb.AppendLine("- report_get(path=\"analysis.summary\")");
-        sb.AppendLine("- report_get(path=\"analysis.exception\", select=[\"type\",\"message\",\"hresult\"])");
+        sb.AppendLine("- report_get(path=\"analysis.exception\", select=[\"type\",\"message\",\"hResult\"])");
         sb.AppendLine("- report_get(path=\"analysis.threads.faultingThread\")");
         sb.AppendLine("- report_get(path=\"analysis.environment.platform\")");
         sb.AppendLine("- report_get(path=\"analysis.environment.runtime\")");
@@ -4608,9 +4608,18 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         }
 
         var trimmed = command.Trim();
-        if (trimmed.StartsWith("sos !", StringComparison.OrdinalIgnoreCase))
+
+        if (trimmed.Length >= 3 &&
+            trimmed.StartsWith("sos", StringComparison.OrdinalIgnoreCase) &&
+            (trimmed.Length == 3 || char.IsWhiteSpace(trimmed[3])))
         {
-            return "sos " + trimmed.Substring("sos !".Length);
+            var afterSos = trimmed.Length == 3 ? string.Empty : trimmed[3..];
+            var rest = afterSos.TrimStart();
+            if (rest.Length > 0 && rest[0] == '!')
+            {
+                var afterBang = rest[1..].TrimStart();
+                return string.IsNullOrWhiteSpace(afterBang) ? "sos" : $"sos {afterBang}";
+            }
         }
 
         return command;
@@ -4722,33 +4731,74 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             needleInt = parsed;
         }
 
-        foreach (var t in all)
+        // Prefer matching the debugger thread ID first (exact match).
+        var match = all.FirstOrDefault(t => string.Equals(t.ThreadId, needle, StringComparison.OrdinalIgnoreCase));
+        if (match != null)
         {
-            if (string.Equals(t.ThreadId, needle, StringComparison.OrdinalIgnoreCase))
-            {
-                return t;
-            }
+            return match;
+        }
 
-            if (needleInt.HasValue && t.ManagedThreadId == needleInt.Value)
+        // Next, support "thread index" inputs where ThreadId is formatted like: "16 (tid: 35176)".
+        if (needleInt.HasValue)
+        {
+            match = all.FirstOrDefault(t => TryParseLeadingInt(t.ThreadId) == needleInt.Value);
+            if (match != null)
             {
-                return t;
+                return match;
             }
+        }
 
-            if (!string.IsNullOrWhiteSpace(t.OsThreadId) &&
-                string.Equals(NormalizeHex(t.OsThreadId), NormalizeHex(needle), StringComparison.OrdinalIgnoreCase))
+        // OS thread ID (hex) match (accepts 0x-prefixed and non-prefixed hex).
+        match = all.FirstOrDefault(t =>
+            !string.IsNullOrWhiteSpace(t.OsThreadId) &&
+            string.Equals(NormalizeHex(t.OsThreadId), NormalizeHex(needle), StringComparison.OrdinalIgnoreCase));
+        if (match != null)
+        {
+            return match;
+        }
+
+        // OS thread ID (decimal) match.
+        match = all.FirstOrDefault(t =>
+            !string.IsNullOrWhiteSpace(t.OsThreadIdDecimal) &&
+            string.Equals(t.OsThreadIdDecimal, needle, StringComparison.OrdinalIgnoreCase));
+        if (match != null)
+        {
+            return match;
+        }
+
+        // Finally, allow matching by managed thread ID when the input is numeric.
+        if (needleInt.HasValue)
+        {
+            match = all.FirstOrDefault(t => t.ManagedThreadId == needleInt.Value);
+            if (match != null)
             {
-                return t;
+                return match;
             }
-
-            if (!string.IsNullOrWhiteSpace(t.OsThreadIdDecimal) &&
-                string.Equals(t.OsThreadIdDecimal, needle, StringComparison.OrdinalIgnoreCase))
-            {
-                return t;
-            }
-
         }
 
         return null;
+    }
+
+    private static int? TryParseLeadingInt(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var span = value.AsSpan().TrimStart();
+        var i = 0;
+        while (i < span.Length && char.IsDigit(span[i]))
+        {
+            i++;
+        }
+
+        if (i == 0)
+        {
+            return null;
+        }
+
+        return int.TryParse(span[..i], out var parsed) ? parsed : null;
     }
 
     private static string NormalizeHex(string value)
