@@ -227,15 +227,15 @@ public class DocsContractTests
         // Keep a few critical defaults in sync with ConnectionSettings.
         Assert.Contains("DEBUGGER_MCP_TIMEOUT=600", text, StringComparison.Ordinal);
         Assert.Contains("DEBUGGER_MCP_HISTORY_FILE=~/.dbg-mcp-history", text, StringComparison.Ordinal);
-        Assert.Contains("\"timeout\": 600", text, StringComparison.Ordinal);
-
-        // Ensure report CLI usage reflects the implemented flags and formats.
-        Assert.Contains("report -o <file> [-f markdown|html|json] [--summary] [--no-watches]", text, StringComparison.Ordinal);
-
-        // Avoid implying reports can be generated without an output path.
-        Assert.DoesNotContain("report --format json", text, StringComparison.Ordinal);
-        Assert.Contains("report -o <file> --format json", text, StringComparison.Ordinal);
-    }
+	        Assert.Contains("\"timeout\": 600", text, StringComparison.Ordinal);
+	
+	        // Ensure report CLI usage reflects the implemented flags and formats.
+	        Assert.Contains("report -o <file> [-f markdown|html|json] [--summary] [--refresh] [--no-watches]", text, StringComparison.Ordinal);
+	
+	        // Avoid implying reports can be generated without an output path.
+	        Assert.DoesNotContain("report --format json", text, StringComparison.Ordinal);
+	        Assert.Contains("report -o <file> --format json", text, StringComparison.Ordinal);
+	    }
 
     [Fact]
     public void CliReadme_DocumentsUpdatedDefaultsAndJsonReportNote()
