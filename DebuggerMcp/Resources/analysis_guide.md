@@ -132,7 +132,7 @@ Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
 1. Build an initial structured crash report (JSON)
 2. Use MCP sampling (`sampling/createMessage`) to ask the connected client’s LLM to analyze it
 3. Allow the LLM to request additional evidence via tools (e.g., `report_get`, `exec`, `inspect`, `get_thread_stack`)
-4. Return the original report enriched with `analysis.aiAnalysis` (root cause + supporting evidence)
+4. Return the original report enriched with `analysis.aiAnalysis` (root cause + evidence list + evidence ledger + hypotheses)
 5. Rewrite `analysis.summary.description` / `analysis.summary.recommendations` using a separate sampling pass over the full report
 6. Add `analysis.aiAnalysis.threadNarrative` and populate `analysis.threads.summary.description` with an evidence-backed “what the process was doing” narrative
 
@@ -152,7 +152,7 @@ analyze(kind: "ai", sessionId: "your-session-id", userId: "your-user-id")
 
 ### Tool Guidance (for the LLM)
 
-During AI sampling, the model has access to the sampling tools `report_get`, `exec`, `inspect`, `get_thread_stack`, and `analysis_complete`.
+During AI sampling, the model has access to evidence-gathering tools (`report_get`, `exec`, `inspect`, `get_thread_stack`) plus orchestration/meta tools (`analysis_complete`, `checkpoint_complete`, `analysis_evidence_add`, `analysis_hypothesis_register`, `analysis_hypothesis_score`).
 
 When the AI asks for more evidence, prefer:
 - `report_get(path: "analysis.exception", select: ["type","message","hresult"])` and `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
@@ -162,12 +162,29 @@ When the AI asks for more evidence, prefer:
 - `get_thread_stack(threadId: "...")` when you need a full stack for a specific thread already present in the report.
 - `exec` only for debugger/SOS commands that don’t have a first-class sampling tool.
 
+#### Stability: checkpoints + evidence/hypotheses
+
+To reduce run-to-run variance and avoid context truncation, the sampling loop maintains:
+- An **evidence ledger** (stable IDs like `E12`) via `analysis_evidence_add`
+- A set of **competing hypotheses** (stable IDs like `H2`) via `analysis_hypothesis_register` and `analysis_hypothesis_score`
+- Periodic **checkpoints** via `checkpoint_complete` (summarize what we know so far and prune the conversation context)
+
+Recommended pattern:
+1. Gather baseline evidence first (summary + exception + faulting thread + key assemblies/modules).
+2. Call `analysis_hypothesis_register` once with 2–4 competing hypotheses.
+3. Call `analysis_evidence_add` once with 5–10 evidence items summarizing baseline findings.
+4. On each subsequent iteration: after new evidence, append only *new* ledger items and update hypotheses confidence/links.
+5. Use `checkpoint_complete` periodically (default every 4 iterations) so the model carries forward a bounded “state” even if earlier messages are pruned.
+
+The final report includes these under `analysis.aiAnalysis.evidenceLedger` and `analysis.aiAnalysis.hypotheses`, and the AI should reference them in `analysis_complete.evidence` when possible.
+
 ### Debugging Sampling Issues
 
 Enable server-side tracing (may include sensitive debugger output):
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE=true` (log previews)
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true` (write full payloads)
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000` (per-file cap)
+- `DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4` (override checkpoint interval; default is 4)
 
 Trace files are written under `LOG_STORAGE_PATH/ai-sampling` (in Docker: `/app/logs/ai-sampling`).
 

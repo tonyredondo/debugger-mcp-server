@@ -273,6 +273,8 @@ Enable server-side sampling traces (may include sensitive debugger output):
 export DEBUGGER_MCP_AI_SAMPLING_TRACE=true
 export DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
 export DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
+# Optional: override how often the sampling loop checkpoints/prunes context (default: 4).
+export DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4
 ```
 
 Trace files are written under:

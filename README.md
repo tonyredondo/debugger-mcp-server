@@ -411,7 +411,9 @@ analyze(kind="ai", sessionId, userId) → Returns the same report enriched with:
   - analysis.aiAnalysis.rootCause / confidence / reasoning
   - analysis.aiAnalysis.summary (and overwrites analysis.summary.description / analysis.summary.recommendations)
   - analysis.aiAnalysis.threadNarrative (and populates analysis.threads.summary.description)
-  - analysis.aiAnalysis.commandsExecuted (tools/commands the AI requested; prefer `inspect` over raw `dumpobj` when possible)
+  - analysis.aiAnalysis.evidence (human-readable evidence list)
+  - analysis.aiAnalysis.evidenceLedger (structured evidence items with stable IDs, e.g. `E12`)
+  - analysis.aiAnalysis.hypotheses (ranked competing hypotheses with evidence links)
 
 Tip: To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
 ```
@@ -875,6 +877,8 @@ export SYMBOL_DOWNLOAD_TIMEOUT_MINUTES=10
 export DEBUGGER_MCP_AI_SAMPLING_TRACE=true
 export DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
 export DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
+# Optional: override how often the AI sampling loop checkpoints/prunes context (default: 4 iterations).
+export DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4
 
 # Convenience only: used in startup messages (HTTP binding is controlled by ASP.NET Core, e.g. ASPNETCORE_URLS)
 export PORT=5000

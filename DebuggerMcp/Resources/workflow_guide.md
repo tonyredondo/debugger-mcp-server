@@ -289,10 +289,14 @@ Notes:
 - Requires an MCP client that supports sampling (`sampling/createMessage`) with tools enabled.
   - The `dbg-mcp` CLI supports this when an LLM provider is configured (`OPENROUTER_API_KEY` or `OPENAI_API_KEY` + `llm provider openai`).
 - For managed object inspection during AI sampling, prefer the sampling tool `inspect(address: "0x...")` over `exec "sos dumpobj ..."` when the AI requests object details.
+- The server enriches the report under `analysis.aiAnalysis` and includes:
+  - `analysis.aiAnalysis.evidenceLedger` (stable evidence IDs like `E12`)
+  - `analysis.aiAnalysis.hypotheses` (competing hypotheses IDs like `H2`, linked to evidence)
 
 Debugging:
 - Enable `DEBUGGER_MCP_AI_SAMPLING_TRACE=true` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true`.
 - Trace files are written under `LOG_STORAGE_PATH/ai-sampling`.
+- Optional: override checkpoint cadence with `DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS` (default: 4).
 
 ---
 

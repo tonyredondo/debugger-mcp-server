@@ -41,7 +41,7 @@ Crash analysis outputs (`analyze` kind `crash`/`ai` and `report` with `format: "
     "watches": { },       // Watch expression evaluation results
     "signature": { },     // Stable dedup signature for triage
     "sourceContext": [ ], // Bounded source snippets (when available)
-    "aiAnalysis": { }     // AI-only (present for analyze(kind="ai"))
+    "aiAnalysis": { }     // AI-only (present for analyze(kind="ai"); includes evidenceLedger + hypotheses)
   }
 }
 ```
@@ -166,21 +166,55 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
       "rootCause": "Race condition in UserService.GetCurrentUser() leading to a null dereference during logout.",
       "confidence": "high",
       "reasoning": "The faulting thread dereferenced a field that another thread set to null; no synchronization was present.",
+      "evidence": [
+        "E1: report_get(path=\"analysis.exception.type\") → System.NullReferenceException",
+        "E4: report_get(path=\"analysis.threads.faultingThread\") → faulting thread has no lock ownership"
+      ],
+      "evidenceLedger": [
+        {
+          "id": "E1",
+          "source": "report_get(path=\"analysis.exception.type\")",
+          "finding": "Exception type is System.NullReferenceException"
+        },
+        {
+          "id": "E4",
+          "source": "report_get(path=\"analysis.threads.faultingThread\")",
+          "finding": "Faulting thread indicates a null dereference without relevant locks held",
+          "whyItMatters": "Supports a race/ordering bug rather than an environment/setup issue.",
+          "tags": [ "threads", "exception" ]
+        }
+      ],
+      "hypotheses": [
+        {
+          "id": "H1",
+          "hypothesis": "Race condition / data race",
+          "confidence": "high",
+          "supportsEvidenceIds": [ "E1", "E4" ],
+          "contradictsEvidenceIds": [],
+          "unknowns": [],
+          "notes": "No synchronization protects the shared field; failure matches stack."
+        },
+        {
+          "id": "H2",
+          "hypothesis": "Corrupted dump / heap corruption",
+          "confidence": "low",
+          "supportsEvidenceIds": [],
+          "contradictsEvidenceIds": [ "E1" ],
+          "unknowns": [ "Need verifyheap output to rule out corruption conclusively." ],
+          "notes": "No evidence of corruption; exception is consistent and repeatable."
+        }
+      ],
       "summary": {
         "description": "AI-rewritten summary description...",
         "recommendations": [ "AI-rewritten recommendation 1", "AI-rewritten recommendation 2" ],
-        "iterations": 2,
-        "commandsExecuted": [ { "tool": "report_get", "input": { "path": "analysis.exception" }, "output": "...", "iteration": 1 } ]
+        "iterations": 2
       },
       "threadNarrative": {
         "description": "At the time of the dump, the process was ...",
         "confidence": "medium",
         "iterations": 2
       },
-      "iterations": 2,
-      "commandsExecuted": [
-        { "tool": "exec", "input": { "command": "!threads" }, "output": "...", "iteration": 1, "duration": "00:00:00.123" }
-      ]
+      "iterations": 2
     }
   }
 }

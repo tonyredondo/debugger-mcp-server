@@ -79,7 +79,7 @@ symbols datadog config
 
 ### Analysis (`help analysis`)
 - `analyze <type> -o <file>` - Run analysis and save output (e.g., `analyze crash -o ./crash.json`)
-- `analyze ai -o <file>` - AI-powered deep crash analysis (requires MCP sampling / LLM config; uses a higher tool timeout by default)
+- `analyze ai -o <file>` - AI-powered deep crash analysis (requires MCP sampling / LLM config; uses a higher tool timeout by default; output includes `analysis.aiAnalysis.evidenceLedger` + `analysis.aiAnalysis.hypotheses`)
 - `analyze perf|cpu|memory|allocations|gc|threads|contention -o <file>` - Performance analyses (save JSON; many aliases supported)
 - `analyze security -o <file>` - Security scan (save JSON)
 - `compare <s1> <s2>` - Compare dumps
