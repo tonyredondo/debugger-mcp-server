@@ -681,12 +681,12 @@ dbg-mcp> dumps upload ./crash.dmp
 dbg-mcp> open <dumpId>
 dbg-mcp> analyze crash -o ./crash.json
 
-	# Generate report
-	dbg-mcp> report -o ./crash-report.md
+# Generate report
+dbg-mcp> report -o ./crash-report.md
 
-	# Re-run AI analysis before generating a report (optional)
-	dbg-mcp> report -o ./crash-report.md --refresh
-	```
+# Re-run AI analysis before generating a report (optional)
+dbg-mcp> report -o ./crash-report.md --refresh
+```
 
 ### Key Features
 

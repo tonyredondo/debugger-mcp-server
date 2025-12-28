@@ -29,12 +29,12 @@ dbg-mcp> dumps upload ./crash.dmp
 dbg-mcp> open <dumpId>
 dbg-mcp> analyze crash -o ./crash.json
 
-	# Generate report
-	dbg-mcp> report -o ./report.md
+# Generate report
+dbg-mcp> report -o ./report.md
 
-	# Re-run AI analysis before generating a report (optional)
-	dbg-mcp> report -o ./report.md --refresh
-	```
+# Re-run AI analysis before generating a report (optional)
+dbg-mcp> report -o ./report.md --refresh
+```
 
 ## Command Categories
 
@@ -97,10 +97,10 @@ In `llmagent` mode:
 - Use `/help`, `/tools`, `/reset`, `/reset conversation`
 - Tool confirmations are disabled by default for the duration of the session (the previous setting is restored on exit)
 
-	### Advanced (`help advanced`)
-	- `watch add/list/eval/remove/clear` - Watch expressions
-	- `report -o <file> [-f markdown|html|json] [--summary] [--refresh] [--no-watches]` - Generate reports (output file required)
-	- `sourcelink <path>` - Resolve to source URL
+### Advanced (`help advanced`)
+- `watch add/list/eval/remove/clear` - Watch expressions
+- `report -o <file> [-f markdown|html|json] [--summary] [--refresh] [--no-watches]` - Generate reports (output file required)
+- `sourcelink <path>` - Resolve to source URL
 
 ## Interactive Features
 
@@ -198,17 +198,17 @@ Use `server init` to create default config, `server list` to view all servers.
 
 ## Common Workflows
 
-	### Analyze a Crash
-	```bash
-	connect http://localhost:5000
-	dumps upload ./crash.dmp
-	open <dumpId>
-	analyze crash -o ./crash.json
-	report -o ./crash-report.md
-	# Re-run AI analysis before generating a report (optional)
-	report -o ./crash-report.md --refresh
-	```
-	Note: `analyze crash`, `analyze ai`, and `report -o <file> --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
+### Analyze a Crash
+```bash
+connect http://localhost:5000
+dumps upload ./crash.dmp
+open <dumpId>
+analyze crash -o ./crash.json
+report -o ./crash-report.md
+# Re-run AI analysis before generating a report (optional)
+report -o ./crash-report.md --refresh
+```
+Note: `analyze crash`, `analyze ai`, and `report -o <file> --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
 
 ### Compare Two Dumps
 ```bash
