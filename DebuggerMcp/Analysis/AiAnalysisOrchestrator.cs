@@ -339,6 +339,19 @@ public sealed class AiAnalysisOrchestrator(
                         failureMessage: lastSamplingError?.Message,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
+                await EnforceHighConfidenceJudgeAndValidationAsync(
+                        result: samplingFailureResult,
+                        commandsExecuted: commandsExecuted,
+                        evidenceLedger: evidenceLedger,
+                        hypothesisTracker: hypothesisTracker,
+                        passName: "analysis",
+                        iteration: iteration,
+                        maxTokens: maxTokens,
+                        lastModel: lastModel,
+                        traceRunDir: traceRunDir,
+                        finalizationReason: "sampling-failure",
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
                 AttachInvestigationState(samplingFailureResult, evidenceLedger, hypothesisTracker);
                 WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", samplingFailureResult);
                 return samplingFailureResult;
@@ -481,6 +494,19 @@ public sealed class AiAnalysisOrchestrator(
                             maxToolCalls: maxToolCalls,
                             lastModel: response.Model,
                             traceRunDir: traceRunDir,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    await EnforceHighConfidenceJudgeAndValidationAsync(
+                            result: final,
+                            commandsExecuted: commandsExecuted,
+                            evidenceLedger: evidenceLedger,
+                            hypothesisTracker: hypothesisTracker,
+                            passName: "analysis",
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            finalizationReason: "tool-budget",
                             cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
                     AttachInvestigationState(final, evidenceLedger, hypothesisTracker);
@@ -870,6 +896,19 @@ public sealed class AiAnalysisOrchestrator(
                 maxIterations: maxIterations,
                 lastModel: lastModel,
                 traceRunDir: traceRunDir,
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        await EnforceHighConfidenceJudgeAndValidationAsync(
+                result: synthesized,
+                commandsExecuted: commandsExecuted,
+                evidenceLedger: evidenceLedger,
+                hypothesisTracker: hypothesisTracker,
+                passName: "analysis",
+                iteration: maxIterations + 1,
+                maxTokens: maxTokens,
+                lastModel: lastModel,
+                traceRunDir: traceRunDir,
+                finalizationReason: "iteration-budget",
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
         AttachInvestigationState(synthesized, evidenceLedger, hypothesisTracker);
@@ -1262,6 +1301,74 @@ State snapshot (JSON):
             WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-parse-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
             return null;
         }
+    }
+
+    private async Task EnforceHighConfidenceJudgeAndValidationAsync(
+        AiAnalysisResult result,
+        List<ExecutedCommand> commandsExecuted,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker,
+        string passName,
+        int iteration,
+        int maxTokens,
+        string? lastModel,
+        string? traceRunDir,
+        string finalizationReason,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(commandsExecuted);
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+        ArgumentNullException.ThrowIfNull(passName);
+        ArgumentNullException.ThrowIfNull(finalizationReason);
+
+        var confidence = (result.Confidence ?? string.Empty).Trim();
+        if (!string.Equals(confidence, "high", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if ((result.Evidence?.Count ?? 0) >= MinHighConfidenceEvidenceItems
+            && HasNonReportEvidenceToolCalls(commandsExecuted)
+            && hypothesisTracker.Hypotheses.Count >= 3
+            && evidenceLedger.Items.Count > 0)
+        {
+            result.Judge ??= await TryRunJudgeStepAsync(
+                    passName: passName,
+                    systemPrompt: SystemPrompt,
+                    evidenceLedger: evidenceLedger,
+                    hypothesisTracker: hypothesisTracker,
+                    iteration: iteration,
+                    maxTokens: maxTokens,
+                    lastModel: lastModel,
+                    traceRunDir: traceRunDir,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+        }
+
+        if (!TryGetAnalysisCompleteValidationError(result, commandsExecuted, evidenceLedger, hypothesisTracker, out var validationError))
+        {
+            return;
+        }
+
+        // Avoid returning high confidence when we couldn't satisfy proof obligations (e.g., judge step missing).
+        result.Confidence = "medium";
+
+        var note = $"Note: confidence downgraded to medium because high-confidence proof obligations were not met during finalization ({finalizationReason}).";
+        if (string.IsNullOrWhiteSpace(result.Reasoning))
+        {
+            result.Reasoning = note;
+        }
+        else if (!result.Reasoning.Contains(note, StringComparison.OrdinalIgnoreCase))
+        {
+            result.Reasoning = result.Reasoning.TrimEnd() + "\n\n" + note;
+        }
+
+        WriteSamplingTraceFile(
+            traceRunDir,
+            $"iter-{iteration:0000}-finalization-validation-error.json",
+            new { passName, iteration, finalizationReason, validationError });
     }
 
     private static void PruneUnrespondedToolUsesFromLastAssistantMessage(

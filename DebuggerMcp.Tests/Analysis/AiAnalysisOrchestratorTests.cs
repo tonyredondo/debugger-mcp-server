@@ -1232,6 +1232,184 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_MaxIterationsReached_HighConfidenceSynthesis_RunsJudgeStep()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "exec", Input: new { command = "!clrstack -a" }, Id: null),
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "NullReferenceException in Foo.Bar", confidence = "medium" },
+                        new { id = "H2", hypothesis = "Assembly version mismatch", confidence = "medium" },
+                        new { id = "H3", hypothesis = "Trimming removed required member", confidence = "medium" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Faulting stack includes Foo.Bar" },
+                        new { id = "E2", source = "report_get(path=\"analysis.exception.type\")", finding = "Exception type is System.NullReferenceException" },
+                        new { id = "E3", source = "report_get(path=\"analysis.exception.message\")", finding = "Exception message indicates null dereference" },
+                        new { id = "E4", source = "report_get(path=\"analysis.assemblies.items\")", finding = "Assemblies appear consistent" },
+                        new { id = "E5", source = "report_get(path=\"analysis.environment.runtime\")", finding = "Runtime type is CoreCLR" },
+                        new { id = "E6", source = "exec(command=\"!clrstack -a\")", finding = "Top frame resolves to Foo.Bar()" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "NullReferenceException in Foo.Bar",
+              "confidence": "high",
+              "reasoning": "The report shows a null dereference.",
+              "evidence": [
+                "E1: faulting stack shows Foo.Bar",
+                "E2: exception type is System.NullReferenceException",
+                "E3: exception message indicates null dereference",
+                "E4: assemblies appear consistent",
+                "E5: runtime is CoreCLR",
+                "E6: top frame resolves to Foo.Bar()"
+              ],
+              "recommendations": [],
+              "additionalFindings": []
+            }
+            """))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H1",
+                confidence = "high",
+                rationale = "H1 best fits E1-E3; H2/H3 contradicted by E4/E5.",
+                supportsEvidenceIds = new[] { "E1", "E2", "E3" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H2", contradictsEvidenceIds = new[] { "E4" }, reason = "Assemblies appear consistent in E4." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E5" }, reason = "Runtime is CoreCLR with JIT (E5)." }
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 1,
+            CheckpointEveryIterations = 0
+        };
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("high", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H1", result.Judge!.SelectedHypothesisId);
+
+        var judgeRequest = requests.Last(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true);
+        Assert.NotNull(judgeRequest.ToolChoice);
+        Assert.Equal("required", judgeRequest.ToolChoice!.Mode);
+        Assert.NotNull(judgeRequest.Tools);
+        Assert.Single(judgeRequest.Tools!);
+        Assert.Equal("analysis_judge_complete", judgeRequest.Tools![0].Name);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MaxToolCallsReached_HighConfidenceSynthesis_RunsJudgeStep()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "NullReferenceException in Foo.Bar", confidence = "medium" },
+                        new { id = "H2", hypothesis = "Assembly version mismatch", confidence = "medium" },
+                        new { id = "H3", hypothesis = "Trimming removed required member", confidence = "medium" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!a\")", finding = "Evidence 1" },
+                        new { id = "E2", source = "exec(command=\"!a\")", finding = "Evidence 2" },
+                        new { id = "E3", source = "exec(command=\"!a\")", finding = "Evidence 3" },
+                        new { id = "E4", source = "exec(command=\"!a\")", finding = "Evidence 4" },
+                        new { id = "E5", source = "exec(command=\"!a\")", finding = "Evidence 5" },
+                        new { id = "E6", source = "exec(command=\"!a\")", finding = "Evidence 6" }
+                    }
+                }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: "tc_a"),
+                (Name: "exec", Input: new { command = "!b" }, Id: "tc_b")))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "NullReferenceException in Foo.Bar",
+              "confidence": "high",
+              "reasoning": "The report shows a null dereference.",
+              "evidence": [
+                "E1: evidence 1",
+                "E2: evidence 2",
+                "E3: evidence 3",
+                "E4: evidence 4",
+                "E5: evidence 5",
+                "E6: evidence 6"
+              ],
+              "recommendations": [],
+              "additionalFindings": []
+            }
+            """))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H1",
+                confidence = "high",
+                rationale = "H1 best fits E1-E3; H2/H3 contradicted by E4/E5.",
+                supportsEvidenceIds = new[] { "E1", "E2", "E3" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H2", contradictsEvidenceIds = new[] { "E4" }, reason = "Assemblies appear consistent." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E5" }, reason = "Runtime is CoreCLR with JIT." }
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10,
+            MaxToolCalls = 1,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("high", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H1", result.Judge!.SelectedHypothesisId);
+
+        var judgeRequest = requests.Last(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true);
+        Assert.NotNull(judgeRequest.ToolChoice);
+        Assert.Equal("required", judgeRequest.ToolChoice!.Mode);
+        Assert.NotNull(judgeRequest.Tools);
+        Assert.Single(judgeRequest.Tools!);
+        Assert.Equal("analysis_judge_complete", judgeRequest.Tools![0].Name);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_CheckpointEveryIterations_PrunesConversationAndContinues()
     {
         var requests = new List<CreateMessageRequestParams>();
