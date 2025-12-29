@@ -27,6 +27,7 @@ public sealed class AiAnalysisOrchestrator(
     private LogLevel SamplingTraceLevel => EnableVerboseSamplingTrace ? LogLevel.Information : LogLevel.Debug;
 
     private const string CheckpointCompleteToolName = "checkpoint_complete";
+    private const string AnalysisJudgeCompleteToolName = "analysis_judge_complete";
     private const string AnalysisEvidenceAddToolName = "analysis_evidence_add";
     private const string AnalysisHypothesisRegisterToolName = "analysis_hypothesis_register";
     private const string AnalysisHypothesisScoreToolName = "analysis_hypothesis_score";
@@ -691,7 +692,28 @@ public sealed class AiAnalysisOrchestrator(
 
                 var completed = ParseAnalysisComplete(pendingAnalysisCompleteInput, commandsExecuted, iteration, response.Model);
                 completed.AnalyzedAt = DateTime.UtcNow;
-                if (TryGetAnalysisCompleteValidationError(completed, commandsExecuted, evidenceLedger, out var validationError))
+
+                var completedConfidence = (completed.Confidence ?? string.Empty).Trim();
+                if (string.Equals(completedConfidence, "high", StringComparison.OrdinalIgnoreCase)
+                    && (completed.Evidence?.Count ?? 0) >= MinHighConfidenceEvidenceItems
+                    && HasNonReportEvidenceToolCalls(commandsExecuted)
+                    && hypothesisTracker.Hypotheses.Count >= 3
+                    && evidenceLedger.Items.Count > 0)
+                {
+                    completed.Judge ??= await TryRunJudgeStepAsync(
+                            passName: "analysis",
+                            systemPrompt: SystemPrompt,
+                            evidenceLedger: evidenceLedger,
+                            hypothesisTracker: hypothesisTracker,
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (TryGetAnalysisCompleteValidationError(completed, commandsExecuted, evidenceLedger, hypothesisTracker, out var validationError))
                 {
                     analysisCompleteRefusals++;
                     analysisCompleteValidationRefusals++;
@@ -985,7 +1007,7 @@ Goal: stabilize the investigation across iterations by maintaining a bounded evi
 Do NOT gather new evidence in this step: do not call exec/report_get/inspect/get_thread_stack/analysis_complete.
 
 Use the meta tools to:
-1) Register 2-4 competing hypotheses (if none exist yet).
+1) Register 3-4 competing hypotheses (if none exist yet).
 2) Add evidence items for baseline findings already observed (exception type/message/hResult, top stack frame/IP, environment/runtime, etc.).
 3) Score/update hypotheses by linking supports/contradicts evidence IDs.
 
@@ -1133,6 +1155,113 @@ Current state snapshot (JSON):
         }
 
         return new MetaBookkeepingResult(Done: true, MetaToolCallsExecuted: metaToolCallsExecuted);
+    }
+
+    private async Task<AiJudgeResult?> TryRunJudgeStepAsync(
+        string passName,
+        string systemPrompt,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker,
+        int iteration,
+        int maxTokens,
+        string? lastModel,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(passName);
+        ArgumentNullException.ThrowIfNull(systemPrompt);
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+
+        if (evidenceLedger.Items.Count == 0 || hypothesisTracker.Hypotheses.Count == 0)
+        {
+            _logger.LogDebug("[AI] Skipping judge step: no evidence/hypotheses have been recorded.");
+            return null;
+        }
+
+        var stateSnapshot = BuildStateSnapshotJson(evidenceLedger, hypothesisTracker);
+        var judgePrompt = $"""
+INTERNAL: Judge step for pass "{passName}".
+
+You are given a stable state snapshot with:
+- evidenceLedger: evidence items with IDs (E#)
+- hypotheses: competing hypotheses with IDs (H#) and their linked supports/contradicts evidence IDs
+
+Task:
+1) Select the single best-supported hypothesis ID.
+2) Provide supportsEvidenceIds (existing E#) that directly support the selection.
+3) Reject at least 2 strongest alternatives. For each rejected hypothesis, provide contradictsEvidenceIds (existing E#) and a concise reason.
+
+Confidence rubric:
+- high: >=3 supporting evidence IDs AND >=2 rejected alternatives with concrete contradicting evidence IDs.
+- medium: leading hypothesis is supported, but at least one strong alternative cannot be fully rejected.
+- low: evidence is sparse/ambiguous.
+
+Constraints:
+- Do NOT call any tools except "{AnalysisJudgeCompleteToolName}".
+- Every evidence ID you cite must exist in evidenceLedger.
+- Do NOT output any additional text.
+
+State snapshot (JSON):
+{stateSnapshot}
+""";
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages =
+            [
+                new SamplingMessage
+                {
+                    Role = Role.User,
+                    Content =
+                    [
+                        new TextContentBlock { Text = judgePrompt }
+                    ]
+                }
+            ],
+            MaxTokens = Math.Max(256, maxTokens),
+            Tools = SamplingTools.GetJudgeTools(),
+            ToolChoice = new ToolChoice { Mode = "required" }
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation("[AI] Running judge step for pass {Pass} at iteration {Iteration}...", passName, iteration);
+            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "[AI] Judge step failed in pass {Pass} at iteration {Iteration}", passName, iteration);
+            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
+            return null;
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-response.json", BuildTraceResponse(iteration, response));
+
+        var toolUse = response.Content?
+            .OfType<ToolUseContentBlock>()
+            .FirstOrDefault(b => string.Equals(b.Name, AnalysisJudgeCompleteToolName, StringComparison.OrdinalIgnoreCase));
+
+        if (toolUse == null)
+        {
+            _logger.LogWarning("[AI] Judge step returned no {Tool} tool call.", AnalysisJudgeCompleteToolName);
+            return null;
+        }
+
+        try
+        {
+            var parsed = ParseJudgeComplete(toolUse.Input, response.Model ?? lastModel);
+            return parsed;
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(ex, "[AI] Judge step returned invalid input for {Tool}.", AnalysisJudgeCompleteToolName);
+            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-parse-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
+            return null;
+        }
     }
 
     private static void PruneUnrespondedToolUsesFromLastAssistantMessage(
@@ -1519,6 +1648,7 @@ Current state snapshot (JSON):
         AiAnalysisResult completed,
         List<ExecutedCommand> commandsExecuted,
         AiEvidenceLedger? evidenceLedger,
+        AiHypothesisTracker? hypothesisTracker,
         out string validationError)
     {
         var errors = new List<string>();
@@ -1526,6 +1656,7 @@ Current state snapshot (JSON):
         var confidence = (completed.Confidence ?? string.Empty).Trim().ToLowerInvariant();
         var evidence = completed.Evidence ?? [];
         var validEvidenceIds = BuildValidEvidenceIdSet(evidenceLedger);
+        var validHypothesisIds = BuildValidHypothesisIdSet(hypothesisTracker);
 
         if (evidence.Count == 0)
         {
@@ -1565,6 +1696,19 @@ Current state snapshot (JSON):
                 {
                     errors.Add("- confidence=high requires at least one exec/inspect/get_thread_stack verification step (or lower confidence).");
                 }
+
+                if (hypothesisTracker == null || hypothesisTracker.Hypotheses.Count < 3)
+                {
+                    errors.Add("- confidence=high requires at least 3 competing hypotheses (register via analysis_hypothesis_register) so the judge can reject top alternatives and reduce variance.");
+                }
+                else
+                {
+                    var judgeIssues = GetJudgeIssues(completed.Judge, validEvidenceIds, validHypothesisIds);
+                    if (judgeIssues.Count > 0)
+                    {
+                        errors.AddRange(judgeIssues.Select(i => "- " + i));
+                    }
+                }
             }
         }
 
@@ -1596,6 +1740,157 @@ Current state snapshot (JSON):
         }
 
         return set;
+    }
+
+    private static HashSet<string> BuildValidHypothesisIdSet(AiHypothesisTracker? hypothesisTracker)
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (hypothesisTracker == null)
+        {
+            return set;
+        }
+
+        foreach (var hypothesis in hypothesisTracker.Hypotheses)
+        {
+            if (hypothesis == null)
+            {
+                continue;
+            }
+
+            var id = hypothesis.Id;
+            if (!string.IsNullOrWhiteSpace(id))
+            {
+                set.Add(id.Trim());
+            }
+        }
+
+        return set;
+    }
+
+    private static List<string> GetJudgeIssues(
+        AiJudgeResult? judge,
+        IReadOnlySet<string> validEvidenceIds,
+        IReadOnlySet<string> validHypothesisIds)
+    {
+        var issues = new List<string>();
+
+        if (judge == null)
+        {
+            issues.Add("confidence=high requires an internal judge step that selects a hypothesis and explicitly rejects top alternatives with evidence IDs.");
+            return issues;
+        }
+
+        if (string.IsNullOrWhiteSpace(judge.SelectedHypothesisId))
+        {
+            issues.Add("judge.selectedHypothesisId is required for confidence=high.");
+        }
+        else if (validHypothesisIds.Count > 0 && !validHypothesisIds.Contains(judge.SelectedHypothesisId.Trim()))
+        {
+            issues.Add($"judge.selectedHypothesisId '{judge.SelectedHypothesisId.Trim()}' does not match any registered hypothesis ID.");
+        }
+
+        var supports = judge.SupportsEvidenceIds ?? [];
+        if (supports.Count == 0)
+        {
+            issues.Add("judge.supportsEvidenceIds must be a non-empty list of evidence IDs (E#).");
+        }
+        else
+        {
+            var unknown = supports.Where(id => !IsKnownEvidenceId(id, validEvidenceIds)).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList();
+            if (unknown.Count > 0)
+            {
+                issues.Add($"judge.supportsEvidenceIds contains unknown evidence IDs: {string.Join(", ", unknown)}.");
+            }
+        }
+
+        var rejected = judge.RejectedHypotheses ?? [];
+        if (rejected.Count < 2)
+        {
+            issues.Add("judge.rejectedHypotheses must contain at least 2 rejected alternatives for confidence=high.");
+        }
+        else
+        {
+            var selected = (judge.SelectedHypothesisId ?? string.Empty).Trim();
+            var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var item in rejected)
+            {
+                if (item == null)
+                {
+                    continue;
+                }
+
+                var hid = (item.HypothesisId ?? string.Empty).Trim();
+                if (string.IsNullOrWhiteSpace(hid))
+                {
+                    issues.Add("judge.rejectedHypotheses contains an entry with missing hypothesisId.");
+                    continue;
+                }
+
+                if (!seen.Add(hid))
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrWhiteSpace(selected) && hid.Equals(selected, StringComparison.OrdinalIgnoreCase))
+                {
+                    issues.Add("judge.rejectedHypotheses must not reject the selected hypothesis.");
+                }
+
+                if (validHypothesisIds.Count > 0 && !validHypothesisIds.Contains(hid))
+                {
+                    issues.Add($"judge.rejectedHypotheses references unknown hypothesisId '{hid}'.");
+                }
+
+                if (item.ContradictsEvidenceIds == null || item.ContradictsEvidenceIds.Count == 0)
+                {
+                    issues.Add($"judge.rejectedHypotheses '{hid}' must include at least one contradicting evidence ID.");
+                }
+                else
+                {
+                    var unknownEvidence = item.ContradictsEvidenceIds
+                        .Where(id => !IsKnownEvidenceId(id, validEvidenceIds))
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(5)
+                        .ToList();
+                    if (unknownEvidence.Count > 0)
+                    {
+                        issues.Add($"judge.rejectedHypotheses '{hid}' contains unknown evidence IDs: {string.Join(", ", unknownEvidence)}.");
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(item.Reason))
+                {
+                    issues.Add($"judge.rejectedHypotheses '{hid}' must include a non-empty reason.");
+                }
+            }
+        }
+
+        return issues;
+    }
+
+    private static bool IsKnownEvidenceId(string? id, IReadOnlySet<string> validEvidenceIds)
+    {
+        if (string.IsNullOrWhiteSpace(id) || validEvidenceIds.Count == 0)
+        {
+            return false;
+        }
+
+        var trimmed = id.Trim();
+        var match = Regex.Match(trimmed, @"^E(?<n>\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        var n = match.Groups["n"].Value.TrimStart('0');
+        if (string.IsNullOrWhiteSpace(n))
+        {
+            return false;
+        }
+
+        var normalized = "E" + n;
+        return validEvidenceIds.Contains(normalized) || validEvidenceIds.Contains(trimmed);
     }
 
     private static List<string> GetEvidenceCitationIssues(List<string> evidence, IReadOnlySet<string> validEvidenceIds)
@@ -1888,7 +2183,7 @@ Current state snapshot (JSON):
         var errorNote = "Last validation errors (truncated):\n" + trimmedValidationError;
         repaired.Reasoning = repaired.Reasoning.TrimEnd() + "\n\n" + errorNote;
 
-        if (TryGetAnalysisCompleteValidationError(repaired, commandsExecuted, evidenceLedger: null, out _))
+        if (TryGetAnalysisCompleteValidationError(repaired, commandsExecuted, evidenceLedger: null, hypothesisTracker: null, out _))
         {
             // Repair failed; keep refusing.
             return null;
@@ -3531,7 +3826,7 @@ Tooling:
         sb.AppendLine("Avoid rerunning the same tool calls; reuse prior evidence and expand only the specific sections you need.");
         sb.AppendLine();
         sb.AppendLine("After baseline evidence, maintain a stable working set:");
-        sb.AppendLine("- Register 2-4 competing hypotheses via analysis_hypothesis_register.");
+        sb.AppendLine("- Register 3-4 competing hypotheses via analysis_hypothesis_register (at least 3 for high-confidence conclusions).");
         sb.AppendLine("- Log new findings via analysis_evidence_add (batch; do not spam).");
         sb.AppendLine("- Update hypotheses via analysis_hypothesis_score (link evidence IDs).");
         sb.AppendLine();
@@ -3542,6 +3837,44 @@ Tooling:
         sb.AppendLine(AiSamplingPromptBuilder.Build(initialReport));
 
         return TruncateInitialPrompt(sb.ToString());
+    }
+
+    private static AiJudgeResult ParseJudgeComplete(JsonElement input, string? model)
+    {
+        if (input.ValueKind != JsonValueKind.Object)
+        {
+            throw new ArgumentException("analysis_judge_complete input must be an object.");
+        }
+
+        var rejectedHypotheses = new List<AiRejectedHypothesis>();
+        if (input.TryGetProperty("rejectedHypotheses", out var rejectedEl) && rejectedEl.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in rejectedEl.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object)
+                {
+                    continue;
+                }
+
+                rejectedHypotheses.Add(new AiRejectedHypothesis
+                {
+                    HypothesisId = TryGetString(item, "hypothesisId") ?? string.Empty,
+                    ContradictsEvidenceIds = TryGetStringArray(item, "contradictsEvidenceIds") ?? [],
+                    Reason = TryGetString(item, "reason") ?? string.Empty
+                });
+            }
+        }
+
+        return new AiJudgeResult
+        {
+            SelectedHypothesisId = TryGetString(input, "selectedHypothesisId") ?? string.Empty,
+            Confidence = TryGetString(input, "confidence") ?? "unknown",
+            Rationale = TryGetString(input, "rationale") ?? string.Empty,
+            SupportsEvidenceIds = TryGetStringArray(input, "supportsEvidenceIds"),
+            RejectedHypotheses = rejectedHypotheses.Count == 0 ? null : rejectedHypotheses,
+            Model = model,
+            AnalyzedAt = DateTime.UtcNow
+        };
     }
 
     private static AiAnalysisResult ParseAnalysisComplete(
@@ -4944,7 +5277,7 @@ Available tools:
 
 Internal meta tools (do NOT gather new evidence; keep these concise and batched):
 - analysis_evidence_add: Add new findings to the evidence ledger (server assigns E# IDs when omitted).
-- analysis_hypothesis_register: Register 2-4 competing hypotheses early (server assigns H# IDs when omitted).
+- analysis_hypothesis_register: Register 3-4 competing hypotheses early (server assigns H# IDs when omitted). High confidence requires >=3 so the judge can reject top alternatives.
 - analysis_hypothesis_score: Update hypothesis confidence and link evidence IDs (supportsEvidenceIds/contradictsEvidenceIds).
 
 report_get notes:
@@ -4991,7 +5324,7 @@ Phase 2: General workflow (follow these steps after baseline evidence)
 10. If you have a final root cause, prepare a extended report about your findings and recommendations.
 
 Phase 3: Hypotheses and deep dives (be explicit and falsify alternatives)
-- Form 2-4 competing hypotheses (e.g., trimming/linker, assembly version mismatch, instrumentation/IL rewrite, runtime/ReadyToRun/JIT bug).
+- Form 3-4 competing hypotheses (e.g., trimming/linker, assembly version mismatch, instrumentation/IL rewrite, runtime/ReadyToRun/JIT bug).
 - For each hypothesis, gather discriminating evidence (small, targeted tool calls). Prefer checks that can falsify alternatives.
 
 Phase 4: Finalization (analysis_complete)

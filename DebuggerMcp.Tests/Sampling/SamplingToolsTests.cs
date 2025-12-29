@@ -51,6 +51,7 @@ public class SamplingToolsTests
         var all = SamplingTools.GetCrashAnalysisTools()
             .Concat(SamplingTools.GetSummaryRewriteTools())
             .Concat(SamplingTools.GetThreadNarrativeTools())
+            .Concat(SamplingTools.GetJudgeTools())
             .GroupBy(t => t.Name)
             .Select(g => g.First())
             .ToList();

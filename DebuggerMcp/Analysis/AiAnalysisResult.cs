@@ -72,6 +72,14 @@ public sealed class AiAnalysisResult
     public List<AiHypothesis>? Hypotheses { get; set; }
 
     /// <summary>
+    /// Gets or sets the result of an internal judge step that selects the best-supported hypothesis and rejects
+    /// top alternatives with evidence citations.
+    /// </summary>
+    [JsonPropertyName("judge")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public AiJudgeResult? Judge { get; set; }
+
+    /// <summary>
     /// Gets or sets the number of analysis iterations performed.
     /// </summary>
     [JsonPropertyName("iterations")]

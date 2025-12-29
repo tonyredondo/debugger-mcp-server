@@ -757,8 +757,31 @@ public class AiAnalysisOrchestratorTests
     [Fact]
     public async Task AnalyzeCrashAsync_AnalysisCompleteAfterEvidence_ReturnsResult()
     {
-        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
             .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "NullReferenceException in Foo.Bar", confidence = "unknown" },
+                        new { id = "H2", hypothesis = "Assembly version mismatch", confidence = "unknown" },
+                        new { id = "H3", hypothesis = "Trimming removed needed member", confidence = "unknown" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Faulting managed stack includes Foo.Bar" },
+                        new { id = "E2", source = "report_get(path=\"analysis.exception.type\")", finding = "Exception type is System.NullReferenceException" },
+                        new { id = "E3", source = "report_get(path=\"analysis.exception.message\")", finding = "Exception message indicates null dereference" },
+                        new { id = "E4", source = "report_get(path=\"analysis.assemblies.items\")", finding = "Assemblies appear consistent" },
+                        new { id = "E5", source = "report_get(path=\"analysis.environment.runtime\")", finding = "Runtime type is CoreCLR" }
+                    }
+                }, Id: null)))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {
                 rootCause = "NullReferenceException in Foo.Bar",
@@ -766,12 +789,24 @@ public class AiAnalysisOrchestratorTests
                 reasoning = "The report shows a null dereference.",
                 evidence = new[]
                 {
-                    "exec(command=\"!clrstack -a\") -> faulting stack shows a NullReferenceException path",
+                    "exec(command=\"!clrstack -a\") -> faulting stack shows a null dereference path",
                     "exec(command=\"!clrstack -a\") -> evidence item 2",
                     "exec(command=\"!clrstack -a\") -> evidence item 3",
                     "exec(command=\"!clrstack -a\") -> evidence item 4",
                     "exec(command=\"!clrstack -a\") -> evidence item 5",
                     "exec(command=\"!clrstack -a\") -> evidence item 6"
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H1",
+                confidence = "high",
+                rationale = "H1 best fits E1-E3; H2/H3 contradicted by E4/E5.",
+                supportsEvidenceIds = new[] { "E1", "E2", "E3" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H2", contradictsEvidenceIds = new[] { "E4" }, reason = "Assemblies appear consistent in E4." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E5" }, reason = "Runtime is CoreCLR with JIT (E5), not a trimming-only scenario." }
                 }
             }));
 
@@ -780,15 +815,30 @@ public class AiAnalysisOrchestratorTests
             MaxIterations = 5
         };
 
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
             "{\"metadata\":{},\"analysis\":{\"exception\":{\"type\":\"System.NullReferenceException\",\"message\":\"boom\"}}}",
-            new FakeDebuggerManager(),
+            debugger,
             clrMdAnalyzer: null);
 
         Assert.Equal("NullReferenceException in Foo.Bar", result.RootCause);
         Assert.Equal("high", result.Confidence);
-        Assert.Equal(2, result.Iterations);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H1", result.Judge!.SelectedHypothesisId);
+
+        Assert.Contains(requests, r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true);
+
+        var judgeRequest = requests.Last(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true);
+        Assert.NotNull(judgeRequest.ToolChoice);
+        Assert.Equal("required", judgeRequest.ToolChoice!.Mode);
+        Assert.NotNull(judgeRequest.Tools);
+        Assert.Single(judgeRequest.Tools!);
+        Assert.Equal("analysis_judge_complete", judgeRequest.Tools![0].Name);
     }
 
     [Fact]

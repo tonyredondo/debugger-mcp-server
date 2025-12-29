@@ -72,6 +72,32 @@ public static class SamplingTools
         }
         """);
 
+    private static readonly JsonElement AnalysisJudgeCompleteSchema = ParseSchema("""
+        {
+          "type": "object",
+          "properties": {
+            "selectedHypothesisId": { "type": "string", "description": "Selected hypothesis ID (e.g., H2)." },
+            "confidence": { "type": "string", "enum": ["high", "medium", "low"], "description": "Confidence in the selected hypothesis." },
+            "rationale": { "type": "string", "description": "Concise rationale that cites evidence IDs (E#)." },
+            "supportsEvidenceIds": { "type": "array", "items": { "type": "string" }, "description": "Evidence IDs (E#) that directly support the selected hypothesis." },
+            "rejectedHypotheses": {
+              "type": "array",
+              "description": "Top competing hypotheses that are rejected, with contradicting evidence IDs.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "hypothesisId": { "type": "string", "description": "Rejected hypothesis ID (e.g., H3)." },
+                  "contradictsEvidenceIds": { "type": "array", "items": { "type": "string" }, "description": "Evidence IDs (E#) that contradict this hypothesis." },
+                  "reason": { "type": "string", "description": "Why this hypothesis is rejected, citing the evidence IDs." }
+                },
+                "required": ["hypothesisId", "contradictsEvidenceIds", "reason"]
+              }
+            }
+          },
+          "required": ["selectedHypothesisId", "confidence", "rationale", "supportsEvidenceIds", "rejectedHypotheses"]
+        }
+        """);
+
     private static readonly JsonElement EvidenceAddSchema = ParseSchema("""
         {
           "type": "object",
@@ -197,6 +223,20 @@ public static class SamplingTools
                 Name = "analysis_hypothesis_score",
                 Description = "Internal meta tool: update hypothesis confidence and link evidence IDs (does not execute debugger commands).",
                 InputSchema = HypothesisScoreSchema
+            }
+        };
+
+    /// <summary>
+    /// Returns the list of tools the LLM may call during the internal judge step.
+    /// </summary>
+    public static IList<Tool> GetJudgeTools() =>
+        new List<Tool>
+        {
+            new()
+            {
+                Name = "analysis_judge_complete",
+                Description = "Internal judge completion tool: selects the best-supported hypothesis and rejects alternatives with evidence citations.",
+                InputSchema = AnalysisJudgeCompleteSchema
             }
         };
 
