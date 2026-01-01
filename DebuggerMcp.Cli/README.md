@@ -314,6 +314,7 @@ analyze security
 ```
 
 **AI analysis note**: `analyze ai` uses MCP sampling (`sampling/createMessage`). When using `dbg-mcp` as the connected MCP client, configure an LLM provider first (e.g., `OPENROUTER_API_KEY=...`, `OPENAI_API_KEY=...` + `llm provider openai`, or `ANTHROPIC_API_KEY=...` + `llm provider anthropic`). AI analysis can take a long time; `analyze ai` uses a higher MCP tool response timeout by default, and you can further increase the global timeout via `set timeout <seconds>` if needed. The server enriches the report under `analysis.aiAnalysis` and also rewrites `analysis.summary.description` / `analysis.summary.recommendations` plus adds an evidence-backed thread narrative. For stability and traceability, AI runs include `analysis.aiAnalysis.evidenceLedger` (evidence IDs like `E12`) and `analysis.aiAnalysis.hypotheses` (competing hypotheses like `H2` linked to evidence).
+Some OpenRouter models reject `tool_choice="required"` during sampling; the server auto-detects this (typically a 404 with “No endpoints found… tool_choice”) and caches a `tool_choice="auto"` fallback for the rest of the run to avoid repeated failures/budget waste.
 Note: `analyze crash`, `analyze ai`, and `report -o <file> --format json` all use the same canonical JSON report schema (`{ "metadata": { ... }, "analysis": { ... } }`).
 
 ### LLM Commands
@@ -344,7 +345,7 @@ Note: when you enter `llmagent`, the CLI temporarily sets `llm set-agent-confirm
 
 In agent mode, the LLM can also call report tools to avoid re-running expensive analysis:
 - `report_index` (small report index: summary + TOC)
-- `report_get` (fetch a report section by path, with paging + projection + simple filtering; objects can be paged via `pageKind="object"`)
+- `report_get` (fetch a report section by path, with paging + projection + simple filtering; supports array indices/slices like `analysis.exception.stackTrace[0]` and `analysis.exception.stackTrace[0:5]`; objects can be paged via `pageKind="object"`)
 
 ### Comparison Commands
 

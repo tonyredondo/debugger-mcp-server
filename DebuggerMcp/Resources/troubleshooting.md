@@ -266,6 +266,18 @@ xcode-select --install
   - The `dbg-mcp` CLI supports sampling when an LLM provider is configured (`OPENROUTER_API_KEY` or `OPENAI_API_KEY` + `llm provider openai`).
 - Try a different model/provider (some providers have stricter tool-call requirements).
 
+### "No endpoints found that support the provided 'tool_choice' value." (OpenRouter 404)
+
+**Cause**: Some OpenRouter models reject OpenAI-style `tool_choice="required"` requests (often returning a 404 error mentioning `tool_choice`).
+
+**Behavior**:
+- The server may attempt `tool_choice="required"` for internal orchestration steps (checkpoint/judge/meta) to force a tool call.
+- When this error is detected, the server retries with `tool_choice="auto"` and caches that capability for the remainder of the run to avoid repeated failures/budget waste.
+
+**Solutions**:
+- Upgrade to a server version that includes the cached fallback behavior.
+- If the model still cannot make progress even with `tool_choice="auto"`, try a different OpenRouter model or provider that supports tool use reliably.
+
 ### "I can't see what was sent to the LLM" / "Sampling is truncated"
 
 Enable server-side sampling traces (may include sensitive debugger output):

@@ -156,8 +156,9 @@ During AI sampling, the model has access to evidence-gathering tools (`report_ge
 
 When the AI asks for more evidence, prefer:
 - `report_get(path: "analysis.exception", select: ["type","message","hResult"])` and `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
-- If a section is too large, use the returned `suggestedPaths` and retry with a narrower path (arrays often suggest `path[0]` and common sub-fields), or page objects via `pageKind: "object"` + `limit/cursor`.
-- For arrays, page via `limit/cursor`, and reduce payload via `select: [...]` and (when applicable) `where: { field: "...", equals: "..." }`.
+- If a section is too large, use the returned `suggestedPaths` and retry with a narrower path. For arrays, either page via `limit/cursor` or fetch a small window via slice syntax (e.g., `analysis.exception.stackTrace[0:10]`). For objects, page via `pageKind: "object"` + `limit/cursor`.
+- For arrays, reduce payload via `select: [...]` and (when applicable) `where: { field: "...", equals: "..." }`.
+- If you accidentally request common wrong paths like `analysis.runtime` / `analysis.process` / `analysis.platform` / `analysis.threads.faulting`, the server rewrites them to their canonical equivalents under `analysis.environment.*` / `analysis.threads.faultingThread` (but prefer the canonical paths).
 - `inspect(address: "0x...", maxDepth: 3)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
 - `get_thread_stack(threadId: "...")` when you need a full stack for a specific thread already present in the report.
 - `exec` only for debugger/SOS commands that don’t have a first-class sampling tool.
@@ -187,6 +188,8 @@ Enable server-side tracing (may include sensitive debugger output):
 - `DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4` (override checkpoint interval; default is 4)
 
 Trace files are written under `LOG_STORAGE_PATH/ai-sampling` (in Docker: `/app/logs/ai-sampling`).
+
+If your trace shows errors like “No endpoints found that support the provided `tool_choice` value”, the provider rejected `tool_choice="required"` for tool calls (seen on some OpenRouter models). The server retries with `tool_choice="auto"` and caches that capability for the remainder of the run to avoid repeated failures.
 
 ### Optional Environment Variables (Crash Analysis + Source Context)
 
@@ -1275,7 +1278,7 @@ Generate comprehensive, shareable reports from your crash analysis in multiple f
 | `report(action="full")` | Generate full analysis report | `sessionId`, `userId`, `format`, `includeWatches`, `includeSecurity`, `maxStackFrames` |
 | `report(action="summary")` | Generate brief summary report | `sessionId`, `userId`, `format` |
 | `report(action="index")` | Get a small report index (summary + TOC) | `sessionId`, `userId` |
-| `report(action="get")` | Fetch a specific report section by path (paged for arrays) | `sessionId`, `userId`, `path`, `limit?`, `cursor?`, `maxChars?` (default: 20000; returns an error if exceeded) |
+| `report(action="get")` | Fetch a specific report section by path (paged for arrays; objects can be paged via `pageKind="object"`) | `sessionId`, `userId`, `path`, `limit?`, `cursor?`, `pageKind?`, `select?`, `whereField?`, `whereEquals?`, `whereCaseInsensitive?`, `maxChars?` (default: 20000; returns an error if exceeded). `path` supports indices/slices like `analysis.exception.stackTrace[0]` and `analysis.exception.stackTrace[0:10]`. |
 
 ### Supported Formats
 
@@ -1302,6 +1305,12 @@ report(action: "index", sessionId: "abc", userId: "user1")
 
 // Fetch a specific report section (paged for arrays)
 report(action: "get", sessionId: "abc", userId: "user1", path: "analysis.threads.all", limit: 25)
+
+// Fetch a bounded slice of the exception stack trace (avoid huge responses)
+report(action: "get", sessionId: "abc", userId: "user1", path: "analysis.exception.stackTrace[0:10]", select: ["frameNumber","function","module","sourceFile","lineNumber"])
+
+// Filter arrays by exact field match (case-insensitive by default)
+report(action: "get", sessionId: "abc", userId: "user1", path: "analysis.assemblies.items", whereField: "name", whereEquals: "System.Private.CoreLib", limit: 5, select: ["name","assemblyVersion","path"])
 ```
 
 ### HTTP Endpoint

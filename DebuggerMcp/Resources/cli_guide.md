@@ -84,6 +84,8 @@ symbols datadog config
 - `analyze security -o <file>` - Security scan (save JSON)
 - `compare <s1> <s2>` - Compare dumps
 
+Note: Some OpenRouter models reject `tool_choice="required"` during MCP sampling; the server detects this (often a 404 mentioning `tool_choice`) and caches a `tool_choice="auto"` fallback for the rest of the run to avoid repeated failures/budget waste.
+
 ### LLM (`help llm`)
 - `llm <prompt>` - Ask a configured LLM (OpenRouter/OpenAI/Anthropic) using your CLI transcript as context
 - `llm set-agent <true|false>` - Enable/disable tool-using agent mode for `llm`

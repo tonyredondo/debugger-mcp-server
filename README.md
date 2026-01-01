@@ -730,6 +730,9 @@ export OPENROUTER_API_KEY="..."
 export OPENROUTER_MODEL="openai/gpt-4o-mini"
 ```
 
+Notes:
+- Some OpenRouter models reject `tool_choice="required"` during MCP sampling (used by `analyze ai`). The server auto-detects this (typically a 404 with “No endpoints found… tool_choice”) and caches a `tool_choice="auto"` fallback for the rest of the run to avoid repeated failures/budget waste.
+
 To use OpenAI directly:
 ```bash
 export OPENAI_API_KEY="..."
@@ -879,6 +882,7 @@ export DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
 export DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
 # Optional: override how often the AI sampling loop checkpoints/prunes context (default: 4 iterations).
 export DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4
+# Note: if a provider rejects `tool_choice="required"` (seen on some OpenRouter models), traces may include a single `*-toolchoice-fallback.json` file per run; subsequent internal steps use `tool_choice="auto"`.
 
 # Convenience only: used in startup messages (HTTP binding is controlled by ASP.NET Core, e.g. ASPNETCORE_URLS)
 export PORT=5000

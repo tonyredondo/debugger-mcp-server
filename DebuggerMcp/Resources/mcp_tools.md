@@ -51,6 +51,8 @@ Optional parameters:
 - `pageKind` (get only, optional; default: "array") controls paging behavior: `"array"` pages arrays, `"object"` pages object properties, `"auto"` enables both.
 - `select` (get only, optional) projects object fields (applies to object results and array items that are objects).
 - `whereField` / `whereEquals` (get only, optional; arrays only) filters array items by exact field match; `whereCaseInsensitive` defaults to true.
+- `path` supports array indices like `analysis.exception.stackTrace[0]` and array slices like `analysis.exception.stackTrace[0:5]` (slices ignore cursors and return a bounded window of items).
+- Compatibility: some common mistaken prefixes are rewritten (e.g., `analysis.runtime` → `analysis.environment.runtime`, `analysis.process` → `analysis.environment.process`, `analysis.platform` → `analysis.environment.platform`, `analysis.threads.faulting` → `analysis.threads.faultingThread`).
 
 ### 5) `analyze`
 Run analysis on the currently open dump.
