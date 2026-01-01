@@ -7,6 +7,7 @@ namespace DebuggerMcp.Cli.Tests;
 /// <summary>
 /// Tests for interactive help rendering in <see cref="DebuggerMcp.Cli.Program"/>.
 /// </summary>
+[Collection("HelpSystem")]
 public class ProgramHelpTests
 {
     [Fact]

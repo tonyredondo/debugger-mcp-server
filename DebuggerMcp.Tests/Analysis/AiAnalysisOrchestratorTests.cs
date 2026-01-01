@@ -150,7 +150,9 @@ public class AiAnalysisOrchestratorTests
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
-        Assert.Equal("done", result.RootCause);
+        Assert.Equal("Assembly version mismatch", result.RootCause);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H1", result.Judge!.SelectedHypothesisId);
         Assert.NotNull(result.EvidenceLedger);
         Assert.NotEmpty(result.EvidenceLedger!);
         Assert.NotNull(result.Hypotheses);
@@ -169,6 +171,11 @@ public class AiAnalysisOrchestratorTests
         Assert.DoesNotContain(toolNames, name => string.Equals("report_get", name, StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(toolNames, name => string.Equals("exec", name, StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(toolNames, name => string.Equals("analysis_complete", name, StringComparison.OrdinalIgnoreCase));
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
     }
 
     [Fact]
@@ -221,7 +228,7 @@ public class AiAnalysisOrchestratorTests
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
-        Assert.Equal("rc", result.RootCause);
+	        Assert.Equal("Assembly mismatch caused MissingMethodException", result.RootCause);
         Assert.NotNull(result.Evidence);
         Assert.Contains(result.Evidence!, e => e.StartsWith("E1", StringComparison.OrdinalIgnoreCase));
 
@@ -831,14 +838,711 @@ public class AiAnalysisOrchestratorTests
         Assert.NotNull(result.Judge);
         Assert.Equal("H1", result.Judge!.SelectedHypothesisId);
 
-        Assert.Contains(requests, r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true);
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
 
-        var judgeRequest = requests.Last(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true);
+        var judgeRequest = judgeRequests[0];
         Assert.NotNull(judgeRequest.ToolChoice);
         Assert.Equal("required", judgeRequest.ToolChoice!.Mode);
         Assert.NotNull(judgeRequest.Tools);
         Assert.Single(judgeRequest.Tools!);
         Assert.Equal("analysis_judge_complete", judgeRequest.Tools![0].Name);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WithEvidenceAndHypotheses_RunsJudgeStepAndAlignsRootCause()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "Hypothesis 1", confidence = "low" },
+                        new { id = "H2", hypothesis = "Hypothesis 2 (winner)", confidence = "medium" },
+                        new { id = "H3", hypothesis = "Hypothesis 3", confidence = "low" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Finding 1" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "generic root cause",
+                confidence = "medium",
+                reasoning = "because",
+                evidence = new[]
+                {
+                    "E1: finding 1"
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H2",
+                confidence = "medium",
+                rationale = "H2 best fits E1.",
+                supportsEvidenceIds = new[] { "E1" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H1", contradictsEvidenceIds = new[] { "E1" }, reason = "E1 contradicts H1." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E1" }, reason = "E1 contradicts H3." }
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H2", result.Judge!.SelectedHypothesisId);
+        Assert.Equal("Hypothesis 2 (winner)", result.RootCause);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WhenJudgeToolInputIsJsonString_ParsesAndAlignsRootCause()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var judgeJson = """
+        {
+          "selectedHypothesisId": "H2",
+          "confidence": "medium",
+          "rationale": "H2 best fits E1.",
+          "supportsEvidenceIds": ["E1"],
+          "rejectedHypotheses": [
+            { "hypothesisId": "H1", "contradictsEvidenceIds": ["E1"], "reason": "E1 contradicts H1." },
+            { "hypothesisId": "H3", "contradictsEvidenceIds": ["E1"], "reason": "E1 contradicts H3." }
+          ]
+        }
+        """;
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "Hypothesis 1 (fallback winner)", confidence = "high" },
+                        new { id = "H2", hypothesis = "Hypothesis 2 (judge winner)", confidence = "low" },
+                        new { id = "H3", hypothesis = "Hypothesis 3", confidence = "low" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Finding 1" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "generic root cause",
+                confidence = "medium",
+                reasoning = "because",
+                evidence = new[]
+                {
+                    "E1: finding 1"
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", judgeJson));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H2", result.Judge!.SelectedHypothesisId);
+        Assert.Equal("H2 best fits E1.", result.Judge.Rationale);
+        Assert.Equal("Hypothesis 2 (judge winner)", result.RootCause);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WhenJudgeToolInputIsRawJsonProperty_ParsesAndAlignsRootCause()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var judgeJson = """
+        {
+          "selectedHypothesisId": "H2",
+          "confidence": "medium",
+          "rationale": "H2 best fits E1.",
+          "supportsEvidenceIds": ["E1"],
+          "rejectedHypotheses": [
+            { "hypothesisId": "H1", "contradictsEvidenceIds": ["E1"], "reason": "E1 contradicts H1." },
+            { "hypothesisId": "H3", "contradictsEvidenceIds": ["E1"], "reason": "E1 contradicts H3." }
+          ]
+        }
+        """;
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "Hypothesis 1 (fallback winner)", confidence = "high" },
+                        new { id = "H2", hypothesis = "Hypothesis 2 (judge winner)", confidence = "low" },
+                        new { id = "H3", hypothesis = "Hypothesis 3", confidence = "low" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Finding 1" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "generic root cause",
+                confidence = "medium",
+                reasoning = "because",
+                evidence = new[]
+                {
+                    "E1: finding 1"
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new { __raw = judgeJson }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H2", result.Judge!.SelectedHypothesisId);
+        Assert.Equal("H2 best fits E1.", result.Judge.Rationale);
+        Assert.Equal("Hypothesis 2 (judge winner)", result.RootCause);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WhenJudgeFails_FallsBackDeterministicallyAndAlignsRootCause()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "Hypothesis 1", confidence = "low" },
+                        new { id = "H2", hypothesis = "Hypothesis 2 (winner)", confidence = "high" },
+                        new { id = "H3", hypothesis = "Hypothesis 3", confidence = "medium" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Finding 1" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "generic root cause",
+                confidence = "medium",
+                reasoning = "because",
+                evidence = new[]
+                {
+                    "E1: finding 1"
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H2", result.Judge!.SelectedHypothesisId);
+        Assert.Contains("Deterministic fallback", result.Judge.Rationale, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Hypothesis 2 (winner)", result.RootCause);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WhenJudgeSelectsUnknownHypothesisId_FallsBackAndAlignsRootCause()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "Hypothesis 1", confidence = "low" },
+                        new { id = "H2", hypothesis = "Hypothesis 2 (winner)", confidence = "high" },
+                        new { id = "H3", hypothesis = "Hypothesis 3", confidence = "low" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Finding 1" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "generic root cause",
+                confidence = "medium",
+                reasoning = "because",
+                evidence = new[]
+                {
+                    "E1: finding 1"
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H99",
+                confidence = "medium",
+                rationale = "H99 best fits E1.",
+                supportsEvidenceIds = new[] { "E1" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H1", contradictsEvidenceIds = new[] { "E1" }, reason = "E1 contradicts H1." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E1" }, reason = "E1 contradicts H3." }
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H2", result.Judge!.SelectedHypothesisId);
+        Assert.Contains("unknown hypothesisId", result.Judge.Rationale, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("H99", result.Judge.Rationale, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Hypothesis 2 (winner)", result.RootCause);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WhenNarrativeContradictsJudgeWinner_RewritesReasoningAndFiltersRecommendations()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new
+                        {
+                            id = "H1",
+                            hypothesis = "Assembly version mismatch between compile-time and runtime.",
+                            confidence = "medium",
+                            testsToRun = new[]
+                            {
+                                "Verify assembly versions for the caller and System.Collections.Concurrent."
+                            }
+                        },
+                        new
+                        {
+                            id = "H2",
+                            hypothesis = "IL rewriting by a profiler/instrumentation.",
+                            confidence = "medium",
+                            testsToRun = Array.Empty<string>()
+                        },
+                        new
+                        {
+                            id = "H3",
+                            hypothesis = "Trimming removed the missing method.",
+                            confidence = "low",
+                            testsToRun = Array.Empty<string>()
+                        }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "report_get(path=\"analysis.exception.message\")", finding = "Method not found: ...TryGetValue..." }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "generic root cause",
+                confidence = "medium",
+                reasoning = "This is characteristic of instrumentation rather than a simple version mismatch.",
+                evidence = new[]
+                {
+                    "E1: MissingMethodException indicates TryGetValue is missing."
+                },
+                recommendations = new[]
+                {
+                    "Update or disable the instrumentation tool to prevent corruption."
+                },
+                additionalFindings = new[]
+                {
+                    "Profiler IL rewriting appears likely."
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H1",
+                confidence = "medium",
+                rationale = "The safest conclusion is version mismatch until disproved.",
+                supportsEvidenceIds = new[] { "E1" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H2", contradictsEvidenceIds = new[] { "E1" }, reason = "No direct evidence of rewriting in the dump." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E1" }, reason = "No trimming configuration evidence." }
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H1", result.Judge!.SelectedHypothesisId);
+        Assert.Equal("Assembly version mismatch between compile-time and runtime.", result.RootCause);
+        Assert.NotNull(result.Reasoning);
+        Assert.Contains("Selected hypothesis:", result.Reasoning!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("instrumentation rather than", result.Reasoning!, StringComparison.OrdinalIgnoreCase);
+
+        Assert.NotNull(result.Recommendations);
+        Assert.DoesNotContain(result.Recommendations!, r => r.Contains("disable", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(result.Recommendations!, r => r.Contains("Verify assembly versions", StringComparison.OrdinalIgnoreCase));
+
+        Assert.Null(result.AdditionalFindings);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WhenWinnerHasNoTestsToRun_UsesDefaultAssemblyMismatchRecommendations()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new
+                        {
+                            id = "H1",
+                            hypothesis = "Assembly version mismatch between compile-time and runtime.",
+                            confidence = "medium"
+                        },
+                        new
+                        {
+                            id = "H2",
+                            hypothesis = "IL rewriting by a profiler/instrumentation.",
+                            confidence = "medium"
+                        },
+                        new
+                        {
+                            id = "H3",
+                            hypothesis = "Trimming removed the missing method.",
+                            confidence = "low"
+                        }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Finding 1" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "generic root cause",
+                confidence = "medium",
+                reasoning = "This looks like instrumentation rather than a version mismatch.",
+                evidence = new[]
+                {
+                    "E1: finding 1"
+                },
+                recommendations = new[]
+                {
+                    "Update or disable the instrumentation tool to prevent type metadata corruption"
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H1",
+                confidence = "low",
+                rationale = "H1 best fits E1.",
+                supportsEvidenceIds = new[] { "E1" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H2", contradictsEvidenceIds = new[] { "E1" }, reason = "E1 contradicts H2." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E1" }, reason = "E1 contradicts H3." }
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("Assembly version mismatch between compile-time and runtime.", result.RootCause);
+
+        Assert.NotNull(result.Recommendations);
+        Assert.Contains(result.Recommendations!, r => r.Contains("analysis.assemblies.items", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.Recommendations!, r => r.Contains("report_get(path=\"analysis.assemblies\",", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(result.Recommendations!, r => r.Contains("disable", StringComparison.OrdinalIgnoreCase));
+
+        Assert.NotEmpty(requests);
+        Assert.NotNull(requests[0].SystemPrompt);
+        Assert.Contains("analysis.assemblies.items", requests[0].SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("analysis.assemblies/items", requests[0].SystemPrompt!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WhenJudgeReturnsJsonText_ParsesAndAlignsRootCause()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var judgeJson = """
+        {
+          "selectedHypothesisId": "H2",
+          "confidence": "medium",
+          "rationale": "H2 best fits E1.",
+          "supportsEvidenceIds": ["E1"],
+          "rejectedHypotheses": [
+            { "hypothesisId": "H1", "contradictsEvidenceIds": ["E1"], "reason": "E1 contradicts H1." },
+            { "hypothesisId": "H3", "contradictsEvidenceIds": ["E1"], "reason": "E1 contradicts H3." }
+          ]
+        }
+        """;
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "Hypothesis 1", confidence = "low" },
+                        new { id = "H2", hypothesis = "Hypothesis 2 (winner)", confidence = "medium" },
+                        new { id = "H3", hypothesis = "Hypothesis 3", confidence = "low" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Finding 1" }
+                    }
+                }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "generic root cause",
+                confidence = "medium",
+                reasoning = "because",
+                evidence = new[]
+                {
+                    "E1: finding 1"
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithText(judgeJson));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H2", result.Judge!.SelectedHypothesisId);
+        Assert.Equal("Hypothesis 2 (winner)", result.RootCause);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MediumConfidenceCompletion_WhenPrerequisitesMissing_SkipsJudge()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!threads" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Deadlock detected",
+                confidence = "medium",
+                reasoning = "Threads are blocked.",
+                evidence = new[]
+                {
+                    "exec(command=\"!threads\") -> thread listing indicates blocked threads"
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("Deadlock detected", result.RootCause);
+        Assert.Null(result.Judge);
+
+        Assert.DoesNotContain(
+            requests,
+            r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true);
     }
 
     [Fact]
@@ -1410,6 +2114,263 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_MaxToolCallsReached_HighConfidenceSynthesis_WhenJudgeFails_DowngradesConfidence()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "NullReferenceException in Foo.Bar", confidence = "medium" },
+                        new { id = "H2", hypothesis = "Assembly version mismatch", confidence = "high" },
+                        new { id = "H3", hypothesis = "Trimming removed required member", confidence = "medium" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!a\")", finding = "Evidence 1" },
+                        new { id = "E2", source = "exec(command=\"!a\")", finding = "Evidence 2" },
+                        new { id = "E3", source = "exec(command=\"!a\")", finding = "Evidence 3" },
+                        new { id = "E4", source = "exec(command=\"!a\")", finding = "Evidence 4" },
+                        new { id = "E5", source = "exec(command=\"!a\")", finding = "Evidence 5" },
+                        new { id = "E6", source = "exec(command=\"!a\")", finding = "Evidence 6" }
+                    }
+                }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: "tc_a"),
+                (Name: "exec", Input: new { command = "!b" }, Id: "tc_b")))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "NullReferenceException in Foo.Bar",
+              "confidence": "high",
+              "reasoning": "The report shows a null dereference.",
+              "evidence": [
+                "E1: evidence 1",
+                "E2: evidence 2",
+                "E3: evidence 3",
+                "E4: evidence 4",
+                "E5: evidence 5",
+                "E6: evidence 6"
+              ],
+              "recommendations": [],
+              "additionalFindings": []
+            }
+            """));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10,
+            MaxToolCalls = 1,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Contains("Deterministic fallback", result.Judge!.Rationale, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("Assembly version mismatch", result.RootCause);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MaxToolCallsReached_HighConfidenceSynthesis_WhenJudgeSupportsEvidenceIdsAreInsufficient_DowngradesConfidence()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "NullReferenceException in Foo.Bar", confidence = "medium" },
+                        new { id = "H2", hypothesis = "Assembly version mismatch", confidence = "high" },
+                        new { id = "H3", hypothesis = "Trimming removed required member", confidence = "medium" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!a\")", finding = "Evidence 1" },
+                        new { id = "E2", source = "exec(command=\"!a\")", finding = "Evidence 2" },
+                        new { id = "E3", source = "exec(command=\"!a\")", finding = "Evidence 3" },
+                        new { id = "E4", source = "exec(command=\"!a\")", finding = "Evidence 4" },
+                        new { id = "E5", source = "exec(command=\"!a\")", finding = "Evidence 5" },
+                        new { id = "E6", source = "exec(command=\"!a\")", finding = "Evidence 6" }
+                    }
+                }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: "tc_a"),
+                (Name: "exec", Input: new { command = "!b" }, Id: "tc_b")))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "NullReferenceException in Foo.Bar",
+              "confidence": "high",
+              "reasoning": "The report shows a null dereference.",
+              "evidence": [
+                "E1: evidence 1",
+                "E2: evidence 2",
+                "E3: evidence 3",
+                "E4: evidence 4",
+                "E5: evidence 5",
+                "E6: evidence 6"
+              ],
+              "recommendations": [],
+              "additionalFindings": []
+            }
+            """))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H2",
+                confidence = "high",
+                rationale = "H2 best fits E1; alternatives are contradicted.",
+                supportsEvidenceIds = new[] { "E1" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H1", contradictsEvidenceIds = new[] { "E4" }, reason = "Contradicted by E4." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E5" }, reason = "Contradicted by E5." }
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10,
+            MaxToolCalls = 1,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H2", result.Judge!.SelectedHypothesisId);
+        Assert.Equal("Assembly version mismatch", result.RootCause);
+        Assert.Contains("downgraded", result.Reasoning ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_MaxToolCallsReached_HighConfidenceSynthesis_WhenJudgeRejectsDuplicateHypothesisIds_DowngradesConfidence()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis = "NullReferenceException in Foo.Bar", confidence = "medium" },
+                        new { id = "H2", hypothesis = "Assembly version mismatch", confidence = "high" },
+                        new { id = "H3", hypothesis = "Trimming removed required member", confidence = "medium" }
+                    }
+                }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!a\")", finding = "Evidence 1" },
+                        new { id = "E2", source = "exec(command=\"!a\")", finding = "Evidence 2" },
+                        new { id = "E3", source = "exec(command=\"!a\")", finding = "Evidence 3" },
+                        new { id = "E4", source = "exec(command=\"!a\")", finding = "Evidence 4" },
+                        new { id = "E5", source = "exec(command=\"!a\")", finding = "Evidence 5" },
+                        new { id = "E6", source = "exec(command=\"!a\")", finding = "Evidence 6" }
+                    }
+                }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: "tc_a"),
+                (Name: "exec", Input: new { command = "!b" }, Id: "tc_b")))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "NullReferenceException in Foo.Bar",
+              "confidence": "high",
+              "reasoning": "The report shows a null dereference.",
+              "evidence": [
+                "E1: evidence 1",
+                "E2: evidence 2",
+                "E3: evidence 3",
+                "E4: evidence 4",
+                "E5: evidence 5",
+                "E6: evidence 6"
+              ],
+              "recommendations": [],
+              "additionalFindings": []
+            }
+            """))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H2",
+                confidence = "high",
+                rationale = "H2 best fits E1-E3; duplicates should not be accepted.",
+                supportsEvidenceIds = new[] { "E1", "E2", "E3" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H1", contradictsEvidenceIds = new[] { "E4" }, reason = "Contradicted by E4." },
+                    new { hypothesisId = "H1", contradictsEvidenceIds = new[] { "E5" }, reason = "Contradicted by E5 (duplicate id)." }
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10,
+            MaxToolCalls = 1,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("medium", result.Confidence);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H2", result.Judge!.SelectedHypothesisId);
+        Assert.Equal("Assembly version mismatch", result.RootCause);
+        Assert.Contains("downgraded", result.Reasoning ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_CheckpointEveryIterations_PrunesConversationAndContinues()
     {
         var requests = new List<CreateMessageRequestParams>();
@@ -1488,9 +2449,11 @@ public class AiAnalysisOrchestratorTests
             debugger,
             clrMdAnalyzer: null);
 
-        Assert.Equal("done", result.RootCause);
+        Assert.Equal("h1", result.RootCause);
+        Assert.NotNull(result.Judge);
+        Assert.False(string.IsNullOrWhiteSpace(result.Judge!.SelectedHypothesisId));
         Assert.Equal(2, debugger.ExecutedCommands.Count);
-        Assert.Equal(5, requests.Count);
+        Assert.Equal(6, requests.Count);
 
         Assert.NotNull(requests[3].ToolChoice);
         Assert.Equal("required", requests[3].ToolChoice!.Mode);
@@ -1505,6 +2468,92 @@ public class AiAnalysisOrchestratorTests
         var checkpointCarry = requests[4].Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
         Assert.Contains("Checkpoint JSON", checkpointCarry, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"facts\"", checkpointCarry, StringComparison.Ordinal);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenDuplicateCachedToolCallOccurs_CreatesCheckpointBeforeInterval()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null),
+                (Name: "exec", Input: new { command = "!a" }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_evidence_add", new { items = Array.Empty<object>() }))
+            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!a" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
+            {
+                facts = new[] { "f1" },
+                hypotheses = Array.Empty<object>(),
+                evidence = Array.Empty<object>(),
+                doNotRepeat = new[] { "exec(!a)" },
+                nextSteps = Array.Empty<object>()
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "exec(command=\"!a\") -> OUTPUT:!a"
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 4,
+            CheckpointEveryIterations = 10,
+            CheckpointMaxTokens = 256
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("done", result.RootCause);
+        Assert.Single(debugger.ExecutedCommands);
+
+        var checkpointRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(checkpointRequests);
+        Assert.NotNull(checkpointRequests[0].ToolChoice);
+        Assert.Equal("required", checkpointRequests[0].ToolChoice!.Mode);
+        Assert.Equal(256, checkpointRequests[0].MaxTokens);
     }
 
     [Fact]
@@ -1705,8 +2754,10 @@ public class AiAnalysisOrchestratorTests
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
-        Assert.Equal("done", result.RootCause);
-        Assert.Equal(4, requests.Count);
+        Assert.Equal("Assembly mismatch caused MissingMethodException", result.RootCause);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H1", result.Judge!.SelectedHypothesisId);
+        Assert.Equal(5, requests.Count);
 
         var iteration2 = requests[3];
         Assert.NotNull(iteration2.Messages);
@@ -1719,6 +2770,11 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains("\"hypotheses\"", carryForward, StringComparison.Ordinal);
         Assert.Contains("\"id\":\"E1\"", carryForward, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("\"id\":\"H1\"", carryForward, StringComparison.OrdinalIgnoreCase);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+        Assert.Single(judgeRequests);
     }
 
     [Fact]
@@ -2065,6 +3121,114 @@ public class AiAnalysisOrchestratorTests
         Assert.NotNull(result.CommandsExecuted);
         Assert.Equal(2, result.CommandsExecuted!.Count);
         Assert.DoesNotContain(result.CommandsExecuted, c => c.Output.Contains("skipped", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenDuplicateToolCallsOccur_DoesNotConsumeToolBudget()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                ("exec", new { command = "!a" }, "tc_a1"),
+                ("exec", new { command = "!a" }, "tc_a2"),
+                ("exec", new { command = "!b" }, "tc_b")))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "Ok",
+                confidence = "low",
+                reasoning = "done",
+                evidence = new[] { "exec(command=\"!a\") -> OUTPUT:!a", "exec(command=\"!b\") -> OUTPUT:!b" }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            MaxToolCalls = 2,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            "{}",
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal("Ok", result.RootCause);
+        Assert.Equal("low", result.Confidence);
+        Assert.Equal(2, debugger.ExecutedCommands.Count);
+        Assert.Contains("!a", debugger.ExecutedCommands);
+        Assert.Contains("!b", debugger.ExecutedCommands);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenToolBudgetSynthesisIsUnstructured_ProducesJudgeAlignedRecommendations()
+    {
+        const string hypothesis = "Profiler/IL rewriting instrumentation corrupted the ConcurrentDictionary type metadata";
+
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                ("analysis_hypothesis_register", new
+                {
+                    hypotheses = new[]
+                    {
+                        new { id = "H1", hypothesis, confidence = "medium" },
+                        new { id = "H2", hypothesis = "Assembly version mismatch", confidence = "medium" },
+                        new { id = "H3", hypothesis = "Trimming removed required member", confidence = "low" }
+                    }
+                }, null),
+                ("analysis_evidence_add", new
+                {
+                    items = new[]
+                    {
+                        new { id = "E1", source = "exec(command=\"!a\")", finding = "Saw MissingMethodException" }
+                    }
+                }, null),
+                ("exec", new { command = "!a" }, "tc_a"),
+                ("exec", new { command = "!b" }, "tc_b")))
+            .EnqueueResult(CreateMessageResultWithText("not valid json"))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H1",
+                confidence = "low",
+                rationale = "Deterministic test judge output.",
+                supportsEvidenceIds = new[] { "E1" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H2", contradictsEvidenceIds = Array.Empty<string>(), reason = "No contradicting evidence recorded." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = Array.Empty<string>(), reason = "No contradicting evidence recorded." }
+                }
+            }));
+
+        var debugger = new FakeDebuggerManager
+        {
+            CommandHandler = cmd => $"OUTPUT:{cmd}"
+        };
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            MaxToolCalls = 1,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            debugger,
+            clrMdAnalyzer: null);
+
+        Assert.Equal(hypothesis, result.RootCause);
+        Assert.NotNull(result.Judge);
+        Assert.Equal("H1", result.Judge!.SelectedHypothesisId);
+        Assert.NotNull(result.Recommendations);
+        Assert.NotEmpty(result.Recommendations!);
+        Assert.NotNull(result.Reasoning);
+        Assert.Contains("Selected hypothesis:", result.Reasoning!, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("Final synthesis", result.Reasoning!, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -2534,8 +3698,8 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
-    public async Task AnalyzeCrashAsync_WhenTraceFileByteLimitExceeded_WritesTruncationMarker()
-    {
+	    public async Task AnalyzeCrashAsync_WhenTraceFileByteLimitExceeded_WritesTruncationMarker()
+	    {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {
@@ -2581,12 +3745,388 @@ public class AiAnalysisOrchestratorTests
             {
                 // Best-effort cleanup.
             }
-        }
+	        }
+	    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenMetaBookkeepingToolChoiceRequiredUnsupported_FallsBackToAuto()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new ToolChoiceRequiredRejectingSamplingClient(requests)
+            .EnqueueAnalysisResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null)))
+            .WithMetaBookkeepingResult(CreateMessageResultWithToolUse("analysis_hypothesis_register", new
+            {
+                hypotheses = new[]
+                {
+                    new { hypothesis = "Assembly mismatch", confidence = "unknown" }
+                }
+            }))
+            .EnqueueAnalysisResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = Array.Empty<string>()
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 0
+        };
+
+        _ = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        var metaRequests = requests
+            .Where(r => r.Tools != null && r.Tools.All(t =>
+                string.Equals(t.Name, "analysis_evidence_add", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t.Name, "analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t.Name, "analysis_hypothesis_score", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        Assert.True(metaRequests.Count >= 2, $"Expected at least two meta bookkeeping requests (required + fallback), got {metaRequests.Count}.");
+        Assert.Equal("required", metaRequests[0].ToolChoice?.Mode);
+        Assert.Equal("auto", metaRequests[1].ToolChoice?.Mode);
     }
 
-    private static CreateMessageResult CreateMessageResultWithText(string text) =>
-        new()
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenCheckpointToolChoiceRequiredUnsupported_FallsBackToAuto()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new CheckpointToolChoiceRequiredRejectingSamplingClient(requests)
+            .EnqueueAnalysisResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null)))
+            .WithCheckpointResult(CreateMessageResultWithToolUse("checkpoint_complete", new
+            {
+                facts = new[] { "f1" },
+                hypotheses = Array.Empty<object>(),
+                evidence = Array.Empty<object>(),
+                doNotRepeat = Array.Empty<string>(),
+                nextSteps = Array.Empty<object>()
+            }))
+            .EnqueueAnalysisResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = Array.Empty<string>()
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 1,
+            MaxMetaToolCalls = 0
+        };
+
+        _ = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        var checkpointRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+
+        Assert.True(checkpointRequests.Count >= 2, $"Expected at least two checkpoint requests (required + fallback), got {checkpointRequests.Count}.");
+        Assert.Equal("required", checkpointRequests[0].ToolChoice?.Mode);
+        Assert.Equal("auto", checkpointRequests[1].ToolChoice?.Mode);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenToolChoiceRequiredUnsupported_CachesFallbackForSubsequentCheckpointRequests()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new ToolChoiceRequiredRejectingSamplingClient(requests)
+            .EnqueueAnalysisResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null)))
+            .WithCheckpointResult(CreateMessageResultWithToolUse("checkpoint_complete", new
+            {
+                facts = Array.Empty<string>(),
+                hypotheses = Array.Empty<object>(),
+                evidence = Array.Empty<object>(),
+                doNotRepeat = Array.Empty<string>(),
+                nextSteps = Array.Empty<object>()
+            }))
+            .EnqueueAnalysisResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueAnalysisResult(CreateMessageResultWithText("no-op"))
+            .EnqueueAnalysisResult(CreateMessageResultWithText("""
+                {
+                  "rootCause": "done",
+                  "confidence": "low",
+                  "reasoning": "ok",
+                  "evidence": [],
+                  "recommendations": [],
+                  "additionalFindings": []
+                }
+                """));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 1,
+            MaxMetaToolCalls = 0
+        };
+
+        _ = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        var metaRequests = requests
+            .Where(r => r.Tools != null && r.Tools.All(t =>
+                string.Equals(t.Name, "analysis_evidence_add", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t.Name, "analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(t.Name, "analysis_hypothesis_score", StringComparison.OrdinalIgnoreCase)))
+            .ToList();
+
+        var checkpointRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+
+        Assert.True(metaRequests.Count >= 2, $"Expected at least two meta bookkeeping requests (required + fallback), got {metaRequests.Count}.");
+        Assert.Equal("required", metaRequests[0].ToolChoice?.Mode);
+        Assert.Equal("auto", metaRequests[1].ToolChoice?.Mode);
+
+        Assert.Equal(2, checkpointRequests.Count);
+        Assert.All(checkpointRequests, r => Assert.Equal("auto", r.ToolChoice?.Mode));
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenJudgeToolChoiceRequiredUnsupported_FallsBackToAuto()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new ToolChoiceRequiredRejectingSamplingClient(requests)
+            .EnqueueAnalysisResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new { source = "report_get(path=\"analysis.exception.type\")", finding = "System.Exception" }
+                    }
+                }, Id: null),
+                (Name: "analysis_hypothesis_register", Input: new
+                {
+                    hypotheses = new[]
+                    {
+                        new { hypothesis = "Assembly mismatch", confidence = "unknown" }
+                    }
+                }, Id: null),
+                (Name: "analysis_complete", Input: new
+                {
+                    rootCause = "done",
+                    confidence = "low",
+                    reasoning = "ok",
+                    evidence = new[] { "E1" }
+                }, Id: null)))
+            .WithJudgeResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H1",
+                confidence = "low",
+                rationale = "E1 supports H1",
+                supportsEvidenceIds = new[] { "E1" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H2", contradictsEvidenceIds = new[] { "E1" }, reason = "Not supported" },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E1" }, reason = "Not supported" }
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 2,
+            CheckpointEveryIterations = 0
+        };
+
+        _ = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        var judgeRequests = requests
+            .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
+            .ToList();
+
+        Assert.True(judgeRequests.Count >= 2, $"Expected at least two judge requests (required + fallback), got {judgeRequests.Count}.");
+        Assert.Equal("required", judgeRequests[0].ToolChoice?.Mode);
+        Assert.Equal("auto", judgeRequests[1].ToolChoice?.Mode);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenNoProgressPersists_FinalizesEarly()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "metadata" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "metadata" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "metadata" }))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "rootCause": "stopped",
+              "confidence": "low",
+              "reasoning": "no progress",
+              "evidence": [],
+              "recommendations": [],
+              "additionalFindings": []
+            }
+            """));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 50,
+            CheckpointEveryIterations = 0,
+            MaxMetaToolCalls = 0,
+            MaxConsecutiveNoProgressIterations = 2
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("stopped", result.RootCause);
+
+        var finalRequest = requests.Last();
+        Assert.Null(finalRequest.Tools);
+        Assert.Null(finalRequest.ToolChoice);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenModelSpamsToolUses_PrunesExcessAndContinues()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var toolUses = Enumerable.Range(0, 10)
+            .Select(_ => (Name: "report_get", Input: (object)new { path = "metadata" }, Id: (string?)null))
+            .ToArray();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(toolUses))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "report_get(path=\"metadata\") -> debuggerType=LLDB"
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 0,
+            MaxMetaToolCalls = 0,
+            MaxToolUsesPerIteration = 2
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("done", result.RootCause);
+        Assert.NotNull(result.CommandsExecuted);
+
+        var reportGets = result.CommandsExecuted!.Where(c => c.Tool == "report_get").ToList();
+        Assert.True(reportGets.Count <= 2, $"Expected report_get calls to be capped to 2, got {reportGets.Count}.");
+
+        var iteration2Messages = requests[1].Messages;
+        var sawToolUseLimitMessage = iteration2Messages
+            .SelectMany(m => m.Content ?? Array.Empty<ContentBlock>())
+            .OfType<TextContentBlock>()
+            .Select(b => b.Text)
+            .Any(t => t != null && t.Contains("Tool-use limit hit", StringComparison.OrdinalIgnoreCase));
+
+        Assert.True(sawToolUseLimitMessage, "Expected the tool-use limit marker message to be carried into the next iteration request.");
+    }
+
+	    private static CreateMessageResult CreateMessageResultWithText(string text) =>
+	        new()
+	        {
             Model = "test-model",
             Role = Role.Assistant,
             Content =
@@ -2685,6 +4225,216 @@ public class AiAnalysisOrchestratorTests
             }
 
             return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private sealed class ToolChoiceRequiredRejectingSamplingClient(List<CreateMessageRequestParams> requests) : ISamplingClient
+    {
+        private const string OpenRouterToolChoiceError =
+            "OpenRouter request failed (404): {\"error\":{\"message\":\"No endpoints found that support the provided 'tool_choice' value.\",\"code\":404}}";
+
+        private readonly Queue<CreateMessageResult> _analysisResults = new();
+        private readonly List<CreateMessageRequestParams> _requests = requests;
+        private CreateMessageResult? _metaResult;
+        private CreateMessageResult? _checkpointResult;
+        private CreateMessageResult? _judgeResult;
+
+        private bool _metaRejected;
+        private bool _checkpointRejected;
+        private bool _judgeRejected;
+
+        public bool IsSamplingSupported => true;
+
+        public bool IsToolUseSupported => true;
+
+        public ToolChoiceRequiredRejectingSamplingClient EnqueueAnalysisResult(CreateMessageResult result)
+        {
+            _analysisResults.Enqueue(result);
+            return this;
+        }
+
+        public ToolChoiceRequiredRejectingSamplingClient WithMetaBookkeepingResult(CreateMessageResult result)
+        {
+            _metaResult = result;
+            return this;
+        }
+
+        public ToolChoiceRequiredRejectingSamplingClient WithCheckpointResult(CreateMessageResult result)
+        {
+            _checkpointResult = result;
+            return this;
+        }
+
+        public ToolChoiceRequiredRejectingSamplingClient WithJudgeResult(CreateMessageResult result)
+        {
+            _judgeResult = result;
+            return this;
+        }
+
+        public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
+        {
+            _requests.Add(request);
+
+            if (IsMetaBookkeepingRequest(request))
+            {
+                if (!_metaRejected && IsRequired(request))
+                {
+                    _metaRejected = true;
+                    throw new InvalidOperationException(OpenRouterToolChoiceError);
+                }
+
+                return Task.FromResult(_metaResult ?? CreateMessageResultWithText("no meta result scripted"));
+            }
+
+            if (IsCheckpointRequest(request))
+            {
+                if (!_checkpointRejected && IsRequired(request))
+                {
+                    _checkpointRejected = true;
+                    throw new InvalidOperationException(OpenRouterToolChoiceError);
+                }
+
+                return Task.FromResult(_checkpointResult ?? CreateMessageResultWithText("no checkpoint result scripted"));
+            }
+
+            if (IsJudgeRequest(request))
+            {
+                if (!_judgeRejected && IsRequired(request))
+                {
+                    _judgeRejected = true;
+                    throw new InvalidOperationException(OpenRouterToolChoiceError);
+                }
+
+                return Task.FromResult(_judgeResult ?? CreateMessageResultWithText("no judge result scripted"));
+            }
+
+            if (_analysisResults.Count == 0)
+            {
+                return Task.FromResult(CreateMessageResultWithText("no more scripted responses"));
+            }
+
+            return Task.FromResult(_analysisResults.Dequeue());
+        }
+
+        private static bool IsRequired(CreateMessageRequestParams request)
+            => string.Equals(request.ToolChoice?.Mode, "required", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsCheckpointRequest(CreateMessageRequestParams request)
+            => request.Tools?.Any(t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase)) == true;
+
+        private static bool IsJudgeRequest(CreateMessageRequestParams request)
+            => request.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true;
+
+        private static bool IsMetaBookkeepingRequest(CreateMessageRequestParams request)
+        {
+            if (request.Tools == null || request.Tools.Count == 0)
+            {
+                return false;
+            }
+
+            var names = request.Tools
+                .Select(t => (t.Name ?? string.Empty).Trim())
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList();
+
+            if (names.Count == 0)
+            {
+                return false;
+            }
+
+            var isMeta = names.All(n =>
+                string.Equals(n, "analysis_evidence_add", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(n, "analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(n, "analysis_hypothesis_score", StringComparison.OrdinalIgnoreCase));
+
+            return isMeta;
+        }
+    }
+
+    private sealed class CheckpointToolChoiceRequiredRejectingSamplingClient(List<CreateMessageRequestParams> requests) : ISamplingClient
+    {
+        private const string OpenRouterToolChoiceError =
+            "OpenRouter request failed (404): {\"error\":{\"message\":\"No endpoints found that support the provided 'tool_choice' value.\",\"code\":404}}";
+
+        private readonly Queue<CreateMessageResult> _analysisResults = new();
+        private readonly List<CreateMessageRequestParams> _requests = requests;
+        private CreateMessageResult? _checkpointResult;
+
+        private bool _checkpointRejected;
+
+        public bool IsSamplingSupported => true;
+
+        public bool IsToolUseSupported => true;
+
+        public CheckpointToolChoiceRequiredRejectingSamplingClient EnqueueAnalysisResult(CreateMessageResult result)
+        {
+            _analysisResults.Enqueue(result);
+            return this;
+        }
+
+        public CheckpointToolChoiceRequiredRejectingSamplingClient WithCheckpointResult(CreateMessageResult result)
+        {
+            _checkpointResult = result;
+            return this;
+        }
+
+        public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
+        {
+            _requests.Add(request);
+
+            if (IsCheckpointRequest(request))
+            {
+                if (!_checkpointRejected && IsRequired(request))
+                {
+                    _checkpointRejected = true;
+                    throw new InvalidOperationException(OpenRouterToolChoiceError);
+                }
+
+                return Task.FromResult(_checkpointResult ?? CreateMessageResultWithText("no checkpoint result scripted"));
+            }
+
+            if (IsMetaBookkeepingRequest(request))
+            {
+                return Task.FromResult(CreateMessageResultWithText("no meta result scripted"));
+            }
+
+            if (_analysisResults.Count == 0)
+            {
+                return Task.FromResult(CreateMessageResultWithText("no more scripted responses"));
+            }
+
+            return Task.FromResult(_analysisResults.Dequeue());
+        }
+
+        private static bool IsRequired(CreateMessageRequestParams request)
+            => string.Equals(request.ToolChoice?.Mode, "required", StringComparison.OrdinalIgnoreCase);
+
+        private static bool IsCheckpointRequest(CreateMessageRequestParams request)
+            => request.Tools?.Any(t => string.Equals(t.Name, "checkpoint_complete", StringComparison.OrdinalIgnoreCase)) == true;
+
+        private static bool IsMetaBookkeepingRequest(CreateMessageRequestParams request)
+        {
+            if (request.Tools == null || request.Tools.Count == 0)
+            {
+                return false;
+            }
+
+            var names = request.Tools
+                .Select(t => (t.Name ?? string.Empty).Trim())
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToList();
+
+            if (names.Count == 0)
+            {
+                return false;
+            }
+
+            var isMeta = names.All(n =>
+                string.Equals(n, "analysis_evidence_add", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(n, "analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(n, "analysis_hypothesis_score", StringComparison.OrdinalIgnoreCase));
+
+            return isMeta;
         }
     }
 

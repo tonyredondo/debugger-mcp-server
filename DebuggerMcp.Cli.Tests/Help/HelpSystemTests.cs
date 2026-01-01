@@ -5,6 +5,7 @@ namespace DebuggerMcp.Cli.Tests.Help;
 /// <summary>
 /// Tests for the HelpSystem class.
 /// </summary>
+[Collection("HelpSystem")]
 public class HelpSystemTests
 {
     [Fact]

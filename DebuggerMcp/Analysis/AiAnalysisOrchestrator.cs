@@ -3,6 +3,7 @@
 using System.Diagnostics;
 using System.Buffers;
 using System.Linq;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -102,6 +103,26 @@ public sealed class AiAnalysisOrchestrator(
     /// Gets or sets the maximum number of tool calls to execute across all iterations.
     /// </summary>
     public int MaxToolCalls { get; set; } = 100;
+
+    /// <summary>
+    /// Gets or sets the maximum number of tool uses to execute from a single assistant response (iteration),
+    /// including cached duplicates.
+    /// </summary>
+    /// <remarks>
+    /// This guards against models/providers getting stuck emitting a single response with hundreds of repeated tool calls,
+    /// which can explode the conversation history even when results are cached.
+    /// </remarks>
+    public int MaxToolUsesPerIteration { get; set; } = 40;
+
+    /// <summary>
+    /// Gets or sets the maximum number of consecutive iterations allowed without making progress
+    /// (no new unique evidence tool calls and no evidence/hypothesis ledger changes).
+    /// </summary>
+    /// <remarks>
+    /// This guards against models/providers getting stuck in loops that repeatedly request the same tools (often cached)
+    /// or emit non-actionable output, consuming the iteration budget without improving the conclusion.
+    /// </remarks>
+    public int MaxConsecutiveNoProgressIterations { get; set; } = 4;
 
     /// <summary>
     /// Gets or sets the maximum number of internal meta-tool calls to execute across all iterations.
@@ -231,6 +252,7 @@ public sealed class AiAnalysisOrchestrator(
         var maxIterations = Math.Max(1, MaxIterations);
         var maxTokens = MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024;
         var maxToolCalls = MaxToolCalls > 0 ? MaxToolCalls : 50;
+        var maxToolUsesPerIteration = MaxToolUsesPerIteration > 0 ? MaxToolUsesPerIteration : 40;
         var maxMetaToolCalls = MaxMetaToolCalls > 0 ? MaxMetaToolCalls : 200;
         var tools = SamplingTools.GetCrashAnalysisTools();
 
@@ -240,6 +262,9 @@ public sealed class AiAnalysisOrchestrator(
         var baselineTracker = new BaselineEvidenceTracker();
         var baselineCompleteLogged = false;
         var metaBookkeepingDone = false;
+        var judgeAttemptState = new JudgeAttemptState();
+        var internalToolChoiceModeCache = new InternalToolChoiceModeCache();
+        var consecutiveNoProgressIterations = 0;
 
         string? lastIterationAssistantText = null;
         string? lastModel = null;
@@ -256,6 +281,11 @@ public sealed class AiAnalysisOrchestrator(
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
+            var uniqueToolCallsAtIterationStart = toolResultCache.Count;
+            var evidenceCountAtIterationStart = evidenceLedger.Items.Count;
+            var hypothesisCountAtIterationStart = hypothesisTracker.Hypotheses.Count;
+            var checkpointAppliedThisIteration = false;
+
             CreateMessageResult? response = null;
             Exception? lastSamplingError = null;
 
@@ -339,16 +369,33 @@ public sealed class AiAnalysisOrchestrator(
                         failureMessage: lastSamplingError?.Message,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
-                await EnforceHighConfidenceJudgeAndValidationAsync(
+                await ApplyJudgeDrivenFinalizationAsync(
                         result: samplingFailureResult,
                         commandsExecuted: commandsExecuted,
                         evidenceLedger: evidenceLedger,
                         hypothesisTracker: hypothesisTracker,
+                        internalToolChoiceModeCache: internalToolChoiceModeCache,
                         passName: "analysis",
                         iteration: iteration,
                         maxTokens: maxTokens,
                         lastModel: lastModel,
                         traceRunDir: traceRunDir,
+                        judgeAttemptState: judgeAttemptState,
+                        finalizationReason: "sampling-failure",
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+                await EnforceHighConfidenceJudgeAndValidationAsync(
+                        result: samplingFailureResult,
+                        commandsExecuted: commandsExecuted,
+                        evidenceLedger: evidenceLedger,
+                        hypothesisTracker: hypothesisTracker,
+                        internalToolChoiceModeCache: internalToolChoiceModeCache,
+                        passName: "analysis",
+                        iteration: iteration,
+                        maxTokens: maxTokens,
+                        lastModel: lastModel,
+                        traceRunDir: traceRunDir,
+                        judgeAttemptState: judgeAttemptState,
                         finalizationReason: "sampling-failure",
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
@@ -385,6 +432,61 @@ public sealed class AiAnalysisOrchestrator(
             {
                 // No tool calls; continue until max iterations. Capture model in the result to aid debugging.
                 _logger.Log(SamplingTraceLevel, "[AI] No tool calls in iteration {Iteration}", iteration);
+                consecutiveNoProgressIterations++;
+                if (consecutiveNoProgressIterations >= Math.Max(1, MaxConsecutiveNoProgressIterations))
+                {
+                    _logger.LogInformation(
+                        "[AI] No progress detected for {Count} consecutive iterations; finalizing analysis early.",
+                        consecutiveNoProgressIterations);
+
+                    var final = await FinalizeAnalysisAfterNoProgressDetectedAsync(
+                            systemPrompt: SystemPrompt,
+                            messages: messages,
+                            commandsExecuted: commandsExecuted,
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            consecutiveNoProgressIterations: consecutiveNoProgressIterations,
+                            uniqueToolCalls: toolResultCache.Count,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+
+                    await ApplyJudgeDrivenFinalizationAsync(
+                            result: final,
+                            commandsExecuted: commandsExecuted,
+                            evidenceLedger: evidenceLedger,
+                            hypothesisTracker: hypothesisTracker,
+                            internalToolChoiceModeCache: internalToolChoiceModeCache,
+                            passName: "analysis",
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            judgeAttemptState: judgeAttemptState,
+                            finalizationReason: "no-progress",
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    await EnforceHighConfidenceJudgeAndValidationAsync(
+                            result: final,
+                            commandsExecuted: commandsExecuted,
+                            evidenceLedger: evidenceLedger,
+                            hypothesisTracker: hypothesisTracker,
+                            internalToolChoiceModeCache: internalToolChoiceModeCache,
+                            passName: "analysis",
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            judgeAttemptState: judgeAttemptState,
+                            finalizationReason: "no-progress",
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+
+                    AttachInvestigationState(final, evidenceLedger, hypothesisTracker);
+                    WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", final);
+                    return final;
+                }
                 continue;
             }
 
@@ -394,19 +496,21 @@ public sealed class AiAnalysisOrchestrator(
             string? pendingAnalysisCompleteId = null;
 
             var rewrittenToolUses = new List<(ToolUseContentBlock ToolUse, string Name, JsonElement Input)>(toolUses.Count);
-            foreach (var toolUse in toolUses)
-            {
-                var (effectiveToolName, effectiveToolInput) = RewriteToolUseIfNeeded(toolUse, clrMdAnalyzer);
-                rewrittenToolUses.Add((toolUse, effectiveToolName, effectiveToolInput));
-            }
+	            foreach (var toolUse in toolUses)
+	            {
+	                var (effectiveToolName, effectiveToolInput) = RewriteToolUseIfNeeded(toolUse, clrMdAnalyzer);
+	                rewrittenToolUses.Add((toolUse, effectiveToolName, effectiveToolInput));
+	            }
 
-            var respondedToolUseIds = new HashSet<string>(StringComparer.Ordinal);
+	            var respondedToolUseIds = new HashSet<string>(StringComparer.Ordinal);
+	            var toolUsesExecutedThisIteration = 0;
+	            var toolUsesPrunedDueToLimit = false;
 
-            foreach (var (toolUse, effectiveToolName, effectiveToolInput) in rewrittenToolUses)
-            {
-                LogRequestedToolSummary(iteration, toolUse, effectiveToolName, effectiveToolInput);
+	            foreach (var (toolUse, effectiveToolName, effectiveToolInput) in rewrittenToolUses)
+	            {
+	                LogRequestedToolSummary(iteration, toolUse, effectiveToolName, effectiveToolInput);
 
-                if (string.Equals(effectiveToolName, "analysis_complete", StringComparison.OrdinalIgnoreCase))
+	                if (string.Equals(effectiveToolName, "analysis_complete", StringComparison.OrdinalIgnoreCase))
                 {
                     if (pendingAnalysisComplete == null)
                     {
@@ -414,31 +518,42 @@ public sealed class AiAnalysisOrchestrator(
                         pendingAnalysisCompleteInput = effectiveToolInput;
                         pendingAnalysisCompleteName = effectiveToolName;
                         pendingAnalysisCompleteId = toolUse.Id;
-                    }
-                    continue;
-                }
+	                    }
+	                    continue;
+	                }
 
-                if (IsInternalMetaTool(effectiveToolName))
-                {
-                    var metaSw = Stopwatch.StartNew();
-                    var metaToolName = effectiveToolName ?? string.Empty;
-                    var metaToolInput = CloneToolInput(effectiveToolInput);
+	                if (toolUsesExecutedThisIteration >= maxToolUsesPerIteration)
+	                {
+	                    toolUsesPrunedDueToLimit = true;
+	                    _logger.LogWarning(
+	                        "[AI] Tool-use limit reached in iteration {Iteration} (limit={Limit}); pruning remaining tool calls.",
+	                        iteration,
+	                        maxToolUsesPerIteration);
+	                    break;
+	                }
+
+	                if (IsInternalMetaTool(effectiveToolName))
+	                {
+	                    var metaSw = Stopwatch.StartNew();
+	                    var metaToolName = effectiveToolName ?? string.Empty;
+	                    var metaToolInput = CloneToolInput(effectiveToolInput);
                     var metaToolUseId = toolUse.Id;
 
                     if (string.IsNullOrWhiteSpace(metaToolUseId))
                     {
                         metaSw.Stop();
                         var msg = $"Tool call '{metaToolName}' is missing required id; cannot execute. Please call the tool again with a valid id.";
-                        messages.Add(new SamplingMessage
-                        {
-                            Role = Role.User,
-                            Content =
-                            [
-                                new TextContentBlock { Text = msg }
-                            ]
-                        });
-                        continue;
-                    }
+	                        messages.Add(new SamplingMessage
+	                        {
+	                            Role = Role.User,
+	                            Content =
+	                            [
+	                                new TextContentBlock { Text = msg }
+	                            ]
+	                        });
+	                        toolUsesExecutedThisIteration++;
+	                        continue;
+	                    }
 
                     string outputForModel;
                     if (metaToolCallsExecuted >= maxMetaToolCalls)
@@ -461,11 +576,11 @@ public sealed class AiAnalysisOrchestrator(
                         outputForModel = TruncateForModel(output);
                     }
 
-                    messages.Add(new SamplingMessage
-                    {
-                        Role = Role.User,
-                        Content =
-                        [
+	                    messages.Add(new SamplingMessage
+	                    {
+	                        Role = Role.User,
+	                        Content =
+	                        [
                             new ToolResultContentBlock
                             {
                                 ToolUseId = metaToolUseId,
@@ -475,15 +590,16 @@ public sealed class AiAnalysisOrchestrator(
                                     new TextContentBlock { Text = outputForModel }
                                 ]
                             }
-                        ]
-                    });
-                    respondedToolUseIds.Add(metaToolUseId);
-                    continue;
-                }
+	                        ]
+	                    });
+	                    respondedToolUseIds.Add(metaToolUseId);
+	                    toolUsesExecutedThisIteration++;
+	                    continue;
+	                }
 
-                if (commandsExecuted.Count >= maxToolCalls)
+                if (toolResultCache.Count >= maxToolCalls)
                 {
-                    _logger.LogInformation("[AI] Tool call budget reached ({MaxToolCalls}); finalizing analysis.", maxToolCalls);
+                    _logger.LogInformation("[AI] Unique tool call budget reached ({MaxToolCalls}); finalizing analysis.", maxToolCalls);
                     PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
                     var final = await FinalizeAnalysisAfterToolBudgetExceededAsync(
                             systemPrompt: SystemPrompt,
@@ -496,16 +612,33 @@ public sealed class AiAnalysisOrchestrator(
                             traceRunDir: traceRunDir,
                             cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
-                    await EnforceHighConfidenceJudgeAndValidationAsync(
+                    await ApplyJudgeDrivenFinalizationAsync(
                             result: final,
                             commandsExecuted: commandsExecuted,
                             evidenceLedger: evidenceLedger,
                             hypothesisTracker: hypothesisTracker,
+                            internalToolChoiceModeCache: internalToolChoiceModeCache,
                             passName: "analysis",
                             iteration: iteration,
                             maxTokens: maxTokens,
                             lastModel: response.Model,
                             traceRunDir: traceRunDir,
+                            judgeAttemptState: judgeAttemptState,
+                            finalizationReason: "tool-budget",
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    await EnforceHighConfidenceJudgeAndValidationAsync(
+                            result: final,
+                            commandsExecuted: commandsExecuted,
+                            evidenceLedger: evidenceLedger,
+                            hypothesisTracker: hypothesisTracker,
+                            internalToolChoiceModeCache: internalToolChoiceModeCache,
+                            passName: "analysis",
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            judgeAttemptState: judgeAttemptState,
                             finalizationReason: "tool-budget",
                             cancellationToken: cancellationToken)
                         .ConfigureAwait(false);
@@ -517,12 +650,13 @@ public sealed class AiAnalysisOrchestrator(
                 var sw = Stopwatch.StartNew();
                 var toolName = effectiveToolName ?? string.Empty;
                 var toolInput = CloneToolInput(effectiveToolInput);
+                var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
                 var toolUseId = toolUse.Id;
-                if (string.IsNullOrWhiteSpace(toolUseId))
-                {
-                    // Tool results require a tool_use_id. If missing, respond with plain text so the model can retry.
-                    sw.Stop();
-                    var msg = $"Tool call '{toolName}' is missing required id; cannot execute. Please call the tool again with a valid id.";
+	                if (string.IsNullOrWhiteSpace(toolUseId))
+	                {
+	                    // Tool results require a tool_use_id. If missing, respond with plain text so the model can retry.
+	                    sw.Stop();
+	                    var msg = $"Tool call '{toolName}' is missing required id; cannot execute. Please call the tool again with a valid id.";
 
                     commandsExecuted.Add(new ExecutedCommand
                     {
@@ -533,29 +667,31 @@ public sealed class AiAnalysisOrchestrator(
                         Duration = sw.Elapsed.ToString("c")
                     });
 
-                    messages.Add(new SamplingMessage
-                    {
-                        Role = Role.User,
-                        Content =
-                        [
-                            new TextContentBlock { Text = msg }
-                        ]
-                    });
-                    continue;
-                }
+	                    messages.Add(new SamplingMessage
+	                    {
+	                        Role = Role.User,
+	                        Content =
+	                        [
+	                            new TextContentBlock { Text = msg }
+	                        ]
+	                    });
+	                    toolUsesExecutedThisIteration++;
+	                    continue;
+	                }
 
                 try
                 {
-                    var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
                     string outputForModel;
+                    string outputForLog;
+                    var wasCached = false;
                     var duration = sw.Elapsed;
                     if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
                     {
                         sw.Stop();
                         duration = TimeSpan.Zero;
-                        outputForModel = TruncateForModel(
-                            "[cached tool result] Duplicate tool call detected; reusing prior output. \n\n" +
-                            cached);
+                        wasCached = true;
+                        outputForModel = cached;
+                        outputForLog = TruncateForModel(BuildCachedToolResultMessage(toolName, toolInput));
                     }
                     else
                     {
@@ -565,6 +701,7 @@ public sealed class AiAnalysisOrchestrator(
                         toolResultCache[toolCacheKey] = outputForModel;
                         sw.Stop();
                         duration = sw.Elapsed;
+                        outputForLog = outputForModel;
                     }
 
                     if (toolName.Equals("report_get", StringComparison.OrdinalIgnoreCase))
@@ -583,17 +720,17 @@ public sealed class AiAnalysisOrchestrator(
                     {
                         Tool = toolName,
                         Input = toolInput,
-                        Output = outputForModel,
+                        Output = outputForLog,
                         Iteration = iteration,
                         Duration = duration.ToString("c")
                     });
                     WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
-                        new { tool = toolName, input = toolInput.ToString(), output = outputForModel, isError = false, duration = duration.ToString("c") });
+                        new { tool = toolName, input = toolInput.ToString(), output = outputForLog, cached = wasCached, isError = false, duration = duration.ToString("c") });
 
-                    messages.Add(new SamplingMessage
-                    {
-                        Role = Role.User,
-                        Content =
+	                    messages.Add(new SamplingMessage
+	                    {
+	                        Role = Role.User,
+	                        Content =
                         [
                             new ToolResultContentBlock
                             {
@@ -607,13 +744,14 @@ public sealed class AiAnalysisOrchestrator(
                                     }
                                 ]
                             }
-                        ]
-                    });
-                    respondedToolUseIds.Add(toolUseId);
-                }
-                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-                {
-                    throw;
+	                        ]
+	                    });
+	                    respondedToolUseIds.Add(toolUseId);
+	                    toolUsesExecutedThisIteration++;
+	                }
+	                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+	                {
+	                    throw;
                 }
                 catch (Exception ex)
                 {
@@ -621,6 +759,10 @@ public sealed class AiAnalysisOrchestrator(
                     var message = ex.Message;
                     _logger.LogWarning(ex, "[AI] Tool execution failed: {Tool}", toolName);
                     var messageForModel = TruncateForModel(message);
+                    if (!string.IsNullOrWhiteSpace(toolCacheKey))
+                    {
+                        toolResultCache[toolCacheKey] = messageForModel;
+                    }
 
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
                     toolIndexByIteration[iteration] = toolOrdinal;
@@ -635,10 +777,10 @@ public sealed class AiAnalysisOrchestrator(
                     WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
                         new { tool = toolName, input = toolInput.ToString(), output = messageForModel, isError = true, duration = sw.Elapsed.ToString("c") });
 
-                    messages.Add(new SamplingMessage
-                    {
-                        Role = Role.User,
-                        Content =
+	                    messages.Add(new SamplingMessage
+	                    {
+	                        Role = Role.User,
+	                        Content =
                         [
                             new ToolResultContentBlock
                             {
@@ -652,14 +794,40 @@ public sealed class AiAnalysisOrchestrator(
                                     }
                                 ]
                             }
-                        ]
-                    });
-                    respondedToolUseIds.Add(toolUseId);
-                }
-            }
+	                        ]
+	                    });
+	                    respondedToolUseIds.Add(toolUseId);
+	                    toolUsesExecutedThisIteration++;
+	                }
+	            }
 
-            if (pendingAnalysisComplete != null)
-            {
+	            if (toolUsesPrunedDueToLimit)
+	            {
+	                // If the model emitted an excessive number of tool calls, ignore any co-issued analysis_complete attempt.
+	                pendingAnalysisComplete = null;
+	                pendingAnalysisCompleteInput = default;
+	                pendingAnalysisCompleteName = null;
+	                pendingAnalysisCompleteId = null;
+
+	                PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
+	                messages.Add(new SamplingMessage
+	                {
+	                    Role = Role.User,
+	                    Content =
+	                    [
+	                        new TextContentBlock
+	                        {
+	                            Text =
+	                                $"INTERNAL: Tool-use limit hit in iteration {iteration}. " +
+	                                $"Executed {respondedToolUseIds.Count} tool calls and pruned the rest. " +
+	                                "Do not repeat identical tool calls; use prior results and proceed with reasoning."
+	                        }
+	                    ]
+	                });
+	            }
+
+	            if (pendingAnalysisComplete != null)
+	            {
                 var otherToolsCoissued = rewrittenToolUses.Any(t =>
                     !string.Equals(t.Name, "analysis_complete", StringComparison.OrdinalIgnoreCase)
                     && !IsInternalMetaTool(t.Name));
@@ -724,13 +892,16 @@ public sealed class AiAnalysisOrchestrator(
                     && (completed.Evidence?.Count ?? 0) >= MinHighConfidenceEvidenceItems
                     && HasNonReportEvidenceToolCalls(commandsExecuted)
                     && hypothesisTracker.Hypotheses.Count >= 3
-                    && evidenceLedger.Items.Count > 0)
+                    && evidenceLedger.Items.Count > 0
+                    && !judgeAttemptState.Attempted)
                 {
+                    judgeAttemptState.Attempted = true;
                     completed.Judge ??= await TryRunJudgeStepAsync(
                             passName: "analysis",
-                            systemPrompt: SystemPrompt,
+                            systemPrompt: JudgeSystemPrompt,
                             evidenceLedger: evidenceLedger,
                             hypothesisTracker: hypothesisTracker,
+                            internalToolChoiceModeCache: internalToolChoiceModeCache,
                             iteration: iteration,
                             maxTokens: maxTokens,
                             lastModel: response.Model,
@@ -767,6 +938,36 @@ public sealed class AiAnalysisOrchestrator(
 
                         if (repaired != null)
                         {
+                            await ApplyJudgeDrivenFinalizationAsync(
+                                    result: repaired,
+                                    commandsExecuted: commandsExecuted,
+                                    evidenceLedger: evidenceLedger,
+                                    hypothesisTracker: hypothesisTracker,
+                                    internalToolChoiceModeCache: internalToolChoiceModeCache,
+                                    passName: "analysis",
+                                    iteration: iteration,
+                                    maxTokens: maxTokens,
+                                    lastModel: response.Model,
+                                    traceRunDir: traceRunDir,
+                                    judgeAttemptState: judgeAttemptState,
+                                    finalizationReason: "analysis-complete-auto-repair",
+                                    cancellationToken: cancellationToken)
+                                .ConfigureAwait(false);
+                            await EnforceHighConfidenceJudgeAndValidationAsync(
+                                    result: repaired,
+                                    commandsExecuted: commandsExecuted,
+                                    evidenceLedger: evidenceLedger,
+                                    hypothesisTracker: hypothesisTracker,
+                                    internalToolChoiceModeCache: internalToolChoiceModeCache,
+                                    passName: "analysis",
+                                    iteration: iteration,
+                                    maxTokens: maxTokens,
+                                    lastModel: response.Model,
+                                    traceRunDir: traceRunDir,
+                                    judgeAttemptState: judgeAttemptState,
+                                    finalizationReason: "analysis-complete-auto-repair",
+                                    cancellationToken: cancellationToken)
+                                .ConfigureAwait(false);
                             AttachInvestigationState(repaired, evidenceLedger, hypothesisTracker);
                             WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", repaired);
                             return repaired;
@@ -818,6 +1019,36 @@ public sealed class AiAnalysisOrchestrator(
                     continue;
                 }
 
+                await ApplyJudgeDrivenFinalizationAsync(
+                        result: completed,
+                        commandsExecuted: commandsExecuted,
+                        evidenceLedger: evidenceLedger,
+                        hypothesisTracker: hypothesisTracker,
+                        internalToolChoiceModeCache: internalToolChoiceModeCache,
+                        passName: "analysis",
+                        iteration: iteration,
+                        maxTokens: maxTokens,
+                        lastModel: response.Model,
+                        traceRunDir: traceRunDir,
+                        judgeAttemptState: judgeAttemptState,
+                        finalizationReason: "analysis-complete",
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
+                await EnforceHighConfidenceJudgeAndValidationAsync(
+                        result: completed,
+                        commandsExecuted: commandsExecuted,
+                        evidenceLedger: evidenceLedger,
+                        hypothesisTracker: hypothesisTracker,
+                        internalToolChoiceModeCache: internalToolChoiceModeCache,
+                        passName: "analysis",
+                        iteration: iteration,
+                        maxTokens: maxTokens,
+                        lastModel: response.Model,
+                        traceRunDir: traceRunDir,
+                        judgeAttemptState: judgeAttemptState,
+                        finalizationReason: "analysis-complete",
+                        cancellationToken: cancellationToken)
+                    .ConfigureAwait(false);
                 AttachInvestigationState(completed, evidenceLedger, hypothesisTracker);
                 WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", completed);
                 return completed;
@@ -836,6 +1067,7 @@ public sealed class AiAnalysisOrchestrator(
                         iteration: iteration,
                         maxTokens: maxTokens,
                         traceRunDir: traceRunDir,
+                        internalToolChoiceModeCache: internalToolChoiceModeCache,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
@@ -862,6 +1094,7 @@ public sealed class AiAnalysisOrchestrator(
                         iteration: iteration,
                         maxTokens: CheckpointMaxTokens,
                         traceRunDir: traceRunDir,
+                        internalToolChoiceModeCache: internalToolChoiceModeCache,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
@@ -872,16 +1105,89 @@ public sealed class AiAnalysisOrchestrator(
                         commandsExecuted: commandsExecuted,
                         commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
                 }
+                else
+                {
+                    checkpoint = NormalizeCheckpointJson(checkpoint, commandsExecuted);
+                }
 
                 lastCheckpointIteration = iteration;
                 commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
 
-                messages.Clear();
-                ApplyCheckpointToStateStores(checkpoint, evidenceLedger, hypothesisTracker);
-                messages.Add(BuildCheckpointCarryForwardMessage(
-                    checkpoint,
-                    passName: "analysis",
+	                messages.Clear();
+	                ApplyCheckpointToStateStores(checkpoint, evidenceLedger, hypothesisTracker);
+	                messages.Add(BuildCheckpointCarryForwardMessage(
+	                    checkpoint,
+	                    passName: "analysis",
                     stateJson: BuildStateSnapshotJson(evidenceLedger, hypothesisTracker)));
+                    checkpointAppliedThisIteration = true;
+	            }
+
+            var madeProgress = checkpointAppliedThisIteration
+                               || toolResultCache.Count != uniqueToolCallsAtIterationStart
+                               || evidenceLedger.Items.Count != evidenceCountAtIterationStart
+                               || hypothesisTracker.Hypotheses.Count != hypothesisCountAtIterationStart;
+
+            if (madeProgress)
+            {
+                consecutiveNoProgressIterations = 0;
+            }
+            else
+            {
+                consecutiveNoProgressIterations++;
+                if (consecutiveNoProgressIterations >= Math.Max(1, MaxConsecutiveNoProgressIterations))
+                {
+                    _logger.LogInformation(
+                        "[AI] No progress detected for {Count} consecutive iterations; finalizing analysis early.",
+                        consecutiveNoProgressIterations);
+
+                    var final = await FinalizeAnalysisAfterNoProgressDetectedAsync(
+                            systemPrompt: SystemPrompt,
+                            messages: messages,
+                            commandsExecuted: commandsExecuted,
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            consecutiveNoProgressIterations: consecutiveNoProgressIterations,
+                            uniqueToolCalls: toolResultCache.Count,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+
+                    await ApplyJudgeDrivenFinalizationAsync(
+                            result: final,
+                            commandsExecuted: commandsExecuted,
+                            evidenceLedger: evidenceLedger,
+                            hypothesisTracker: hypothesisTracker,
+                            internalToolChoiceModeCache: internalToolChoiceModeCache,
+                            passName: "analysis",
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            judgeAttemptState: judgeAttemptState,
+                            finalizationReason: "no-progress",
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                    await EnforceHighConfidenceJudgeAndValidationAsync(
+                            result: final,
+                            commandsExecuted: commandsExecuted,
+                            evidenceLedger: evidenceLedger,
+                            hypothesisTracker: hypothesisTracker,
+                            internalToolChoiceModeCache: internalToolChoiceModeCache,
+                            passName: "analysis",
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            lastModel: response.Model,
+                            traceRunDir: traceRunDir,
+                            judgeAttemptState: judgeAttemptState,
+                            finalizationReason: "no-progress",
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+
+                    AttachInvestigationState(final, evidenceLedger, hypothesisTracker);
+                    WriteSamplingTraceFile(traceRunDir, "final-ai-analysis.json", final);
+                    return final;
+                }
             }
         }
 
@@ -898,16 +1204,33 @@ public sealed class AiAnalysisOrchestrator(
                 traceRunDir: traceRunDir,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
-        await EnforceHighConfidenceJudgeAndValidationAsync(
+        await ApplyJudgeDrivenFinalizationAsync(
                 result: synthesized,
                 commandsExecuted: commandsExecuted,
                 evidenceLedger: evidenceLedger,
                 hypothesisTracker: hypothesisTracker,
+                internalToolChoiceModeCache: internalToolChoiceModeCache,
                 passName: "analysis",
                 iteration: maxIterations + 1,
                 maxTokens: maxTokens,
                 lastModel: lastModel,
                 traceRunDir: traceRunDir,
+                judgeAttemptState: judgeAttemptState,
+                finalizationReason: "iteration-budget",
+                cancellationToken: cancellationToken)
+            .ConfigureAwait(false);
+        await EnforceHighConfidenceJudgeAndValidationAsync(
+                result: synthesized,
+                commandsExecuted: commandsExecuted,
+                evidenceLedger: evidenceLedger,
+                hypothesisTracker: hypothesisTracker,
+                internalToolChoiceModeCache: internalToolChoiceModeCache,
+                passName: "analysis",
+                iteration: maxIterations + 1,
+                maxTokens: maxTokens,
+                lastModel: lastModel,
+                traceRunDir: traceRunDir,
+                judgeAttemptState: judgeAttemptState,
                 finalizationReason: "iteration-budget",
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
@@ -931,6 +1254,24 @@ public sealed class AiAnalysisOrchestrator(
 
         hasError = json.TryGetProperty("error", out _);
         return true;
+    }
+
+    private sealed class JudgeAttemptState
+    {
+        public bool Attempted { get; set; }
+    }
+
+    private sealed class InternalToolChoiceModeCache
+    {
+        public string Mode { get; private set; } = "required";
+
+        public void MarkRequiredUnsupported()
+        {
+            if (!string.Equals(Mode, "auto", StringComparison.OrdinalIgnoreCase))
+            {
+                Mode = "auto";
+            }
+        }
     }
 
     private sealed class BaselineEvidenceTracker
@@ -1010,6 +1351,7 @@ public sealed class AiAnalysisOrchestrator(
         int iteration,
         int maxTokens,
         string? traceRunDir,
+        InternalToolChoiceModeCache internalToolChoiceModeCache,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(passName);
@@ -1017,6 +1359,7 @@ public sealed class AiAnalysisOrchestrator(
         ArgumentNullException.ThrowIfNull(messages);
         ArgumentNullException.ThrowIfNull(evidenceLedger);
         ArgumentNullException.ThrowIfNull(hypothesisTracker);
+        ArgumentNullException.ThrowIfNull(internalToolChoiceModeCache);
 
         if (metaToolCallsExecuted >= maxMetaToolCalls)
         {
@@ -1073,6 +1416,7 @@ Current state snapshot (JSON):
 
         CreateMessageResult? response = null;
         Exception? lastError = null;
+        var toolChoiceMode = internalToolChoiceModeCache.Mode;
 
         for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
         {
@@ -1082,7 +1426,7 @@ Current state snapshot (JSON):
                 Messages = requestMessages,
                 MaxTokens = maxTokens,
                 Tools = metaTools,
-                ToolChoice = new ToolChoice { Mode = "required" }
+                ToolChoice = new ToolChoice { Mode = toolChoiceMode }
             };
 
             try
@@ -1101,6 +1445,26 @@ Current state snapshot (JSON):
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
+                if (toolChoiceMode.Equals("required", StringComparison.OrdinalIgnoreCase) &&
+                    IsToolChoiceRequiredUnsupported(ex))
+                {
+                    internalToolChoiceModeCache.MarkRequiredUnsupported();
+                    _logger.LogInformation(
+                        "[AI] Provider rejected toolChoice=required for meta bookkeeping; retrying with toolChoice=auto (iteration {Iteration}).",
+                        iteration);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-meta-bookkeeping-toolchoice-fallback.json", new
+                    {
+                        passName,
+                        iteration,
+                        from = "required",
+                        to = "auto",
+                        message = ex.Message
+                    });
+                    toolChoiceMode = "auto";
+                    lastError = ex;
+                    continue;
+                }
+
                 lastError = ex;
                 _logger.LogWarning(ex, "[AI] Meta bookkeeping failed at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", iteration, attempt, MaxSamplingRequestAttempts);
                 WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-meta-bookkeeping-error.json", new { passName, iteration, attempt, error = ex.ToString(), message = ex.Message });
@@ -1110,7 +1474,18 @@ Current state snapshot (JSON):
         if (response?.Content == null || response.Content.Count == 0)
         {
             _logger.LogWarning("[AI] Meta bookkeeping skipped: no response content. Error={Message}", lastError?.Message);
-            return new MetaBookkeepingResult(Done: false, MetaToolCallsExecuted: metaToolCallsExecuted);
+            return new MetaBookkeepingResult(Done: true, MetaToolCallsExecuted: metaToolCallsExecuted);
+        }
+
+        var toolUses = response.Content.OfType<ToolUseContentBlock>().ToList();
+        var metaToolUses = toolUses
+            .Where(t => IsInternalMetaTool((t.Name ?? string.Empty).Trim()))
+            .ToList();
+
+        if (metaToolUses.Count == 0)
+        {
+            _logger.LogWarning("[AI] Meta bookkeeping response contained no tool calls.");
+            return new MetaBookkeepingResult(Done: true, MetaToolCallsExecuted: metaToolCallsExecuted);
         }
 
         messages.Add(new SamplingMessage
@@ -1119,15 +1494,8 @@ Current state snapshot (JSON):
             Content = response.Content
         });
 
-        var toolUses = response.Content.OfType<ToolUseContentBlock>().ToList();
-        if (toolUses.Count == 0)
-        {
-            _logger.LogWarning("[AI] Meta bookkeeping response contained no tool calls.");
-            return new MetaBookkeepingResult(Done: false, MetaToolCallsExecuted: metaToolCallsExecuted);
-        }
-
         var respondedToolUseIds = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var toolUse in toolUses)
+        foreach (var toolUse in metaToolUses)
         {
             var toolName = (toolUse.Name ?? string.Empty).Trim();
             if (!IsInternalMetaTool(toolName))
@@ -1155,7 +1523,7 @@ Current state snapshot (JSON):
             }
             else
             {
-                var output = ExecuteInternalMetaTool(toolName, toolUse.Input, evidenceLedger, hypothesisTracker);
+                var output = ExecuteInternalMetaTool(toolName, NormalizeToolInput(toolUse.Input), evidenceLedger, hypothesisTracker);
                 metaToolCallsExecuted++;
                 outputForModel = TruncateForModel(output);
             }
@@ -1201,6 +1569,7 @@ Current state snapshot (JSON):
         string systemPrompt,
         AiEvidenceLedger evidenceLedger,
         AiHypothesisTracker hypothesisTracker,
+        InternalToolChoiceModeCache internalToolChoiceModeCache,
         int iteration,
         int maxTokens,
         string? lastModel,
@@ -1211,12 +1580,16 @@ Current state snapshot (JSON):
         ArgumentNullException.ThrowIfNull(systemPrompt);
         ArgumentNullException.ThrowIfNull(evidenceLedger);
         ArgumentNullException.ThrowIfNull(hypothesisTracker);
+        ArgumentNullException.ThrowIfNull(internalToolChoiceModeCache);
 
         if (evidenceLedger.Items.Count == 0 || hypothesisTracker.Hypotheses.Count == 0)
         {
             _logger.LogDebug("[AI] Skipping judge step: no evidence/hypotheses have been recorded.");
             return null;
         }
+
+        var hypothesisCount = hypothesisTracker.Hypotheses.Count;
+        var requiredRejected = Math.Min(2, Math.Max(0, hypothesisCount - 1));
 
         var stateSnapshot = BuildStateSnapshotJson(evidenceLedger, hypothesisTracker);
         var judgePrompt = $"""
@@ -1229,10 +1602,10 @@ You are given a stable state snapshot with:
 Task:
 1) Select the single best-supported hypothesis ID.
 2) Provide supportsEvidenceIds (existing E#) that directly support the selection.
-3) Reject at least 2 strongest alternatives. For each rejected hypothesis, provide contradictsEvidenceIds (existing E#) and a concise reason.
+3) Reject at least {requiredRejected} strongest alternative(s). For each rejected hypothesis, provide contradictsEvidenceIds (existing E#) and a concise reason.
 
 Confidence rubric:
-- high: >=3 supporting evidence IDs AND >=2 rejected alternatives with concrete contradicting evidence IDs.
+- high: only allowed when there are at least 3 competing hypotheses. Requires >=3 supporting evidence IDs AND >=2 rejected alternatives with concrete contradicting evidence IDs.
 - medium: leading hypothesis is supported, but at least one strong alternative cannot be fully rejected.
 - low: evidence is sparse/ambiguous.
 
@@ -1261,7 +1634,7 @@ State snapshot (JSON):
             ],
             MaxTokens = Math.Max(256, maxTokens),
             Tools = SamplingTools.GetJudgeTools(),
-            ToolChoice = new ToolChoice { Mode = "required" }
+            ToolChoice = new ToolChoice { Mode = internalToolChoiceModeCache.Mode }
         };
 
         CreateMessageResult response;
@@ -1273,26 +1646,85 @@ State snapshot (JSON):
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning(ex, "[AI] Judge step failed in pass {Pass} at iteration {Iteration}", passName, iteration);
-            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
-            return null;
+            if (request.ToolChoice?.Mode?.Equals("required", StringComparison.OrdinalIgnoreCase) == true
+                && IsToolChoiceRequiredUnsupported(ex))
+            {
+                internalToolChoiceModeCache.MarkRequiredUnsupported();
+                _logger.LogInformation(
+                    "[AI] Provider rejected toolChoice=required for judge step; retrying with toolChoice=auto (pass {Pass}, iteration {Iteration}).",
+                    passName,
+                    iteration);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-toolchoice-fallback.json", new
+                {
+                    passName,
+                    iteration,
+                    from = "required",
+                    to = "auto",
+                    message = ex.Message
+                });
+
+                var fallbackRequest = CloneWithToolChoiceMode(request, "auto");
+                try
+                {
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-fallback-request.json", BuildTraceRequest(iteration, fallbackRequest));
+                    response = await _samplingClient.RequestCompletionAsync(fallbackRequest, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex2) when (!cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning(ex2, "[AI] Judge step failed in pass {Pass} at iteration {Iteration}", passName, iteration);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-error.json", new { passName, iteration, error = ex2.ToString(), message = ex2.Message });
+                    return null;
+                }
+            }
+            else
+            {
+                _logger.LogWarning(ex, "[AI] Judge step failed in pass {Pass} at iteration {Iteration}", passName, iteration);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
+                return null;
+            }
         }
 
         WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-response.json", BuildTraceResponse(iteration, response));
 
-        var toolUse = response.Content?
+        var allToolUses = response.Content?
             .OfType<ToolUseContentBlock>()
-            .FirstOrDefault(b => string.Equals(b.Name, AnalysisJudgeCompleteToolName, StringComparison.OrdinalIgnoreCase));
+            .ToList() ?? [];
+
+        var toolUse = allToolUses.FirstOrDefault(b =>
+            string.Equals((b.Name ?? string.Empty).Trim(), AnalysisJudgeCompleteToolName, StringComparison.OrdinalIgnoreCase));
+
+        if (toolUse == null && allToolUses.Count == 1)
+        {
+            toolUse = allToolUses[0];
+            _logger.LogWarning(
+                "[AI] Judge step returned an unexpected tool call name; attempting to parse the only tool call present (name={Name}).",
+                toolUse.Name);
+        }
 
         if (toolUse == null)
         {
+            var assistantText = ExtractAssistantText(response);
+            if (!string.IsNullOrWhiteSpace(assistantText) && TryParseFirstJsonObject(assistantText, out var json))
+            {
+                try
+                {
+                    return ParseJudgeComplete(json, response.Model ?? lastModel);
+                }
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning(ex, "[AI] Judge step returned unstructured JSON but it did not match the expected schema.");
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-judge-parse-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
+                    return null;
+                }
+            }
+
             _logger.LogWarning("[AI] Judge step returned no {Tool} tool call.", AnalysisJudgeCompleteToolName);
             return null;
         }
 
         try
         {
-            var parsed = ParseJudgeComplete(toolUse.Input, response.Model ?? lastModel);
+            var parsed = ParseJudgeComplete(NormalizeToolInput(toolUse.Input), response.Model ?? lastModel);
             return parsed;
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
@@ -1303,16 +1735,18 @@ State snapshot (JSON):
         }
     }
 
-    private async Task EnforceHighConfidenceJudgeAndValidationAsync(
+    private async Task ApplyJudgeDrivenFinalizationAsync(
         AiAnalysisResult result,
         List<ExecutedCommand> commandsExecuted,
         AiEvidenceLedger evidenceLedger,
         AiHypothesisTracker hypothesisTracker,
+        InternalToolChoiceModeCache internalToolChoiceModeCache,
         string passName,
         int iteration,
         int maxTokens,
         string? lastModel,
         string? traceRunDir,
+        JudgeAttemptState judgeAttemptState,
         string finalizationReason,
         CancellationToken cancellationToken)
     {
@@ -1320,7 +1754,619 @@ State snapshot (JSON):
         ArgumentNullException.ThrowIfNull(commandsExecuted);
         ArgumentNullException.ThrowIfNull(evidenceLedger);
         ArgumentNullException.ThrowIfNull(hypothesisTracker);
+        ArgumentNullException.ThrowIfNull(internalToolChoiceModeCache);
         ArgumentNullException.ThrowIfNull(passName);
+        ArgumentNullException.ThrowIfNull(judgeAttemptState);
+        ArgumentNullException.ThrowIfNull(finalizationReason);
+
+        if (evidenceLedger.Items.Count == 0 || hypothesisTracker.Hypotheses.Count == 0)
+        {
+            return;
+        }
+
+        if (result.Judge == null && !judgeAttemptState.Attempted)
+        {
+            judgeAttemptState.Attempted = true;
+            result.Judge = await TryRunJudgeStepAsync(
+                    passName: passName,
+                    systemPrompt: JudgeSystemPrompt,
+                    evidenceLedger: evidenceLedger,
+                    hypothesisTracker: hypothesisTracker,
+                    internalToolChoiceModeCache: internalToolChoiceModeCache,
+                    iteration: iteration,
+                    maxTokens: maxTokens,
+                    lastModel: lastModel,
+                    traceRunDir: traceRunDir,
+                    cancellationToken: cancellationToken)
+                .ConfigureAwait(false);
+
+            result.Judge ??= BuildDeterministicJudgeFallback(
+                hypothesisTracker: hypothesisTracker,
+                model: lastModel,
+                rationale: $"Deterministic fallback: judge step failed during finalization ({finalizationReason}).");
+        }
+
+        result.Judge ??= BuildDeterministicJudgeFallback(
+            hypothesisTracker: hypothesisTracker,
+            model: lastModel,
+            rationale: $"Deterministic fallback: judge step was already attempted earlier; using deterministic selection during finalization ({finalizationReason}).");
+
+        if (!TryGetHypothesisById(hypothesisTracker, result.Judge.SelectedHypothesisId, out var winner))
+        {
+            result.Judge = BuildDeterministicJudgeFallback(
+                hypothesisTracker: hypothesisTracker,
+                model: lastModel,
+                rationale: $"Deterministic fallback: judge selected unknown hypothesisId '{result.Judge.SelectedHypothesisId}'.");
+
+            if (!TryGetHypothesisById(hypothesisTracker, result.Judge.SelectedHypothesisId, out winner))
+            {
+                return;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(winner?.Hypothesis))
+        {
+            var winnerText = winner.Hypothesis.Trim();
+            var winnerCategory = ClassifyHypothesisCategory(winnerText);
+            result.RootCause = winnerText;
+
+            var shouldForceJudgeNarrative = ShouldForceJudgeAlignedNarrative(
+                finalizationReason,
+                reasoning: result.Reasoning,
+                recommendations: result.Recommendations);
+            var shouldFillReasoning = string.IsNullOrWhiteSpace(result.Reasoning);
+            var shouldFillRecommendations = result.Recommendations is null || result.Recommendations.Count == 0;
+
+            var shouldRewriteNarrative = shouldForceJudgeNarrative || ShouldRewriteNarrativeToMatchJudgeWinner(
+                winnerCategory: winnerCategory,
+                currentReasoning: result.Reasoning,
+                currentRecommendations: result.Recommendations,
+                currentAdditionalFindings: result.AdditionalFindings);
+
+            if (shouldRewriteNarrative)
+            {
+                result.Reasoning = BuildJudgeAlignedReasoning(result.Judge, winnerText);
+                result.Recommendations = BuildJudgeAlignedRecommendations(winner, winnerCategory);
+                result.AdditionalFindings = null;
+            }
+            else
+            {
+                if (shouldFillReasoning)
+                {
+                    result.Reasoning = BuildJudgeAlignedReasoning(result.Judge, winnerText);
+                }
+
+                if (shouldFillRecommendations)
+                {
+                    result.Recommendations = BuildJudgeAlignedRecommendations(winner, winnerCategory);
+                }
+            }
+        }
+
+        result.Recommendations = FilterDisallowedRecommendations(result.Recommendations);
+        if (result.Summary?.Recommendations != null)
+        {
+            result.Summary.Recommendations = FilterDisallowedRecommendations(result.Summary.Recommendations);
+        }
+    }
+
+    private static bool ShouldForceJudgeAlignedNarrative(string finalizationReason, string? reasoning, List<string>? recommendations)
+    {
+        if (string.IsNullOrWhiteSpace(finalizationReason))
+        {
+            return false;
+        }
+
+        var normalized = finalizationReason.Trim();
+        if (normalized.Equals("sampling-failure", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+
+        if (!normalized.Equals("tool-budget", StringComparison.OrdinalIgnoreCase) &&
+            !normalized.Equals("iteration-budget", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (recommendations == null || recommendations.Count == 0)
+        {
+            return true;
+        }
+
+        if (string.IsNullOrWhiteSpace(reasoning))
+        {
+            return true;
+        }
+
+        return reasoning.Contains("Final synthesis", StringComparison.OrdinalIgnoreCase) ||
+               reasoning.Contains("Tool call budget exceeded", StringComparison.OrdinalIgnoreCase) ||
+               reasoning.Contains("Sampling failed", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryGetHypothesisById(
+        AiHypothesisTracker hypothesisTracker,
+        string? hypothesisId,
+        out AiHypothesis? hypothesis)
+    {
+        hypothesis = null;
+        if (hypothesisTracker.Hypotheses.Count == 0 || string.IsNullOrWhiteSpace(hypothesisId))
+        {
+            return false;
+        }
+
+        var trimmed = hypothesisId.Trim();
+        hypothesis = hypothesisTracker.Hypotheses
+            .FirstOrDefault(h => h != null && string.Equals(h.Id, trimmed, StringComparison.OrdinalIgnoreCase));
+        return hypothesis != null;
+    }
+
+    private static AiJudgeResult BuildDeterministicJudgeFallback(AiHypothesisTracker hypothesisTracker, string? model, string rationale)
+    {
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+
+        var hypotheses = hypothesisTracker.Hypotheses.Where(h => h != null).ToList();
+        if (hypotheses.Count == 0)
+        {
+            return new AiJudgeResult
+            {
+                SelectedHypothesisId = string.Empty,
+                Confidence = "unknown",
+                Rationale = string.IsNullOrWhiteSpace(rationale) ? "Deterministic fallback: no hypotheses available." : rationale.Trim(),
+                Model = model,
+                AnalyzedAt = DateTime.UtcNow
+            };
+        }
+
+        var winner = hypotheses
+            .OrderByDescending(h => GetConfidenceRank(h!.Confidence))
+            .ThenByDescending(h => h!.SupportsEvidenceIds?.Count ?? 0)
+            .ThenBy(h => h!.ContradictsEvidenceIds?.Count ?? 0)
+            .ThenBy(h => ParseHypothesisIdNumber(h!.Id) ?? int.MaxValue)
+            .ThenBy(h => h!.Id ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .First()!;
+
+        var rejected = hypotheses
+            .Where(h => h != null && !string.Equals(h.Id, winner.Id, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(h => GetConfidenceRank(h!.Confidence))
+            .ThenByDescending(h => h!.SupportsEvidenceIds?.Count ?? 0)
+            .ThenBy(h => ParseHypothesisIdNumber(h!.Id) ?? int.MaxValue)
+            .ThenBy(h => h!.Id ?? string.Empty, StringComparer.OrdinalIgnoreCase)
+            .Take(2)
+            .Select(h => new AiRejectedHypothesis
+            {
+                HypothesisId = h!.Id ?? string.Empty,
+                ContradictsEvidenceIds = h.ContradictsEvidenceIds ?? [],
+                Reason = h.ContradictsEvidenceIds is { Count: > 0 }
+                    ? "Rejected by linked contradicting evidence IDs."
+                    : "Insufficient contradicting evidence IDs were linked; rejection is provisional."
+            })
+            .ToList();
+
+        var supports = winner.SupportsEvidenceIds;
+        var canBeHigh = supports is { Count: >= 3 } && rejected.Count >= 2 && rejected.All(r => r.ContradictsEvidenceIds.Count > 0);
+
+        return new AiJudgeResult
+        {
+            SelectedHypothesisId = winner.Id ?? string.Empty,
+            Confidence = canBeHigh ? "high" : "low",
+            Rationale = string.IsNullOrWhiteSpace(rationale)
+                ? "Deterministic fallback: selected hypothesis by confidence/supporting evidence links."
+                : rationale.Trim(),
+            SupportsEvidenceIds = supports,
+            RejectedHypotheses = rejected.Count == 0 ? null : rejected,
+            Model = model,
+            AnalyzedAt = DateTime.UtcNow
+        };
+    }
+
+    private enum HypothesisCategory
+    {
+        Unknown = 0,
+        AssemblyVersionMismatch,
+        ProfilerOrInstrumentation,
+        Trimming,
+        MemoryCorruption
+    }
+
+    private static HypothesisCategory ClassifyHypothesisCategory(string? hypothesis)
+    {
+        if (string.IsNullOrWhiteSpace(hypothesis))
+        {
+            return HypothesisCategory.Unknown;
+        }
+
+        var text = hypothesis.Trim().ToLowerInvariant();
+        if (text.Contains("profiler", StringComparison.Ordinal) ||
+            text.Contains("instrumentation", StringComparison.Ordinal) ||
+            text.Contains("tracer", StringComparison.Ordinal) ||
+            text.Contains("datadog", StringComparison.Ordinal) ||
+            text.Contains("il rewriting", StringComparison.Ordinal) ||
+            text.Contains("il-rewriting", StringComparison.Ordinal) ||
+            text.Contains("aop", StringComparison.Ordinal))
+        {
+            return HypothesisCategory.ProfilerOrInstrumentation;
+        }
+
+        if (text.Contains("trim", StringComparison.Ordinal) ||
+            text.Contains("illink", StringComparison.Ordinal) ||
+            text.Contains("linker", StringComparison.Ordinal) ||
+            text.Contains("publishtrimmed", StringComparison.Ordinal) ||
+            text.Contains("nativeaot", StringComparison.Ordinal))
+        {
+            return HypothesisCategory.Trimming;
+        }
+
+        if (text.Contains("version mismatch", StringComparison.Ordinal) ||
+            text.Contains("assembly version", StringComparison.Ordinal) ||
+            text.Contains("assembly mismatch", StringComparison.Ordinal) ||
+            text.Contains("binding redirect", StringComparison.Ordinal) ||
+            text.Contains("incompatible version", StringComparison.Ordinal))
+        {
+            return HypothesisCategory.AssemblyVersionMismatch;
+        }
+
+        if (text.Contains("memory corruption", StringComparison.Ordinal) ||
+            text.Contains("heap corruption", StringComparison.Ordinal) ||
+            text.Contains("method table", StringComparison.Ordinal) && text.Contains("corrupt", StringComparison.Ordinal))
+        {
+            return HypothesisCategory.MemoryCorruption;
+        }
+
+        return HypothesisCategory.Unknown;
+    }
+
+    private static bool ShouldRewriteNarrativeToMatchJudgeWinner(
+        HypothesisCategory winnerCategory,
+        string? currentReasoning,
+        List<string>? currentRecommendations,
+        List<string>? currentAdditionalFindings)
+    {
+        var reasoning = currentReasoning ?? string.Empty;
+        if (NarrativeNegatesWinnerCategory(reasoning, winnerCategory))
+        {
+            return true;
+        }
+
+        var recommendationsText = string.Join("\n", currentRecommendations ?? []);
+        if (NarrativeNegatesWinnerCategory(recommendationsText, winnerCategory))
+        {
+            return true;
+        }
+
+        var additionalText = string.Join("\n", currentAdditionalFindings ?? []);
+        if (NarrativeNegatesWinnerCategory(additionalText, winnerCategory))
+        {
+            return true;
+        }
+
+        if (ContainsDisallowedProfilerDisableRecommendation(currentRecommendations))
+        {
+            return true;
+        }
+
+        var narrativeAll = string.Join("\n", new[] { reasoning, recommendationsText, additionalText });
+        var narrativeCategories = ExtractNarrativeCategories(narrativeAll);
+        if (winnerCategory != HypothesisCategory.Unknown && narrativeCategories.Count > 0 && !narrativeCategories.Contains(winnerCategory))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static HashSet<HypothesisCategory> ExtractNarrativeCategories(string? narrative)
+    {
+        var set = new HashSet<HypothesisCategory>();
+        if (string.IsNullOrWhiteSpace(narrative))
+        {
+            return set;
+        }
+
+        var text = narrative.ToLowerInvariant();
+        if (text.Contains("profiler", StringComparison.Ordinal) ||
+            text.Contains("instrumentation", StringComparison.Ordinal) ||
+            text.Contains("tracer", StringComparison.Ordinal) ||
+            text.Contains("datadog", StringComparison.Ordinal) ||
+            text.Contains("il rewriting", StringComparison.Ordinal) ||
+            text.Contains("il-rewriting", StringComparison.Ordinal) ||
+            text.Contains("aop", StringComparison.Ordinal))
+        {
+            set.Add(HypothesisCategory.ProfilerOrInstrumentation);
+        }
+
+        if (text.Contains("trim", StringComparison.Ordinal) ||
+            text.Contains("illink", StringComparison.Ordinal) ||
+            text.Contains("linker", StringComparison.Ordinal) ||
+            text.Contains("publishtrimmed", StringComparison.Ordinal) ||
+            text.Contains("nativeaot", StringComparison.Ordinal))
+        {
+            set.Add(HypothesisCategory.Trimming);
+        }
+
+        if (text.Contains("version mismatch", StringComparison.Ordinal) ||
+            text.Contains("assembly version", StringComparison.Ordinal) ||
+            text.Contains("assembly mismatch", StringComparison.Ordinal) ||
+            text.Contains("binding redirect", StringComparison.Ordinal) ||
+            text.Contains("incompatible version", StringComparison.Ordinal))
+        {
+            set.Add(HypothesisCategory.AssemblyVersionMismatch);
+        }
+
+        if (text.Contains("memory corruption", StringComparison.Ordinal) ||
+            text.Contains("heap corruption", StringComparison.Ordinal) ||
+            text.Contains("method table", StringComparison.Ordinal) && text.Contains("corrupt", StringComparison.Ordinal))
+        {
+            set.Add(HypothesisCategory.MemoryCorruption);
+        }
+
+        set.Remove(HypothesisCategory.Unknown);
+        return set;
+    }
+
+    private static bool NarrativeNegatesWinnerCategory(string narrative, HypothesisCategory winnerCategory)
+    {
+        if (string.IsNullOrWhiteSpace(narrative) || winnerCategory == HypothesisCategory.Unknown)
+        {
+            return false;
+        }
+
+        var lowered = narrative.ToLowerInvariant();
+        return winnerCategory switch
+        {
+            HypothesisCategory.AssemblyVersionMismatch => ContainsNegatedConcept(lowered, "version mismatch") ||
+                                                         ContainsNegatedConcept(lowered, "assembly mismatch") ||
+                                                         ContainsNegatedConcept(lowered, "assembly version"),
+            HypothesisCategory.ProfilerOrInstrumentation => ContainsNegatedConcept(lowered, "profiler") ||
+                                                           ContainsNegatedConcept(lowered, "instrumentation") ||
+                                                           ContainsNegatedConcept(lowered, "tracer") ||
+                                                           ContainsNegatedConcept(lowered, "il rewriting"),
+            HypothesisCategory.Trimming => ContainsNegatedConcept(lowered, "trim") ||
+                                          ContainsNegatedConcept(lowered, "publishtrimmed") ||
+                                          ContainsNegatedConcept(lowered, "nativeaot"),
+            HypothesisCategory.MemoryCorruption => ContainsNegatedConcept(lowered, "memory corruption") ||
+                                                  ContainsNegatedConcept(lowered, "heap corruption"),
+            _ => false
+        };
+    }
+
+    private static bool ContainsNegatedConcept(string loweredNarrative, string concept)
+    {
+        if (string.IsNullOrWhiteSpace(loweredNarrative) || string.IsNullOrWhiteSpace(concept))
+        {
+            return false;
+        }
+
+        var idx = loweredNarrative.IndexOf(concept, StringComparison.Ordinal);
+        if (idx < 0)
+        {
+            return false;
+        }
+
+        var windowStart = Math.Max(0, idx - 80);
+        var window = loweredNarrative.Substring(windowStart, idx - windowStart);
+        return window.Contains("rather than", StringComparison.Ordinal) ||
+               window.Contains("instead of", StringComparison.Ordinal) ||
+               window.Contains("rule out", StringComparison.Ordinal) ||
+               window.Contains("ruling out", StringComparison.Ordinal) ||
+               window.Contains("not a ", StringComparison.Ordinal) ||
+               window.Contains("not an ", StringComparison.Ordinal) ||
+               window.Contains("not due to", StringComparison.Ordinal) ||
+               window.Contains("not caused by", StringComparison.Ordinal) ||
+               window.Contains("no evidence", StringComparison.Ordinal) ||
+               window.Contains("no sign", StringComparison.Ordinal) ||
+               window.Contains("no indication", StringComparison.Ordinal) ||
+               window.Contains("without evidence", StringComparison.Ordinal);
+    }
+
+    private static string BuildJudgeAlignedReasoning(AiJudgeResult? judge, string winnerText)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"Selected hypothesis: {winnerText}".TrimEnd());
+        if (judge != null)
+        {
+            if (!string.IsNullOrWhiteSpace(judge.SelectedHypothesisId))
+            {
+                sb.AppendLine($"Judge selection: {judge.SelectedHypothesisId.Trim()} (confidence={judge.Confidence?.Trim() ?? "unknown"})".TrimEnd());
+            }
+
+            if (!string.IsNullOrWhiteSpace(judge.Rationale))
+            {
+                sb.AppendLine();
+                sb.AppendLine("Judge rationale:");
+                sb.AppendLine(judge.Rationale.Trim());
+            }
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    private static List<string>? BuildJudgeAlignedRecommendations(AiHypothesis winner, HypothesisCategory winnerCategory)
+    {
+        var recs = new List<string>();
+
+        if (winner.TestsToRun is { Count: > 0 })
+        {
+            recs.AddRange(winner.TestsToRun.Where(s => !string.IsNullOrWhiteSpace(s)).Select(s => s.Trim()));
+        }
+
+        if (recs.Count == 0)
+        {
+            recs.AddRange(winnerCategory switch
+            {
+                HypothesisCategory.AssemblyVersionMismatch =>
+                [
+                    "Verify the exact runtime-loaded assembly versions for the failing type and its caller (report_get(path=\"analysis.assemblies.items\", limit=25, select=[\"name\",\"assemblyVersion\",\"fileVersion\",\"path\"]) and report_get(path=\"analysis.modules\", ...)).",
+                    "Confirm the failing type is resolved from the expected assembly and AssemblyLoadContext (exec \"!name2ee * <TypeName>\" / exec \"!dumpmodule <module>\" where available).",
+                    "Ensure build-time package versions match the deployed runtime and remove duplicate copies of System.Collections.Concurrent from the deployment image."
+                ],
+                HypothesisCategory.ProfilerOrInstrumentation =>
+                [
+                    "Identify which profilers/tracers/instrumentation are active in the dump (report_get(path=\"analysis.modules\") for known profiler DLLs/so files) and verify their versions.",
+                    "If instrumentation performs IL rewriting, verify it in-dump by inspecting method/IL/JIT state rather than assuming (e.g., inspect the relevant MethodDesc / IL when possible).",
+                    "Adjust instrumentation configuration to exclude core framework assemblies/types from rewriting if corruption is suspected."
+                ],
+                HypothesisCategory.Trimming =>
+                [
+                    "If trimming/ILLink is enabled, add explicit preservation rules for the missing member (e.g., descriptor/attribute) and rebuild.",
+                    "Confirm whether the app was built with trimming or NativeAOT settings and collect the publish configuration used for the crashed artifact."
+                ],
+                HypothesisCategory.MemoryCorruption =>
+                [
+                    "Look for additional signs of memory corruption (invalid MethodTables, inconsistent object headers) and capture relevant diagnostics for upstream investigation.",
+                    "Check for native components or unsafe code paths that could corrupt managed memory around the time of the exception."
+                ],
+                _ => []
+            });
+        }
+
+        recs = FilterDisallowedRecommendations(recs) ?? [];
+        if (recs.Count == 0)
+        {
+            return null;
+        }
+
+        return DeduplicateAndLimit(recs, limit: 8);
+    }
+
+    private static List<string>? FilterDisallowedRecommendations(List<string>? recommendations)
+    {
+        if (recommendations == null || recommendations.Count == 0)
+        {
+            return recommendations;
+        }
+
+        var filtered = new List<string>(recommendations.Count);
+        foreach (var rec in recommendations)
+        {
+            if (string.IsNullOrWhiteSpace(rec))
+            {
+                continue;
+            }
+
+            if (IsDisallowedProfilerDisableRecommendation(rec))
+            {
+                continue;
+            }
+
+            filtered.Add(rec.Trim());
+        }
+
+        return filtered.Count == 0 ? null : DeduplicateAndLimit(filtered, limit: 12);
+    }
+
+    private static bool ContainsDisallowedProfilerDisableRecommendation(List<string>? recommendations)
+        => recommendations != null && recommendations.Any(IsDisallowedProfilerDisableRecommendation);
+
+    private static bool IsDisallowedProfilerDisableRecommendation(string recommendation)
+    {
+        if (string.IsNullOrWhiteSpace(recommendation))
+        {
+            return false;
+        }
+
+        var text = recommendation.Trim().ToLowerInvariant();
+        var containsDisable =
+            text.Contains("disable", StringComparison.Ordinal) ||
+            text.Contains("turn off", StringComparison.Ordinal) ||
+            text.Contains("remove", StringComparison.Ordinal);
+
+        if (!containsDisable)
+        {
+            return false;
+        }
+
+        return text.Contains("profiler", StringComparison.Ordinal) ||
+               text.Contains("instrumentation", StringComparison.Ordinal) ||
+               text.Contains("tracer", StringComparison.Ordinal) ||
+               text.Contains("monitoring", StringComparison.Ordinal) ||
+               text.Contains("datadog", StringComparison.Ordinal) ||
+               text.Contains("application insights", StringComparison.Ordinal) ||
+               text.Contains("dynatrace", StringComparison.Ordinal);
+    }
+
+    private static List<string> DeduplicateAndLimit(List<string> items, int limit)
+    {
+        if (items.Count <= 1)
+        {
+            return items;
+        }
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<string>(Math.Min(items.Count, limit));
+        foreach (var item in items)
+        {
+            if (string.IsNullOrWhiteSpace(item))
+            {
+                continue;
+            }
+
+            var trimmed = item.Trim();
+            if (!seen.Add(trimmed))
+            {
+                continue;
+            }
+
+            result.Add(trimmed);
+            if (result.Count >= limit)
+            {
+                break;
+            }
+        }
+
+        return result;
+    }
+
+    private static int GetConfidenceRank(string? confidence)
+    {
+        var normalized = (confidence ?? string.Empty).Trim().ToLowerInvariant();
+        return normalized switch
+        {
+            "high" => 3,
+            "medium" => 2,
+            "low" => 1,
+            _ => 0
+        };
+    }
+
+    private static int? ParseHypothesisIdNumber(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        var match = Regex.Match(id.Trim(), @"^H(?<n>\d+)$", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+        if (!match.Success)
+        {
+            return null;
+        }
+
+        return int.TryParse(match.Groups["n"].Value, out var parsed) && parsed > 0 ? parsed : null;
+    }
+
+    private async Task EnforceHighConfidenceJudgeAndValidationAsync(
+        AiAnalysisResult result,
+        List<ExecutedCommand> commandsExecuted,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker,
+        InternalToolChoiceModeCache internalToolChoiceModeCache,
+        string passName,
+        int iteration,
+        int maxTokens,
+        string? lastModel,
+        string? traceRunDir,
+        JudgeAttemptState judgeAttemptState,
+        string finalizationReason,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(result);
+        ArgumentNullException.ThrowIfNull(commandsExecuted);
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+        ArgumentNullException.ThrowIfNull(internalToolChoiceModeCache);
+        ArgumentNullException.ThrowIfNull(passName);
+        ArgumentNullException.ThrowIfNull(judgeAttemptState);
         ArgumentNullException.ThrowIfNull(finalizationReason);
 
         var confidence = (result.Confidence ?? string.Empty).Trim();
@@ -1332,13 +2378,16 @@ State snapshot (JSON):
         if ((result.Evidence?.Count ?? 0) >= MinHighConfidenceEvidenceItems
             && HasNonReportEvidenceToolCalls(commandsExecuted)
             && hypothesisTracker.Hypotheses.Count >= 3
-            && evidenceLedger.Items.Count > 0)
+            && evidenceLedger.Items.Count > 0
+            && !judgeAttemptState.Attempted)
         {
+            judgeAttemptState.Attempted = true;
             result.Judge ??= await TryRunJudgeStepAsync(
                     passName: passName,
-                    systemPrompt: SystemPrompt,
+                    systemPrompt: JudgeSystemPrompt,
                     evidenceLedger: evidenceLedger,
                     hypothesisTracker: hypothesisTracker,
+                    internalToolChoiceModeCache: internalToolChoiceModeCache,
                     iteration: iteration,
                     maxTokens: maxTokens,
                     lastModel: lastModel,
@@ -1887,6 +2936,12 @@ State snapshot (JSON):
             return issues;
         }
 
+        var judgeConfidence = (judge.Confidence ?? string.Empty).Trim();
+        if (!string.Equals(judgeConfidence, "high", StringComparison.OrdinalIgnoreCase))
+        {
+            issues.Add("confidence=high requires judge.confidence=\"high\".");
+        }
+
         if (string.IsNullOrWhiteSpace(judge.SelectedHypothesisId))
         {
             issues.Add("judge.selectedHypothesisId is required for confidence=high.");
@@ -1903,7 +2958,18 @@ State snapshot (JSON):
         }
         else
         {
-            var unknown = supports.Where(id => !IsKnownEvidenceId(id, validEvidenceIds)).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList();
+            var uniqueSupports = supports
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .Select(id => id.Trim())
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (uniqueSupports.Count < 3)
+            {
+                issues.Add("confidence=high requires judge.supportsEvidenceIds to contain at least 3 distinct evidence IDs.");
+            }
+
+            var unknown = uniqueSupports.Where(id => !IsKnownEvidenceId(id, validEvidenceIds)).Take(5).ToList();
             if (unknown.Count > 0)
             {
                 issues.Add($"judge.supportsEvidenceIds contains unknown evidence IDs: {string.Join(", ", unknown)}.");
@@ -1919,6 +2985,7 @@ State snapshot (JSON):
         {
             var selected = (judge.SelectedHypothesisId ?? string.Empty).Trim();
             var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var duplicateIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var item in rejected)
             {
@@ -1936,6 +3003,7 @@ State snapshot (JSON):
 
                 if (!seen.Add(hid))
                 {
+                    duplicateIds.Add(hid);
                     continue;
                 }
 
@@ -1970,6 +3038,16 @@ State snapshot (JSON):
                 {
                     issues.Add($"judge.rejectedHypotheses '{hid}' must include a non-empty reason.");
                 }
+            }
+
+            if (seen.Count < 2)
+            {
+                issues.Add("judge.rejectedHypotheses must contain at least 2 distinct rejected alternatives for confidence=high.");
+            }
+
+            if (duplicateIds.Count > 0)
+            {
+                issues.Add($"judge.rejectedHypotheses contains duplicate hypothesisId values: {string.Join(", ", duplicateIds.Take(3))}.");
             }
         }
 
@@ -2360,6 +3438,7 @@ State snapshot (JSON):
         var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
         var lastCheckpointIteration = 0;
         var commandsExecutedAtLastCheckpoint = 0;
+        var internalToolChoiceModeCache = new InternalToolChoiceModeCache();
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
@@ -2494,9 +3573,9 @@ State snapshot (JSON):
                     continue;
                 }
 
-                if (commandsExecuted.Count >= maxToolCalls)
+                if (toolResultCache.Count >= maxToolCalls)
                 {
-                    _logger.LogInformation("[AI] Tool call budget reached ({MaxToolCalls}); finalizing pass {Pass}.", maxToolCalls, passName);
+                    _logger.LogInformation("[AI] Unique tool call budget reached ({MaxToolCalls}); finalizing pass {Pass}.", maxToolCalls, passName);
                     PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
                     return await FinalizePassAfterToolBudgetExceededAsync<T>(
                             passName: passName,
@@ -2537,18 +3616,20 @@ State snapshot (JSON):
                 }
 
                 var sw = Stopwatch.StartNew();
+                var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
                 try
                 {
                     string outputForModel;
+                    string outputForLog;
+                    var wasCached = false;
                     var duration = sw.Elapsed;
-                    var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
                     if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
                     {
                         sw.Stop();
                         duration = TimeSpan.Zero;
-                        outputForModel = TruncateForModel(
-                            "[cached tool result] Duplicate tool call detected; reusing prior output. Do not repeat identical tool calls.\n\n" +
-                            cached);
+                        wasCached = true;
+                        outputForModel = cached;
+                        outputForLog = TruncateForModel(BuildCachedToolResultMessage(toolName, toolInput));
                     }
                     else
                     {
@@ -2558,6 +3639,7 @@ State snapshot (JSON):
                         toolResultCache[toolCacheKey] = outputForModel;
                         sw.Stop();
                         duration = sw.Elapsed;
+                        outputForLog = outputForModel;
                     }
 
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
@@ -2566,13 +3648,13 @@ State snapshot (JSON):
                     {
                         Tool = toolName,
                         Input = CloneToolInput(toolInput),
-                        Output = outputForModel,
+                        Output = outputForLog,
                         Iteration = iteration,
                         Duration = duration.ToString("c")
                     });
 
                     WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
-                        new { tool = toolName, input = CloneToolInput(toolInput).ToString(), output = outputForModel, isError = false, duration = duration.ToString("c") });
+                        new { tool = toolName, input = CloneToolInput(toolInput).ToString(), output = outputForLog, cached = wasCached, isError = false, duration = duration.ToString("c") });
 
                     messages.Add(new SamplingMessage
                     {
@@ -2601,6 +3683,10 @@ State snapshot (JSON):
                     sw.Stop();
                     _logger.LogWarning(ex, "[AI] Tool execution failed in pass {Pass}: {Tool}", passName, toolName);
                     var messageForModel = TruncateForModel(ex.Message);
+                    if (!string.IsNullOrWhiteSpace(toolCacheKey))
+                    {
+                        toolResultCache[toolCacheKey] = messageForModel;
+                    }
 
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
                     toolIndexByIteration[iteration] = toolOrdinal;
@@ -2670,6 +3756,7 @@ State snapshot (JSON):
                         iteration: iteration,
                         maxTokens: CheckpointMaxTokens,
                         traceRunDir: traceRunDir,
+                        internalToolChoiceModeCache: internalToolChoiceModeCache,
                         cancellationToken: cancellationToken)
                     .ConfigureAwait(false);
 
@@ -2775,7 +3862,7 @@ State snapshot (JSON):
             && c.Output.Contains("too_large", StringComparison.OrdinalIgnoreCase));
 
         var duplicateReuseCount = recent.Count(c =>
-            c.Output.StartsWith("[cached tool result] Duplicate tool call detected", StringComparison.Ordinal));
+            c.Output.StartsWith("[cached tool result] Duplicate", StringComparison.OrdinalIgnoreCase));
 
         return tooLargeCount >= 2 || duplicateReuseCount >= 1;
     }
@@ -2789,8 +3876,11 @@ State snapshot (JSON):
         int iteration,
         int maxTokens,
         string? traceRunDir,
+        InternalToolChoiceModeCache internalToolChoiceModeCache,
         CancellationToken cancellationToken)
     {
+        ArgumentNullException.ThrowIfNull(internalToolChoiceModeCache);
+
         var priorCheckpointMessage = FindLatestCheckpointCarryForwardMessage(messages, passName);
 
 	        var prompt = $"""
@@ -2862,7 +3952,7 @@ State snapshot (JSON):
             Messages = checkpointMessages,
             MaxTokens = Math.Max(256, Math.Min(maxTokens, 65_000)),
             Tools = checkpointTools,
-            ToolChoice = new ToolChoice { Mode = "required" }
+            ToolChoice = new ToolChoice { Mode = internalToolChoiceModeCache.Mode }
         };
 
         CreateMessageResult response;
@@ -2874,9 +3964,42 @@ State snapshot (JSON):
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
-            _logger.LogWarning(ex, "[AI] Checkpoint synthesis failed in pass {Pass} at iteration {Iteration}", passName, iteration);
-            WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
-            return null;
+            if (request.ToolChoice?.Mode?.Equals("required", StringComparison.OrdinalIgnoreCase) == true
+                && IsToolChoiceRequiredUnsupported(ex))
+            {
+                internalToolChoiceModeCache.MarkRequiredUnsupported();
+                _logger.LogInformation(
+                    "[AI] Provider rejected toolChoice=required for checkpoint synthesis; retrying with toolChoice=auto (pass {Pass}, iteration {Iteration}).",
+                    passName,
+                    iteration);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-toolchoice-fallback.json", new
+                {
+                    passName,
+                    iteration,
+                    from = "required",
+                    to = "auto",
+                    message = ex.Message
+                });
+
+                var fallbackRequest = CloneWithToolChoiceMode(request, "auto");
+                try
+                {
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-fallback-request.json", BuildTraceRequest(iteration, fallbackRequest));
+                    response = await _samplingClient.RequestCompletionAsync(fallbackRequest, cancellationToken).ConfigureAwait(false);
+                }
+                catch (Exception ex2) when (!cancellationToken.IsCancellationRequested)
+                {
+                    _logger.LogWarning(ex2, "[AI] Checkpoint synthesis failed in pass {Pass} at iteration {Iteration}", passName, iteration);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-error.json", new { passName, iteration, error = ex2.ToString(), message = ex2.Message });
+                    return null;
+                }
+            }
+            else
+            {
+                _logger.LogWarning(ex, "[AI] Checkpoint synthesis failed in pass {Pass} at iteration {Iteration}", passName, iteration);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-error.json", new { passName, iteration, error = ex.ToString(), message = ex.Message });
+                return null;
+            }
         }
 
         WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-response.json", BuildTraceResponse(iteration, response));
@@ -2893,12 +4016,12 @@ State snapshot (JSON):
             return null;
         }
 
-        text = text.Trim();
-	        if (!TryParseFirstJsonObject(text, out var json))
-	        {
-	            _logger.LogWarning("[AI] Checkpoint synthesis returned unstructured output in pass {Pass} at iteration {Iteration}", passName, iteration);
-	            return TruncateText(text, maxChars: MaxCheckpointJsonChars);
-	        }
+	        text = text.Trim();
+		        if (!TryParseFirstJsonObject(text, out var json))
+		        {
+		            _logger.LogWarning("[AI] Checkpoint synthesis returned unstructured output in pass {Pass} at iteration {Iteration}", passName, iteration);
+		            return null;
+		        }
 
 	        var normalized = JsonSerializer.Serialize(json, new JsonSerializerOptions { WriteIndented = false });
 	        if (normalized.Length > MaxCheckpointJsonChars)
@@ -3298,31 +4421,426 @@ Checkpoint JSON:
         return sb.ToString().TrimEnd();
     }
 
+    private static IEnumerable<Exception> EnumerateExceptionChain(Exception ex)
+    {
+        for (var current = ex; current != null; current = current.InnerException)
+        {
+            yield return current;
+        }
+    }
+
+    private static bool IsToolChoiceRequiredUnsupported(Exception ex)
+    {
+        foreach (var current in EnumerateExceptionChain(ex))
+        {
+            var message = current.Message ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                continue;
+            }
+
+            // Observed from OpenRouter for some models (e.g., z-ai/glm-4.7):
+            // "No endpoints found that support the provided 'tool_choice' value."
+            if (message.Contains("tool_choice", StringComparison.OrdinalIgnoreCase)
+                && (message.Contains("No endpoints found", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("not support", StringComparison.OrdinalIgnoreCase)
+                    || message.Contains("unsupported", StringComparison.OrdinalIgnoreCase))
+                && message.Contains("required", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (message.Contains("tool_choice", StringComparison.OrdinalIgnoreCase)
+                && message.Contains("No endpoints found", StringComparison.OrdinalIgnoreCase)
+                && message.Contains("support", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static CreateMessageRequestParams CloneWithToolChoiceMode(CreateMessageRequestParams request, string mode)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        // Preserve all public writable properties to avoid subtly changing provider behavior on retry.
+        var clone = new CreateMessageRequestParams
+        {
+            // MaxTokens is a required member; seed it in the initializer to satisfy required-member enforcement.
+            MaxTokens = request.MaxTokens,
+            Messages = request.Messages
+        };
+        foreach (var prop in typeof(CreateMessageRequestParams).GetProperties(BindingFlags.Instance | BindingFlags.Public))
+        {
+            if (!prop.CanRead || !prop.CanWrite)
+            {
+                continue;
+            }
+
+            if (prop.GetIndexParameters().Length != 0)
+            {
+                continue;
+            }
+
+            if (string.Equals(prop.Name, nameof(CreateMessageRequestParams.ToolChoice), StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var value = prop.GetValue(request);
+            prop.SetValue(clone, value);
+        }
+
+        clone.ToolChoice = new ToolChoice { Mode = mode };
+        return clone;
+    }
+
+    private static bool IsBaselineEvidenceComplete(List<ExecutedCommand> commandsExecuted)
+    {
+        var seenPaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var cmd in commandsExecuted)
+        {
+            if (!cmd.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var path = TryGetString(cmd.Input, "path");
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                seenPaths.Add(path.Trim());
+            }
+        }
+
+        // Keep this aligned with the Phase 1 baseline prompt.
+        var baselinePaths = new[]
+        {
+            "metadata",
+            "analysis.summary",
+            "analysis.environment",
+            "analysis.exception.type",
+            "analysis.exception.message",
+            "analysis.exception.hResult",
+            "analysis.exception.stackTrace",
+            "analysis.exception.analysis"
+        };
+
+        return baselinePaths.All(seenPaths.Contains);
+    }
+
+    private static List<string> BuildDeterministicDoNotRepeatList(List<ExecutedCommand> commandsExecuted)
+    {
+        var entries = new List<string>(capacity: 50);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string? entry)
+        {
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                return;
+            }
+
+            var trimmed = entry.Trim();
+            trimmed = TruncateText(trimmed, maxChars: 512);
+
+            if (seen.Add(trimmed))
+            {
+                entries.Add(trimmed);
+            }
+        }
+
+        static string? BuildEntry(ExecutedCommand cmd)
+        {
+            var tool = (cmd.Tool ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(tool))
+            {
+                return null;
+            }
+
+            if (tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+            {
+                var path = TryGetString(cmd.Input, "path");
+                if (string.IsNullOrWhiteSpace(path))
+                {
+                    return "report_get(path=<missing>)";
+                }
+
+                var args = new List<string> { $"path=\"{path.Trim()}\"" };
+
+                var pageKind = TryGetString(cmd.Input, "pageKind");
+                if (!string.IsNullOrWhiteSpace(pageKind))
+                {
+                    args.Add($"pageKind=\"{pageKind.Trim()}\"");
+                }
+
+                if (cmd.Input.ValueKind == JsonValueKind.Object && cmd.Input.TryGetProperty("limit", out var limitEl))
+                {
+                    if (limitEl.ValueKind == JsonValueKind.Number && limitEl.TryGetInt32(out var limit))
+                    {
+                        args.Add($"limit={limit}");
+                    }
+                }
+
+                var select = TryGetStringArray(cmd.Input, "select");
+                if (select is { Count: > 0 })
+                {
+                    args.Add($"select=[{string.Join(",", select.Select(s => $"\"{s}\""))}]");
+                }
+
+                return $"report_get({string.Join(", ", args)})";
+            }
+
+            if (tool.Equals("exec", StringComparison.OrdinalIgnoreCase))
+            {
+                var command = TryGetString(cmd.Input, "command");
+                return string.IsNullOrWhiteSpace(command)
+                    ? "exec(command=<missing>)"
+                    : $"exec(command=\"{TruncateText(command.Trim(), maxChars: 512)}\")";
+            }
+
+            if (tool.Equals("inspect", StringComparison.OrdinalIgnoreCase))
+            {
+                var address = TryGetString(cmd.Input, "address");
+                return string.IsNullOrWhiteSpace(address)
+                    ? "inspect(address=<missing>)"
+                    : $"inspect(address=\"{address.Trim()}\")";
+            }
+
+            if (tool.Equals("get_thread_stack", StringComparison.OrdinalIgnoreCase))
+            {
+                var threadId = TryGetString(cmd.Input, "threadId");
+                return string.IsNullOrWhiteSpace(threadId)
+                    ? "get_thread_stack(threadId=<missing>)"
+                    : $"get_thread_stack(threadId=\"{threadId.Trim()}\")";
+            }
+
+            return $"{tool}({TruncateText(cmd.Input.ToString(), maxChars: 256)})";
+        }
+
+        // Prefer including the baseline evidence report_get calls if they exist.
+        var baselinePaths = new[]
+        {
+            "metadata",
+            "analysis.summary",
+            "analysis.environment",
+            "analysis.exception.type",
+            "analysis.exception.message",
+            "analysis.exception.hResult",
+            "analysis.exception.stackTrace",
+            "analysis.exception.analysis"
+        };
+
+        foreach (var path in baselinePaths)
+        {
+            var cmd = commandsExecuted.FirstOrDefault(c =>
+                c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(TryGetString(c.Input, "path")?.Trim(), path, StringComparison.Ordinal));
+
+            if (cmd != null)
+            {
+                Add(BuildEntry(cmd));
+            }
+        }
+
+        // Fill with the most recent unique tool calls, bounded.
+        for (var i = commandsExecuted.Count - 1; i >= 0 && entries.Count < 50; i--)
+        {
+            Add(BuildEntry(commandsExecuted[i]));
+        }
+
+        return entries;
+    }
+
+    private static string NormalizeCheckpointJson(string checkpointJson, List<ExecutedCommand> commandsExecuted)
+    {
+        ArgumentNullException.ThrowIfNull(checkpointJson);
+        ArgumentNullException.ThrowIfNull(commandsExecuted);
+
+        if (string.IsNullOrWhiteSpace(checkpointJson))
+        {
+            return checkpointJson;
+        }
+
+        if (!TryParseFirstJsonObject(checkpointJson, out var json) || json.ValueKind != JsonValueKind.Object)
+        {
+            return checkpointJson;
+        }
+
+        var baselineComplete = IsBaselineEvidenceComplete(commandsExecuted);
+
+        var facts = TryGetStringArray(json, "facts") ?? new List<string>();
+        if (!facts.Any(f => f.TrimStart().StartsWith("baselineComplete=", StringComparison.OrdinalIgnoreCase)))
+        {
+            facts.Add($"baselineComplete={baselineComplete.ToString().ToLowerInvariant()}");
+        }
+
+        if (facts.Count > 50)
+        {
+            facts = facts.Take(50).ToList();
+        }
+
+        var deterministicDoNotRepeat = BuildDeterministicDoNotRepeatList(commandsExecuted);
+        var existingDoNotRepeat = TryGetStringArray(json, "doNotRepeat") ?? new List<string>();
+
+        var mergedDoNotRepeat = new List<string>(capacity: 50);
+        var mergedSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void Add(string? entry)
+        {
+            if (string.IsNullOrWhiteSpace(entry))
+            {
+                return;
+            }
+
+            var trimmed = entry.Trim();
+            if (!mergedSeen.Add(trimmed))
+            {
+                return;
+            }
+
+            if (mergedDoNotRepeat.Count >= 50)
+            {
+                return;
+            }
+
+            mergedDoNotRepeat.Add(trimmed);
+        }
+
+        foreach (var entry in existingDoNotRepeat)
+        {
+            Add(entry);
+        }
+
+        foreach (var entry in deterministicDoNotRepeat)
+        {
+            Add(entry);
+        }
+
+        var hypotheses = json.TryGetProperty("hypotheses", out var hypothesesEl)
+            ? hypothesesEl
+            : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var evidence = json.TryGetProperty("evidence", out var evidenceEl)
+            ? evidenceEl
+            : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var nextSteps = json.TryGetProperty("nextSteps", out var nextStepsEl)
+            ? nextStepsEl
+            : JsonSerializer.SerializeToElement(Array.Empty<object>());
+
+        var normalized = JsonSerializer.Serialize(new
+        {
+            facts,
+            hypotheses,
+            evidence,
+            doNotRepeat = mergedDoNotRepeat,
+            nextSteps
+        }, new JsonSerializerOptions { WriteIndented = false });
+
+        if (normalized.Length <= MaxCheckpointJsonChars)
+        {
+            return normalized;
+        }
+
+        // Ensure we never return invalid/truncated JSON. Prefer a smaller checkpoint rather than truncating.
+        var trimmedFacts = facts.Take(30).Select(f => TruncateText(f, maxChars: 1024)).ToList();
+        var trimmedDoNotRepeat = mergedDoNotRepeat.Take(30).Select(d => TruncateText(d, maxChars: 512)).ToList();
+
+        var fallback = JsonSerializer.Serialize(new
+        {
+            facts = trimmedFacts,
+            hypotheses = Array.Empty<object>(),
+            evidence = Array.Empty<object>(),
+            doNotRepeat = trimmedDoNotRepeat,
+            nextSteps = Array.Empty<object>()
+        }, new JsonSerializerOptions { WriteIndented = false });
+
+        return fallback.Length <= MaxCheckpointJsonChars
+            ? fallback
+            : JsonSerializer.Serialize(new
+            {
+                facts = new[] { "Checkpoint normalization exceeded size limits; using minimal fallback." },
+                hypotheses = Array.Empty<object>(),
+                evidence = Array.Empty<object>(),
+                doNotRepeat = Array.Empty<string>(),
+                nextSteps = Array.Empty<object>()
+            }, new JsonSerializerOptions { WriteIndented = false });
+    }
+
     private static string BuildDeterministicCheckpointJson(
         string passName,
         List<ExecutedCommand> commandsExecuted,
         int commandsExecutedAtLastCheckpoint)
     {
         var evidence = BuildCheckpointEvidenceSnapshot(passName, commandsExecuted, commandsExecutedAtLastCheckpoint);
-        var checkpoint = new
-        {
-            facts = new[]
-            {
-                "Checkpoint synthesis unavailable; using deterministic fallback checkpoint.",
-                $"pass={passName}"
-            },
-            hypotheses = Array.Empty<object>(),
-            evidence = new[]
-            {
-                new { id = "E0", source = "deterministic", finding = TruncateText(evidence, maxChars: 12_000) }
-            },
-            doNotRepeat = Array.Empty<string>(),
-            nextSteps = Array.Empty<object>()
-	        };
 
-	        var json = JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = false });
-	        return json.Length > MaxCheckpointJsonChars ? TruncateText(json, maxChars: MaxCheckpointJsonChars) : json;
-	    }
+        var doNotRepeat = BuildDeterministicDoNotRepeatList(commandsExecuted);
+        var baselineComplete = IsBaselineEvidenceComplete(commandsExecuted);
+
+        var facts = new List<string>
+        {
+            "Checkpoint synthesis unavailable; using deterministic fallback checkpoint.",
+            $"pass={passName}",
+            $"baselineComplete={baselineComplete.ToString().ToLowerInvariant()}",
+            $"uniqueToolCalls={doNotRepeat.Count}"
+        };
+
+        var evidenceMaxChars = 12_000;
+        var doNotRepeatCount = doNotRepeat.Count;
+
+        while (true)
+        {
+            var checkpoint = new
+            {
+                facts = facts.Select(f => TruncateText(f, maxChars: 1024)).ToList(),
+                hypotheses = Array.Empty<object>(),
+                evidence = new[]
+                {
+                    new { id = "E0", source = "deterministic", finding = TruncateText(evidence, maxChars: evidenceMaxChars) }
+                },
+                doNotRepeat = doNotRepeat.Take(doNotRepeatCount).ToList(),
+                nextSteps = Array.Empty<object>()
+            };
+
+            var json = JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = false });
+            if (json.Length <= MaxCheckpointJsonChars)
+            {
+                return json;
+            }
+
+            if (evidenceMaxChars > 1024)
+            {
+                evidenceMaxChars = Math.Max(1024, evidenceMaxChars / 2);
+                continue;
+            }
+
+            if (doNotRepeatCount > 10)
+            {
+                doNotRepeatCount = Math.Max(10, doNotRepeatCount / 2);
+                continue;
+            }
+
+            var minimal = JsonSerializer.Serialize(new
+            {
+                facts = facts.Take(10).Select(f => TruncateText(f, maxChars: 256)).ToList(),
+                hypotheses = Array.Empty<object>(),
+                evidence = Array.Empty<object>(),
+                doNotRepeat = doNotRepeat.Take(doNotRepeatCount).ToList(),
+                nextSteps = Array.Empty<object>()
+            }, new JsonSerializerOptions { WriteIndented = false });
+
+            return minimal.Length <= MaxCheckpointJsonChars
+                ? minimal
+                : JsonSerializer.Serialize(new
+                {
+                    facts = new[] { "Deterministic checkpoint exceeded size limits; using minimal fallback." },
+                    hypotheses = Array.Empty<object>(),
+                    evidence = Array.Empty<object>(),
+                    doNotRepeat = Array.Empty<string>(),
+                    nextSteps = Array.Empty<object>()
+                }, new JsonSerializerOptions { WriteIndented = false });
+        }
+    }
 
     private static AiSummaryResult ParseSummaryRewriteComplete(
         JsonElement input,
@@ -3590,22 +5108,23 @@ Tooling:
     private (string Name, JsonElement Input) RewriteToolUseIfNeeded(ToolUseContentBlock toolUse, IManagedObjectInspector? inspector)
     {
         var name = (toolUse.Name ?? string.Empty).Trim();
+        var input = NormalizeToolInput(toolUse.Input);
         if (!string.Equals(name, "exec", StringComparison.OrdinalIgnoreCase))
         {
-            return (name, toolUse.Input);
+            return (name, input);
         }
 
         if (inspector == null || !inspector.IsOpen)
         {
-            return (name, toolUse.Input);
+            return (name, input);
         }
 
-        var cmd = TryGetString(toolUse.Input, "command") ?? string.Empty;
+        var cmd = TryGetString(input, "command") ?? string.Empty;
         var match = Regex.Match(cmd, @"^\s*sos\s+(dumpobj|dumpvc)\s+(?<addr>0x[0-9a-fA-F]+|[0-9a-fA-F]+)\s*$",
             RegexOptions.CultureInvariant | RegexOptions.IgnoreCase);
         if (!match.Success)
         {
-            return (name, toolUse.Input);
+            return (name, input);
         }
 
         var addr = match.Groups["addr"].Value;
@@ -4303,6 +5822,110 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         {
             return BuildFallbackSynthesisResult(
                 prefix: $"Tool call budget exceeded ({maxToolCalls}). Final synthesis produced unstructured output.",
+                text: text,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: response.Model ?? lastModel);
+        }
+
+        var parsed = ParseAnalysisComplete(json, commandsExecuted, iteration, response.Model ?? lastModel);
+        parsed.AnalyzedAt = DateTime.UtcNow;
+        return parsed;
+    }
+
+    private async Task<AiAnalysisResult> FinalizeAnalysisAfterNoProgressDetectedAsync(
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        int maxTokens,
+        int consecutiveNoProgressIterations,
+        int uniqueToolCalls,
+        string? lastModel,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+    {
+        const string analysisSchema = """
+{
+  "rootCause": "string",
+  "confidence": "high|medium|low|unknown",
+  "reasoning": "string",
+  "evidence": ["string"],
+  "recommendations": ["string"],
+  "additionalFindings": ["string"]
+}
+""";
+
+        var finalPrompt = $"""
+The investigation appears to be stuck: there has been no progress for {consecutiveNoProgressIterations} consecutive iteration(s).
+
+You MUST NOT request any tools. Instead, synthesize the best possible conclusion based ONLY on evidence already collected in this conversation
+(tool outputs already shown). If evidence is insufficient, set confidence to "low" and list the most important missing evidence items.
+
+Notes:
+- Repeating tool calls that already have results is not progress; treat cached/repeated calls as already known.
+- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
+- Unique evidence tool calls seen so far: {uniqueToolCalls}
+
+Return ONLY valid JSON (no markdown, no code fences) with this schema:
+{analysisSchema}
+""";
+
+        var finalMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = finalPrompt }
+                ]
+            }
+        };
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages = finalMessages,
+            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: maxTokens),
+            Tools = null,
+            ToolChoice = null
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation("[AI] Finalizing analysis early due to no progress...");
+            WriteSamplingTraceFile(traceRunDir, $"final-no-progress-synthesis-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: $"No progress detected. Final synthesis request failed: {ex.Message}",
+                text: string.Empty,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: lastModel);
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"final-no-progress-synthesis-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response);
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: "No progress detected. Final synthesis returned empty content.",
+                text: string.Empty,
+                commandsExecuted: commandsExecuted,
+                iteration: iteration,
+                model: response.Model ?? lastModel);
+        }
+
+        if (!TryParseFirstJsonObject(text, out var json))
+        {
+            return BuildFallbackSynthesisResult(
+                prefix: "No progress detected. Final synthesis produced unstructured output.",
                 text: text,
                 commandsExecuted: commandsExecuted,
                 iteration: iteration,
@@ -5288,6 +6911,76 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         }
     }
 
+    private static JsonElement NormalizeToolInput(JsonElement input)
+    {
+        if (input.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            using var empty = JsonDocument.Parse("{}");
+            return empty.RootElement.Clone();
+        }
+
+        if (input.ValueKind == JsonValueKind.Object)
+        {
+            if (input.TryGetProperty("__raw", out var rawEl) && rawEl.ValueKind == JsonValueKind.String)
+            {
+                if (TryParseRawJsonObject(rawEl.GetString(), out var parsed))
+                {
+                    return parsed;
+                }
+            }
+
+            return input;
+        }
+
+        if (input.ValueKind == JsonValueKind.String)
+        {
+            if (TryParseRawJsonObject(input.GetString(), out var parsed))
+            {
+                return parsed;
+            }
+
+            return input;
+        }
+
+        return input;
+    }
+
+    private static bool TryParseRawJsonObject(string? raw, out JsonElement parsed)
+    {
+        parsed = default;
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        var trimmed = raw.Trim();
+        if (trimmed.Length == 0 || trimmed.Length > 50_000)
+        {
+            return false;
+        }
+
+        if (trimmed[0] != '{')
+        {
+            return false;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(trimmed);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            parsed = doc.RootElement.Clone();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
     private static string TruncateInitialPrompt(string text)
         => TruncateText(text, maxChars: 200_000);
 
@@ -5351,6 +7044,16 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         @"|(^|[;&|]\s*)(command\s+script|script)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    private const string JudgeSystemPrompt = """
+You are an internal evaluator that selects the best-supported hypothesis based ONLY on the provided evidence/hypothesis ledger.
+
+Rules:
+- You MUST call the tool "analysis_judge_complete" exactly once.
+- Do NOT call any other tools.
+- Do NOT output any text outside the tool call.
+- Tool input MUST be a valid JSON object (not a JSON string).
+""";
+
     private const string SystemPrompt = """
 You are an expert crash dump analyst. You've been given an initial crash analysis report from a memory dump.
 
@@ -5361,7 +7064,10 @@ IMPORTANT: Always keep the user's stated goal and the primary objective of the a
 IMPORTANT: Before using exec, determine the active debugger type from the initial report metadata (metadata.debuggerType, e.g. "LLDB" or "WinDbg") and only issue commands that exist in that debugger. Never run WinDbg-only commands in an LLDB session (or vice versa).
 IMPORTANT: Exception: WinDbg-style SOS commands prefixed with '!' (e.g., !pe, !clrstack, !dumpheap) are acceptable in LLDB sessions because the server strips the leading '!'.
 IMPORTANT: Do not repeat identical tool calls with the same arguments; reuse prior tool outputs as evidence and move the investigation forward.
-IMPORTANT: Do not assume assembly versions from file paths. Treat paths as hints and verify versions using assembly metadata from the report (prefer report_get for analysis.assemblies/items and analysis.modules where available).
+IMPORTANT: Tool inputs MUST be valid JSON objects (double-quoted keys, no trailing commas). Do NOT pass JSON as a quoted string.
+IMPORTANT: report_get requires a top-level "path" string. Never call report_get without path.
+IMPORTANT: Do not assume assembly versions from file paths. Treat paths as hints and verify versions using assembly metadata from the report (prefer report_get for analysis.assemblies.items and analysis.modules where available).
+IMPORTANT: When using SOS commands like !dumpmt/!dumpmt -md, confirm the reported type name matches the type you are reasoning about (e.g., do not conclude ConcurrentDictionary.TryGetValue is missing if you inspected ConcurrentDictionary+Enumerator).
 IMPORTANT: If you suspect a profiler/tracer rewrote IL, VERIFY it: check whether the executing code is IL/JIT vs R2R/NGen, whether the method is JITted, and (when possible) inspect/dump the current IL to confirm rewriting rather than assuming.
 IMPORTANT: Maintain a running, cumulative set of confirmed facts and evidence across iterations; do not “reset” what you know each step.
 IMPORTANT: Use the internal meta tools (analysis_evidence_add / analysis_hypothesis_register / analysis_hypothesis_score) to maintain a stable evidence ledger and competing hypotheses. Batch updates; do not spam (at most once per iteration).
@@ -5461,6 +7167,45 @@ Be thorough but efficient. Don't run unnecessary commands.
         }
 
         return $"{toolName.Trim().ToLowerInvariant()}:{CanonicalizeJson(toolInput)}";
+    }
+
+    private static string BuildCachedToolResultMessage(string toolName, JsonElement toolInput)
+    {
+        var normalized = (toolName ?? string.Empty).Trim();
+
+        if (normalized.Equals("exec", StringComparison.OrdinalIgnoreCase))
+        {
+            var command = toolInput.ValueKind == JsonValueKind.Object ? TryGetString(toolInput, "command") : null;
+            return string.IsNullOrWhiteSpace(command)
+                ? "[cached tool result] Duplicate exec call detected; prior output already provided. Do not repeat identical tool calls."
+                : $"[cached tool result] Duplicate exec call detected for command: {command.Trim()}. Prior output already provided. Do not repeat identical tool calls.";
+        }
+
+        if (normalized.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+        {
+            var path = toolInput.ValueKind == JsonValueKind.Object ? TryGetString(toolInput, "path") : null;
+            return string.IsNullOrWhiteSpace(path)
+                ? "[cached tool result] Duplicate report_get call detected; prior output already provided. Do not repeat identical tool calls."
+                : $"[cached tool result] Duplicate report_get call detected for path: {path.Trim()}. Prior output already provided. Do not repeat identical tool calls.";
+        }
+
+        if (normalized.Equals("inspect", StringComparison.OrdinalIgnoreCase))
+        {
+            var address = toolInput.ValueKind == JsonValueKind.Object ? TryGetString(toolInput, "address") : null;
+            return string.IsNullOrWhiteSpace(address)
+                ? "[cached tool result] Duplicate inspect call detected; prior output already provided. Do not repeat identical tool calls."
+                : $"[cached tool result] Duplicate inspect call detected for address: {address.Trim()}. Prior output already provided. Do not repeat identical tool calls.";
+        }
+
+        if (normalized.Equals("get_thread_stack", StringComparison.OrdinalIgnoreCase))
+        {
+            var threadId = toolInput.ValueKind == JsonValueKind.Object ? TryGetString(toolInput, "threadId") : null;
+            return string.IsNullOrWhiteSpace(threadId)
+                ? "[cached tool result] Duplicate get_thread_stack call detected; prior output already provided. Do not repeat identical tool calls."
+                : $"[cached tool result] Duplicate get_thread_stack call detected for threadId: {threadId.Trim()}. Prior output already provided. Do not repeat identical tool calls.";
+        }
+
+        return $"[cached tool result] Duplicate {normalized} call detected; prior output already provided. Do not repeat identical tool calls.";
     }
 
     private static string NormalizeDebuggerCommand(string command)

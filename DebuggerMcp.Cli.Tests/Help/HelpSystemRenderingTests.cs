@@ -8,6 +8,7 @@ namespace DebuggerMcp.Cli.Tests.Help;
 /// <summary>
 /// Rendering-oriented tests for <see cref="HelpSystem"/> helpers.
 /// </summary>
+[Collection("HelpSystem")]
 public class HelpSystemRenderingTests
 {
     [Fact]
@@ -54,4 +55,3 @@ public class HelpSystemRenderingTests
         Assert.Contains("exec", console.Output, StringComparison.OrdinalIgnoreCase);
     }
 }
-

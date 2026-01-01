@@ -82,6 +82,48 @@ public class ReportSectionApiTests
     }
 
     [Fact]
+    public void GetSection_WhenArrayPathUsesTrailingSlice_ReturnsSlicedItems()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "threads": { "all": [ { "id":1 }, { "id":2 }, { "id":3 } ] } }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(report, "analysis.threads.all[1:3]", limit: null, cursor: null, maxChars: 50_000);
+        using var doc = JsonDocument.Parse(json);
+
+        Assert.Equal("analysis.threads.all", doc.RootElement.GetProperty("path").GetString());
+
+        var page = doc.RootElement.GetProperty("page");
+        Assert.Equal("array", page.GetProperty("kind").GetString());
+        Assert.Equal(1, page.GetProperty("offset").GetInt32());
+        Assert.Equal(2, page.GetProperty("limit").GetInt32());
+
+        var value = doc.RootElement.GetProperty("value");
+        Assert.Equal(JsonValueKind.Array, value.ValueKind);
+        Assert.Equal(2, value.GetArrayLength());
+        Assert.Equal(2, value[0].GetProperty("id").GetInt32());
+        Assert.Equal(3, value[1].GetProperty("id").GetInt32());
+    }
+
+    [Fact]
+    public void GetSection_WhenSliceUsedOnNonArrayPath_ReturnsInvalidArgumentError()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "exception": { "type":"System.Exception", "message":"boom" } }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(report, "analysis.exception[0:1]", limit: null, cursor: null, maxChars: 50_000);
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("invalid_argument", doc.RootElement.GetProperty("error").GetProperty("code").GetString());
+    }
+
+    [Fact]
     public void GetSection_WhenInvalidPath_ReturnsInvalidPathError()
     {
         var report = """
@@ -90,6 +132,33 @@ public class ReportSectionApiTests
 
         var json = ReportSectionApi.GetSection(report, "analysis.nope", limit: null, cursor: null, maxChars: 50_000);
         Assert.Contains("\"code\": \"invalid_path\"", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetSection_WhenObjectSelectMatchesNoProperties_ReturnsInvalidArgumentErrorWithAvailableProperties()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "assemblies": { "count": 1, "items": [ { "name": "a" } ] } }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(
+            report,
+            "analysis.assemblies",
+            limit: null,
+            cursor: null,
+            maxChars: 50_000,
+            select: new[] { "name", "version" });
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.Equal("invalid_argument", doc.RootElement.GetProperty("error").GetProperty("code").GetString());
+
+        var available = doc.RootElement.GetProperty("extra").GetProperty("availableProperties");
+        Assert.Equal(JsonValueKind.Array, available.ValueKind);
+        Assert.Contains(available.EnumerateArray(), e => string.Equals("items", e.GetString(), StringComparison.Ordinal));
+        Assert.Contains(available.EnumerateArray(), e => string.Equals("count", e.GetString(), StringComparison.Ordinal));
     }
 
     [Fact]
@@ -453,6 +522,66 @@ public class ReportSectionApiTests
         Assert.Contains("\"code\": \"too_large\"", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("suggestedPaths", json, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("analysis.assemblies.items[0]", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void GetSection_WhenArrayFollowedByItemsAlias_ReturnsArray()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": { "modules": [ { "name":"m1" }, { "name":"m2" } ] }
+        }
+        """;
+
+        var json = ReportSectionApi.GetSection(report, "analysis.modules.items", limit: null, cursor: null, maxChars: 50_000);
+        using var doc = JsonDocument.Parse(json);
+
+        Assert.Equal("analysis.modules.items", doc.RootElement.GetProperty("path").GetString());
+        var value = doc.RootElement.GetProperty("value");
+        Assert.Equal(JsonValueKind.Array, value.ValueKind);
+        Assert.Equal(2, value.GetArrayLength());
+        Assert.Equal("m1", value[0].GetProperty("name").GetString());
+        Assert.Equal("m2", value[1].GetProperty("name").GetString());
+    }
+
+    [Fact]
+    public void GetSection_WhenKnownPathAliasRequested_RewritesToCanonicalPath()
+    {
+        var report = """
+        {
+          "metadata": { "dumpId":"d1" },
+          "analysis": {
+            "environment": {
+              "runtime": { "clrVersion": "9.0.0" },
+              "process": { "name": "dotnet" },
+              "platform": { "os": "Linux" }
+            },
+            "threads": { "faultingThread": { "threadId": "1" } }
+          }
+        }
+        """;
+
+        var runtime = ReportSectionApi.GetSection(report, "analysis.runtime.clrVersion", limit: null, cursor: null, maxChars: 50_000);
+        using (var doc = JsonDocument.Parse(runtime))
+        {
+            Assert.Equal("analysis.environment.runtime.clrVersion", doc.RootElement.GetProperty("path").GetString());
+            Assert.Equal("9.0.0", doc.RootElement.GetProperty("value").GetString());
+        }
+
+        var process = ReportSectionApi.GetSection(report, "analysis.process", limit: null, cursor: null, maxChars: 50_000);
+        using (var doc = JsonDocument.Parse(process))
+        {
+            Assert.Equal("analysis.environment.process", doc.RootElement.GetProperty("path").GetString());
+            Assert.Equal("dotnet", doc.RootElement.GetProperty("value").GetProperty("name").GetString());
+        }
+
+        var faulting = ReportSectionApi.GetSection(report, "analysis.threads.faulting", limit: null, cursor: null, maxChars: 50_000);
+        using (var doc = JsonDocument.Parse(faulting))
+        {
+            Assert.Equal("analysis.threads.faultingThread", doc.RootElement.GetProperty("path").GetString());
+            Assert.Equal("1", doc.RootElement.GetProperty("value").GetProperty("threadId").GetString());
+        }
     }
 
     private static string ExtractCursor(string json)

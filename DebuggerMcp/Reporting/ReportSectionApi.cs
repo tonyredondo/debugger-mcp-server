@@ -3,6 +3,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Text.RegularExpressions;
 using DebuggerMcp.Serialization;
 
 namespace DebuggerMcp.Reporting;
@@ -27,6 +28,9 @@ internal static class ReportSectionApi
     private const int MaxSelectFieldChars = 64;
     private const int MaxWhereValueChars = 256;
     private const int MaxTocEntries = 64;
+    private static readonly Regex TrailingSliceRegex = new(
+        @"^(?<base>.+?)\[(?<start>\d+):(?<end>\d+)\]$",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private static readonly JsonSerializerOptions CompactCamelCaseIgnoreNull = new()
     {
@@ -93,78 +97,172 @@ internal static class ReportSectionApi
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         var maxResponseChars = Math.Clamp(maxChars ?? DefaultMaxResponseChars, 1_000, 2_000_000);
-        if (path.Length > MaxPathChars)
+        var trimmedPath = path.Trim();
+        if (trimmedPath.Length > MaxPathChars)
         {
-            return SerializeError(path, "invalid_path", $"Path exceeds maximum length ({MaxPathChars}).", maxResponseChars);
+            return SerializeError(trimmedPath, "invalid_path", $"Path exceeds maximum length ({MaxPathChars}).", maxResponseChars);
+        }
+
+        int? sliceStart = null;
+        int? sliceEndExclusive = null;
+        if (TryParseTrailingSlice(trimmedPath, out var sliceBasePath, out var start, out var end, out var sliceError))
+        {
+            if (sliceError != null)
+            {
+                return SerializeError(trimmedPath, "invalid_path", sliceError, maxResponseChars);
+            }
+
+            trimmedPath = sliceBasePath;
+            sliceStart = start;
+            sliceEndExclusive = end;
         }
 
         if (!TryNormalizePageKind(pageKind, out var effectivePageKind, out var pageKindError))
         {
-            return SerializeError(path, "invalid_argument", pageKindError ?? "Invalid pageKind.", maxResponseChars);
+            return SerializeError(trimmedPath, "invalid_argument", pageKindError ?? "Invalid pageKind.", maxResponseChars);
         }
 
         if (!TryNormalizeSelect(select, out var effectiveSelect, out var selectError))
         {
-            return SerializeError(path, "invalid_argument", selectError ?? "Invalid select.", maxResponseChars);
+            return SerializeError(trimmedPath, "invalid_argument", selectError ?? "Invalid select.", maxResponseChars);
         }
 
         if (!TryNormalizeWhere(where, out var effectiveWhere, out var whereError))
         {
-            return SerializeError(path, "invalid_argument", whereError ?? "Invalid where.", maxResponseChars);
+            return SerializeError(trimmedPath, "invalid_argument", whereError ?? "Invalid where.", maxResponseChars);
         }
 
         using var doc = JsonDocument.Parse(reportJson);
         var root = doc.RootElement;
 
-        if (!TryResolvePath(root, path, out var value, out var resolveError))
+        if (!TryResolvePath(root, trimmedPath, out var value, out var resolveError))
         {
-            return SerializeError(path, "invalid_path", resolveError ?? $"Path '{path}' does not exist.", maxResponseChars);
+            if (TryRewriteKnownPath(trimmedPath, out var rewrittenPath) &&
+                TryResolvePath(root, rewrittenPath, out value, out _))
+            {
+                trimmedPath = rewrittenPath;
+            }
+            else
+            {
+                return SerializeError(trimmedPath, "invalid_path", resolveError ?? $"Path '{trimmedPath}' does not exist.", maxResponseChars);
+            }
+        }
+
+        if (sliceStart.HasValue && sliceEndExclusive.HasValue && value.ValueKind != JsonValueKind.Array)
+        {
+            return SerializeError(trimmedPath, "invalid_argument", "Slice syntax is only supported for array paths.", maxResponseChars);
         }
 
         if (effectiveWhere != null && value.ValueKind != JsonValueKind.Array)
         {
-            return SerializeError(path, "invalid_argument", "where is only supported for array paths.", maxResponseChars);
+            return SerializeError(trimmedPath, "invalid_argument", "where is only supported for array paths.", maxResponseChars);
         }
 
         if (value.ValueKind == JsonValueKind.Array)
         {
+            if (sliceStart.HasValue && sliceEndExclusive.HasValue)
+            {
+                cursor = null;
+            }
+
             var queryHash = ComputeQueryHash(pageKind: "array", select: effectiveSelect, where: effectiveWhere);
             var totalCount = value.GetArrayLength();
             var filtered = ApplyWhereFilter(value, effectiveWhere);
-            var page = ResolvePage(path, kind: "array", length: filtered.Count, limit, cursor, queryHash, out var pageError);
+            int offset;
+            int resolvedLimit;
+            if (sliceStart.HasValue && sliceEndExclusive.HasValue)
+            {
+                if (sliceEndExclusive.Value < sliceStart.Value)
+                {
+                    return SerializeError(trimmedPath, "invalid_path", "Invalid slice: end must be >= start.", maxResponseChars);
+                }
+
+                var effectiveStart = Math.Min(sliceStart.Value, filtered.Count);
+                var sliceCap = Math.Min(sliceEndExclusive.Value, filtered.Count);
+                if (sliceCap < effectiveStart)
+                {
+                    sliceCap = effectiveStart;
+                }
+
+                offset = effectiveStart;
+                var available = sliceCap - effectiveStart;
+                var maxWithinSlice = Math.Min(available, MaxLimit);
+                if (maxWithinSlice == 0)
+                {
+                    resolvedLimit = 0;
+                }
+                else
+                {
+                    resolvedLimit = limit.HasValue
+                        ? Math.Clamp(limit.Value, 1, maxWithinSlice)
+                        : maxWithinSlice;
+                }
+
+                var items = new List<JsonElement>(capacity: resolvedLimit);
+                var endExclusive = Math.Min(sliceCap, offset + resolvedLimit);
+                for (var i = offset; i < endExclusive; i++)
+                {
+                    var element = filtered[i];
+                    items.Add(ProjectElement(element, effectiveSelect));
+                }
+
+                string? nextCursor = null;
+
+                var sliceResponse = new
+                {
+                    path = trimmedPath,
+                    value = items,
+                    page = new
+                    {
+                        kind = "array",
+                        offset,
+                        total = totalCount,
+                        filteredTotal = effectiveWhere == null ? (int?)null : filtered.Count,
+                        limit = resolvedLimit,
+                        nextCursor
+                    }
+                };
+
+                return SerializeBounded(sliceResponse, maxResponseChars, trimmedPath, value, pageKind: "array", select: effectiveSelect, where: effectiveWhere);
+            }
+
+            var page = ResolvePage(trimmedPath, kind: "array", length: filtered.Count, limit, cursor, queryHash, out var pageError);
             if (pageError != null)
             {
-                return SerializeError(path, "invalid_cursor", pageError, maxResponseChars);
+                return SerializeError(trimmedPath, "invalid_cursor", pageError, maxResponseChars);
             }
 
-            var items = new List<JsonElement>(capacity: page.Limit);
-            var endExclusive = Math.Min(filtered.Count, page.Offset + page.Limit);
-            for (var i = page.Offset; i < endExclusive; i++)
+            offset = page.Offset;
+            resolvedLimit = page.Limit;
+
+            var itemsPaged = new List<JsonElement>(capacity: resolvedLimit);
+            var endExclusivePaged = Math.Min(filtered.Count, offset + resolvedLimit);
+            for (var i = offset; i < endExclusivePaged; i++)
             {
                 var element = filtered[i];
-                items.Add(ProjectElement(element, effectiveSelect));
+                itemsPaged.Add(ProjectElement(element, effectiveSelect));
             }
 
-            var nextCursor = endExclusive < filtered.Count
-                ? EncodeCursor(new ReportCursor(path, endExclusive, page.Limit, "array", queryHash))
+            var nextCursorPaged = endExclusivePaged < filtered.Count
+                ? EncodeCursor(new ReportCursor(trimmedPath, endExclusivePaged, resolvedLimit, "array", queryHash))
                 : null;
 
             var response = new
             {
-                path,
-                value = items,
+                path = trimmedPath,
+                value = itemsPaged,
                 page = new
                 {
                     kind = "array",
-                    offset = page.Offset,
+                    offset,
                     total = totalCount,
                     filteredTotal = effectiveWhere == null ? (int?)null : filtered.Count,
-                    limit = page.Limit,
-                    nextCursor
+                    limit = resolvedLimit,
+                    nextCursor = nextCursorPaged
                 }
             };
 
-            return SerializeBounded(response, maxResponseChars, path, value, pageKind: "array", select: effectiveSelect, where: effectiveWhere);
+            return SerializeBounded(response, maxResponseChars, trimmedPath, value, pageKind: "array", select: effectiveSelect, where: effectiveWhere);
         }
 
         if (value.ValueKind == JsonValueKind.Object &&
@@ -173,6 +271,7 @@ internal static class ReportSectionApi
         {
             var queryHash = ComputeQueryHash(pageKind: "object", select: effectiveSelect, where: null);
             List<string> properties;
+            IReadOnlyList<string>? availableProperties = null;
             if (effectiveSelect is { Count: > 0 })
             {
                 // For object results, select acts as a field filter on the object itself (no nesting).
@@ -180,6 +279,23 @@ internal static class ReportSectionApi
                     .Where(p => value.TryGetProperty(p, out _))
                     .Distinct(StringComparer.Ordinal)
                     .ToList();
+
+                if (properties.Count == 0)
+                {
+                    availableProperties = value.EnumerateObject()
+                        .Select(p => p.Name)
+                        .Distinct(StringComparer.Ordinal)
+                        .OrderBy(p => p, StringComparer.Ordinal)
+                        .Take(20)
+                        .ToList();
+
+                    return SerializeError(
+                        trimmedPath,
+                        "invalid_argument",
+                        "select did not match any properties on this object.",
+                        maxResponseChars,
+                        extra: new { availableProperties });
+                }
             }
             else
             {
@@ -190,10 +306,10 @@ internal static class ReportSectionApi
                     .ToList();
             }
 
-            var page = ResolvePage(path, kind: "object", length: properties.Count, limit, cursor, queryHash, out var pageError);
+            var page = ResolvePage(trimmedPath, kind: "object", length: properties.Count, limit, cursor, queryHash, out var pageError);
             if (pageError != null)
             {
-                return SerializeError(path, "invalid_cursor", pageError, maxResponseChars);
+                return SerializeError(trimmedPath, "invalid_cursor", pageError, maxResponseChars);
             }
 
             var endExclusive = Math.Min(properties.Count, page.Offset + page.Limit);
@@ -213,7 +329,7 @@ internal static class ReportSectionApi
 
             var response = new
             {
-                path,
+                path = trimmedPath,
                 value = JsonSerializer.SerializeToElement(selected, CompactCamelCaseIgnoreNull),
                 page = new
                 {
@@ -225,17 +341,77 @@ internal static class ReportSectionApi
                 }
             };
 
-            return SerializeBounded(response, maxResponseChars, path, value, effectivePageKind, effectiveSelect, effectiveWhere);
+            return SerializeBounded(response, maxResponseChars, trimmedPath, value, effectivePageKind, effectiveSelect, effectiveWhere);
         }
 
-        var responseObj = new { path, value = ProjectElement(value, effectiveSelect) };
+        if (effectiveSelect is { Count: > 0 } &&
+            value.ValueKind == JsonValueKind.Object &&
+            value.EnumerateObject().Any() &&
+            !effectiveSelect.Any(p => value.TryGetProperty(p, out _)))
+        {
+            var availableProperties = value.EnumerateObject()
+                .Select(p => p.Name)
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .Take(20)
+                .ToList();
+
+            return SerializeError(
+                trimmedPath,
+                "invalid_argument",
+                "select did not match any properties on this object.",
+                maxResponseChars,
+                extra: new { availableProperties });
+        }
+
+        var responseObj = new { path = trimmedPath, value = ProjectElement(value, effectiveSelect) };
 
         if (!string.IsNullOrWhiteSpace(cursor))
         {
-            return SerializeError(path, "invalid_cursor", "Cursor cannot be used for this path because the value is not pageable (array, or object paging enabled via pageKind=\"object\").", maxResponseChars);
+            return SerializeError(trimmedPath, "invalid_cursor", "Cursor cannot be used for this path because the value is not pageable (array, or object paging enabled via pageKind=\"object\").", maxResponseChars);
         }
 
-        return SerializeBounded(responseObj, maxResponseChars, path, value, effectivePageKind, effectiveSelect, effectiveWhere);
+        return SerializeBounded(responseObj, maxResponseChars, trimmedPath, value, effectivePageKind, effectiveSelect, effectiveWhere);
+    }
+
+    private static bool TryParseTrailingSlice(string path, out string basePath, out int start, out int end, out string? error)
+    {
+        basePath = string.Empty;
+        start = 0;
+        end = 0;
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var match = TrailingSliceRegex.Match(path);
+        if (!match.Success)
+        {
+            return false;
+        }
+
+        basePath = match.Groups["base"].Value.Trim();
+        if (basePath.Length == 0)
+        {
+            error = "Invalid slice: missing base path.";
+            return true;
+        }
+
+        if (!int.TryParse(match.Groups["start"].Value, out start) || start < 0)
+        {
+            error = "Invalid slice: start must be a non-negative integer.";
+            return true;
+        }
+
+        if (!int.TryParse(match.Groups["end"].Value, out end) || end < 0)
+        {
+            error = "Invalid slice: end must be a non-negative integer.";
+            return true;
+        }
+
+        return true;
     }
 
     private static object? TryBuildSummary(JsonElement analysis)
@@ -431,6 +607,30 @@ internal static class ReportSectionApi
         var current = root;
         foreach (var segment in segments)
         {
+            if (current.ValueKind == JsonValueKind.Array)
+            {
+                // Compatibility alias: some models assume arrays are wrapped under an "items" property.
+                if (string.Equals(segment.Name, "items", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (segment.Index.HasValue)
+                    {
+                        var idx = segment.Index.Value;
+                        if (idx < 0 || idx >= current.GetArrayLength())
+                        {
+                            error = $"Index {idx} is out of range for '{segment.Name}' (length {current.GetArrayLength()}).";
+                            return false;
+                        }
+
+                        current = current[idx];
+                    }
+
+                    continue;
+                }
+
+                error = $"Segment '{segment.Name}' cannot be resolved because the current node is not an object.";
+                return false;
+            }
+
             if (current.ValueKind != JsonValueKind.Object)
             {
                 error = $"Segment '{segment.Name}' cannot be resolved because the current node is not an object.";
@@ -464,6 +664,58 @@ internal static class ReportSectionApi
 
         value = current;
         return true;
+    }
+
+    private static bool TryRewriteKnownPath(string path, out string rewritten)
+    {
+        rewritten = string.Empty;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        var trimmed = path.Trim();
+
+        if (TryRewritePrefix(trimmed, "analysis.runtime", "analysis.environment.runtime", out rewritten))
+        {
+            return true;
+        }
+
+        if (TryRewritePrefix(trimmed, "analysis.process", "analysis.environment.process", out rewritten))
+        {
+            return true;
+        }
+
+        if (TryRewritePrefix(trimmed, "analysis.platform", "analysis.environment.platform", out rewritten))
+        {
+            return true;
+        }
+
+        if (TryRewritePrefix(trimmed, "analysis.threads.faulting", "analysis.threads.faultingThread", out rewritten))
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryRewritePrefix(string path, string prefix, string replacement, out string rewritten)
+    {
+        rewritten = string.Empty;
+
+        if (path.Equals(prefix, StringComparison.OrdinalIgnoreCase))
+        {
+            rewritten = replacement;
+            return true;
+        }
+
+        if (path.StartsWith(prefix + ".", StringComparison.OrdinalIgnoreCase))
+        {
+            rewritten = replacement + path.Substring(prefix.Length);
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryResolveRelativeDotPath(JsonElement root, string path, out JsonElement value)
