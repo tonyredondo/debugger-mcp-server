@@ -6959,26 +6959,7 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
             return false;
         }
 
-        if (trimmed[0] != '{')
-        {
-            return false;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(trimmed);
-            if (doc.RootElement.ValueKind != JsonValueKind.Object)
-            {
-                return false;
-            }
-
-            parsed = doc.RootElement.Clone();
-            return true;
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
+        return TryParseFirstJsonObject(trimmed, out parsed);
     }
 
     private static string TruncateInitialPrompt(string text)

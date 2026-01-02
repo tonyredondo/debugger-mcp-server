@@ -58,5 +58,41 @@ public class AiAnalysisOrchestratorAdditionalCoverageTests
         var ex = Assert.Throws<TargetInvocationException>(() => execute!.Invoke(null, new object[] { doc.RootElement, reportJson }));
         Assert.IsType<ArgumentException>(ex.InnerException);
     }
-}
 
+    [Fact]
+    public void NormalizeToolInput_WhenRawContainsConcatenatedJsonObjects_ParsesFirstObject()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeToolInput", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        var raw = """
+        {"path":"metadata","pageKind":"object","limit":50}{"path":"metadata","pageKind":"object","limit":50}
+        """.Trim();
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new Dictionary<string, string> { ["__raw"] = raw }));
+        var normalized = (JsonElement)normalize!.Invoke(null, new object[] { doc.RootElement })!;
+
+        Assert.Equal(JsonValueKind.Object, normalized.ValueKind);
+        Assert.Equal("metadata", normalized.GetProperty("path").GetString());
+        Assert.Equal("object", normalized.GetProperty("pageKind").GetString());
+        Assert.Equal(50, normalized.GetProperty("limit").GetInt32());
+        Assert.False(normalized.TryGetProperty("__raw", out _));
+    }
+
+    [Fact]
+    public void NormalizeToolInput_WhenInputIsConcatenatedJsonString_ParsesFirstObject()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeToolInput", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        var raw = """
+        {"path":"analysis.exception.type"}{"path":"analysis.exception.type"}
+        """.Trim();
+
+        using var doc = JsonDocument.Parse(JsonSerializer.Serialize(raw));
+        var normalized = (JsonElement)normalize!.Invoke(null, new object[] { doc.RootElement })!;
+
+        Assert.Equal(JsonValueKind.Object, normalized.ValueKind);
+        Assert.Equal("analysis.exception.type", normalized.GetProperty("path").GetString());
+    }
+}
