@@ -199,6 +199,48 @@ public sealed class AiEvidenceLedgerItem
     [JsonPropertyName("tags")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public List<string>? Tags { get; set; }
+
+    /// <summary>
+    /// Gets or sets the tool name that produced this evidence (e.g., report_get, exec).
+    /// </summary>
+    [JsonPropertyName("toolName")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToolName { get; set; }
+
+    /// <summary>
+    /// Gets or sets a stable hash of the tool call identity (tool name + normalized input), prefixed with <c>sha256:</c>.
+    /// </summary>
+    [JsonPropertyName("toolKeyHash")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToolKeyHash { get; set; }
+
+    /// <summary>
+    /// Gets or sets a hash of the tool output text used for this evidence item, prefixed with <c>sha256:</c>.
+    /// </summary>
+    [JsonPropertyName("toolOutputHash")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToolOutputHash { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether the tool result was served from cache.
+    /// </summary>
+    [JsonPropertyName("toolWasCached")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ToolWasCached { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether the tool result represents a tool-level error.
+    /// </summary>
+    [JsonPropertyName("toolWasError")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? ToolWasError { get; set; }
+
+    /// <summary>
+    /// Gets or sets optional model-authored notes about this evidence item.
+    /// </summary>
+    [JsonPropertyName("notes")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<string>? Notes { get; set; }
 }
 
 /// <summary>

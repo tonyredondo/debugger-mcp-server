@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Buffers;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
@@ -183,6 +184,24 @@ public sealed class AiAnalysisOrchestrator(
     public int SamplingTraceMaxFileBytes { get; set; } = 2_000_000;
 
     /// <summary>
+    /// Gets or sets a value indicating whether evidence provenance is enabled.
+    /// </summary>
+    /// <remarks>
+    /// When enabled, the orchestrator auto-records evidence ledger items from tool outputs and restricts
+    /// <c>analysis_evidence_add</c> to annotation-only to prevent evidence poisoning.
+    /// </remarks>
+    public bool EnableEvidenceProvenance { get; set; } = true;
+
+    /// <summary>
+    /// Gets or sets the maximum characters stored per auto-generated evidence finding.
+    /// </summary>
+    /// <remarks>
+    /// This applies to auto-recorded evidence items derived from tool outputs. The evidence ledger also enforces
+    /// its own truncation bounds; this property provides an additional guardrail for large tool outputs.
+    /// </remarks>
+    public int EvidenceExcerptMaxChars { get; set; } = 2048;
+
+    /// <summary>
     /// Gets a value indicating whether AI analysis is available for the connected client.
     /// </summary>
     public bool IsSamplingAvailable => _samplingClient.IsSamplingSupported;
@@ -254,6 +273,8 @@ public sealed class AiAnalysisOrchestrator(
         var maxToolCalls = MaxToolCalls > 0 ? MaxToolCalls : 50;
         var maxToolUsesPerIteration = MaxToolUsesPerIteration > 0 ? MaxToolUsesPerIteration : 40;
         var maxMetaToolCalls = MaxMetaToolCalls > 0 ? MaxMetaToolCalls : 200;
+        var evidenceExcerptMaxChars = Math.Clamp(EvidenceExcerptMaxChars, 64, 50_000);
+        var evidenceProvenanceEnabled = EnableEvidenceProvenance;
         var tools = SamplingTools.GetCrashAnalysisTools();
 
         var evidenceLedger = new AiEvidenceLedger();
@@ -264,6 +285,7 @@ public sealed class AiAnalysisOrchestrator(
         var metaBookkeepingDone = false;
         var judgeAttemptState = new JudgeAttemptState();
         var internalToolChoiceModeCache = new InternalToolChoiceModeCache();
+        var evidenceIdByToolKeyHash = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var consecutiveNoProgressIterations = 0;
 
         string? lastIterationAssistantText = null;
@@ -570,7 +592,7 @@ public sealed class AiAnalysisOrchestrator(
                     }
                     else
                     {
-                        var output = ExecuteInternalMetaTool(metaToolName, metaToolInput, evidenceLedger, hypothesisTracker);
+                        var output = ExecuteInternalMetaTool(metaToolName, metaToolInput, evidenceLedger, hypothesisTracker, evidenceProvenanceEnabled);
                         metaToolCallsExecuted++;
                         metaSw.Stop();
                         outputForModel = TruncateForModel(output);
@@ -714,6 +736,18 @@ public sealed class AiAnalysisOrchestrator(
                         }
                     }
 
+                    AutoRecordEvidenceFromToolResult(
+                        evidenceLedger: evidenceLedger,
+                        evidenceIdByToolKeyHash: evidenceIdByToolKeyHash,
+                        toolName: toolName,
+                        toolInput: toolInput,
+                        toolCacheKey: toolCacheKey,
+                        outputForModel: outputForModel,
+                        wasCached: wasCached,
+                        toolWasError: false,
+                        includeProvenanceMetadata: evidenceProvenanceEnabled,
+                        evidenceExcerptMaxChars: evidenceExcerptMaxChars);
+
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
                     toolIndexByIteration[iteration] = toolOrdinal;
                     commandsExecuted.Add(new ExecutedCommand
@@ -763,6 +797,18 @@ public sealed class AiAnalysisOrchestrator(
                     {
                         toolResultCache[toolCacheKey] = messageForModel;
                     }
+
+                    AutoRecordEvidenceFromToolResult(
+                        evidenceLedger: evidenceLedger,
+                        evidenceIdByToolKeyHash: evidenceIdByToolKeyHash,
+                        toolName: toolName,
+                        toolInput: toolInput,
+                        toolCacheKey: toolCacheKey,
+                        outputForModel: messageForModel,
+                        wasCached: false,
+                        toolWasError: true,
+                        includeProvenanceMetadata: evidenceProvenanceEnabled,
+                        evidenceExcerptMaxChars: evidenceExcerptMaxChars);
 
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
                     toolIndexByIteration[iteration] = toolOrdinal;
@@ -1114,7 +1160,11 @@ public sealed class AiAnalysisOrchestrator(
                 commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
 
 	                messages.Clear();
-	                ApplyCheckpointToStateStores(checkpoint, evidenceLedger, hypothesisTracker);
+	                ApplyCheckpointToStateStores(
+	                    checkpoint,
+	                    evidenceLedger,
+	                    hypothesisTracker,
+	                    enableEvidenceProvenance: evidenceProvenanceEnabled);
 	                messages.Add(BuildCheckpointCarryForwardMessage(
 	                    checkpoint,
 	                    passName: "analysis",
@@ -1390,13 +1440,14 @@ Do NOT gather new evidence in this step: do not call exec/report_get/inspect/get
 
 Use the meta tools to:
 1) Register 3-4 competing hypotheses (if none exist yet).
-2) Add evidence items for baseline findings already observed (exception type/message/hResult, top stack frame/IP, environment/runtime, etc.).
-3) Score/update hypotheses by linking supports/contradicts evidence IDs.
+2) Evidence is already recorded automatically from tool outputs (E# IDs). Do not add new evidence facts manually.
+3) Optionally annotate existing evidence items (whyItMatters/tags/notes) if it helps scoring (do not restate tool outputs as new findings).
+4) Score/update hypotheses by linking supports/contradicts evidence IDs.
 
 Constraints:
 - Batch updates; do not spam (single assistant message with multiple tool calls is preferred).
 - Be grounded: cite sources from already executed tool calls (e.g., report_get(...) or exec(...)).
-- Keep strings concise (<=2048 chars each). Evidence<=15 items for this step.
+- Keep strings concise (<=2048 chars each). Avoid repeated meta tool calls with no changes.
 
 Current state snapshot (JSON):
 {stateSnapshot}
@@ -1523,7 +1574,7 @@ Current state snapshot (JSON):
             }
             else
             {
-                var output = ExecuteInternalMetaTool(toolName, NormalizeToolInput(toolUse.Input), evidenceLedger, hypothesisTracker);
+                var output = ExecuteInternalMetaTool(toolName, NormalizeToolInput(toolUse.Input), evidenceLedger, hypothesisTracker, EnableEvidenceProvenance);
                 metaToolCallsExecuted++;
                 outputForModel = TruncateForModel(output);
             }
@@ -2588,7 +2639,8 @@ State snapshot (JSON):
         string toolName,
         JsonElement toolInput,
         AiEvidenceLedger evidenceLedger,
-        AiHypothesisTracker hypothesisTracker)
+        AiHypothesisTracker hypothesisTracker,
+        bool evidenceProvenanceEnabled)
     {
         ArgumentNullException.ThrowIfNull(evidenceLedger);
         ArgumentNullException.ThrowIfNull(hypothesisTracker);
@@ -2598,17 +2650,175 @@ State snapshot (JSON):
             var normalized = (toolName ?? string.Empty).Trim();
             if (normalized.Equals(AnalysisEvidenceAddToolName, StringComparison.OrdinalIgnoreCase))
             {
-                var items = ParseEvidenceLedgerItems(toolInput);
-                var added = evidenceLedger.AddOrUpdate(items);
+                if (!evidenceProvenanceEnabled)
+                {
+                    return ExecuteLegacyEvidenceAdd(toolInput, evidenceLedger);
+                }
+
+                const int maxRejectedItems = 25;
+                var annotated = new List<string>();
+                var rejected = new List<object>();
+                var ignoredDuplicates = 0;
+                var invalidItems = 0;
+                var legacyEvidenceNotes = 0;
+
+                if (toolInput.ValueKind != JsonValueKind.Object)
+                {
+                    invalidItems = 1;
+                    rejected.Add(new
+                    {
+                        index = 0,
+                        reason = "input_must_be_object",
+                        hint = "analysis_evidence_add is annotation-only. Provide { items: [ { id: \"E#\", whyItMatters?: \"...\", tags?: [...], notes?: [...] } ] }. Do not retry."
+                    });
+
+                    return JsonSerializer.Serialize(new
+                    {
+                        annotated,
+                        ignoredDuplicates,
+                        invalidItems,
+                        rejected,
+                        total = evidenceLedger.Items.Count,
+                        advice = "Continue analysis; do not retry analysis_evidence_add unless you have new annotations for existing evidence IDs."
+                    });
+                }
+
+                if (!toolInput.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
+                {
+                    invalidItems = 1;
+                    rejected.Add(new
+                    {
+                        index = 0,
+                        reason = "items_required",
+                        hint = "analysis_evidence_add.items must be an array. This tool is annotation-only; evidence facts are auto-generated from tool outputs. Do not retry."
+                    });
+
+                    return JsonSerializer.Serialize(new
+                    {
+                        annotated,
+                        ignoredDuplicates,
+                        invalidItems,
+                        rejected,
+                        total = evidenceLedger.Items.Count,
+                        advice = "Continue analysis; do not retry analysis_evidence_add unless you have new annotations for existing evidence IDs."
+                    });
+                }
+
+                var seenAnnotated = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                var index = 0;
+
+                foreach (var item in itemsEl.EnumerateArray())
+                {
+                    if (item.ValueKind != JsonValueKind.Object)
+                    {
+                        invalidItems++;
+                        if (rejected.Count < maxRejectedItems)
+                        {
+                            rejected.Add(new
+                            {
+                                index,
+                                reason = "item_must_be_object",
+                                hint = "Each item must be an object. Example: { id: \"E12\", whyItMatters: \"...\", tags: [\"...\"] }."
+                            });
+                        }
+
+                        index++;
+                        continue;
+                    }
+
+                    var evidenceId = TryGetString(item, "id") ?? TryGetString(item, "evidenceId") ?? string.Empty;
+                    var whyItMatters = TryGetString(item, "whyItMatters");
+                    var tags = TryGetStringArray(item, "tags");
+
+                    var notes = TryGetStringArray(item, "notes") ?? [];
+                    var note = TryGetString(item, "note");
+                    if (!string.IsNullOrWhiteSpace(note))
+                    {
+                        notes.Add(note);
+                    }
+
+                    var legacySource = TryGetString(item, "source");
+                    var legacyFinding = TryGetString(item, "finding");
+                    if (!string.IsNullOrWhiteSpace(legacySource) || !string.IsNullOrWhiteSpace(legacyFinding))
+                    {
+                        legacyEvidenceNotes++;
+                        var combined = string.IsNullOrWhiteSpace(legacySource)
+                            ? legacyFinding ?? string.Empty
+                            : string.IsNullOrWhiteSpace(legacyFinding)
+                                ? legacySource ?? string.Empty
+                                : $"{legacySource!.Trim()} -> {legacyFinding!.Trim()}";
+
+                        if (!string.IsNullOrWhiteSpace(combined))
+                        {
+                            notes.Add(combined);
+                        }
+                    }
+
+                    var normalizedNotes = notes.Count == 0 ? null : notes;
+
+                    var status = evidenceLedger.Annotate(
+                        evidenceId,
+                        whyItMatters,
+                        tags,
+                        normalizedNotes,
+                        out var normalizedId);
+
+                    switch (status)
+                    {
+                        case AiEvidenceLedgerAnnotationStatus.Annotated:
+                            if (seenAnnotated.Add(normalizedId))
+                            {
+                                annotated.Add(normalizedId);
+                            }
+                            break;
+                        case AiEvidenceLedgerAnnotationStatus.NoChange:
+                            ignoredDuplicates++;
+                            break;
+                        case AiEvidenceLedgerAnnotationStatus.InvalidId:
+                            invalidItems++;
+                            if (rejected.Count < maxRejectedItems)
+                            {
+                                rejected.Add(new
+                                {
+                                    index,
+                                    reason = "invalid_or_missing_id",
+                                    hint = "Provide an existing evidence ID (E#) from evidenceLedger. This tool cannot create new evidence."
+                                });
+                            }
+                            break;
+                        case AiEvidenceLedgerAnnotationStatus.UnknownId:
+                            if (rejected.Count < maxRejectedItems)
+                            {
+                                rejected.Add(new
+                                {
+                                    index,
+                                    id = string.IsNullOrWhiteSpace(evidenceId) ? null : evidenceId.Trim(),
+                                    reason = "unknown_evidence_id",
+                                    hint = "Evidence ID must exist in evidenceLedger. Use an existing E#; evidence facts are auto-generated from tool outputs."
+                                });
+                            }
+                            break;
+                        default:
+                            invalidItems++;
+                            if (rejected.Count < maxRejectedItems)
+                            {
+                                rejected.Add(new { index, reason = "unknown_status" });
+                            }
+                            break;
+                    }
+
+                    index++;
+                }
+
                 return JsonSerializer.Serialize(new
                 {
-                    added = added.AddedIds,
-                    updated = added.UpdatedIds,
-                    invalidItems = added.InvalidItems,
-                    ignoredDuplicates = added.IgnoredDuplicates,
-                    ignoredDuplicateIds = added.IgnoredDuplicateIds,
-                    ignoredAtCapacity = added.IgnoredAtCapacity,
-                    total = evidenceLedger.Items.Count
+                    annotated,
+                    ignoredDuplicates,
+                    invalidItems,
+                    legacyEvidenceNotes,
+                    rejected,
+                    total = evidenceLedger.Items.Count,
+                    advice = "analysis_evidence_add is annotation-only; evidence facts are auto-generated from tool outputs. Continue analysis; do not retry unless you have new annotations."
                 });
             }
 
@@ -2650,38 +2860,131 @@ State snapshot (JSON):
         }
     }
 
-    private static List<AiEvidenceLedgerItem> ParseEvidenceLedgerItems(JsonElement toolInput)
+    private static string ExecuteLegacyEvidenceAdd(JsonElement toolInput, AiEvidenceLedger evidenceLedger)
     {
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+
+        const int maxRejectedItems = 25;
+        var rejected = new List<object>();
+        var invalidItems = 0;
+
         if (toolInput.ValueKind != JsonValueKind.Object)
         {
-            throw new ArgumentException("analysis_evidence_add input must be an object.");
+            invalidItems = 1;
+            rejected.Add(new
+            {
+                index = 0,
+                reason = "input_must_be_object",
+                hint = "Legacy evidence_add mode: provide { items: [ { id?: \"E#\", source: \"...\", finding: \"...\" } ] }."
+            });
+
+            return JsonSerializer.Serialize(new
+            {
+                added = Array.Empty<string>(),
+                updated = Array.Empty<string>(),
+                invalidItems,
+                ignoredDuplicates = 0,
+                ignoredDuplicateIds = Array.Empty<string>(),
+                ignoredAtCapacity = 0,
+                rejected,
+                total = evidenceLedger.Items.Count,
+                advice = "Legacy evidence_add mode: include source+finding to add evidence. Continue analysis; do not retry without adding missing fields."
+            });
         }
 
         if (!toolInput.TryGetProperty("items", out var itemsEl) || itemsEl.ValueKind != JsonValueKind.Array)
         {
-            throw new ArgumentException("analysis_evidence_add.items is required.");
+            invalidItems = 1;
+            rejected.Add(new
+            {
+                index = 0,
+                reason = "items_required",
+                hint = "Legacy evidence_add mode requires items[]. Provide { items: [ { id?: \"E#\", source: \"...\", finding: \"...\" } ] }."
+            });
+
+            return JsonSerializer.Serialize(new
+            {
+                added = Array.Empty<string>(),
+                updated = Array.Empty<string>(),
+                invalidItems,
+                ignoredDuplicates = 0,
+                ignoredDuplicateIds = Array.Empty<string>(),
+                ignoredAtCapacity = 0,
+                rejected,
+                total = evidenceLedger.Items.Count,
+                advice = "Legacy evidence_add mode: include source+finding to add evidence. Continue analysis; do not retry without adding missing fields."
+            });
         }
 
         var items = new List<AiEvidenceLedgerItem>();
+        var index = 0;
+
         foreach (var item in itemsEl.EnumerateArray())
         {
             if (item.ValueKind != JsonValueKind.Object)
             {
+                invalidItems++;
+                if (rejected.Count < maxRejectedItems)
+                {
+                    rejected.Add(new { index, reason = "item_must_be_object" });
+                }
+
+                index++;
                 continue;
             }
 
-            var tags = TryGetStringArray(item, "tags");
+            var source = TryGetString(item, "source");
+            var finding = TryGetString(item, "finding");
+            if (string.IsNullOrWhiteSpace(source) || string.IsNullOrWhiteSpace(finding))
+            {
+                invalidItems++;
+                if (rejected.Count < maxRejectedItems)
+                {
+                    rejected.Add(new
+                    {
+                        index,
+                        reason = "source_and_finding_required",
+                        hint = "Legacy evidence_add mode requires both source and finding to add evidence."
+                    });
+                }
+
+                index++;
+                continue;
+            }
+
+            var notes = TryGetStringArray(item, "notes") ?? [];
+            var note = TryGetString(item, "note");
+            if (!string.IsNullOrWhiteSpace(note))
+            {
+                notes.Add(note);
+            }
+
             items.Add(new AiEvidenceLedgerItem
             {
-                Id = TryGetString(item, "id") ?? string.Empty,
-                Source = TryGetString(item, "source") ?? string.Empty,
-                Finding = TryGetString(item, "finding") ?? string.Empty,
+                Id = TryGetString(item, "id") ?? TryGetString(item, "evidenceId") ?? string.Empty,
+                Source = source,
+                Finding = finding,
                 WhyItMatters = TryGetString(item, "whyItMatters"),
-                Tags = tags
+                Tags = TryGetStringArray(item, "tags"),
+                Notes = notes.Count == 0 ? null : notes
             });
+
+            index++;
         }
 
-        return items;
+        var addResult = items.Count > 0 ? evidenceLedger.AddOrUpdate(items) : new AiEvidenceLedgerAddResult();
+        return JsonSerializer.Serialize(new
+        {
+            added = addResult.AddedIds,
+            updated = addResult.UpdatedIds,
+            invalidItems = invalidItems + addResult.InvalidItems,
+            ignoredDuplicates = addResult.IgnoredDuplicates,
+            ignoredDuplicateIds = addResult.IgnoredDuplicateIds,
+            ignoredAtCapacity = addResult.IgnoredAtCapacity,
+            rejected,
+            total = evidenceLedger.Items.Count,
+            advice = "Legacy evidence_add mode: continue analysis; do not retry unless you have new evidence items to add."
+        });
     }
 
     private static List<AiHypothesis> ParseHypotheses(JsonElement toolInput)
@@ -4198,7 +4501,11 @@ Checkpoint JSON:
             : json;
     }
 
-    private static void ApplyCheckpointToStateStores(string checkpointJson, AiEvidenceLedger evidenceLedger, AiHypothesisTracker hypothesisTracker)
+    private static void ApplyCheckpointToStateStores(
+        string checkpointJson,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker,
+        bool enableEvidenceProvenance)
     {
         ArgumentNullException.ThrowIfNull(checkpointJson);
         ArgumentNullException.ThrowIfNull(evidenceLedger);
@@ -4228,7 +4535,9 @@ Checkpoint JSON:
                 return;
             }
 
-            if (root.TryGetProperty("evidence", out var evidenceEl) && evidenceEl.ValueKind == JsonValueKind.Array)
+            if (!enableEvidenceProvenance
+                && root.TryGetProperty("evidence", out var evidenceEl)
+                && evidenceEl.ValueKind == JsonValueKind.Array)
             {
                 var items = new List<AiEvidenceLedgerItem>();
                 foreach (var item in evidenceEl.EnumerateArray())
@@ -5452,9 +5761,10 @@ Tooling:
         sb.AppendLine("Avoid rerunning the same tool calls; reuse prior evidence and expand only the specific sections you need.");
         sb.AppendLine();
         sb.AppendLine("After baseline evidence, maintain a stable working set:");
+        sb.AppendLine("- Evidence ledger is auto-populated from tool outputs with stable IDs (E#). Do not add new evidence facts manually.");
+        sb.AppendLine("- Optionally annotate existing evidence via analysis_evidence_add (whyItMatters/tags/notes); do not restate tool outputs as new findings.");
         sb.AppendLine("- Register 3-4 competing hypotheses via analysis_hypothesis_register (at least 3 for high-confidence conclusions).");
-        sb.AppendLine("- Log new findings via analysis_evidence_add (batch; do not spam).");
-        sb.AppendLine("- Update hypotheses via analysis_hypothesis_score (link evidence IDs).");
+        sb.AppendLine("- Update hypotheses via analysis_hypothesis_score (link existing evidence IDs).");
         sb.AppendLine();
         sb.AppendLine("Report index (summary + TOC):");
         sb.AppendLine(ReportSectionApi.BuildIndex(fullReportJson));
@@ -6299,7 +6609,13 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
                 Source = i.Source,
                 Finding = i.Finding,
                 WhyItMatters = i.WhyItMatters,
-                Tags = i.Tags == null ? null : new List<string>(i.Tags)
+                Tags = i.Tags == null ? null : new List<string>(i.Tags),
+                ToolName = i.ToolName,
+                ToolKeyHash = i.ToolKeyHash,
+                ToolOutputHash = i.ToolOutputHash,
+                ToolWasCached = i.ToolWasCached,
+                ToolWasError = i.ToolWasError,
+                Notes = i.Notes == null ? null : new List<string>(i.Notes)
             })
             .ToList();
 
@@ -7051,7 +7367,7 @@ IMPORTANT: Do not assume assembly versions from file paths. Treat paths as hints
 IMPORTANT: When using SOS commands like !dumpmt/!dumpmt -md, confirm the reported type name matches the type you are reasoning about (e.g., do not conclude ConcurrentDictionary.TryGetValue is missing if you inspected ConcurrentDictionary+Enumerator).
 IMPORTANT: If you suspect a profiler/tracer rewrote IL, VERIFY it: check whether the executing code is IL/JIT vs R2R/NGen, whether the method is JITted, and (when possible) inspect/dump the current IL to confirm rewriting rather than assuming.
 IMPORTANT: Maintain a running, cumulative set of confirmed facts and evidence across iterations; do not “reset” what you know each step.
-IMPORTANT: Use the internal meta tools (analysis_evidence_add / analysis_hypothesis_register / analysis_hypothesis_score) to maintain a stable evidence ledger and competing hypotheses. Batch updates; do not spam (at most once per iteration).
+IMPORTANT: Evidence is automatically recorded from tool outputs into a stable evidence ledger with IDs (E#). Use analysis_evidence_add only to annotate existing evidence items (whyItMatters/tags/notes); do not invent new findings.
 IMPORTANT: If you cite an evidence ID (E#) in analysis_complete.evidence, it must exist in the evidence ledger.
 IMPORTANT: Treat SOS as already loaded unless the report explicitly says otherwise. The report metadata indicates whether SOS is loaded (metadata.sosLoaded) and is the source of truth. If metadata.sosLoaded is absent, treat SOS load status as unknown and gather evidence (e.g., exec "sos help" and record the exact output/error).
 IMPORTANT: If metadata.sosLoaded=true, NEVER attempt to load SOS and NEVER claim SOS is not loaded. Do not run any "plugin load libsosplugin.so", ".load sos", or similar commands.
@@ -7070,7 +7386,7 @@ Available tools:
 - analysis_complete: Call when you've determined the root cause (include an explicit 'evidence' list in the tool input)
 
 Internal meta tools (do NOT gather new evidence; keep these concise and batched):
-- analysis_evidence_add: Add new findings to the evidence ledger (server assigns E# IDs when omitted).
+- analysis_evidence_add: Annotate existing evidence items only (whyItMatters/tags/notes). Evidence facts are auto-generated from tool outputs.
 - analysis_hypothesis_register: Register 3-4 competing hypotheses early (server assigns H# IDs when omitted). High confidence requires >=3 so the judge can reject top alternatives.
 - analysis_hypothesis_score: Update hypothesis confidence and link evidence IDs (supportsEvidenceIds/contradictsEvidenceIds).
 
@@ -7131,6 +7447,103 @@ Phase 4: Finalization (analysis_complete)
 
 Be thorough but efficient. Don't run unnecessary commands.
 """;
+
+    private static void AutoRecordEvidenceFromToolResult(
+        AiEvidenceLedger evidenceLedger,
+        Dictionary<string, string> evidenceIdByToolKeyHash,
+        string toolName,
+        JsonElement toolInput,
+        string toolCacheKey,
+        string outputForModel,
+        bool wasCached,
+        bool toolWasError,
+        bool includeProvenanceMetadata,
+        int evidenceExcerptMaxChars)
+    {
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(evidenceIdByToolKeyHash);
+
+        if (!IsEvidenceToolName(toolName) || string.IsNullOrWhiteSpace(toolCacheKey))
+        {
+            return;
+        }
+
+        var toolKeyHash = ComputeSha256Prefixed(toolCacheKey);
+        if (evidenceIdByToolKeyHash.ContainsKey(toolKeyHash))
+        {
+            return;
+        }
+
+        var source = BuildEvidenceSource(toolName, toolInput);
+        var finding = string.IsNullOrWhiteSpace(outputForModel)
+            ? toolWasError
+                ? "(tool error; empty output)"
+                : "(empty tool output)"
+            : outputForModel.Trim();
+
+        var excerptLimit = Math.Clamp(evidenceExcerptMaxChars, 64, 50_000);
+        finding = TruncateText(finding, excerptLimit);
+
+        var outputHash = ComputeSha256Prefixed(outputForModel ?? string.Empty);
+        var addResult = evidenceLedger.AddOrUpdate(
+        [
+            new AiEvidenceLedgerItem
+            {
+                Source = source,
+                Finding = finding,
+                ToolName = includeProvenanceMetadata ? (toolName ?? string.Empty).Trim() : null,
+                ToolKeyHash = includeProvenanceMetadata ? toolKeyHash : null,
+                ToolOutputHash = includeProvenanceMetadata ? outputHash : null,
+                ToolWasCached = includeProvenanceMetadata ? wasCached : null,
+                ToolWasError = includeProvenanceMetadata ? toolWasError : null
+            }
+        ]);
+
+        var evidenceId = addResult.AddedIds.FirstOrDefault()
+                         ?? addResult.IgnoredDuplicateIds.FirstOrDefault()
+                         ?? addResult.UpdatedIds.FirstOrDefault();
+        if (!string.IsNullOrWhiteSpace(evidenceId))
+        {
+            evidenceIdByToolKeyHash[toolKeyHash] = evidenceId;
+        }
+    }
+
+    private static bool IsEvidenceToolName(string? toolName)
+    {
+        if (string.IsNullOrWhiteSpace(toolName))
+        {
+            return false;
+        }
+
+        var normalized = toolName.Trim();
+        return normalized.Equals("exec", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Equals("report_get", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Equals("inspect", StringComparison.OrdinalIgnoreCase) ||
+               normalized.Equals("get_thread_stack", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string BuildEvidenceSource(string toolName, JsonElement toolInput)
+    {
+        var normalized = (toolName ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            normalized = "tool";
+        }
+
+        if (toolInput.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return normalized;
+        }
+
+        return $"{normalized}({CanonicalizeJson(toolInput)})";
+    }
+
+    private static string ComputeSha256Prefixed(string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
+        var hash = SHA256.HashData(bytes);
+        return "sha256:" + Convert.ToHexString(hash).ToLowerInvariant();
+    }
 
     private static string BuildToolCacheKey(string toolName, JsonElement toolInput)
     {

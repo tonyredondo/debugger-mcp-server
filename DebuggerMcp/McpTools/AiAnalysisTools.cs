@@ -164,7 +164,9 @@ public sealed class AiAnalysisTools(
             EnableSamplingTraceFiles = EnvironmentConfig.IsAiSamplingTraceFilesEnabled(),
             SamplingTraceFilesRootDirectory = EnvironmentConfig.GetAiSamplingTraceFilesDirectory(),
             SamplingTraceMaxFileBytes = EnvironmentConfig.GetAiSamplingTraceMaxFileBytes(),
-            SamplingTraceLabel = $"{sessionId}-{session.CurrentDumpId ?? "no-dump"}"
+            SamplingTraceLabel = $"{sessionId}-{session.CurrentDumpId ?? "no-dump"}",
+            EnableEvidenceProvenance = EnvironmentConfig.IsAiEvidenceProvenanceEnabled(),
+            EvidenceExcerptMaxChars = EnvironmentConfig.GetAiEvidenceExcerptMaxChars()
         };
 
         var checkpointEveryIterations = EnvironmentConfig.GetAiSamplingCheckpointEveryIterationsOverride();

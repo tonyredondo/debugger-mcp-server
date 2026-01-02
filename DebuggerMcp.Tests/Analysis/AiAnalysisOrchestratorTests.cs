@@ -240,6 +240,176 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task AnalyzeCrashAsync_AutoRecordsEvidenceFromToolResults_WithProvenanceFields()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "rc",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[] { "E1" }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 0
+        };
+
+        var reportJson = """
+        {
+          "metadata": { "debuggerType": "LLDB" },
+          "analysis": { "exception": { "type": "ORIGINAL" } }
+        }
+        """;
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            reportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.EvidenceLedger);
+        var e1 = Assert.Single(result.EvidenceLedger!, e => string.Equals("E1", e.Id, StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("report_get", e1.ToolName);
+        Assert.StartsWith("sha256:", e1.ToolKeyHash);
+        Assert.StartsWith("sha256:", e1.ToolOutputHash);
+        Assert.False(e1.ToolWasError ?? false);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenEvidenceAddProvidesFinding_DoesNotOverwriteServerFinding()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "analysis_evidence_add", Input: new
+                {
+                    items = new[]
+                    {
+                        new
+                        {
+                            id = "E1",
+                            source = "report_get(path=\"analysis.exception.type\")",
+                            finding = "FAKE_FINDING",
+                            whyItMatters = "model note"
+                        }
+                    }
+                }, Id: null),
+                (Name: "analysis_complete", Input: new
+                {
+                    rootCause = "rc",
+                    confidence = "low",
+                    reasoning = "ok",
+                    evidence = new[] { "E1" }
+                }, Id: null)));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 0
+        };
+
+        var reportJson = """
+        {
+          "metadata": { "debuggerType": "LLDB" },
+          "analysis": { "exception": { "type": "ORIGINAL" } }
+        }
+        """;
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            reportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        var e1 = Assert.Single(result.EvidenceLedger!, e => string.Equals("E1", e.Id, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("ORIGINAL", e1.Finding, StringComparison.Ordinal);
+        Assert.DoesNotContain("FAKE_FINDING", e1.Finding, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenDuplicateToolCallsOccur_ReusesEvidenceId()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "rc",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[] { "E1" }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 0
+        };
+
+        var reportJson = """
+        {
+          "metadata": { "debuggerType": "LLDB" },
+          "analysis": { "exception": { "type": "ORIGINAL" } }
+        }
+        """;
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            reportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.EvidenceLedger);
+        Assert.Single(result.EvidenceLedger!);
+        Assert.Equal("E1", result.EvidenceLedger![0].Id);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenToolArgsContainConcatenatedJson_ParsesFirstObject()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse(
+                "report_get",
+                "{\"path\":\"analysis.exception.type\"}{\"path\":\"analysis.exception.message\"}"))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "rc",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[] { "E1" }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 3,
+            CheckpointEveryIterations = 0
+        };
+
+        var reportJson = """
+        {
+          "metadata": { "debuggerType": "LLDB" },
+          "analysis": { "exception": { "type": "EXPECTED" } }
+        }
+        """;
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            reportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.EvidenceLedger);
+        var e1 = Assert.Single(result.EvidenceLedger!, e => string.Equals("E1", e.Id, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("analysis.exception.type", e1.Source, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("EXPECTED", e1.Finding, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AnalyzeCrashAsync_WhenModelRepeatsInvalidHighConfidenceAnalysisComplete_AutoFinalizesWithDowngradedConfidence()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
@@ -767,7 +937,6 @@ public class AiAnalysisOrchestratorTests
         var requests = new List<CreateMessageRequestParams>();
 
         var sampling = new SequencedCapturingSamplingClient(requests)
-            .EnqueueResult(CreateMessageResultWithToolUse("exec", new { command = "!clrstack -a" }))
             .EnqueueResult(CreateMessageResultWithToolUses(
                 (Name: "analysis_hypothesis_register", Input: new
                 {
@@ -778,17 +947,12 @@ public class AiAnalysisOrchestratorTests
                         new { id = "H3", hypothesis = "Trimming removed needed member", confidence = "unknown" }
                     }
                 }, Id: null),
-                (Name: "analysis_evidence_add", Input: new
-                {
-                    items = new[]
-                    {
-                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Faulting managed stack includes Foo.Bar" },
-                        new { id = "E2", source = "report_get(path=\"analysis.exception.type\")", finding = "Exception type is System.NullReferenceException" },
-                        new { id = "E3", source = "report_get(path=\"analysis.exception.message\")", finding = "Exception message indicates null dereference" },
-                        new { id = "E4", source = "report_get(path=\"analysis.assemblies.items\")", finding = "Assemblies appear consistent" },
-                        new { id = "E5", source = "report_get(path=\"analysis.environment.runtime\")", finding = "Runtime type is CoreCLR" }
-                    }
-                }, Id: null)))
+                (Name: "exec", Input: new { command = "!clrstack -a" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.environment.runtime", pageKind = "object", limit = 30 }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.summary.crashType" }, Id: null)))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
             {
                 rootCause = "NullReferenceException in Foo.Bar",
@@ -796,12 +960,12 @@ public class AiAnalysisOrchestratorTests
                 reasoning = "The report shows a null dereference.",
                 evidence = new[]
                 {
-                    "exec(command=\"!clrstack -a\") -> faulting stack shows a null dereference path",
-                    "exec(command=\"!clrstack -a\") -> evidence item 2",
-                    "exec(command=\"!clrstack -a\") -> evidence item 3",
-                    "exec(command=\"!clrstack -a\") -> evidence item 4",
-                    "exec(command=\"!clrstack -a\") -> evidence item 5",
-                    "exec(command=\"!clrstack -a\") -> evidence item 6"
+                    "E1: exec(command=\"!clrstack -a\") includes Foo.Bar",
+                    "E2: report_get(path=\"analysis.exception.type\") returned System.NullReferenceException",
+                    "E3: report_get(path=\"analysis.exception.message\") returned boom",
+                    "E4: report_get(path=\"analysis.exception.hResult\") returned 0x1",
+                    "E5: report_get(path=\"analysis.environment.runtime\") returned CoreCLR",
+                    "E6: report_get(path=\"analysis.summary.crashType\") returned .NET Managed Exception"
                 }
             }))
             .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
@@ -824,12 +988,16 @@ public class AiAnalysisOrchestratorTests
 
         var debugger = new FakeDebuggerManager
         {
-            CommandHandler = cmd => $"OUTPUT:{cmd}"
+            CommandHandler = cmd => cmd.Contains("!clrstack", StringComparison.OrdinalIgnoreCase)
+                ? $"OUTPUT:{cmd}\nFoo.Bar()\n"
+                : $"OUTPUT:{cmd}"
         };
+
+        var reportJson = MinimalBaselineReportJson.Replace("\"System.Exception\"", "\"System.NullReferenceException\"");
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            "{\"metadata\":{},\"analysis\":{\"exception\":{\"type\":\"System.NullReferenceException\",\"message\":\"boom\"}}}",
+            reportJson,
             debugger,
             clrMdAnalyzer: null);
 
@@ -1942,7 +2110,6 @@ public class AiAnalysisOrchestratorTests
 
         var sampling = new SequencedCapturingSamplingClient(requests)
             .EnqueueResult(CreateMessageResultWithToolUses(
-                (Name: "exec", Input: new { command = "!clrstack -a" }, Id: null),
                 (Name: "analysis_hypothesis_register", Input: new
                 {
                     hypotheses = new[]
@@ -1952,18 +2119,12 @@ public class AiAnalysisOrchestratorTests
                         new { id = "H3", hypothesis = "Trimming removed required member", confidence = "medium" }
                     }
                 }, Id: null),
-                (Name: "analysis_evidence_add", Input: new
-                {
-                    items = new[]
-                    {
-                        new { id = "E1", source = "exec(command=\"!clrstack -a\")", finding = "Faulting stack includes Foo.Bar" },
-                        new { id = "E2", source = "report_get(path=\"analysis.exception.type\")", finding = "Exception type is System.NullReferenceException" },
-                        new { id = "E3", source = "report_get(path=\"analysis.exception.message\")", finding = "Exception message indicates null dereference" },
-                        new { id = "E4", source = "report_get(path=\"analysis.assemblies.items\")", finding = "Assemblies appear consistent" },
-                        new { id = "E5", source = "report_get(path=\"analysis.environment.runtime\")", finding = "Runtime type is CoreCLR" },
-                        new { id = "E6", source = "exec(command=\"!clrstack -a\")", finding = "Top frame resolves to Foo.Bar()" }
-                    }
-                }, Id: null)))
+                (Name: "exec", Input: new { command = "!clrstack -a" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.environment.runtime", pageKind = "object", limit = 30 }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.summary.crashType" }, Id: null)))
             .EnqueueResult(CreateMessageResultWithText("""
             {
               "rootCause": "NullReferenceException in Foo.Bar",
@@ -2002,12 +2163,16 @@ public class AiAnalysisOrchestratorTests
 
         var debugger = new FakeDebuggerManager
         {
-            CommandHandler = cmd => $"OUTPUT:{cmd}"
+            CommandHandler = cmd => cmd.Contains("!clrstack", StringComparison.OrdinalIgnoreCase)
+                ? $"OUTPUT:{cmd}\nFoo.Bar()\n"
+                : $"OUTPUT:{cmd}"
         };
+
+        var reportJson = MinimalBaselineReportJson.Replace("\"System.Exception\"", "\"System.NullReferenceException\"");
 
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            MinimalBaselineReportJson,
+            reportJson,
             debugger,
             clrMdAnalyzer: null);
 
@@ -2039,19 +2204,9 @@ public class AiAnalysisOrchestratorTests
                         new { id = "H3", hypothesis = "Trimming removed required member", confidence = "medium" }
                     }
                 }, Id: null),
-                (Name: "analysis_evidence_add", Input: new
-                {
-                    items = new[]
-                    {
-                        new { id = "E1", source = "exec(command=\"!a\")", finding = "Evidence 1" },
-                        new { id = "E2", source = "exec(command=\"!a\")", finding = "Evidence 2" },
-                        new { id = "E3", source = "exec(command=\"!a\")", finding = "Evidence 3" },
-                        new { id = "E4", source = "exec(command=\"!a\")", finding = "Evidence 4" },
-                        new { id = "E5", source = "exec(command=\"!a\")", finding = "Evidence 5" },
-                        new { id = "E6", source = "exec(command=\"!a\")", finding = "Evidence 6" }
-                    }
-                }, Id: null),
                 (Name: "exec", Input: new { command = "!a" }, Id: "tc_a"),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: "tc_type"),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: "tc_msg"),
                 (Name: "exec", Input: new { command = "!b" }, Id: "tc_b")))
             .EnqueueResult(CreateMessageResultWithText("""
             {
@@ -2059,12 +2214,12 @@ public class AiAnalysisOrchestratorTests
               "confidence": "high",
               "reasoning": "The report shows a null dereference.",
               "evidence": [
-                "E1: evidence 1",
-                "E2: evidence 2",
-                "E3: evidence 3",
-                "E4: evidence 4",
-                "E5: evidence 5",
-                "E6: evidence 6"
+                "E1: exec(command=\"!a\") output includes Foo.Bar",
+                "E2: report_get(path=\"analysis.exception.type\") returned System.NullReferenceException",
+                "E3: report_get(path=\"analysis.exception.message\") returned boom",
+                "E1: repeated evidence (still grounded)",
+                "E2: repeated evidence (still grounded)",
+                "E3: repeated evidence (still grounded)"
               ],
               "recommendations": [],
               "additionalFindings": []
@@ -2074,30 +2229,34 @@ public class AiAnalysisOrchestratorTests
             {
                 selectedHypothesisId = "H1",
                 confidence = "high",
-                rationale = "H1 best fits E1-E3; H2/H3 contradicted by E4/E5.",
+                rationale = "H1 best fits E1-E3; H2/H3 contradicted by E2/E3.",
                 supportsEvidenceIds = new[] { "E1", "E2", "E3" },
                 rejectedHypotheses = new[]
                 {
-                    new { hypothesisId = "H2", contradictsEvidenceIds = new[] { "E4" }, reason = "Assemblies appear consistent." },
-                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E5" }, reason = "Runtime is CoreCLR with JIT." }
+                    new { hypothesisId = "H2", contradictsEvidenceIds = new[] { "E2" }, reason = "Exception type evidence does not support mismatch." },
+                    new { hypothesisId = "H3", contradictsEvidenceIds = new[] { "E3" }, reason = "Exception message indicates a null dereference, not missing members." }
                 }
             }));
 
         var debugger = new FakeDebuggerManager
         {
-            CommandHandler = cmd => $"OUTPUT:{cmd}"
+            CommandHandler = cmd => cmd.Contains("!a", StringComparison.OrdinalIgnoreCase)
+                ? $"OUTPUT:{cmd}\nFoo.Bar()\n"
+                : $"OUTPUT:{cmd}"
         };
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
             MaxIterations = 10,
-            MaxToolCalls = 1,
+            MaxToolCalls = 3,
             CheckpointEveryIterations = 0
         };
 
+        var reportJson = MinimalBaselineReportJson.Replace("\"System.Exception\"", "\"System.NullReferenceException\"");
+
         var result = await orchestrator.AnalyzeCrashAsync(
             new CrashAnalysisResult(),
-            MinimalBaselineReportJson,
+            reportJson,
             debugger,
             clrMdAnalyzer: null);
 
@@ -2775,6 +2934,85 @@ public class AiAnalysisOrchestratorTests
             .Where(r => r.Tools?.Any(t => string.Equals(t.Name, "analysis_judge_complete", StringComparison.OrdinalIgnoreCase)) == true)
             .ToList();
         Assert.Single(judgeRequests);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenCheckpointEvidenceSwapsExistingIds_DoesNotOverwriteEvidenceLedger()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            // Iteration 1: gather baseline evidence (E1..E8).
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null)))
+            // Meta bookkeeping (required by the orchestrator once baseline completes).
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_evidence_add", new { items = Array.Empty<object>() }))
+            // Checkpoint synthesis attempts to swap E1/E2.
+            .EnqueueResult(CreateMessageResultWithToolUse("checkpoint_complete", new
+            {
+                facts = new[] { "f1" },
+                hypotheses = Array.Empty<object>(),
+                evidence = new object[]
+                {
+                    new { id = "E1", source = "report_get(path=\"analysis.summary\")", finding = "SWAPPED_SUMMARY" },
+                    new { id = "E2", source = "report_get(path=\"metadata\")", finding = "SWAPPED_METADATA" }
+                },
+                doNotRepeat = new[] { "report_get(path=\"metadata\")" },
+                nextSteps = Array.Empty<object>()
+            }))
+            // Iteration 2: finish.
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[] { "E1", "E2" }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 2,
+            CheckpointEveryIterations = 1,
+            CheckpointMaxTokens = 256,
+            EnableEvidenceProvenance = true
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result.EvidenceLedger);
+
+        var e1 = Assert.Single(result.EvidenceLedger!, e => string.Equals("E1", e.Id, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("\"path\":\"metadata\"", e1.Source, StringComparison.Ordinal);
+        Assert.DoesNotContain("analysis.summary", e1.Source, StringComparison.OrdinalIgnoreCase);
+
+        var e2 = Assert.Single(result.EvidenceLedger!, e => string.Equals("E2", e.Id, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains("\"path\":\"analysis.summary\"", e2.Source, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"path\":\"metadata\"", e2.Source, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

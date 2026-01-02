@@ -109,6 +109,16 @@ namespace DebuggerMcp.Configuration;
 ///       Convenience port value used in startup messages. Actual HTTP binding is controlled by ASP.NET Core (e.g., ASPNETCORE_URLS).
 ///     </term>
 ///   </item>
+///   <item>
+///     <term>DEBUGGER_MCP_AI_EVIDENCE_PROVENANCE</term>
+///     <term>true</term>
+///     <term>Enable evidence provenance: auto-record evidence from tool outputs and restrict analysis_evidence_add to annotations.</term>
+///   </item>
+///   <item>
+///     <term>DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS</term>
+///     <term>2048</term>
+///     <term>Maximum characters stored per auto-generated evidence finding (before ledger truncation).</term>
+///   </item>
 /// </list>
 /// </remarks>
 public static class EnvironmentConfig
@@ -398,6 +408,24 @@ public static class EnvironmentConfig
     public const string AiSamplingCheckpointEveryIterations = "DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS";
 
     /// <summary>
+    /// Environment variable name for enabling evidence provenance.
+    /// </summary>
+    /// <remarks>
+    /// When enabled, the AI sampling orchestrator auto-records evidence ledger items from tool outputs (exec/report_get/inspect/get_thread_stack),
+    /// and restricts <c>analysis_evidence_add</c> to annotation-only (whyItMatters/tags/notes) to prevent evidence poisoning.
+    /// </remarks>
+    public const string AiEvidenceProvenance = "DEBUGGER_MCP_AI_EVIDENCE_PROVENANCE";
+
+    /// <summary>
+    /// Environment variable name for controlling the maximum excerpt size stored per auto-generated evidence finding.
+    /// </summary>
+    /// <remarks>
+    /// This affects the text stored in <c>analysis.aiAnalysis.evidenceLedger[].finding</c> for auto-generated entries.
+    /// The evidence ledger applies its own truncation as well; this provides an additional guardrail for large tool outputs.
+    /// </remarks>
+    public const string AiEvidenceExcerptMaxChars = "DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS";
+
+    /// <summary>
     /// Default maximum request body size in GB when environment variable is not set.
     /// </summary>
     public const int DefaultMaxRequestBodySizeGb = 5;
@@ -523,6 +551,18 @@ public static class EnvironmentConfig
     /// </summary>
     /// <returns>True when AI sampling trace files should be written.</returns>
     public static bool IsAiSamplingTraceFilesEnabled() => GetBool(AiSamplingTraceFiles, false);
+
+    /// <summary>
+    /// Checks whether evidence provenance should be enabled for AI sampling runs.
+    /// </summary>
+    /// <returns>True when evidence provenance should be enabled.</returns>
+    public static bool IsAiEvidenceProvenanceEnabled() => GetBool(AiEvidenceProvenance, true);
+
+    /// <summary>
+    /// Gets the configured maximum characters stored per auto-generated evidence finding.
+    /// </summary>
+    /// <returns>Maximum characters (positive integer).</returns>
+    public static int GetAiEvidenceExcerptMaxChars() => GetInt(AiEvidenceExcerptMaxChars, 2048);
 
     /// <summary>
     /// Gets the configured log storage path.

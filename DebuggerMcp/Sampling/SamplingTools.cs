@@ -104,17 +104,17 @@ public static class SamplingTools
           "properties": {
             "items": {
               "type": "array",
-              "description": "Evidence items to add to the running evidence ledger (bounded). Batch items; do not spam.",
+              "description": "Annotate existing evidence items (E#) in the running evidence ledger. This tool does NOT add new evidence facts (evidence is auto-generated from tool outputs). Batch items; do not spam.",
               "items": {
                 "type": "object",
                 "properties": {
-                  "id": { "type": "string", "description": "Optional evidence ID (e.g., E12). If omitted, the server assigns one." },
-                  "source": { "type": "string", "description": "Where this evidence came from (e.g., report_get(path=\"analysis.exception.type\"), exec(\"!dumpmt -md 0x...\"))." },
-                  "finding": { "type": "string", "description": "What was observed (short, specific, grounded in tool output)." },
-                  "whyItMatters": { "type": "string", "description": "Optional: why this finding supports/refutes hypotheses." },
-                  "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags (e.g., trimming, r2r, mismatch)." }
+                  "id": { "type": "string", "description": "Evidence ID to annotate (e.g., E12)." },
+                  "whyItMatters": { "type": "string", "description": "Optional: why this evidence supports/refutes hypotheses (annotation only; not ground truth)." },
+                  "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags to apply to this evidence item (e.g., trimming, r2r, mismatch)." },
+                  "note": { "type": "string", "description": "Optional note (annotation only; not ground truth)." },
+                  "notes": { "type": "array", "items": { "type": "string" }, "description": "Optional notes (annotation only; not ground truth)." }
                 },
-                "required": ["source", "finding"]
+                "required": ["id"]
               }
             }
           },
@@ -209,7 +209,7 @@ public static class SamplingTools
             new()
             {
                 Name = "analysis_evidence_add",
-                Description = "Internal meta tool: add evidence items to a bounded evidence ledger (does not execute debugger commands).",
+                Description = "Internal meta tool: annotate existing evidence items in the evidence ledger (does not execute debugger commands). Evidence facts are auto-generated from tool outputs.",
                 InputSchema = EvidenceAddSchema
             },
             new()

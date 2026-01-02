@@ -34,6 +34,8 @@ public class EnvironmentConfigTests : IDisposable
         StoreOriginalValue(EnvironmentConfig.AiSamplingTraceFiles);
         StoreOriginalValue(EnvironmentConfig.AiSamplingTraceMaxFileBytes);
         StoreOriginalValue(EnvironmentConfig.AiSamplingCheckpointEveryIterations);
+        StoreOriginalValue(EnvironmentConfig.AiEvidenceProvenance);
+        StoreOriginalValue(EnvironmentConfig.AiEvidenceExcerptMaxChars);
     }
 
     private void StoreOriginalValue(string name)
@@ -175,6 +177,18 @@ public class EnvironmentConfigTests : IDisposable
     public void AiSamplingCheckpointEveryIterations_ConstantName_IsCorrect()
     {
         Assert.Equal("DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS", EnvironmentConfig.AiSamplingCheckpointEveryIterations);
+    }
+
+    [Fact]
+    public void AiEvidenceProvenance_ConstantName_IsCorrect()
+    {
+        Assert.Equal("DEBUGGER_MCP_AI_EVIDENCE_PROVENANCE", EnvironmentConfig.AiEvidenceProvenance);
+    }
+
+    [Fact]
+    public void AiEvidenceExcerptMaxChars_ConstantName_IsCorrect()
+    {
+        Assert.Equal("DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS", EnvironmentConfig.AiEvidenceExcerptMaxChars);
     }
 
     [Fact]
@@ -796,6 +810,58 @@ public class EnvironmentConfigTests : IDisposable
 
         // Assert
         Assert.False(result);
+    }
+
+    [Fact]
+    public void IsAiEvidenceProvenanceEnabled_EnvNotSet_ReturnsTrue()
+    {
+        // Arrange
+        ClearEnv(EnvironmentConfig.AiEvidenceProvenance);
+
+        // Act
+        var result = EnvironmentConfig.IsAiEvidenceProvenanceEnabled();
+
+        // Assert
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsAiEvidenceProvenanceEnabled_EnvSetFalse_ReturnsFalse()
+    {
+        // Arrange
+        SetEnv(EnvironmentConfig.AiEvidenceProvenance, "false");
+
+        // Act
+        var result = EnvironmentConfig.IsAiEvidenceProvenanceEnabled();
+
+        // Assert
+        Assert.False(result);
+    }
+
+    [Fact]
+    public void GetAiEvidenceExcerptMaxChars_EnvNotSet_ReturnsDefault()
+    {
+        // Arrange
+        ClearEnv(EnvironmentConfig.AiEvidenceExcerptMaxChars);
+
+        // Act
+        var result = EnvironmentConfig.GetAiEvidenceExcerptMaxChars();
+
+        // Assert
+        Assert.Equal(2048, result);
+    }
+
+    [Fact]
+    public void GetAiEvidenceExcerptMaxChars_EnvSet_ReturnsValue()
+    {
+        // Arrange
+        SetEnv(EnvironmentConfig.AiEvidenceExcerptMaxChars, "123");
+
+        // Act
+        var result = EnvironmentConfig.GetAiEvidenceExcerptMaxChars();
+
+        // Assert
+        Assert.Equal(123, result);
     }
 
     [Fact]

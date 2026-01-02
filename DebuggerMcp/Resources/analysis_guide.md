@@ -156,7 +156,7 @@ During AI sampling, the model has access to evidence-gathering tools (`report_ge
 
 When the AI asks for more evidence, prefer:
 - `report_get(path: "analysis.exception", select: ["type","message","hResult"])` and `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
-- If a section is too large, use the returned `suggestedPaths` and retry with a narrower path. For arrays, either page via `limit/cursor` or fetch a small window via slice syntax (e.g., `analysis.exception.stackTrace[0:10]`). For objects, page via `pageKind: "object"` + `limit/cursor`.
+- If a section is too large, use the returned `suggestedPaths` and retry with a narrower path. For arrays, page via `limit/cursor` (and reduce payload via `select`). You can also fetch a single element by index (e.g., `analysis.exception.stackTrace[0]`) or request a bounded window via trailing slice syntax (e.g., `analysis.exception.stackTrace[0:10]`). If a slice fails with `invalid_path`, fall back to `limit/cursor`. For objects, page via `pageKind: "object"` + `limit/cursor`.
 - For arrays, reduce payload via `select: [...]` and (when applicable) `where: { field: "...", equals: "..." }`.
 - If you accidentally request common wrong paths like `analysis.runtime` / `analysis.process` / `analysis.platform` / `analysis.threads.faulting`, the server rewrites them to their canonical equivalents under `analysis.environment.*` / `analysis.threads.faultingThread` (but prefer the canonical paths).
 - `inspect(address: "0x...", maxDepth: 3)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
@@ -166,15 +166,15 @@ When the AI asks for more evidence, prefer:
 #### Stability: checkpoints + evidence/hypotheses
 
 To reduce run-to-run variance and avoid context truncation, the sampling loop maintains:
-- An **evidence ledger** (stable IDs like `E12`) via `analysis_evidence_add`
+- An **evidence ledger** (stable IDs like `E12`) **auto-generated from tool outputs** (optionally annotated via `analysis_evidence_add`)
 - A set of **competing hypotheses** (stable IDs like `H2`) via `analysis_hypothesis_register` and `analysis_hypothesis_score`
 - Periodic **checkpoints** via `checkpoint_complete` (summarize what we know so far and prune the conversation context)
 
 Recommended pattern:
 1. Gather baseline evidence first (summary + exception + faulting thread + key assemblies/modules).
 2. Call `analysis_hypothesis_register` once with 2–4 competing hypotheses.
-3. Call `analysis_evidence_add` once with 5–10 evidence items summarizing baseline findings.
-4. On each subsequent iteration: after new evidence, append only *new* ledger items and update hypotheses confidence/links.
+3. Optionally call `analysis_evidence_add` to annotate existing evidence items (e.g., tag evidence with `trimming`, add `whyItMatters` for scoring). Do not use it to add new “facts”.
+4. On each subsequent iteration: gather *new* evidence (tool calls) and update hypotheses confidence/links (evidence IDs are stable).
 5. Use `checkpoint_complete` periodically (default every 4 iterations) so the model carries forward a bounded “state” even if earlier messages are pruned.
 
 The final report includes these under `analysis.aiAnalysis.evidenceLedger` and `analysis.aiAnalysis.hypotheses`, and the AI should reference them in `analysis_complete.evidence` when possible.
@@ -186,6 +186,8 @@ Enable server-side tracing (may include sensitive debugger output):
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true` (write full payloads)
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000` (per-file cap)
 - `DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4` (override checkpoint interval; default is 4)
+- `DEBUGGER_MCP_AI_EVIDENCE_PROVENANCE=true` (enable auto evidence provenance and keep `analysis_evidence_add` annotation-only)
+- `DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS=2048` (max chars stored per auto-generated evidence finding)
 
 Trace files are written under `LOG_STORAGE_PATH/ai-sampling` (in Docker: `/app/logs/ai-sampling`).
 
