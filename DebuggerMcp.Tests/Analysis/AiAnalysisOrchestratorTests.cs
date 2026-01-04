@@ -635,6 +635,165 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public async Task RewriteSummaryAsync_WhenProviderRejectsStructuredToolHistory_RetriesWithCheckpointOnlyHistory()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new StructuredToolHistoryRejectingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_summary_rewrite_complete", new
+            {
+                description = "rewritten",
+                recommendations = new[] { "r1" }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0,
+            MaxSamplingRequestAttempts = 2
+        };
+
+        var result = await orchestrator.RewriteSummaryAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result);
+        Assert.Equal("rewritten", result!.Description);
+
+        Assert.True(requests.Count >= 3, $"Expected at least 3 requests (initial + failed retry + checkpoint-only retry), got {requests.Count}.");
+        Assert.True(ContainsStructuredToolHistory(requests[1]), "Expected the second request to contain structured tool history and trigger the provider rejection.");
+        Assert.False(ContainsStructuredToolHistory(requests.Last()), "Expected the retry request to use checkpoint-only history without tool blocks.");
+    }
+
+    [Fact]
+    public async Task RewriteSummaryAsync_WhenToolCallIsRepeated_ReplaysCachedPayloadInCommandLog()
+    {
+        var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_summary_rewrite_complete", new
+            {
+                description = "rewritten",
+                recommendations = new[] { "r1" }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 5,
+            CheckpointEveryIterations = 0
+        };
+
+        var result = await orchestrator.RewriteSummaryAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result);
+        Assert.Equal("rewritten", result!.Description);
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Equal(2, result.CommandsExecuted!.Count);
+        Assert.All(result.CommandsExecuted!, command => Assert.Equal("report_get", command.Tool));
+        Assert.Equal(result.CommandsExecuted![0].Output, result.CommandsExecuted[1].Output);
+        Assert.False(result.CommandsExecuted[1].Output.Contains("Duplicate report_get call detected", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task RewriteSummaryAsync_WhenNoProgressPersists_FinalizesEarly()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "analysis.exception.type" }))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "description": "rewritten",
+              "recommendations": []
+            }
+            """));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 25,
+            CheckpointEveryIterations = 0,
+            MaxConsecutiveNoProgressIterations = 1
+        };
+
+        var result = await orchestrator.RewriteSummaryAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result);
+        Assert.Equal("rewritten", result!.Description);
+
+        var finalRequest = requests.Last();
+        Assert.Null(finalRequest.Tools);
+        Assert.Null(finalRequest.ToolChoice);
+    }
+
+    [Fact]
+    public async Task RewriteSummaryAsync_WhenToolUseBudgetExceeded_FinalizesEarly()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var paths = new[]
+        {
+            "metadata",
+            "analysis.summary",
+            "analysis.environment",
+            "analysis.exception.type",
+            "analysis.exception.message",
+            "analysis.exception.hResult",
+            "analysis.exception.stackTrace",
+            "analysis.exception.analysis",
+            "analysis.summary.crashType",
+            "analysis.environment.runtime",
+            "analysis.environment.process"
+        };
+
+        var toolUses = paths
+            .Select(path => (Name: "report_get", Input: (object)new { path }, Id: (string?)null))
+            .ToArray();
+
+        var sampling = new SequencedCapturingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(toolUses))
+            .EnqueueResult(CreateMessageResultWithText("""
+            {
+              "description": "final",
+              "recommendations": []
+            }
+            """));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 25,
+            CheckpointEveryIterations = 0,
+            SummaryRewriteMaxTotalToolUses = 10
+        };
+
+        var result = await orchestrator.RewriteSummaryAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.NotNull(result);
+        Assert.Equal("final", result!.Description);
+        Assert.NotNull(result.CommandsExecuted);
+        Assert.Equal(10, result.CommandsExecuted!.Count);
+
+        Assert.Equal(2, requests.Count);
+        Assert.Null(requests.Last().Tools);
+        Assert.Null(requests.Last().ToolChoice);
+    }
+
+    [Fact]
     public async Task GenerateThreadNarrativeAsync_WhenModelCallsCompletionImmediately_CompletesWithoutRequiringEvidenceTools()
     {
         var sampling = new FakeSamplingClient(isSamplingSupported: true, isToolUseSupported: true)
@@ -659,6 +818,90 @@ public class AiAnalysisOrchestratorTests
         Assert.Equal("premature", result!.Description);
         Assert.Equal("high", result.Confidence);
         Assert.Null(result.CommandsExecuted);
+    }
+
+    [Fact]
+    public async Task AnalyzeCrashAsync_WhenMetaBookkeepingRejectsStructuredToolHistory_RetriesWithCheckpointOnlyHistory()
+    {
+        var requests = new List<CreateMessageRequestParams>();
+
+        var sampling = new StructuredToolHistoryRejectingSamplingClient(requests)
+            .EnqueueResult(CreateMessageResultWithToolUses(
+                (Name: "report_get", Input: new { path = "metadata", pageKind = "object", limit = 50 }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.summary",
+                    pageKind = "object",
+                    select = new[] { "crashType", "description", "recommendations", "threadCount", "moduleCount", "assemblyCount" }
+                }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.environment",
+                    pageKind = "object",
+                    select = new[] { "platform", "runtime", "process", "nativeAot" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.type" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.message" }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.hResult" }, Id: null),
+                (Name: "report_get", Input: new
+                {
+                    path = "analysis.exception.stackTrace",
+                    limit = 8,
+                    select = new[] { "frameNumber", "instructionPointer", "module", "function", "sourceFile", "lineNumber", "isManaged" }
+                }, Id: null),
+                (Name: "report_get", Input: new { path = "analysis.exception.analysis", pageKind = "object", limit = 200 }, Id: null)))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_hypothesis_register", new
+            {
+                hypotheses = new[]
+                {
+                    new { hypothesis = "Assembly version mismatch", confidence = "unknown" },
+                    new { hypothesis = "Profiler/IL rewriting", confidence = "unknown" }
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_complete", new
+            {
+                rootCause = "done",
+                confidence = "low",
+                reasoning = "ok",
+                evidence = new[]
+                {
+                    "report_get(path=\"analysis.exception.type\")"
+                }
+            }))
+            .EnqueueResult(CreateMessageResultWithToolUse("analysis_judge_complete", new
+            {
+                selectedHypothesisId = "H1",
+                confidence = "low",
+                rationale = "ok",
+                supportsEvidenceIds = new[] { "E1" },
+                rejectedHypotheses = new[]
+                {
+                    new { hypothesisId = "H2", contradictsEvidenceIds = Array.Empty<string>(), reason = "no contradicting evidence" }
+                }
+            }));
+
+        var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
+        {
+            MaxIterations = 10,
+            CheckpointEveryIterations = 0,
+            MaxSamplingRequestAttempts = 2
+        };
+
+        var result = await orchestrator.AnalyzeCrashAsync(
+            new CrashAnalysisResult(),
+            MinimalBaselineReportJson,
+            new FakeDebuggerManager(),
+            clrMdAnalyzer: null);
+
+        Assert.Equal("Assembly version mismatch", result.RootCause);
+
+        var metaRequests = requests
+            .Where(IsMetaBookkeepingRequest)
+            .ToList();
+
+        Assert.True(metaRequests.Count >= 2, $"Expected at least 2 meta bookkeeping requests (failed + retry), got {metaRequests.Count}.");
+        Assert.True(ContainsStructuredToolHistory(metaRequests[0]), "Expected first meta bookkeeping request to include structured tool history.");
+        Assert.False(ContainsStructuredToolHistory(metaRequests[1]), "Expected retry meta bookkeeping request to use checkpoint-only history without tool blocks.");
     }
 
     [Fact]
@@ -693,6 +936,57 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains(logs, l => l.Level == LogLevel.Debug && l.Message.Contains("Sampling request", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(logs, l => l.Level == LogLevel.Debug && l.Message.Contains("Sampling response", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(logs, l => l.Level == LogLevel.Debug && l.Message.Contains("Tool requested", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static bool IsMetaBookkeepingRequest(CreateMessageRequestParams request)
+    {
+        if (request.Tools == null || request.Tools.Count == 0)
+        {
+            return false;
+        }
+
+        var names = request.Tools
+            .Select(t => (t.Name ?? string.Empty).Trim())
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .ToList();
+
+        if (names.Count == 0)
+        {
+            return false;
+        }
+
+        var isMeta = names.All(n =>
+            string.Equals(n, "analysis_evidence_add", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(n, "analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(n, "analysis_hypothesis_score", StringComparison.OrdinalIgnoreCase));
+
+        return isMeta;
+    }
+
+    private static bool ContainsStructuredToolHistory(CreateMessageRequestParams request)
+    {
+        if (request.Messages == null || request.Messages.Count == 0)
+        {
+            return false;
+        }
+
+        foreach (var message in request.Messages)
+        {
+            if (message.Content == null)
+            {
+                continue;
+            }
+
+            foreach (var block in message.Content)
+            {
+                if (block is ToolUseContentBlock || block is ToolResultContentBlock)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     [Fact]
@@ -1790,7 +2084,8 @@ public class AiAnalysisOrchestratorTests
         Assert.NotNull(result.CommandsExecuted);
         var execCalls = result.CommandsExecuted!.Where(c => c.Tool == "exec").ToList();
         Assert.Equal(2, execCalls.Count);
-        Assert.Contains("cached tool result", execCalls[1].Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(execCalls[0].Output, execCalls[1].Output);
+        Assert.True(execCalls[1].Cached == true);
     }
 
     [Fact]
@@ -3804,7 +4099,10 @@ public class AiAnalysisOrchestratorTests
 
         Assert.NotNull(result.CommandsExecuted);
         Assert.Equal(2, result.CommandsExecuted!.Count(c => c.Tool == "exec"));
-        Assert.Contains(result.CommandsExecuted!, c => c.Output.Contains("[cached tool result]", StringComparison.OrdinalIgnoreCase));
+        var execCalls = result.CommandsExecuted!.Where(c => c.Tool == "exec").ToList();
+        Assert.Equal(2, execCalls.Count);
+        Assert.Equal(execCalls[0].Output, execCalls[1].Output);
+        Assert.Contains(execCalls, c => c.Cached == true);
     }
 
     [Fact]
@@ -4457,6 +4755,45 @@ public class AiAnalysisOrchestratorTests
         public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
         {
             _requests.Add(request);
+            if (_results.Count == 0)
+            {
+                return Task.FromResult(CreateMessageResultWithText("no more scripted responses"));
+            }
+
+            return Task.FromResult(_results.Dequeue());
+        }
+    }
+
+    private sealed class StructuredToolHistoryRejectingSamplingClient(List<CreateMessageRequestParams> requests) : ISamplingClient
+    {
+        private const string GeminiPartsFieldError =
+            "Google: message must include at least one parts field";
+
+        private readonly Queue<CreateMessageResult> _results = new();
+        private readonly List<CreateMessageRequestParams> _requests = requests;
+
+        private bool _rejected;
+
+        public bool IsSamplingSupported => true;
+
+        public bool IsToolUseSupported => true;
+
+        public StructuredToolHistoryRejectingSamplingClient EnqueueResult(CreateMessageResult result)
+        {
+            _results.Enqueue(result);
+            return this;
+        }
+
+        public Task<CreateMessageResult> RequestCompletionAsync(CreateMessageRequestParams request, CancellationToken cancellationToken = default)
+        {
+            _requests.Add(request);
+
+            if (!_rejected && ContainsStructuredToolHistory(request))
+            {
+                _rejected = true;
+                throw new InvalidOperationException(GeminiPartsFieldError);
+            }
+
             if (_results.Count == 0)
             {
                 return Task.FromResult(CreateMessageResultWithText("no more scripted responses"));

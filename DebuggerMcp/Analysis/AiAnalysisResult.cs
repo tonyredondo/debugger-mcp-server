@@ -440,4 +440,11 @@ public sealed class ExecutedCommand
     [JsonPropertyName("duration")]
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? Duration { get; set; }
+
+    /// <summary>
+    /// Gets or sets whether this tool execution reused a cached tool result.
+    /// </summary>
+    [JsonPropertyName("cached")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public bool? Cached { get; set; }
 }

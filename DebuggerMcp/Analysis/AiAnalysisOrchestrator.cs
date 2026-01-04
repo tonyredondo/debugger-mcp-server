@@ -25,6 +25,8 @@ public sealed class AiAnalysisOrchestrator(
 {
     private readonly ISamplingClient _samplingClient = samplingClient ?? throw new ArgumentNullException(nameof(samplingClient));
     private readonly ILogger<AiAnalysisOrchestrator> _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    private readonly ToolHistoryModeCache _toolHistoryModeCache = new();
+    private readonly CheckpointSynthesisFailureCache _checkpointSynthesisFailureCache = new();
 
     private LogLevel SamplingTraceLevel => EnableVerboseSamplingTrace ? LogLevel.Information : LogLevel.Debug;
 
@@ -88,6 +90,42 @@ public sealed class AiAnalysisOrchestrator(
     /// Gets or sets the maximum number of sampling iterations to perform.
     /// </summary>
     public int MaxIterations { get; set; } = 120;
+
+    /// <summary>
+    /// Gets or sets the maximum number of sampling iterations for the summary rewrite pass.
+    /// </summary>
+    /// <remarks>
+    /// This pass is a polishing step and should converge quickly. It is also bounded separately to reduce
+    /// cost and prevent non-converging models/providers from consuming the full analysis iteration budget.
+    /// </remarks>
+    public int SummaryRewriteMaxIterations { get; set; } = 25;
+
+    /// <summary>
+    /// Gets or sets the maximum number of sampling iterations for the thread narrative pass.
+    /// </summary>
+    /// <remarks>
+    /// This pass is intended to synthesize thread activity from existing report evidence. Keeping this bounded
+    /// prevents runaway tool-calling loops when a model fails to call the completion tool.
+    /// </remarks>
+    public int ThreadNarrativeMaxIterations { get; set; } = 25;
+
+    /// <summary>
+    /// Gets or sets the maximum number of tool uses executed across the summary rewrite pass.
+    /// </summary>
+    /// <remarks>
+    /// This counts every tool invocation (including cached duplicates). It is a hard stop to prevent models
+    /// from looping indefinitely while repeatedly calling tools without producing a completion.
+    /// </remarks>
+    public int SummaryRewriteMaxTotalToolUses { get; set; } = 150;
+
+    /// <summary>
+    /// Gets or sets the maximum number of tool uses executed across the thread narrative pass.
+    /// </summary>
+    /// <remarks>
+    /// This counts every tool invocation (including cached duplicates). It is a hard stop to prevent models
+    /// from looping indefinitely while repeatedly calling tools without producing a completion.
+    /// </remarks>
+    public int ThreadNarrativeMaxTotalToolUses { get; set; } = 150;
 
     /// <summary>
     /// Gets or sets the maximum number of attempts to retry a single sampling request when the client returns an error
@@ -308,6 +346,24 @@ public sealed class AiAnalysisOrchestrator(
             var hypothesisCountAtIterationStart = hypothesisTracker.Hypotheses.Count;
             var checkpointAppliedThisIteration = false;
 
+            if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+            {
+                var checkpoint = BuildDeterministicCheckpointJson(
+                    passName: "analysis",
+                    commandsExecuted: commandsExecuted,
+                    commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+
+                lastCheckpointIteration = iteration - 1;
+                commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+
+                messages.Clear();
+                messages.Add(BuildCheckpointCarryForwardMessage(
+                    checkpoint,
+                    passName: "analysis",
+                    stateJson: BuildStateSnapshotJson(evidenceLedger, hypothesisTracker)));
+                checkpointAppliedThisIteration = true;
+            }
+
             CreateMessageResult? response = null;
             Exception? lastSamplingError = null;
 
@@ -356,6 +412,19 @@ public sealed class AiAnalysisOrchestrator(
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     lastSamplingError = ex;
+                    if (IsStructuredToolHistoryUnsupported(ex) && _toolHistoryModeCache.MarkStructuredToolHistoryUnsupported())
+                    {
+                        _logger.LogInformation(
+                            "[AI] Provider rejected structured tool history; switching to checkpoint-only history mode for the remainder of this run (analysis pass).");
+                        WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-history-mode-fallback.json", new
+                        {
+                            passName = "analysis",
+                            iteration,
+                            mode = "checkpoint-only",
+                            reason = "structured_tool_history_unsupported",
+                            message = ex.Message
+                        });
+                    }
                     _logger.LogWarning(ex, "[AI] Sampling failed at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", iteration, attempt, MaxSamplingRequestAttempts);
                     var errorFileName = attempt == 1
                         ? $"iter-{iteration:0000}-error.json"
@@ -701,24 +770,24 @@ public sealed class AiAnalysisOrchestrator(
 	                    continue;
 	                }
 
-                try
-                {
-                    string outputForModel;
-                    string outputForLog;
-                    var wasCached = false;
-                    var duration = sw.Elapsed;
-                    if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
-                    {
-                        sw.Stop();
-                        duration = TimeSpan.Zero;
-                        wasCached = true;
-                        outputForModel = cached;
-                        outputForLog = TruncateForModel(BuildCachedToolResultMessage(toolName, toolInput));
-                    }
-                    else
-                    {
-                        var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, initialReport, debugger, clrMdAnalyzer, cancellationToken)
-                            .ConfigureAwait(false);
+	                try
+	                {
+	                    string outputForModel;
+	                    string outputForLog;
+	                    var wasCached = false;
+	                    var duration = sw.Elapsed;
+	                    if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
+	                    {
+	                        sw.Stop();
+	                        duration = TimeSpan.Zero;
+	                        wasCached = true;
+	                        outputForModel = cached;
+	                        outputForLog = outputForModel;
+	                    }
+	                    else
+	                    {
+	                        var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, initialReport, debugger, clrMdAnalyzer, cancellationToken)
+	                            .ConfigureAwait(false);
                         outputForModel = TruncateForModel(output);
                         toolResultCache[toolCacheKey] = outputForModel;
                         sw.Stop();
@@ -750,14 +819,15 @@ public sealed class AiAnalysisOrchestrator(
 
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
                     toolIndexByIteration[iteration] = toolOrdinal;
-                    commandsExecuted.Add(new ExecutedCommand
-                    {
-                        Tool = toolName,
-                        Input = toolInput,
-                        Output = outputForLog,
-                        Iteration = iteration,
-                        Duration = duration.ToString("c")
-                    });
+	                    commandsExecuted.Add(new ExecutedCommand
+	                    {
+	                        Tool = toolName,
+	                        Input = toolInput,
+	                        Output = outputForLog,
+	                        Iteration = iteration,
+	                        Duration = duration.ToString("c"),
+	                        Cached = wasCached ? true : null
+	                    });
                     WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
                         new { tool = toolName, input = toolInput.ToString(), output = outputForLog, cached = wasCached, isError = false, duration = duration.ToString("c") });
 
@@ -1324,6 +1394,46 @@ public sealed class AiAnalysisOrchestrator(
         }
     }
 
+    private enum ToolHistoryMode
+    {
+        Structured,
+        CheckpointOnly
+    }
+
+    private sealed class ToolHistoryModeCache
+    {
+        public ToolHistoryMode Mode { get; private set; } = ToolHistoryMode.Structured;
+
+        public bool IsCheckpointOnly => Mode == ToolHistoryMode.CheckpointOnly;
+
+        public bool MarkStructuredToolHistoryUnsupported()
+        {
+            if (Mode == ToolHistoryMode.CheckpointOnly)
+            {
+                return false;
+            }
+
+            Mode = ToolHistoryMode.CheckpointOnly;
+            return true;
+        }
+    }
+
+    private sealed class CheckpointSynthesisFailureCache
+    {
+        public bool IsDisabled { get; private set; }
+
+        public bool Disable()
+        {
+            if (IsDisabled)
+            {
+                return false;
+            }
+
+            IsDisabled = true;
+            return true;
+        }
+    }
+
     private sealed class BaselineEvidenceTracker
     {
         private static readonly string[] RequiredPaths =
@@ -1449,25 +1559,43 @@ Constraints:
 - Be grounded: cite sources from already executed tool calls (e.g., report_get(...) or exec(...)).
 - Keep strings concise (<=2048 chars each). Avoid repeated meta tool calls with no changes.
 
-Current state snapshot (JSON):
+        Current state snapshot (JSON):
 {stateSnapshot}
 """;
 
-        var requestMessages = new List<SamplingMessage>(messages)
+        SamplingMessage BuildMetaBookkeepingPromptMessage() => new()
         {
-            new()
-            {
-                Role = Role.User,
-                Content =
-                [
-                    new TextContentBlock { Text = metaPrompt }
-                ]
-            }
+            Role = Role.User,
+            Content =
+            [
+                new TextContentBlock { Text = metaPrompt }
+            ]
         };
+
+        List<SamplingMessage> BuildMetaBookkeepingRequestMessages()
+        {
+            if (!_toolHistoryModeCache.IsCheckpointOnly)
+            {
+                var request = new List<SamplingMessage>(messages)
+                {
+                    BuildMetaBookkeepingPromptMessage()
+                };
+                return request;
+            }
+
+            var checkpointMessage = FindLatestCheckpointCarryForwardMessage(messages, passName);
+            var checkpointOnly = checkpointMessage == null
+                ? new List<SamplingMessage>()
+                : new List<SamplingMessage> { checkpointMessage };
+
+            checkpointOnly.Add(BuildMetaBookkeepingPromptMessage());
+            return checkpointOnly;
+        }
 
         CreateMessageResult? response = null;
         Exception? lastError = null;
         var toolChoiceMode = internalToolChoiceModeCache.Mode;
+        var requestMessages = BuildMetaBookkeepingRequestMessages();
 
         for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
         {
@@ -1496,6 +1624,24 @@ Current state snapshot (JSON):
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
+                if (IsStructuredToolHistoryUnsupported(ex) && _toolHistoryModeCache.MarkStructuredToolHistoryUnsupported())
+                {
+                    _logger.LogInformation(
+                        "[AI] Provider rejected structured tool history; switching to checkpoint-only history mode for the remainder of this run (pass {Pass}).",
+                        passName);
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-history-mode-fallback.json", new
+                    {
+                        passName,
+                        iteration,
+                        mode = "checkpoint-only",
+                        reason = "structured_tool_history_unsupported",
+                        message = ex.Message
+                    });
+                    requestMessages = BuildMetaBookkeepingRequestMessages();
+                    lastError = ex;
+                    continue;
+                }
+
                 if (toolChoiceMode.Equals("required", StringComparison.OrdinalIgnoreCase) &&
                     IsToolChoiceRequiredUnsupported(ex))
                 {
@@ -3732,9 +3878,11 @@ State snapshot (JSON):
             }
         };
 
-        var maxIterations = Math.Max(1, MaxIterations);
+        var maxIterations = GetMaxIterationsForSamplingPass(passName);
         var maxTokens = MaxTokensPerRequest > 0 ? MaxTokensPerRequest : 1024;
         var maxToolCalls = MaxToolCalls > 0 ? MaxToolCalls : 50;
+        var maxToolUsesPerIteration = MaxToolUsesPerIteration > 0 ? MaxToolUsesPerIteration : 40;
+        var maxTotalToolUses = GetMaxTotalToolUsesForSamplingPass(passName);
 
         string? lastModel = null;
         var toolIndexByIteration = new Dictionary<int, int>();
@@ -3742,9 +3890,25 @@ State snapshot (JSON):
         var lastCheckpointIteration = 0;
         var commandsExecutedAtLastCheckpoint = 0;
         var internalToolChoiceModeCache = new InternalToolChoiceModeCache();
+        var consecutiveNoProgressIterations = 0;
 
         for (var iteration = 1; iteration <= maxIterations; iteration++)
         {
+            var uniqueToolCallsAtIterationStart = toolResultCache.Count;
+
+            if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+            {
+                var checkpoint = BuildDeterministicCheckpointJson(
+                    passName: passName,
+                    commandsExecuted: commandsExecuted,
+                    commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+
+                lastCheckpointIteration = iteration - 1;
+                commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+                messages.Clear();
+                messages.Add(BuildCheckpointCarryForwardMessage(checkpoint, passName: passName));
+            }
+
             CreateMessageResult? response = null;
             Exception? lastSamplingError = null;
 
@@ -3789,6 +3953,20 @@ State snapshot (JSON):
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     lastSamplingError = ex;
+                    if (IsStructuredToolHistoryUnsupported(ex) && _toolHistoryModeCache.MarkStructuredToolHistoryUnsupported())
+                    {
+                        _logger.LogInformation(
+                            "[AI] Provider rejected structured tool history; switching to checkpoint-only history mode for the remainder of this run (pass {Pass}).",
+                            passName);
+                        WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-history-mode-fallback.json", new
+                        {
+                            passName,
+                            iteration,
+                            mode = "checkpoint-only",
+                            reason = "structured_tool_history_unsupported",
+                            message = ex.Message
+                        });
+                    }
                     _logger.LogWarning(ex, "[AI] Sampling pass {Pass} failed at iteration {Iteration} (attempt {Attempt}/{MaxAttempts})", passName, iteration, attempt, MaxSamplingRequestAttempts);
                     var errorFileName = attempt == 1
                         ? $"iter-{iteration:0000}-error.json"
@@ -3846,6 +4024,22 @@ State snapshot (JSON):
             var toolUses = response.Content?.OfType<ToolUseContentBlock>().ToList() ?? [];
             if (toolUses.Count == 0)
             {
+                var assistantText = ExtractAssistantText(response);
+                if (!string.IsNullOrWhiteSpace(assistantText) && TryParseFirstJsonObject(assistantText, out var json))
+                {
+                    var maybeCompletion = ParseCompletionTool<T>(
+                        passName,
+                        completionToolName,
+                        json,
+                        commandsExecuted,
+                        iteration,
+                        lastModel);
+                    if (maybeCompletion != null)
+                    {
+                        return maybeCompletion;
+                    }
+                }
+
                 continue;
             }
 
@@ -3860,6 +4054,8 @@ State snapshot (JSON):
             }
 
             var respondedToolUseIds = new HashSet<string>(StringComparer.Ordinal);
+            var toolUsesExecutedThisIteration = 0;
+            var toolUsesPrunedDueToLimit = false;
 
             foreach (var (toolUse, toolName, toolInput) in rewrittenToolUses)
             {
@@ -3876,6 +4072,17 @@ State snapshot (JSON):
                     continue;
                 }
 
+                if (toolUsesExecutedThisIteration >= maxToolUsesPerIteration)
+                {
+                    toolUsesPrunedDueToLimit = true;
+                    _logger.LogWarning(
+                        "[AI] Tool-use limit reached in pass {Pass} iteration {Iteration} (limit={Limit}); pruning remaining tool calls.",
+                        passName,
+                        iteration,
+                        maxToolUsesPerIteration);
+                    break;
+                }
+
                 if (toolResultCache.Count >= maxToolCalls)
                 {
                     _logger.LogInformation("[AI] Unique tool call budget reached ({MaxToolCalls}); finalizing pass {Pass}.", maxToolCalls, passName);
@@ -3888,6 +4095,28 @@ State snapshot (JSON):
                             iteration: iteration,
                             maxTokens: maxTokens,
                             maxToolCalls: maxToolCalls,
+                            lastModel: lastModel,
+                            traceRunDir: traceRunDir,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                }
+
+                if (commandsExecuted.Count >= maxTotalToolUses)
+                {
+                    _logger.LogInformation(
+                        "[AI] Tool-use budget reached in pass {Pass} (totalToolUses={TotalToolUses}, limit={Limit}); finalizing.",
+                        passName,
+                        commandsExecuted.Count,
+                        maxTotalToolUses);
+                    PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
+                    return await FinalizePassAfterTotalToolUseBudgetExceededAsync<T>(
+                            passName: passName,
+                            systemPrompt: systemPrompt,
+                            messages: messages,
+                            commandsExecuted: commandsExecuted,
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            maxTotalToolUses: maxTotalToolUses,
                             lastModel: lastModel,
                             traceRunDir: traceRunDir,
                             cancellationToken: cancellationToken)
@@ -3915,29 +4144,30 @@ State snapshot (JSON):
                             new TextContentBlock { Text = msg }
                         ]
                     });
+                    toolUsesExecutedThisIteration++;
                     continue;
                 }
 
                 var sw = Stopwatch.StartNew();
                 var toolCacheKey = BuildToolCacheKey(toolName, toolInput);
-                try
-                {
-                    string outputForModel;
-                    string outputForLog;
-                    var wasCached = false;
-                    var duration = sw.Elapsed;
-                    if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
-                    {
-                        sw.Stop();
-                        duration = TimeSpan.Zero;
-                        wasCached = true;
-                        outputForModel = cached;
-                        outputForLog = TruncateForModel(BuildCachedToolResultMessage(toolName, toolInput));
-                    }
-                    else
-                    {
-                        var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, report, debugger, clrMdAnalyzer, cancellationToken)
-                            .ConfigureAwait(false);
+	                try
+	                {
+	                    string outputForModel;
+	                    string outputForLog;
+	                    var wasCached = false;
+	                    var duration = sw.Elapsed;
+	                    if (toolResultCache.TryGetValue(toolCacheKey, out var cached))
+	                    {
+	                        sw.Stop();
+	                        duration = TimeSpan.Zero;
+	                        wasCached = true;
+	                        outputForModel = cached;
+	                        outputForLog = outputForModel;
+	                    }
+	                    else
+	                    {
+	                        var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, report, debugger, clrMdAnalyzer, cancellationToken)
+	                            .ConfigureAwait(false);
                         outputForModel = TruncateForModel(output);
                         toolResultCache[toolCacheKey] = outputForModel;
                         sw.Stop();
@@ -3947,14 +4177,15 @@ State snapshot (JSON):
 
                     var toolOrdinal = toolIndexByIteration.TryGetValue(iteration, out var n) ? n + 1 : 1;
                     toolIndexByIteration[iteration] = toolOrdinal;
-                    commandsExecuted.Add(new ExecutedCommand
-                    {
-                        Tool = toolName,
-                        Input = CloneToolInput(toolInput),
-                        Output = outputForLog,
-                        Iteration = iteration,
-                        Duration = duration.ToString("c")
-                    });
+	                    commandsExecuted.Add(new ExecutedCommand
+	                    {
+	                        Tool = toolName,
+	                        Input = CloneToolInput(toolInput),
+	                        Output = outputForLog,
+	                        Iteration = iteration,
+	                        Duration = duration.ToString("c"),
+	                        Cached = wasCached ? true : null
+	                    });
 
                     WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-tool-{toolOrdinal:00}-{SanitizeFileComponent(toolName)}.json",
                         new { tool = toolName, input = CloneToolInput(toolInput).ToString(), output = outputForLog, cached = wasCached, isError = false, duration = duration.ToString("c") });
@@ -3975,8 +4206,9 @@ State snapshot (JSON):
                             }
                         ]
                     });
-                respondedToolUseIds.Add(toolUseId);
-            }
+                    respondedToolUseIds.Add(toolUseId);
+                    toolUsesExecutedThisIteration++;
+                }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
                 throw;
@@ -4022,6 +4254,7 @@ State snapshot (JSON):
                         ]
                     });
                 respondedToolUseIds.Add(toolUseId);
+                toolUsesExecutedThisIteration++;
             }
         }
 
@@ -4039,6 +4272,41 @@ State snapshot (JSON):
             }
 
                 return ParseCompletionTool<T>(passName, completionToolName, pendingCompleteInput, commandsExecuted, iteration, lastModel);
+            }
+
+            if (toolUsesPrunedDueToLimit)
+            {
+                PruneUnrespondedToolUsesFromLastAssistantMessage(messages, respondedToolUseIds);
+            }
+
+            var madeProgress = toolResultCache.Count != uniqueToolCallsAtIterationStart;
+            if (madeProgress)
+            {
+                consecutiveNoProgressIterations = 0;
+            }
+            else
+            {
+                consecutiveNoProgressIterations++;
+                if (consecutiveNoProgressIterations >= Math.Max(1, MaxConsecutiveNoProgressIterations))
+                {
+                    _logger.LogInformation(
+                        "[AI] No progress detected for {Count} consecutive iterations; finalizing pass {Pass} early.",
+                        consecutiveNoProgressIterations,
+                        passName);
+                    return await FinalizePassAfterNoProgressDetectedAsync<T>(
+                            passName: passName,
+                            systemPrompt: systemPrompt,
+                            messages: messages,
+                            commandsExecuted: commandsExecuted,
+                            iteration: iteration,
+                            maxTokens: maxTokens,
+                            consecutiveNoProgressIterations: consecutiveNoProgressIterations,
+                            uniqueToolCalls: toolResultCache.Count,
+                            lastModel: lastModel,
+                            traceRunDir: traceRunDir,
+                            cancellationToken: cancellationToken)
+                        .ConfigureAwait(false);
+                }
             }
 
             if (iteration < maxIterations
@@ -4092,6 +4360,43 @@ State snapshot (JSON):
                 traceRunDir: traceRunDir,
                 cancellationToken: cancellationToken)
             .ConfigureAwait(false);
+    }
+
+    private int GetMaxIterationsForSamplingPass(string passName)
+    {
+        var global = Math.Max(1, MaxIterations);
+
+        var perPass = passName switch
+        {
+            "summary-rewrite" => SummaryRewriteMaxIterations,
+            "thread-narrative" => ThreadNarrativeMaxIterations,
+            _ => global
+        };
+
+        if (perPass <= 0)
+        {
+            perPass = global;
+        }
+
+        return Math.Max(1, Math.Min(global, perPass));
+    }
+
+    private int GetMaxTotalToolUsesForSamplingPass(string passName)
+    {
+        var perPass = passName switch
+        {
+            "summary-rewrite" => SummaryRewriteMaxTotalToolUses,
+            "thread-narrative" => ThreadNarrativeMaxTotalToolUses,
+            _ => 0
+        };
+
+        if (perPass > 0)
+        {
+            return Math.Max(10, perPass);
+        }
+
+        var fallbackUnique = MaxToolCalls > 0 ? MaxToolCalls : 100;
+        return Math.Max(10, fallbackUnique * 2);
     }
 
     private static T? ParseCompletionTool<T>(
@@ -4160,15 +4465,14 @@ State snapshot (JSON):
             return false;
         }
 
-        var tooLargeCount = recent.Count(c =>
-            c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
-            && c.Output.Contains("too_large", StringComparison.OrdinalIgnoreCase));
+	        var tooLargeCount = recent.Count(c =>
+	            c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+	            && c.Output.Contains("too_large", StringComparison.OrdinalIgnoreCase));
 
-        var duplicateReuseCount = recent.Count(c =>
-            c.Output.StartsWith("[cached tool result] Duplicate", StringComparison.OrdinalIgnoreCase));
+	        var duplicateReuseCount = recent.Count(c => c.Cached == true);
 
-        return tooLargeCount >= 2 || duplicateReuseCount >= 1;
-    }
+	        return tooLargeCount >= 2 || duplicateReuseCount >= 1;
+	    }
 
     private async Task<string?> TryCreateCheckpointAsync(
         string passName,
@@ -4184,7 +4488,21 @@ State snapshot (JSON):
     {
         ArgumentNullException.ThrowIfNull(internalToolChoiceModeCache);
 
+        if (_checkpointSynthesisFailureCache.IsDisabled)
+        {
+            _logger.LogDebug("[AI] Skipping checkpoint synthesis for pass {Pass}: disabled after a previous checkpoint failure.", passName);
+            return null;
+        }
+
         var priorCheckpointMessage = FindLatestCheckpointCarryForwardMessage(messages, passName);
+        if (priorCheckpointMessage == null && _toolHistoryModeCache.IsCheckpointOnly && commandsExecuted.Count > 0)
+        {
+            var deterministic = BuildDeterministicCheckpointJson(
+                passName: passName,
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+            priorCheckpointMessage = BuildCheckpointCarryForwardMessage(deterministic, passName: passName);
+        }
 
 	        var prompt = $"""
 	Create an INTERNAL checkpoint for pass "{passName}".
@@ -4267,6 +4585,22 @@ State snapshot (JSON):
         }
         catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
         {
+            if (IsStreamAlreadyConsumedError(ex) && _checkpointSynthesisFailureCache.Disable())
+            {
+                _logger.LogWarning(
+                    ex,
+                    "[AI] Checkpoint synthesis failed due to a stream-consumption error; disabling further checkpoint synthesis for this run (pass {Pass}).",
+                    passName);
+                WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-disabled.json", new
+                {
+                    passName,
+                    iteration,
+                    reason = "stream_already_consumed",
+                    message = ex.Message
+                });
+                return null;
+            }
+
             if (request.ToolChoice?.Mode?.Equals("required", StringComparison.OrdinalIgnoreCase) == true
                 && IsToolChoiceRequiredUnsupported(ex))
             {
@@ -4292,6 +4626,22 @@ State snapshot (JSON):
                 }
                 catch (Exception ex2) when (!cancellationToken.IsCancellationRequested)
                 {
+                    if (IsStreamAlreadyConsumedError(ex2) && _checkpointSynthesisFailureCache.Disable())
+                    {
+                        _logger.LogWarning(
+                            ex2,
+                            "[AI] Checkpoint synthesis failed due to a stream-consumption error; disabling further checkpoint synthesis for this run (pass {Pass}).",
+                            passName);
+                        WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-disabled.json", new
+                        {
+                            passName,
+                            iteration,
+                            reason = "stream_already_consumed",
+                            message = ex2.Message
+                        });
+                        return null;
+                    }
+
                     _logger.LogWarning(ex2, "[AI] Checkpoint synthesis failed in pass {Pass} at iteration {Iteration}", passName, iteration);
                     WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-checkpoint-error.json", new { passName, iteration, error = ex2.ToString(), message = ex2.Message });
                     return null;
@@ -4762,6 +5112,53 @@ Checkpoint JSON:
             if (message.Contains("tool_choice", StringComparison.OrdinalIgnoreCase)
                 && message.Contains("No endpoints found", StringComparison.OrdinalIgnoreCase)
                 && message.Contains("support", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsStructuredToolHistoryUnsupported(Exception ex)
+    {
+        foreach (var current in EnumerateExceptionChain(ex))
+        {
+            var message = current.Message ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                continue;
+            }
+
+            // Observed from Gemini via OpenRouter/Google when a request includes tool history messages
+            // that don't translate to Gemini "parts" (assistant tool_use / user tool_result blocks).
+            if (message.Contains("must include at least one parts field", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (message.Contains("parts field", StringComparison.OrdinalIgnoreCase)
+                && message.Contains("gemini", StringComparison.OrdinalIgnoreCase)
+                && message.Contains("invalid_argument", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsStreamAlreadyConsumedError(Exception ex)
+    {
+        foreach (var current in EnumerateExceptionChain(ex))
+        {
+            var message = current.Message ?? string.Empty;
+            if (string.IsNullOrWhiteSpace(message))
+            {
+                continue;
+            }
+
+            if (message.Contains("stream was already consumed", StringComparison.OrdinalIgnoreCase))
             {
                 return true;
             }
@@ -6054,6 +6451,16 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         string? traceRunDir,
         CancellationToken cancellationToken)
     {
+        if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+        {
+            var checkpoint = BuildDeterministicCheckpointJson(
+                passName: "analysis",
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: 0);
+
+            messages = [BuildCheckpointCarryForwardMessage(checkpoint, passName: "analysis")];
+        }
+
         const string analysisSchema = """
 {
   "rootCause": "string",
@@ -6155,6 +6562,16 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         string? traceRunDir,
         CancellationToken cancellationToken)
     {
+        if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+        {
+            var checkpoint = BuildDeterministicCheckpointJson(
+                passName: "analysis",
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: 0);
+
+            messages = [BuildCheckpointCarryForwardMessage(checkpoint, passName: "analysis")];
+        }
+
         const string analysisSchema = """
 {
   "rootCause": "string",
@@ -6258,6 +6675,16 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         string? traceRunDir,
         CancellationToken cancellationToken)
     {
+        if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+        {
+            var checkpoint = BuildDeterministicCheckpointJson(
+                passName: "analysis",
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: 0);
+
+            messages = [BuildCheckpointCarryForwardMessage(checkpoint, passName: "analysis")];
+        }
+
         const string analysisSchema = """
 {
   "rootCause": "string",
@@ -6348,6 +6775,16 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         CancellationToken cancellationToken)
         where T : class
     {
+        if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+        {
+            var checkpoint = BuildDeterministicCheckpointJson(
+                passName: passName,
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: 0);
+
+            messages = [BuildCheckpointCarryForwardMessage(checkpoint, passName: passName)];
+        }
+
         var expectedSchema = passName switch
         {
             "summary-rewrite" => """
@@ -6462,6 +6899,284 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         return parsed;
     }
 
+    private async Task<T?> FinalizePassAfterTotalToolUseBudgetExceededAsync<T>(
+        string passName,
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        int maxTokens,
+        int maxTotalToolUses,
+        string? lastModel,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+        {
+            var checkpoint = BuildDeterministicCheckpointJson(
+                passName: passName,
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: 0);
+
+            messages = [BuildCheckpointCarryForwardMessage(checkpoint, passName: passName)];
+        }
+
+        var expectedSchema = passName switch
+        {
+            "summary-rewrite" => """
+{
+  "description": "string",
+  "recommendations": ["string"]
+}
+""",
+            "thread-narrative" => """
+{
+  "description": "string",
+  "confidence": "high|medium|low|unknown"
+}
+""",
+            _ => "{}"
+        };
+
+        var finalPrompt = $"""
+Tool-use budget exceeded (totalToolUses={commandsExecuted.Count}, limit={maxTotalToolUses}): do not request any tools.
+
+Based ONLY on the evidence already collected in this conversation (tool outputs already shown), provide the best final result for pass '{passName}'.
+If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed (due to tool-use budget) and must be ignored.
+
+Return ONLY valid JSON (no markdown, no code fences) matching:
+{expectedSchema}
+""";
+
+        var finalMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = finalPrompt }
+                ]
+            }
+        };
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages = finalMessages,
+            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: maxTokens),
+            Tools = null,
+            ToolChoice = null
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation(
+                "[AI] Finalizing pass {Pass} after tool-use budget exceeded (limit={Limit})...",
+                passName,
+                maxTotalToolUses);
+            WriteSamplingTraceFile(traceRunDir, $"final-{passName}-tooluse-budget-synthesis-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return passName switch
+            {
+                "summary-rewrite" => new AiSummaryResult
+                {
+                    Error = $"Tool-use budget exceeded ({maxTotalToolUses}). Final synthesis request failed: {ex.Message}",
+                    Description = string.Empty,
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                "thread-narrative" => new AiThreadNarrativeResult
+                {
+                    Error = $"Tool-use budget exceeded ({maxTotalToolUses}). Final synthesis request failed: {ex.Message}",
+                    Description = string.Empty,
+                    Confidence = "low",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                _ => null
+            };
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"final-{passName}-tooluse-budget-synthesis-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response);
+        if (string.IsNullOrWhiteSpace(text) || !TryParseFirstJsonObject(text, out var json))
+        {
+            return passName switch
+            {
+                "summary-rewrite" => new AiSummaryResult
+                {
+                    Description = string.IsNullOrWhiteSpace(text) ? string.Empty : text.Trim(),
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = response.Model ?? lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                "thread-narrative" => new AiThreadNarrativeResult
+                {
+                    Description = string.IsNullOrWhiteSpace(text) ? string.Empty : text.Trim(),
+                    Confidence = "low",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = response.Model ?? lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                _ => null
+            };
+        }
+
+        return ParseCompletionTool<T>(passName, completionToolName: string.Empty, input: json, commandsExecuted, iteration, response.Model ?? lastModel);
+    }
+
+    private async Task<T?> FinalizePassAfterNoProgressDetectedAsync<T>(
+        string passName,
+        string systemPrompt,
+        List<SamplingMessage> messages,
+        List<ExecutedCommand> commandsExecuted,
+        int iteration,
+        int maxTokens,
+        int consecutiveNoProgressIterations,
+        int uniqueToolCalls,
+        string? lastModel,
+        string? traceRunDir,
+        CancellationToken cancellationToken)
+        where T : class
+    {
+        if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+        {
+            var checkpoint = BuildDeterministicCheckpointJson(
+                passName: passName,
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: 0);
+
+            messages = [BuildCheckpointCarryForwardMessage(checkpoint, passName: passName)];
+        }
+
+        var expectedSchema = passName switch
+        {
+            "summary-rewrite" => """
+{
+  "description": "string",
+  "recommendations": ["string"]
+}
+""",
+            "thread-narrative" => """
+{
+  "description": "string",
+  "confidence": "high|medium|low|unknown"
+}
+""",
+            _ => "{}"
+        };
+
+        var finalPrompt = $"""
+No progress detected for {consecutiveNoProgressIterations} consecutive iterations (uniqueToolCalls={uniqueToolCalls}): this is a final synthesis step. Do not request any tools.
+
+Based ONLY on the evidence already collected in this conversation (tool outputs already shown), provide the best final result for pass '{passName}'.
+If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed (due to no-progress early stop) and must be ignored.
+
+Return ONLY valid JSON (no markdown, no code fences) matching:
+{expectedSchema}
+""";
+
+        var finalMessages = new List<SamplingMessage>(messages)
+        {
+            new()
+            {
+                Role = Role.User,
+                Content =
+                [
+                    new TextContentBlock { Text = finalPrompt }
+                ]
+            }
+        };
+
+        var request = new CreateMessageRequestParams
+        {
+            SystemPrompt = systemPrompt,
+            Messages = finalMessages,
+            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: maxTokens),
+            Tools = null,
+            ToolChoice = null
+        };
+
+        CreateMessageResult response;
+        try
+        {
+            _logger.LogInformation("[AI] Finalizing pass {Pass} after no progress detected...", passName);
+            WriteSamplingTraceFile(traceRunDir, $"final-{passName}-no-progress-synthesis-request.json", BuildTraceRequest(iteration, request));
+            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+        {
+            return passName switch
+            {
+                "summary-rewrite" => new AiSummaryResult
+                {
+                    Error = $"No progress detected; final synthesis request failed: {ex.Message}",
+                    Description = string.Empty,
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                "thread-narrative" => new AiThreadNarrativeResult
+                {
+                    Error = $"No progress detected; final synthesis request failed: {ex.Message}",
+                    Description = string.Empty,
+                    Confidence = "low",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                _ => null
+            };
+        }
+
+        WriteSamplingTraceFile(traceRunDir, $"final-{passName}-no-progress-synthesis-response.json", BuildTraceResponse(iteration, response));
+
+        var text = ExtractAssistantText(response) ?? string.Empty;
+        if (!TryParseFirstJsonObject(text, out var json))
+        {
+            return passName switch
+            {
+                "summary-rewrite" => new AiSummaryResult
+                {
+                    Error = "No progress detected. Final synthesis produced unstructured output.",
+                    Description = text.Trim(),
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = response.Model ?? lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                "thread-narrative" => new AiThreadNarrativeResult
+                {
+                    Error = "No progress detected. Final synthesis produced unstructured output.",
+                    Description = text.Trim(),
+                    Confidence = "low",
+                    Iterations = iteration,
+                    CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+                    Model = response.Model ?? lastModel,
+                    AnalyzedAt = DateTime.UtcNow
+                } as T,
+                _ => null
+            };
+        }
+
+        return ParseCompletionTool<T>(passName, completionToolName: string.Empty, input: json, commandsExecuted, iteration, response.Model ?? lastModel);
+    }
+
     private async Task<T?> FinalizePassAfterMaxIterationsReachedAsync<T>(
         string passName,
         string systemPrompt,
@@ -6475,6 +7190,16 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         CancellationToken cancellationToken)
         where T : class
     {
+        if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+        {
+            var checkpoint = BuildDeterministicCheckpointJson(
+                passName: passName,
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: 0);
+
+            messages = [BuildCheckpointCarryForwardMessage(checkpoint, passName: passName)];
+        }
+
         var expectedSchema = passName switch
         {
             "summary-rewrite" => """
