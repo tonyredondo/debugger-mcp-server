@@ -4849,12 +4849,37 @@ public class AiAnalysisOrchestratorTests
             InvalidCursor(10)
         };
 
-        object?[] args = { 10, commands, true, null };
+        object?[] args = { 10, commands, true, 0, false, null };
         var shouldInject = (bool)method!.Invoke(null, args)!;
-        var reason = (string)args[3]!;
+        var reason = (string)args[5]!;
 
         Assert.True(shouldInject);
         Assert.Equal("invalid_cursor_loop", reason);
+    }
+
+    [Fact]
+    public void TryGetDeterministicCheckpointInjectionReason_WhenCheckpointNoProgressRepeats_ReturnsCheckpointNoProgress()
+    {
+        var method = typeof(AiAnalysisOrchestrator).GetMethod("TryGetDeterministicCheckpointInjectionReason", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = JsonSerializer.SerializeToElement(new { path = "analysis.modules", limit = 10 }),
+                Output = "{\"path\":\"analysis.modules\",\"value\":[]}",
+                Iteration = 10
+            }
+        };
+
+        object?[] args = { 10, commands, true, 1, true, null };
+        var shouldInject = (bool)method!.Invoke(null, args)!;
+        var reason = (string)args[5]!;
+
+        Assert.True(shouldInject);
+        Assert.Equal("checkpoint_no_progress", reason);
     }
 
     [Fact]
@@ -4866,6 +4891,8 @@ public class AiAnalysisOrchestratorTests
         var evidenceLedger = new AiEvidenceLedger();
         evidenceLedger.AddOrUpdate(new[]
         {
+            new AiEvidenceLedgerItem { Id = "E7", Source = "report_get(path=\"metadata\")", Finding = "Metadata", Tags = new() { "BASELINE_META" } },
+            new AiEvidenceLedgerItem { Id = "E8", Source = "report_get(path=\"analysis.environment\")", Finding = "Environment", Tags = new() { "BASELINE_ENV" } },
             new AiEvidenceLedgerItem { Id = "E1", Source = "report_get(path=\"analysis.exception.type\")", Finding = "System.Exception", Tags = new() { "BASELINE_EXC_TYPE" } },
             new AiEvidenceLedgerItem { Id = "E2", Source = "report_get(path=\"analysis.exception.stackTrace\")", Finding = "Top frame", Tags = new() { "BASELINE_STACK_TOP" } },
             new AiEvidenceLedgerItem { Id = "E3", Source = "report_get(path=\"analysis.modules\")", Finding = "Modules" },
@@ -4902,6 +4929,244 @@ public class AiAnalysisOrchestratorTests
         var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
         Assert.Single(nextSteps);
         Assert.Equal("analysis_complete", nextSteps[0].GetProperty("tool").GetString());
+    }
+
+    [Fact]
+    public void BuildDeterministicLoopBreakCheckpointJson_WhenInvalidCursorLoop_ProducesRetryWithoutCursorNextStep()
+    {
+        var build = typeof(AiAnalysisOrchestrator).GetMethod("BuildDeterministicLoopBreakCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(build);
+
+        using var doc = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace","limit":10,"cursor":"abc"}
+        """);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = doc.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.exception.stackTrace\",\"error\":{\"code\":\"invalid_cursor\",\"message\":\"Cursor does not match\"}}",
+                Iteration = 10
+            }
+        };
+
+        var evidenceLedger = new AiEvidenceLedger();
+        var hypothesisTracker = new AiHypothesisTracker(evidenceLedger);
+
+        var checkpoint = (string)build!.Invoke(null, new object[]
+        {
+            "analysis",
+            commands,
+            0,
+            "dumpId=x generatedAt=y",
+            "invalid_cursor_loop",
+            evidenceLedger,
+            hypothesisTracker,
+            false
+        })!;
+
+        using var parsed = JsonDocument.Parse(checkpoint);
+        var facts = parsed.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.StartsWith("REPORT_GET CURSOR:", StringComparison.OrdinalIgnoreCase));
+
+        var nextSteps = parsed.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(nextSteps);
+        var call = nextSteps[0].GetProperty("call").GetString() ?? string.Empty;
+        Assert.DoesNotContain("\"cursor\"", call, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenReportGetMissingPath_AddsContractFactsAndDoNotRepeatIncludesInvalidCall()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var empty = JsonDocument.Parse("{}");
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = empty.RootElement.Clone(),
+                Output = "report_get.path is required.",
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        {"facts":[],"hypotheses":[],"evidence":[],"doNotRepeat":[],"nextSteps":[]}
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.Contains("report_get.path is required", StringComparison.OrdinalIgnoreCase));
+
+        var doNotRepeat = doc.RootElement.GetProperty("doNotRepeat").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(doNotRepeat, d => string.Equals("report_get({})", d, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenReportGetInvalidArrayIndex_AddsNoRangeIndexReminder()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var input = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace[0:5]"}
+        """);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.exception.stackTrace\",\"error\":{\"code\":\"invalid_path\",\"message\":\"Invalid array index '0:5'. Only numeric indices are supported.\"}}",
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        {"facts":[],"hypotheses":[],"evidence":[],"doNotRepeat":[],"nextSteps":[]}
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.Contains("stackTrace[0:5]", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenHypothesisRegisterMissingHypotheses_AddsExampleAndBlocksInvalidCall()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var empty = JsonDocument.Parse("{}");
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "analysis_hypothesis_register",
+                Input = empty.RootElement.Clone(),
+                Output = "analysis_hypothesis_register.hypotheses is required.",
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        {"facts":[],"hypotheses":[],"evidence":[],"doNotRepeat":[],"nextSteps":[]}
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.StartsWith("META EXAMPLE: analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase));
+
+        var doNotRepeat = doc.RootElement.GetProperty("doNotRepeat").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(doNotRepeat, d => string.Equals("analysis_hypothesis_register({})", d, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void TryGetDeterministicCheckpointInjectionReason_WhenToolInputContractErrorsRepeat_ReturnsToolInputContractLoop()
+    {
+        var method = typeof(AiAnalysisOrchestrator).GetMethod("TryGetDeterministicCheckpointInjectionReason", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        static ExecutedCommand MissingPath(int iteration) => new()
+        {
+            Tool = "report_get",
+            Input = JsonSerializer.SerializeToElement(new { }),
+            Output = "report_get.path is required.",
+            Iteration = iteration
+        };
+
+        var commands = new List<ExecutedCommand>
+        {
+            MissingPath(8),
+            MissingPath(9),
+            MissingPath(10)
+        };
+
+        object?[] args = { 10, commands, true, 0, false, null };
+        var shouldInject = (bool)method!.Invoke(null, args)!;
+        var reason = (string)args[5]!;
+
+        Assert.True(shouldInject);
+        Assert.Equal("tool_input_contract_loop", reason);
+    }
+
+    [Fact]
+    public void TryGetDeterministicCheckpointInjectionReason_WhenHypothesisRegisterNoProgressRepeats_ReturnsHypothesisRegisterNoProgress()
+    {
+        var method = typeof(AiAnalysisOrchestrator).GetMethod("TryGetDeterministicCheckpointInjectionReason", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        static ExecutedCommand NoProgress(int iteration) => new()
+        {
+            Tool = "analysis_hypothesis_register",
+            Input = JsonSerializer.SerializeToElement(new { hypotheses = Array.Empty<object>() }),
+            Output = "{\"added\":[],\"updated\":[],\"ignoredAtCapacity\":0}",
+            Iteration = iteration
+        };
+
+        var commands = new List<ExecutedCommand>
+        {
+            NoProgress(8),
+            NoProgress(9),
+            NoProgress(10)
+        };
+
+        object?[] args = { 10, commands, true, 0, false, null };
+        var shouldInject = (bool)method!.Invoke(null, args)!;
+        var reason = (string)args[5]!;
+
+        Assert.True(shouldInject);
+        Assert.Equal("hypothesis_register_no_progress", reason);
+    }
+
+    [Fact]
+    public void BuildDeterministicLoopBreakCheckpointJson_WhenHypothesisRegisterNoProgress_UsesHypothesisScoreNextStep()
+    {
+        var build = typeof(AiAnalysisOrchestrator).GetMethod("BuildDeterministicLoopBreakCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(build);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "analysis_hypothesis_register",
+                Input = JsonSerializer.SerializeToElement(new { hypotheses = Array.Empty<object>() }),
+                Output = "{\"added\":[],\"updated\":[],\"ignoredAtCapacity\":0}",
+                Iteration = 10
+            }
+        };
+
+        var evidenceLedger = new AiEvidenceLedger();
+        var hypothesisTracker = new AiHypothesisTracker(evidenceLedger);
+
+        var checkpoint = (string)build!.Invoke(null, new object[]
+        {
+            "analysis",
+            commands,
+            0,
+            "dumpId=x generatedAt=y",
+            "hypothesis_register_no_progress",
+            evidenceLedger,
+            hypothesisTracker,
+            false
+        })!;
+
+        using var parsed = JsonDocument.Parse(checkpoint);
+        var nextSteps = parsed.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(nextSteps);
+        Assert.Equal("analysis_hypothesis_score", nextSteps[0].GetProperty("tool").GetString());
     }
 
     private sealed class FakeSamplingClient(bool isSamplingSupported, bool isToolUseSupported) : ISamplingClient

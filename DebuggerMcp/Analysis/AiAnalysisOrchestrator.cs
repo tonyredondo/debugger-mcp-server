@@ -337,6 +337,9 @@ public sealed class AiAnalysisOrchestrator(
         int? uniqueToolCallCountAtLastValidationRefusal = null;
         var lastCheckpointIteration = 0;
         var commandsExecutedAtLastCheckpoint = 0;
+        string? lastCheckpointProgressSignature = null;
+        var consecutiveNoProgressCheckpoints = 0;
+        string? lastCheckpointHash = null;
         var lastDeterministicCheckpointIteration = 0;
         string? lastDeterministicCheckpointHash = null;
         string? lastDeterministicCheckpointReason = null;
@@ -1214,19 +1217,39 @@ public sealed class AiAnalysisOrchestrator(
                 commandsExecuted: commandsExecuted,
                 commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
 
+            var checkpointProgressSignature = BuildCheckpointProgressSignature(
+                uniqueToolCalls: toolResultCache.Count,
+                evidenceCount: evidenceLedger.Items.Count,
+                hypothesisCount: hypothesisTracker.Hypotheses.Count);
+
+            var noProgressSinceLastCheckpoint = !string.IsNullOrWhiteSpace(lastCheckpointProgressSignature)
+                                                && string.Equals(lastCheckpointProgressSignature, checkpointProgressSignature, StringComparison.OrdinalIgnoreCase);
+
+            var baselinePhase = ComputeBaselinePhaseState(commandsExecuted);
+            var baselineBlocked = !baselineTracker.IsComplete && IsBaselineBlocked(iteration, commandsExecuted, baselinePhase.Missing);
+
             var shouldInjectDeterministic = TryGetDeterministicCheckpointInjectionReason(
                 iteration: iteration,
                 commandsExecuted: commandsExecuted,
                 baselineComplete: baselineTracker.IsComplete,
+                consecutiveNoProgressCheckpoints: consecutiveNoProgressCheckpoints,
+                noProgressSinceLastCheckpoint: noProgressSinceLastCheckpoint,
                 reason: out var deterministicReason);
 
+            if (baselineBlocked)
+            {
+                shouldInjectDeterministic = true;
+                deterministicReason = "baseline_blocked";
+            }
+
             if (iteration < maxIterations
-                && baselineTracker.IsComplete
+                && (baselineTracker.IsComplete || baselineBlocked)
                 && commandsExecuted.Count > commandsExecutedAtLastCheckpoint
                 && (shouldCheckpointByInterval || shouldInjectDeterministic))
             {
                 var allowDeterministicInjection = shouldInjectDeterministic
-                    && (iteration - lastDeterministicCheckpointIteration >= 2
+                    && (baselineBlocked
+                        || iteration - lastDeterministicCheckpointIteration >= 2
                         || !string.Equals(lastDeterministicCheckpointReason, deterministicReason, StringComparison.OrdinalIgnoreCase));
 
                 string checkpoint;
@@ -1239,7 +1262,8 @@ public sealed class AiAnalysisOrchestrator(
                         baselineKey: baselineKey,
                         reason: deterministicReason,
                         evidenceLedger: evidenceLedger,
-                        hypothesisTracker: hypothesisTracker);
+                        hypothesisTracker: hypothesisTracker,
+                        forceFinalizeNow: baselineBlocked);
 
                     var hash = ComputeSha256Prefixed(checkpoint);
                     if (!string.IsNullOrWhiteSpace(lastDeterministicCheckpointHash)
@@ -1294,6 +1318,8 @@ public sealed class AiAnalysisOrchestrator(
 
                 lastCheckpointIteration = iteration;
                 commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+                consecutiveNoProgressCheckpoints = noProgressSinceLastCheckpoint ? consecutiveNoProgressCheckpoints + 1 : 0;
+                lastCheckpointHash = ComputeSha256Prefixed(checkpoint);
 
 	                messages.Clear();
 	                ApplyCheckpointToStateStores(
@@ -1301,6 +1327,10 @@ public sealed class AiAnalysisOrchestrator(
 	                    evidenceLedger,
 	                    hypothesisTracker,
 	                    enableEvidenceProvenance: evidenceProvenanceEnabled);
+                    lastCheckpointProgressSignature = BuildCheckpointProgressSignature(
+                        uniqueToolCalls: toolResultCache.Count,
+                        evidenceCount: evidenceLedger.Items.Count,
+                        hypothesisCount: hypothesisTracker.Hypotheses.Count);
 	                messages.Add(BuildCheckpointCarryForwardMessage(
 	                    checkpoint,
 	                    passName: "analysis",
@@ -1525,6 +1555,9 @@ public sealed class AiAnalysisOrchestrator(
     private static readonly IReadOnlyDictionary<string, string> BaselineIdByPath =
         BaselineCalls.ToDictionary(c => c.Path, c => c.Id, StringComparer.OrdinalIgnoreCase);
 
+    private static readonly IReadOnlyDictionary<string, string> BaselinePathById =
+        BaselineCalls.ToDictionary(c => c.Id, c => c.Path, StringComparer.OrdinalIgnoreCase);
+
     private static readonly IReadOnlyList<string> BaselineCallFacts =
         BaselineCalls.Select(c => $"BASELINE_CALL: {c.Id} = {c.Call}").ToList();
 
@@ -1645,6 +1678,45 @@ public sealed class AiAnalysisOrchestrator(
 
             _seen[path] = true;
         }
+    }
+
+    private static bool IsBaselineBlocked(int iteration, List<ExecutedCommand> commandsExecuted, IReadOnlyList<string> missingBaselineIds)
+    {
+        if (iteration < 10 || commandsExecuted.Count == 0 || missingBaselineIds.Count == 0)
+        {
+            return false;
+        }
+
+        var windowStart = Math.Max(1, iteration - 9);
+        foreach (var id in missingBaselineIds)
+        {
+            if (string.IsNullOrWhiteSpace(id) || !BaselinePathById.TryGetValue(id.Trim(), out var path))
+            {
+                return false;
+            }
+
+            var attempts = commandsExecuted
+                .Where(c =>
+                    c.Iteration >= windowStart
+                    && c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(TryGetString(c.Input, "path")?.Trim(), path, StringComparison.Ordinal))
+                .ToList();
+
+            if (attempts.Count < 2)
+            {
+                return false;
+            }
+
+            var failedAttempts = attempts.Count(c =>
+                TryParseReportGetResponseHasError(c.Output ?? string.Empty, out var hasError) && hasError);
+
+            if (failedAttempts < 2)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private readonly record struct MetaBookkeepingResult(bool Done, int MetaToolCallsExecuted);
@@ -4627,6 +4699,8 @@ State snapshot (JSON):
         int iteration,
         List<ExecutedCommand> commandsExecuted,
         bool baselineComplete,
+        int consecutiveNoProgressCheckpoints,
+        bool noProgressSinceLastCheckpoint,
         out string reason)
     {
         reason = string.Empty;
@@ -4634,6 +4708,12 @@ State snapshot (JSON):
         if (!baselineComplete || iteration <= 0 || commandsExecuted.Count == 0)
         {
             return false;
+        }
+
+        if (noProgressSinceLastCheckpoint && consecutiveNoProgressCheckpoints >= 1)
+        {
+            reason = "checkpoint_no_progress";
+            return true;
         }
 
         var windowStart = Math.Max(1, iteration - 9);
@@ -4667,6 +4747,13 @@ State snapshot (JSON):
             return true;
         }
 
+        var duplicateToolUseCount = recent.Count(c => c.Cached == true);
+        if (duplicateToolUseCount >= 4)
+        {
+            reason = "duplicate_tool_use_loop";
+            return true;
+        }
+
         var toolInputContractErrors = recent.Count(IsToolInputContractError);
         if (toolInputContractErrors >= 3)
         {
@@ -4674,15 +4761,117 @@ State snapshot (JSON):
             return true;
         }
 
-        var hypothesisNoProgress = recent.Count(IsHypothesisRegisterNoProgress);
+        var hypothesisNoProgress = CountHypothesisRegisterNoProgress(recent);
         if (hypothesisNoProgress >= 2)
         {
             reason = "hypothesis_register_no_progress";
             return true;
         }
 
+        var hypothesisRegisterCalls = recent.Count(c => c.Tool.Equals("analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase));
+        if (hypothesisRegisterCalls > 2)
+        {
+            var newEvidenceArrived = recent.Any(c => IsEvidenceToolName(c.Tool) && c.Cached != true);
+            if (!newEvidenceArrived)
+            {
+                reason = "hypothesis_register_spam";
+                return true;
+            }
+        }
+
         return false;
     }
+
+    private static int CountHypothesisRegisterNoProgress(List<ExecutedCommand> recent)
+    {
+        if (recent.Count == 0)
+        {
+            return 0;
+        }
+
+        var registerCalls = recent
+            .Where(c => c.Tool.Equals("analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(c => c.Iteration)
+            .ToList();
+
+        if (registerCalls.Count < 2)
+        {
+            return 0;
+        }
+
+        var noProgressCount = 0;
+        var lastRegisterIteration = registerCalls[0].Iteration;
+
+        for (var i = 1; i < registerCalls.Count; i++)
+        {
+            var current = registerCalls[i];
+            if (!TryParseHypothesisRegisterResult(current.Output ?? string.Empty, out var addedCount, out var ignoredAtCapacity))
+            {
+                lastRegisterIteration = current.Iteration;
+                continue;
+            }
+
+            var isNoProgress = addedCount == 0 || ignoredAtCapacity > 0;
+            if (!isNoProgress)
+            {
+                lastRegisterIteration = current.Iteration;
+                continue;
+            }
+
+            var hasNewEvidenceSinceLastRegister = recent.Any(c =>
+                c.Iteration > lastRegisterIteration
+                && c.Iteration <= current.Iteration
+                && IsEvidenceToolName(c.Tool)
+                && c.Cached != true);
+
+            if (!hasNewEvidenceSinceLastRegister)
+            {
+                noProgressCount++;
+            }
+
+            lastRegisterIteration = current.Iteration;
+        }
+
+        return noProgressCount;
+    }
+
+    private static bool TryParseHypothesisRegisterResult(string output, out int addedCount, out int ignoredAtCapacity)
+    {
+        addedCount = 0;
+        ignoredAtCapacity = 0;
+
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return false;
+        }
+
+        if (!TryParseFirstJsonObject(output, out var json) || json.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (json.TryGetProperty("added", out var addedEl) && addedEl.ValueKind == JsonValueKind.Array)
+        {
+            addedCount = addedEl.GetArrayLength();
+        }
+
+        if (json.TryGetProperty("ignoredAtCapacity", out var ignoredEl))
+        {
+            if (ignoredEl.ValueKind == JsonValueKind.Number && ignoredEl.TryGetInt32(out var n))
+            {
+                ignoredAtCapacity = n;
+            }
+            else if (int.TryParse(ignoredEl.ToString(), out var parsed))
+            {
+                ignoredAtCapacity = parsed;
+            }
+        }
+
+        return true;
+    }
+
+    private static string BuildCheckpointProgressSignature(int uniqueToolCalls, int evidenceCount, int hypothesisCount)
+        => $"{uniqueToolCalls}|{evidenceCount}|{hypothesisCount}";
 
     private static bool IsBaselineReportGet(ExecutedCommand command)
     {
@@ -4762,27 +4951,6 @@ State snapshot (JSON):
         return false;
     }
 
-    private static bool IsHypothesisRegisterNoProgress(ExecutedCommand command)
-    {
-        if (!command.Tool.Equals("analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase))
-        {
-            return false;
-        }
-
-        var output = command.Output ?? string.Empty;
-        if (!TryParseFirstJsonObject(output, out var json) || json.ValueKind != JsonValueKind.Object)
-        {
-            return false;
-        }
-
-        if (!json.TryGetProperty("added", out var addedEl) || addedEl.ValueKind != JsonValueKind.Array)
-        {
-            return false;
-        }
-
-        return addedEl.GetArrayLength() == 0;
-    }
-
 	    private async Task<string?> TryCreateCheckpointAsync(
 	        string passName,
 	        string systemPrompt,
@@ -4828,9 +4996,12 @@ State snapshot (JSON):
 		Report/tool contracts to encode in the checkpoint:
 		- report_get.path is required; never call report_get with empty args.
 		- Array indices must be numeric (e.g., stackTrace[0]); ranges like stackTrace[0:5] are invalid.
-		- Cursor is only valid for the IDENTICAL query shape (same path/select/where/pageKind/limit). If any change, drop cursor.
-		- Do not guess ".items" or report shape; query a parent node first. If you get too_large, follow the tool's "Try:" hints exactly.
+		- Cursor is only valid for the IDENTICAL query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.
+		- Cursor examples: GOOD = reuse cursor only with identical args; BAD = reusing cursor after changing select/where/pageKind/limit (invalid_cursor).
+		- Do not guess ".items" or report shape; query a parent node first (pageKind="object", limit<=50). If you get too_large, follow the tool's "Try:" hints exactly.
+		- Recovery: invalid_cursor => retry same query without cursor; invalid_path/missing property => step back to a parent node and query keys; stop after 2 failed corrections.
 		- analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required.
+		- Hypothesis hygiene: do not register new hypotheses unless new evidence arrived since last hypothesis update; if ignoredAtCapacity>0, stop registering and update/score existing hypotheses.
 	
 		Working memory requirements:
 		- Preserve the LAST tool result in a usable form (either add fact "LAST_TOOL: ..." with a short excerpt including error code/Try hint, or add evidence item id="E_LAST").
@@ -5106,15 +5277,18 @@ State snapshot (JSON):
             - Do NOT call any tool listed in doNotRepeat (exact duplicate tool + arguments), even if you feel you've "forgotten" the result; re-use the checkpoint facts/evidence instead.
             - If facts contain PHASE: baselineComplete=true, do NOT restart baseline calls; continue with post-baseline investigation.
             - If facts contain PHASE: finalizeNow=true, call analysis_complete next (unless you are explicitly blocked by missing required evidence IDs).
+            - If analysis_complete was previously rejected, do NOT restart baseline; fix only the rejected/missing fields or evidence formatting and try finalize again.
 
             report_get contract:
             - report_get.path is required; never call report_get with empty args.
             - Array indices must be numeric (e.g., stackTrace[0]); ranges like stackTrace[0:5] are invalid.
-            - Cursor is only valid for the IDENTICAL query shape (same path/select/where/pageKind/limit). If any change, drop cursor.
-            - Do not guess ".items" or report shape; query a parent node first. If you get too_large, follow the tool's "Try:" hints exactly.
+            - Cursor is only valid for the IDENTICAL query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.
+            - Do not guess ".items" or report shape; query a parent node first (pageKind="object", limit<=50). If you get too_large, follow the tool's "Try:" hints exactly.
+            - Recovery: invalid_cursor => retry same query without cursor; invalid_path/missing property => step back to a parent node and query keys; stop after 2 failed corrections.
 
             Meta tool contract:
             - analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required.
+            - Hypothesis hygiene: do not register new hypotheses unless new evidence arrived since last hypothesis update; if ignoredAtCapacity>0, stop registering and update/score existing hypotheses.
 
             When you need more evidence, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor).
 
@@ -6028,11 +6202,15 @@ State snapshot (JSON):
             AddFact(baselineCallFact);
         }
 
-        AddFact("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any changes, drop cursor and start a new query.");
-        AddFact("REPORT_GET SYNTAX: report_get.path is required. Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
-        AddFact("REPORT_GET STRUCTURE: do not guess .items; query the parent node first. Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
-        AddFact("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. If a property/index is invalid, stop guessing and query the nearest valid parent node.");
+        AddFact("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
+        AddFact("REPORT_GET SYNTAX: report_get.path is required (never call report_get() / report_get({})). Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
+        AddFact("REPORT_GET STRUCTURE: do not guess .items or report shape. If a segment/property is missing, query the nearest parent node first (pageKind=\"object\", limit<=50). Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
+        AddFact("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. invalid_cursor => retry same query WITHOUT cursor. invalid_path (missing property/index or .items misuse) => drop .items; if node is an array, page the array node with limit/cursor; otherwise step back and query parent keys. Stop after 2 failed corrections; pick a different step or finalize with limitations.");
         AddFact("META TOOL CONTRACT: analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required. Do not call meta tools with empty args.");
+        AddFact("META EXAMPLE: analysis_hypothesis_register({\"hypotheses\":[{\"hypothesis\":\"Assembly version mismatch\",\"confidence\":\"medium\"}]})");
+        AddFact("META EXAMPLE: analysis_evidence_add({\"items\":[{\"source\":\"report_get(path=\\\"analysis.modules\\\")\",\"finding\":\"...\"}]})");
+        AddFact("HYPOTHESIS HYGIENE: do not register new hypotheses unless new evidence arrived since the last hypothesis update (baseline counts once). If ignoredAtCapacity>0, stop registering; use analysis_hypothesis_score or converge.");
+        AddFact("QUALITY: do not assert trimming/version mismatch/instrumentation without at least one supporting evidence item (module/assembly versions, runtime info, profiler indicators).");
 
         var lastToolFact = BuildLastToolFact(commandsExecuted);
         if (!string.IsNullOrWhiteSpace(lastToolFact))
@@ -6173,11 +6351,15 @@ State snapshot (JSON):
 
             facts.AddRange(BaselineCallFacts);
 
-            facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any changes, drop cursor and start a new query.");
-            facts.Add("REPORT_GET SYNTAX: report_get.path is required. Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
-            facts.Add("REPORT_GET STRUCTURE: do not guess .items; query the parent node first. Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
-            facts.Add("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. If a property/index is invalid, stop guessing and query the nearest valid parent node.");
+            facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
+            facts.Add("REPORT_GET SYNTAX: report_get.path is required (never call report_get() / report_get({})). Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
+            facts.Add("REPORT_GET STRUCTURE: do not guess .items or report shape. If a segment/property is missing, query the nearest parent node first (pageKind=\"object\", limit<=50). Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
+            facts.Add("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. invalid_cursor => retry same query WITHOUT cursor. invalid_path (missing property/index or .items misuse) => drop .items; if node is an array, page the array node with limit/cursor; otherwise step back and query parent keys. Stop after 2 failed corrections; pick a different step or finalize with limitations.");
             facts.Add("META TOOL CONTRACT: analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required. Do not call meta tools with empty args.");
+            facts.Add("META EXAMPLE: analysis_hypothesis_register({\"hypotheses\":[{\"hypothesis\":\"Assembly version mismatch\",\"confidence\":\"medium\"}]})");
+            facts.Add("META EXAMPLE: analysis_evidence_add({\"items\":[{\"source\":\"report_get(path=\\\"analysis.modules\\\")\",\"finding\":\"...\"}]})");
+            facts.Add("HYPOTHESIS HYGIENE: do not register new hypotheses unless new evidence arrived since the last hypothesis update (baseline counts once). If ignoredAtCapacity>0, stop registering; use analysis_hypothesis_score or converge.");
+            facts.Add("QUALITY: do not assert trimming/version mismatch/instrumentation without at least one supporting evidence item (module/assembly versions, runtime info, profiler indicators).");
 
             var lastToolFact = BuildLastToolFact(commandsExecuted);
             if (!string.IsNullOrWhiteSpace(lastToolFact))
@@ -6271,15 +6453,24 @@ State snapshot (JSON):
         {
             facts.Add($"PHASE: baselineMissing={JsonSerializer.Serialize(baselinePhase.Missing)}");
         }
+        if (reason.StartsWith("baseline_blocked", StringComparison.OrdinalIgnoreCase))
+        {
+            facts.Add("PHASE: baselineIncompleteButBlocked=true");
+            facts.Add("LIMITATIONS: Baseline evidence is incomplete and appears blocked; finalize with an explicit limitations section and avoid high confidence.");
+        }
 
         facts.Add(baselineEvidenceFact);
         facts.AddRange(BaselineCallFacts);
 
-        facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any changes, drop cursor and start a new query.");
-        facts.Add("REPORT_GET SYNTAX: report_get.path is required. Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
-        facts.Add("REPORT_GET STRUCTURE: do not guess .items; query the parent node first. Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
-        facts.Add("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. If a property/index is invalid, stop guessing and query the nearest valid parent node.");
+        facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
+        facts.Add("REPORT_GET SYNTAX: report_get.path is required (never call report_get() / report_get({})). Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
+        facts.Add("REPORT_GET STRUCTURE: do not guess .items or report shape. If a segment/property is missing, query the nearest parent node first (pageKind=\"object\", limit<=50). Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
+        facts.Add("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. invalid_cursor => retry same query WITHOUT cursor. invalid_path (missing property/index or .items misuse) => drop .items; if node is an array, page the array node with limit/cursor; otherwise step back and query parent keys. Stop after 2 failed corrections; pick a different step or finalize with limitations.");
         facts.Add("META TOOL CONTRACT: analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required. Do not call meta tools with empty args.");
+        facts.Add("META EXAMPLE: analysis_hypothesis_register({\"hypotheses\":[{\"hypothesis\":\"Assembly version mismatch\",\"confidence\":\"medium\"}]})");
+        facts.Add("META EXAMPLE: analysis_evidence_add({\"items\":[{\"source\":\"report_get(path=\\\"analysis.modules\\\")\",\"finding\":\"...\"}]})");
+        facts.Add("HYPOTHESIS HYGIENE: do not register new hypotheses unless new evidence arrived since the last hypothesis update (baseline counts once). If ignoredAtCapacity>0, stop registering; use analysis_hypothesis_score or converge.");
+        facts.Add("QUALITY: do not assert trimming/version mismatch/instrumentation without at least one supporting evidence item (module/assembly versions, runtime info, profiler indicators).");
 
         var lastToolFact = BuildLastToolFact(commandsExecuted);
         if (!string.IsNullOrWhiteSpace(lastToolFact))
@@ -6391,14 +6582,20 @@ State snapshot (JSON):
 
         if (forceFinalizeNow)
         {
+            var why = reason.StartsWith("baseline_blocked", StringComparison.OrdinalIgnoreCase)
+                ? "Baseline evidence appears blocked; finalize now with explicit limitations and reduced confidence. Do not restart baseline."
+                : "Loop guard triggered repeatedly; finalize now using BASELINE_EVIDENCE mapping + evidence IDs. Do not restart baseline.";
+
             steps.Add(new
             {
                 tool = "analysis_complete",
                 call = "analysis_complete(rootCause=\"...\", confidence=\"low|medium\", reasoning=\"...\", evidence=[\"E#\", ...])",
-                why = "Loop guard triggered repeatedly; finalize now using BASELINE_EVIDENCE mapping + evidence IDs. Do not restart baseline."
+                why
             });
             return steps;
         }
+
+        var executedToolKeys = BuildExecutedToolKeySet(commandsExecuted);
 
         if (reason.StartsWith("invalid_cursor", StringComparison.OrdinalIgnoreCase))
         {
@@ -6423,7 +6620,8 @@ State snapshot (JSON):
             }
         }
 
-        if (reason.StartsWith("hypothesis_register_no_progress", StringComparison.OrdinalIgnoreCase))
+        if (reason.StartsWith("hypothesis_register_no_progress", StringComparison.OrdinalIgnoreCase)
+            || reason.StartsWith("hypothesis_register_spam", StringComparison.OrdinalIgnoreCase))
         {
             steps.Add(new
             {
@@ -6436,10 +6634,48 @@ State snapshot (JSON):
 
         steps.Add(new
         {
-            tool = "report_get",
-            call = "report_get(path=\"analysis.modules\", limit=20, select=[\"name\",\"version\",\"path\",\"baseAddress\"])",
-            why = "Progress with a narrow, high-signal evidence fetch. Do not repeat baseline calls."
+            tool = "analysis_complete",
+            call = "analysis_complete(rootCause=\"...\", confidence=\"low|medium\", reasoning=\"...\", evidence=[\"E#\", ...])",
+            why = "No safe non-duplicate next step found; finalize using current evidence (include limitations if data is missing)."
         });
+
+        var candidates = new List<(string Call, string Why)>
+        {
+            ("report_get(path=\"analysis.modules\", limit=20, select=[\"name\",\"version\",\"path\",\"baseAddress\"])", "Fetch a compact module list to support/deny version mismatch or native interop hypotheses."),
+            ("report_get(path=\"analysis.environment.runtime\", pageKind=\"object\", limit=30)", "Fetch runtime details (CLR type/version) for compatibility/version-mismatch reasoning."),
+            ("report_get(path=\"analysis.threads.summary\", pageKind=\"object\", limit=20)", "Fetch thread summary to guide whether this is a faulting thread vs systemic issue."),
+            ("report_get(path=\"analysis.synchronization.summary\", pageKind=\"object\", limit=30)", "Fetch synchronization summary to identify deadlocks/contention."),
+            ("report_get(path=\"analysis.security\", pageKind=\"object\", limit=30)", "Fetch security summary (if present) to include/ignore security angle.")
+        };
+
+        foreach (var candidate in candidates)
+        {
+            var openParen = candidate.Call.IndexOf('(');
+            var closeParen = candidate.Call.LastIndexOf(')');
+            if (openParen < 0 || closeParen < openParen)
+            {
+                continue;
+            }
+
+            var args = candidate.Call.Substring(openParen + 1, closeParen - openParen - 1).Trim();
+            if (!TryParseNamedArgs(args, out var input))
+            {
+                continue;
+            }
+
+            var key = BuildToolCacheKey("report_get", input);
+            if (!string.IsNullOrWhiteSpace(key) && !executedToolKeys.Contains(key))
+            {
+                steps[0] = new
+                {
+                    tool = "report_get",
+                    call = candidate.Call,
+                    why = candidate.Why
+                };
+                return steps;
+            }
+        }
+
         return steps;
     }
 
@@ -6622,6 +6858,13 @@ State snapshot (JSON):
                 || string.Equals(t, "BASELINE_EXC_HRESULT", StringComparison.OrdinalIgnoreCase)) == true);
 
         if (!hasBaselineExc || !hasBaselineStackTop)
+        {
+            return false;
+        }
+
+        var hasBaselineMeta = evidenceLedger.Items.Any(e => e.Tags?.Any(t => string.Equals(t, "BASELINE_META", StringComparison.OrdinalIgnoreCase)) == true);
+        var hasBaselineEnv = evidenceLedger.Items.Any(e => e.Tags?.Any(t => string.Equals(t, "BASELINE_ENV", StringComparison.OrdinalIgnoreCase)) == true);
+        if (!hasBaselineMeta || !hasBaselineEnv)
         {
             return false;
         }
@@ -9313,8 +9556,17 @@ Be thorough but efficient. Don't run unnecessary commands.
         var excerptLimit = Math.Clamp(evidenceExcerptMaxChars, 64, 50_000);
         finding = TruncateText(finding, excerptLimit);
 
+        var toolWasErrorFromOutput = toolWasError;
+        if (!toolWasErrorFromOutput
+            && toolName.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+            && TryParseReportGetResponseHasError(outputForModel ?? string.Empty, out var reportGetHasError)
+            && reportGetHasError)
+        {
+            toolWasErrorFromOutput = true;
+        }
+
         List<string>? baselineTags = null;
-        if (!toolWasError
+        if (!toolWasErrorFromOutput
             && toolInput.ValueKind == JsonValueKind.Object
             && toolName.Equals("report_get", StringComparison.OrdinalIgnoreCase))
         {
@@ -9337,7 +9589,7 @@ Be thorough but efficient. Don't run unnecessary commands.
                 ToolKeyHash = includeProvenanceMetadata ? toolKeyHash : null,
                 ToolOutputHash = includeProvenanceMetadata ? outputHash : null,
                 ToolWasCached = includeProvenanceMetadata ? wasCached : null,
-                ToolWasError = includeProvenanceMetadata ? toolWasError : null
+                ToolWasError = includeProvenanceMetadata ? toolWasErrorFromOutput : null
             }
         ]);
 
