@@ -1,5 +1,6 @@
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Sampling;
@@ -3096,7 +3097,7 @@ public class AiAnalysisOrchestratorTests
         var carryText = requests[4].Messages[0].Content!.OfType<TextContentBlock>().Single().Text;
         Assert.True(carryText.Length > 20_000, $"Expected carry-forward message to exceed 20k chars, got {carryText.Length}.");
         Assert.DoesNotContain("Checkpoint synthesis unavailable", carryText, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("FACT-49:", carryText, StringComparison.Ordinal);
+        Assert.Contains("FACT-00:", carryText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -4710,6 +4711,197 @@ public class AiAnalysisOrchestratorTests
             Role = Role.Assistant,
             Content = blocks
         };
+    }
+
+    [Fact]
+    public void BuildToolCacheKey_WhenSelectOrderDiffers_IsOrderInsensitive()
+    {
+        var buildToolCacheKey = typeof(AiAnalysisOrchestrator).GetMethod("BuildToolCacheKey", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(buildToolCacheKey);
+
+        using var doc1 = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace","limit":8,"select":["frameNumber","function","frameNumber"]}
+        """);
+
+        using var doc2 = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace","limit":8,"select":["function","frameNumber"]}
+        """);
+
+        var key1 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc1.RootElement })!;
+        var key2 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc2.RootElement })!;
+
+        Assert.Equal(key1, key2);
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_FiltersNextStepsThatRepeatExecutedToolCalls_AndKeepsNonDuplicates()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var executedInputDoc = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace","limit":8,"select":["frameNumber","function"]}
+        """);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = executedInputDoc.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.exception.stackTrace\",\"value\":[]}",
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        {
+          "facts": [],
+          "hypotheses": [],
+          "evidence": [],
+          "doNotRepeat": [],
+          "nextSteps": [
+            {
+              "tool": "report_get",
+              "call": "report_get({\"path\":\"analysis.exception.stackTrace\",\"limit\":8,\"select\":[\"function\",\"frameNumber\"]})",
+              "why": "duplicate"
+            },
+            {
+              "tool": "report_get",
+              "call": "report_get({\"path\":\"analysis.exception.stackTrace\",\"limit\":10,\"select\":[\"function\",\"frameNumber\"]})",
+              "why": "different limit"
+            }
+          ]
+        }
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var nextSteps = doc.RootElement.GetProperty("nextSteps");
+        Assert.Equal(JsonValueKind.Array, nextSteps.ValueKind);
+        Assert.Single(nextSteps.EnumerateArray());
+        var remainingCall = nextSteps.EnumerateArray().Single().GetProperty("call").GetString();
+        Assert.NotNull(remainingCall);
+        Assert.Contains("\"limit\":10", remainingCall!, StringComparison.Ordinal);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.StartsWith("BASELINE_KEY:", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(facts, f => f.StartsWith("PHASE: baselineComplete=", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(facts, f => f.StartsWith("REPORT_GET CURSOR:", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(facts, f => f.StartsWith("LAST_TOOL:", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void IsBaselineEvidenceComplete_DoesNotRequireAnalysisExceptionAnalysis()
+    {
+        var isComplete = typeof(AiAnalysisOrchestrator).GetMethod("IsBaselineEvidenceComplete", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(isComplete);
+
+        static ExecutedCommand Ok(string path)
+        {
+            using var doc = JsonDocument.Parse(JsonSerializer.Serialize(new { path }));
+            return new ExecutedCommand
+            {
+                Tool = "report_get",
+                Input = doc.RootElement.Clone(),
+                Output = JsonSerializer.Serialize(new { path, value = new { ok = true } }),
+                Iteration = 1
+            };
+        }
+
+        var commands = new List<ExecutedCommand>
+        {
+            Ok("metadata"),
+            Ok("analysis.summary"),
+            Ok("analysis.environment"),
+            Ok("analysis.exception.type"),
+            Ok("analysis.exception.message"),
+            Ok("analysis.exception.hResult"),
+            Ok("analysis.exception.stackTrace")
+        };
+
+        var result = (bool)isComplete!.Invoke(null, new object[] { commands })!;
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void TryGetDeterministicCheckpointInjectionReason_WhenInvalidCursorRepeats_ReturnsInvalidCursorLoop()
+    {
+        var method = typeof(AiAnalysisOrchestrator).GetMethod("TryGetDeterministicCheckpointInjectionReason", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        static ExecutedCommand InvalidCursor(int iteration)
+        {
+            using var doc = JsonDocument.Parse("{\"path\":\"analysis.exception.stackTrace\",\"limit\":10}");
+            return new ExecutedCommand
+            {
+                Tool = "report_get",
+                Input = doc.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.exception.stackTrace\",\"error\":{\"code\":\"invalid_cursor\",\"message\":\"Cursor does not match\"}}",
+                Iteration = iteration
+            };
+        }
+
+        var commands = new List<ExecutedCommand>
+        {
+            InvalidCursor(9),
+            InvalidCursor(10)
+        };
+
+        object?[] args = { 10, commands, true, null };
+        var shouldInject = (bool)method!.Invoke(null, args)!;
+        var reason = (string)args[3]!;
+
+        Assert.True(shouldInject);
+        Assert.Equal("invalid_cursor_loop", reason);
+    }
+
+    [Fact]
+    public void AugmentCheckpointWithConvergenceFacts_WhenEvidenceIsSufficient_SetsFinalizeNowAndReplacesNextSteps()
+    {
+        var augment = typeof(AiAnalysisOrchestrator).GetMethod("AugmentCheckpointWithConvergenceFacts", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(augment);
+
+        var evidenceLedger = new AiEvidenceLedger();
+        evidenceLedger.AddOrUpdate(new[]
+        {
+            new AiEvidenceLedgerItem { Id = "E1", Source = "report_get(path=\"analysis.exception.type\")", Finding = "System.Exception", Tags = new() { "BASELINE_EXC_TYPE" } },
+            new AiEvidenceLedgerItem { Id = "E2", Source = "report_get(path=\"analysis.exception.stackTrace\")", Finding = "Top frame", Tags = new() { "BASELINE_STACK_TOP" } },
+            new AiEvidenceLedgerItem { Id = "E3", Source = "report_get(path=\"analysis.modules\")", Finding = "Modules" },
+            new AiEvidenceLedgerItem { Id = "E4", Source = "exec(\"!pe\")", Finding = "Exception object" },
+            new AiEvidenceLedgerItem { Id = "E5", Source = "exec(\"!clrstack\")", Finding = "Managed stack" },
+            new AiEvidenceLedgerItem { Id = "E6", Source = "report_get(path=\"analysis.environment.runtime\")", Finding = "CoreCLR" }
+        });
+
+        var hypothesisTracker = new AiHypothesisTracker(evidenceLedger);
+        hypothesisTracker.Register(new[]
+        {
+            new AiHypothesis
+            {
+                Id = "H1",
+                Hypothesis = "Primary hypothesis",
+                Confidence = "high",
+                SupportsEvidenceIds = new() { "E1", "E2" }
+            },
+            new AiHypothesis { Id = "H2", Hypothesis = "Alt hypothesis", Confidence = "low" },
+            new AiHypothesis { Id = "H3", Hypothesis = "Alt hypothesis 2", Confidence = "low" }
+        });
+
+        var checkpointJson = """
+        {"facts":["x"],"hypotheses":[],"evidence":[],"doNotRepeat":[],"nextSteps":[{"tool":"report_get","call":"report_get({\"path\":\"analysis.modules\"})","why":"ok"}]}
+        """;
+
+        var augmented = (string)augment!.Invoke(null, new object[] { checkpointJson, evidenceLedger, hypothesisTracker, false })!;
+        using var doc = JsonDocument.Parse(augmented);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.StartsWith("BASELINE_EVIDENCE:", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(facts, f => string.Equals("PHASE: finalizeNow=true", f, StringComparison.OrdinalIgnoreCase));
+
+        var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(nextSteps);
+        Assert.Equal("analysis_complete", nextSteps[0].GetProperty("tool").GetString());
     }
 
     private sealed class FakeSamplingClient(bool isSamplingSupported, bool isToolUseSupported) : ISamplingClient

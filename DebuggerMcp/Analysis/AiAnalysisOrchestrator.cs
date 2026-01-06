@@ -314,6 +314,7 @@ public sealed class AiAnalysisOrchestrator(
         var evidenceExcerptMaxChars = Math.Clamp(EvidenceExcerptMaxChars, 64, 50_000);
         var evidenceProvenanceEnabled = EnableEvidenceProvenance;
         var tools = SamplingTools.GetCrashAnalysisTools();
+        var baselineKey = ComputeBaselineKey(fullReportJson);
 
         var evidenceLedger = new AiEvidenceLedger();
         var hypothesisTracker = new AiHypothesisTracker(evidenceLedger);
@@ -336,6 +337,9 @@ public sealed class AiAnalysisOrchestrator(
         int? uniqueToolCallCountAtLastValidationRefusal = null;
         var lastCheckpointIteration = 0;
         var commandsExecutedAtLastCheckpoint = 0;
+        var lastDeterministicCheckpointIteration = 0;
+        string? lastDeterministicCheckpointHash = null;
+        string? lastDeterministicCheckpointReason = null;
 
         var traceRunDir = InitializeSamplingTraceDirectory();
 
@@ -351,7 +355,8 @@ public sealed class AiAnalysisOrchestrator(
                 var checkpoint = BuildDeterministicCheckpointJson(
                     passName: "analysis",
                     commandsExecuted: commandsExecuted,
-                    commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+                    commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
+                    baselineKey: baselineKey);
 
                 lastCheckpointIteration = iteration - 1;
                 commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
@@ -437,7 +442,8 @@ public sealed class AiAnalysisOrchestrator(
                     var fallbackCheckpoint = BuildDeterministicCheckpointJson(
                         passName: "analysis",
                         commandsExecuted: commandsExecuted,
-                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
+                        baselineKey: baselineKey);
                     lastCheckpointIteration = iteration;
                     commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
                     messages.Clear();
@@ -666,6 +672,15 @@ public sealed class AiAnalysisOrchestrator(
                         metaSw.Stop();
                         outputForModel = TruncateForModel(output);
                     }
+
+                    commandsExecuted.Add(new ExecutedCommand
+                    {
+                        Tool = metaToolName,
+                        Input = metaToolInput,
+                        Output = outputForModel,
+                        Iteration = iteration,
+                        Duration = metaSw.Elapsed.ToString("c")
+                    });
 
 	                    messages.Add(new SamplingMessage
 	                    {
@@ -1191,39 +1206,90 @@ public sealed class AiAnalysisOrchestrator(
                 metaBookkeepingDone = metaBookkeepingResult.Done;
             }
 
+            var shouldCheckpointByInterval = ShouldCreateCheckpoint(
+                iteration: iteration,
+                maxIterations: maxIterations,
+                checkpointEveryIterations: CheckpointEveryIterations,
+                lastCheckpointIteration: lastCheckpointIteration,
+                commandsExecuted: commandsExecuted,
+                commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+
+            var shouldInjectDeterministic = TryGetDeterministicCheckpointInjectionReason(
+                iteration: iteration,
+                commandsExecuted: commandsExecuted,
+                baselineComplete: baselineTracker.IsComplete,
+                reason: out var deterministicReason);
+
             if (iteration < maxIterations
                 && baselineTracker.IsComplete
-                && ShouldCreateCheckpoint(
-                    iteration: iteration,
-                    maxIterations: maxIterations,
-                    checkpointEveryIterations: CheckpointEveryIterations,
-                    lastCheckpointIteration: lastCheckpointIteration,
-                    commandsExecuted: commandsExecuted,
-                    commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint))
+                && commandsExecuted.Count > commandsExecutedAtLastCheckpoint
+                && (shouldCheckpointByInterval || shouldInjectDeterministic))
             {
-                var checkpoint = await TryCreateCheckpointAsync(
+                var allowDeterministicInjection = shouldInjectDeterministic
+                    && (iteration - lastDeterministicCheckpointIteration >= 2
+                        || !string.Equals(lastDeterministicCheckpointReason, deterministicReason, StringComparison.OrdinalIgnoreCase));
+
+                string checkpoint;
+                if (allowDeterministicInjection)
+                {
+                    checkpoint = BuildDeterministicLoopBreakCheckpointJson(
                         passName: "analysis",
-                        systemPrompt: SystemPrompt,
-                        messages: messages,
                         commandsExecuted: commandsExecuted,
                         commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
-                        iteration: iteration,
-                        maxTokens: CheckpointMaxTokens,
-                        traceRunDir: traceRunDir,
-                        internalToolChoiceModeCache: internalToolChoiceModeCache,
-                        cancellationToken: cancellationToken)
-                    .ConfigureAwait(false);
+                        baselineKey: baselineKey,
+                        reason: deterministicReason,
+                        evidenceLedger: evidenceLedger,
+                        hypothesisTracker: hypothesisTracker);
 
-                if (string.IsNullOrWhiteSpace(checkpoint))
-                {
-                    checkpoint = BuildDeterministicCheckpointJson(
-                        passName: "analysis",
-                        commandsExecuted: commandsExecuted,
-                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+                    var hash = ComputeSha256Prefixed(checkpoint);
+                    if (!string.IsNullOrWhiteSpace(lastDeterministicCheckpointHash)
+                        && string.Equals(lastDeterministicCheckpointHash, hash, StringComparison.OrdinalIgnoreCase))
+                    {
+                        checkpoint = BuildDeterministicLoopBreakCheckpointJson(
+                            passName: "analysis",
+                            commandsExecuted: commandsExecuted,
+                            commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
+                            baselineKey: baselineKey,
+                            reason: $"{deterministicReason}:repeat",
+                            evidenceLedger: evidenceLedger,
+                            hypothesisTracker: hypothesisTracker,
+                            forceFinalizeNow: true);
+                        hash = ComputeSha256Prefixed(checkpoint);
+                    }
+
+                    lastDeterministicCheckpointIteration = iteration;
+                    lastDeterministicCheckpointHash = hash;
+                    lastDeterministicCheckpointReason = deterministicReason;
                 }
-                else
-                {
-                    checkpoint = NormalizeCheckpointJson(checkpoint, commandsExecuted);
+	                else
+	                {
+	                    checkpoint = await TryCreateCheckpointAsync(
+	                            passName: "analysis",
+	                            systemPrompt: SystemPrompt,
+	                            messages: messages,
+	                            commandsExecuted: commandsExecuted,
+	                            commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
+                            iteration: iteration,
+	                            maxTokens: CheckpointMaxTokens,
+	                            traceRunDir: traceRunDir,
+	                            internalToolChoiceModeCache: internalToolChoiceModeCache,
+	                            cancellationToken: cancellationToken)
+	                        .ConfigureAwait(false) ?? string.Empty;
+
+	                    if (string.IsNullOrWhiteSpace(checkpoint))
+	                    {
+	                        checkpoint = BuildDeterministicCheckpointJson(
+	                            passName: "analysis",
+                            commandsExecuted: commandsExecuted,
+                            commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
+                            baselineKey: baselineKey);
+                    }
+                    else
+                    {
+                        checkpoint = NormalizeCheckpointJson(checkpoint, commandsExecuted, baselineKey);
+                    }
+
+                    checkpoint = AugmentCheckpointWithConvergenceFacts(checkpoint, evidenceLedger, hypothesisTracker);
                 }
 
                 lastCheckpointIteration = iteration;
@@ -1434,25 +1500,108 @@ public sealed class AiAnalysisOrchestrator(
         }
     }
 
+    private static readonly string[] BaselineEvidencePaths =
+    [
+        "metadata",
+        "analysis.summary",
+        "analysis.environment",
+        "analysis.exception.type",
+        "analysis.exception.message",
+        "analysis.exception.hResult",
+        "analysis.exception.stackTrace"
+    ];
+
+    private static readonly (string Id, string Path, string Call)[] BaselineCalls =
+    [
+        ("META", "metadata", "report_get(path=\"metadata\", pageKind=\"object\", limit=50)"),
+        ("SUMMARY", "analysis.summary", "report_get(path=\"analysis.summary\", pageKind=\"object\", select=[\"crashType\",\"description\",\"recommendations\",\"threadCount\",\"moduleCount\",\"assemblyCount\"])"),
+        ("ENV", "analysis.environment", "report_get(path=\"analysis.environment\", pageKind=\"object\", select=[\"platform\",\"runtime\",\"process\",\"nativeAot\"])"),
+        ("EXC_TYPE", "analysis.exception.type", "report_get(path=\"analysis.exception.type\")"),
+        ("EXC_MESSAGE", "analysis.exception.message", "report_get(path=\"analysis.exception.message\")"),
+        ("EXC_HRESULT", "analysis.exception.hResult", "report_get(path=\"analysis.exception.hResult\")"),
+        ("STACK_TOP", "analysis.exception.stackTrace", "report_get(path=\"analysis.exception.stackTrace\", limit=8, select=[\"frameNumber\",\"instructionPointer\",\"module\",\"function\",\"sourceFile\",\"lineNumber\",\"isManaged\"])")
+    ];
+
+    private static readonly IReadOnlyDictionary<string, string> BaselineIdByPath =
+        BaselineCalls.ToDictionary(c => c.Path, c => c.Id, StringComparer.OrdinalIgnoreCase);
+
+    private static readonly IReadOnlyList<string> BaselineCallFacts =
+        BaselineCalls.Select(c => $"BASELINE_CALL: {c.Id} = {c.Call}").ToList();
+
+    private readonly record struct BaselinePhaseState(bool Complete, List<string> Completed, List<string> Missing);
+
+    private static BaselinePhaseState ComputeBaselinePhaseState(List<ExecutedCommand> commandsExecuted)
+    {
+        var completed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var cmd in commandsExecuted)
+        {
+            if (!cmd.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var path = TryGetString(cmd.Input, "path");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            path = path.Trim();
+            if (!BaselineIdByPath.TryGetValue(path, out var id))
+            {
+                continue;
+            }
+
+            if (!TryParseReportGetResponseHasError(cmd.Output ?? string.Empty, out var hasError))
+            {
+                continue;
+            }
+
+            if (!hasError)
+            {
+                completed.Add(id);
+            }
+        }
+
+        var orderedIds = BaselineCalls.Select(c => c.Id).ToList();
+        var completedOrdered = orderedIds.Where(id => completed.Contains(id)).ToList();
+        var missing = orderedIds.Where(id => !completed.Contains(id)).ToList();
+        return new BaselinePhaseState(missing.Count == 0, completedOrdered, missing);
+    }
+
+    private static string ComputeBaselineKey(string fullReportJson)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(fullReportJson);
+            var root = doc.RootElement;
+            if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("metadata", out var metadata) && metadata.ValueKind == JsonValueKind.Object)
+            {
+                var dumpId = TryGetString(metadata, "dumpId");
+                var generatedAt = TryGetString(metadata, "generatedAt");
+
+                dumpId = string.IsNullOrWhiteSpace(dumpId) ? "<unknown>" : dumpId.Trim();
+                generatedAt = string.IsNullOrWhiteSpace(generatedAt) ? "<unknown>" : generatedAt.Trim();
+
+                return $"dumpId={dumpId} generatedAt={generatedAt}";
+            }
+        }
+        catch
+        {
+            // Ignore and fall back.
+        }
+
+        return "dumpId=<unknown> generatedAt=<unknown>";
+    }
+
     private sealed class BaselineEvidenceTracker
     {
-        private static readonly string[] RequiredPaths =
-        [
-            "metadata",
-            "analysis.summary",
-            "analysis.environment",
-            "analysis.exception.type",
-            "analysis.exception.message",
-            "analysis.exception.hResult",
-            "analysis.exception.stackTrace",
-            "analysis.exception.analysis"
-        ];
-
         private readonly Dictionary<string, bool> _seen = new(StringComparer.OrdinalIgnoreCase);
 
         public BaselineEvidenceTracker()
         {
-            foreach (var path in RequiredPaths)
+            foreach (var path in BaselineEvidencePaths)
             {
                 _seen[path] = false;
             }
@@ -4474,11 +4623,171 @@ State snapshot (JSON):
 	        return tooLargeCount >= 2 || duplicateReuseCount >= 1;
 	    }
 
-    private async Task<string?> TryCreateCheckpointAsync(
-        string passName,
-        string systemPrompt,
-        List<SamplingMessage> messages,
+    private static bool TryGetDeterministicCheckpointInjectionReason(
+        int iteration,
         List<ExecutedCommand> commandsExecuted,
+        bool baselineComplete,
+        out string reason)
+    {
+        reason = string.Empty;
+
+        if (!baselineComplete || iteration <= 0 || commandsExecuted.Count == 0)
+        {
+            return false;
+        }
+
+        var windowStart = Math.Max(1, iteration - 9);
+        var recent = commandsExecuted.Where(c => c.Iteration >= windowStart).ToList();
+        if (recent.Count == 0)
+        {
+            return false;
+        }
+
+        var baselineDuplicateRepeats = recent.Count(c =>
+            c.Cached == true
+            && c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+            && IsBaselineReportGet(c)
+            && TryParseReportGetResponseHasError(c.Output ?? string.Empty, out var hasError)
+            && !hasError);
+
+        if (baselineDuplicateRepeats >= 2)
+        {
+            reason = "baseline_duplicate_loop";
+            return true;
+        }
+
+        var invalidCursor = recent.Count(c =>
+            c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+            && TryGetReportGetErrorCode(c.Output ?? string.Empty, out var code)
+            && code.Equals("invalid_cursor", StringComparison.OrdinalIgnoreCase));
+
+        if (invalidCursor >= 2)
+        {
+            reason = "invalid_cursor_loop";
+            return true;
+        }
+
+        var toolInputContractErrors = recent.Count(IsToolInputContractError);
+        if (toolInputContractErrors >= 3)
+        {
+            reason = "tool_input_contract_loop";
+            return true;
+        }
+
+        var hypothesisNoProgress = recent.Count(IsHypothesisRegisterNoProgress);
+        if (hypothesisNoProgress >= 2)
+        {
+            reason = "hypothesis_register_no_progress";
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsBaselineReportGet(ExecutedCommand command)
+    {
+        if (!command.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var path = TryGetString(command.Input, "path");
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            return false;
+        }
+
+        return BaselineIdByPath.ContainsKey(path.Trim());
+    }
+
+    private static bool TryGetReportGetErrorCode(string outputForModel, out string code)
+    {
+        code = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(outputForModel))
+        {
+            return false;
+        }
+
+        if (!TryParseFirstJsonObject(outputForModel, out var json) || json.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!json.TryGetProperty("error", out var errorEl) || errorEl.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!errorEl.TryGetProperty("code", out var codeEl))
+        {
+            return false;
+        }
+
+        code = codeEl.ValueKind == JsonValueKind.String ? (codeEl.GetString() ?? string.Empty) : codeEl.ToString();
+        code = code.Trim();
+        return !string.IsNullOrWhiteSpace(code);
+    }
+
+    private static bool IsToolInputContractError(ExecutedCommand command)
+    {
+        if (command.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+        {
+            if (TryGetReportGetErrorCode(command.Output ?? string.Empty, out var code))
+            {
+                return code.Equals("too_large", StringComparison.OrdinalIgnoreCase)
+                       || code.Equals("invalid_path", StringComparison.OrdinalIgnoreCase)
+                       || code.Equals("invalid_argument", StringComparison.OrdinalIgnoreCase);
+            }
+
+            var output = command.Output ?? string.Empty;
+            return output.Contains("report_get.path is required", StringComparison.OrdinalIgnoreCase)
+                   || output.Contains("report_get input must be an object", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (command.Tool.Equals("analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase))
+        {
+            var output = command.Output ?? string.Empty;
+            return output.Contains("analysis_hypothesis_register.hypotheses is required", StringComparison.OrdinalIgnoreCase)
+                   || output.Contains("\"error\"", StringComparison.OrdinalIgnoreCase);
+        }
+
+        if (command.Tool.Equals("analysis_evidence_add", StringComparison.OrdinalIgnoreCase))
+        {
+            var output = command.Output ?? string.Empty;
+            return output.Contains("analysis_evidence_add.items is required", StringComparison.OrdinalIgnoreCase)
+                   || output.Contains("\"error\"", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
+
+    private static bool IsHypothesisRegisterNoProgress(ExecutedCommand command)
+    {
+        if (!command.Tool.Equals("analysis_hypothesis_register", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var output = command.Output ?? string.Empty;
+        if (!TryParseFirstJsonObject(output, out var json) || json.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (!json.TryGetProperty("added", out var addedEl) || addedEl.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        return addedEl.GetArrayLength() == 0;
+    }
+
+	    private async Task<string?> TryCreateCheckpointAsync(
+	        string passName,
+	        string systemPrompt,
+	        List<SamplingMessage> messages,
+	        List<ExecutedCommand> commandsExecuted,
         int commandsExecutedAtLastCheckpoint,
         int iteration,
         int maxTokens,
@@ -4495,34 +4804,45 @@ State snapshot (JSON):
         }
 
         var priorCheckpointMessage = FindLatestCheckpointCarryForwardMessage(messages, passName);
-        if (priorCheckpointMessage == null && _toolHistoryModeCache.IsCheckpointOnly && commandsExecuted.Count > 0)
-        {
-            var deterministic = BuildDeterministicCheckpointJson(
-                passName: passName,
-                commandsExecuted: commandsExecuted,
-                commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
-            priorCheckpointMessage = BuildCheckpointCarryForwardMessage(deterministic, passName: passName);
-        }
+	        if (priorCheckpointMessage == null && _toolHistoryModeCache.IsCheckpointOnly && commandsExecuted.Count > 0)
+	        {
+	            var deterministic = BuildDeterministicCheckpointJson(
+	                passName: passName,
+	                commandsExecuted: commandsExecuted,
+	                commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+	            priorCheckpointMessage = BuildCheckpointCarryForwardMessage(deterministic, passName: passName);
+	        }
 
-	        var prompt = $"""
-	Create an INTERNAL checkpoint for pass "{passName}".
-
-	Goal: preserve a working memory so we can prune older tool outputs and avoid repeating tool calls.
-	Do NOT request any debugger tools in this step.
-
-	Rules:
-	- Base this ONLY on evidence already shown in this conversation (tool results already returned).
-	- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
-	- Be detailed, but bounded: facts<=50, hypotheses<=10, evidence<=50, doNotRepeat<=50, nextSteps<=20.
-	- Keep strings concise (prefer <=2048 chars each).
-	- In nextSteps, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor; prefer smaller paths).
-	- Remember, this will be the source of truth for the next steps, so be very detailed and specific.
-	- Don't hesitate to create a large summary, you have up to {MaxCheckpointJsonChars} characters to work with. I encourage you to use this to its full potential.
-	- Keep the result of the last tool call in the checkpoint, it will be used to continue the analysis,
-
-	Respond by calling the "{CheckpointCompleteToolName}" tool with arguments matching its schema.
-	Do NOT output any additional text.
-	""";
+		        var prompt = $"""
+		Create an INTERNAL checkpoint for pass "{passName}".
+	
+		Goal: preserve a working memory so we can prune older tool outputs and avoid repeating tool calls.
+		Do NOT request any debugger tools in this step.
+	
+		Hard rules:
+		- Base this ONLY on executed tool results already returned in this conversation.
+		- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
+		- doNotRepeat is a HARD constraint against exact-duplicate tool calls (same tool + same arguments). Include duplicates to stop loops.
+		- nextSteps MUST NOT include anything already in doNotRepeat. Prefer 1-5 narrowly-scoped, high-signal steps.
+	
+		Report/tool contracts to encode in the checkpoint:
+		- report_get.path is required; never call report_get with empty args.
+		- Array indices must be numeric (e.g., stackTrace[0]); ranges like stackTrace[0:5] are invalid.
+		- Cursor is only valid for the IDENTICAL query shape (same path/select/where/pageKind/limit). If any change, drop cursor.
+		- Do not guess ".items" or report shape; query a parent node first. If you get too_large, follow the tool's "Try:" hints exactly.
+		- analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required.
+	
+		Working memory requirements:
+		- Preserve the LAST tool result in a usable form (either add fact "LAST_TOOL: ..." with a short excerpt including error code/Try hint, or add evidence item id="E_LAST").
+		- Convergence: if evidence/hypotheses are already sufficient, add fact "PHASE: finalizeNow=true" and set nextSteps to a single analysis_complete call.
+	
+		Bounds:
+		- facts<=50, hypotheses<=10, evidence<=50, doNotRepeat<=50, nextSteps<=20.
+		- Keep strings concise (prefer <=2048 chars each). Keep total JSON <= {MaxCheckpointJsonChars} characters.
+	
+		Respond by calling the "{CheckpointCompleteToolName}" tool with arguments matching its schema.
+		Do NOT output any additional text.
+		""";
 
         List<SamplingMessage> checkpointMessages;
         if (priorCheckpointMessage == null)
@@ -4772,21 +5092,36 @@ State snapshot (JSON):
             ? string.Empty
             : $"""
 
-Stable state JSON (evidence ledger + hypotheses):
-{stateJson}
-""";
+                Stable state JSON (evidence ledger + hypotheses):
+                {stateJson}
+                """;
 
         var prompt = $"""
-This is the current INTERNAL working memory checkpoint for pass "{passName}".
-Treat it as authoritative.
+            This is the current INTERNAL working memory checkpoint for pass "{passName}".
+            Treat it as authoritative.
 
-Older tool outputs may have been pruned to keep context small. Do not repeat tool calls listed in doNotRepeat.
-When you need more evidence, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor).
+            Older tool outputs may have been pruned to keep context small.
 
-Checkpoint JSON:
-{checkpointJson}
-{stateSection}
-""";
+            Hard constraints:
+            - Do NOT call any tool listed in doNotRepeat (exact duplicate tool + arguments), even if you feel you've "forgotten" the result; re-use the checkpoint facts/evidence instead.
+            - If facts contain PHASE: baselineComplete=true, do NOT restart baseline calls; continue with post-baseline investigation.
+            - If facts contain PHASE: finalizeNow=true, call analysis_complete next (unless you are explicitly blocked by missing required evidence IDs).
+
+            report_get contract:
+            - report_get.path is required; never call report_get with empty args.
+            - Array indices must be numeric (e.g., stackTrace[0]); ranges like stackTrace[0:5] are invalid.
+            - Cursor is only valid for the IDENTICAL query shape (same path/select/where/pageKind/limit). If any change, drop cursor.
+            - Do not guess ".items" or report shape; query a parent node first. If you get too_large, follow the tool's "Try:" hints exactly.
+
+            Meta tool contract:
+            - analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required.
+
+            When you need more evidence, propose narrowly-scoped tool calls (small report_get paths with select/limit/cursor).
+
+            Checkpoint JSON:
+            {checkpointJson}
+            {stateSection}
+            """;
 
         return new SamplingMessage
         {
@@ -5205,7 +5540,7 @@ Checkpoint JSON:
 
     private static bool IsBaselineEvidenceComplete(List<ExecutedCommand> commandsExecuted)
     {
-        var seenPaths = new HashSet<string>(StringComparer.Ordinal);
+        var seenPaths = new Dictionary<string, bool>(StringComparer.Ordinal);
         foreach (var cmd in commandsExecuted)
         {
             if (!cmd.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
@@ -5216,129 +5551,74 @@ Checkpoint JSON:
             var path = TryGetString(cmd.Input, "path");
             if (!string.IsNullOrWhiteSpace(path))
             {
-                seenPaths.Add(path.Trim());
+                path = path.Trim();
+                if (!TryParseReportGetResponseHasError(cmd.Output ?? string.Empty, out var hasError))
+                {
+                    continue;
+                }
+
+                if (!hasError)
+                {
+                    seenPaths[path] = true;
+                }
             }
         }
 
         // Keep this aligned with the Phase 1 baseline prompt.
-        var baselinePaths = new[]
-        {
-            "metadata",
-            "analysis.summary",
-            "analysis.environment",
-            "analysis.exception.type",
-            "analysis.exception.message",
-            "analysis.exception.hResult",
-            "analysis.exception.stackTrace",
-            "analysis.exception.analysis"
-        };
-
-        return baselinePaths.All(seenPaths.Contains);
+        return BaselineEvidencePaths.All(p => seenPaths.TryGetValue(p, out var ok) && ok);
     }
 
     private static List<string> BuildDeterministicDoNotRepeatList(List<ExecutedCommand> commandsExecuted)
     {
         var entries = new List<string>(capacity: 50);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
 
-        void Add(string? entry)
+        static string FormatEntry(string toolName, JsonElement toolInput)
         {
-            if (string.IsNullOrWhiteSpace(entry))
+            var normalizedTool = (toolName ?? string.Empty).Trim().ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(normalizedTool))
+            {
+                normalizedTool = "tool";
+            }
+
+            if (normalizedTool.Equals("exec", StringComparison.OrdinalIgnoreCase))
+            {
+                var command = toolInput.ValueKind == JsonValueKind.Object ? TryGetString(toolInput, "command") : toolInput.ToString();
+                command = NormalizeDebuggerCommand(command ?? string.Empty);
+                command = TruncateText(command, maxChars: 512);
+                return string.IsNullOrWhiteSpace(command)
+                    ? "exec(command=<missing>)"
+                    : $"exec(command=\"{command}\")";
+            }
+
+            var canonical = CanonicalizeJson(toolInput);
+            canonical = TruncateText(canonical, maxChars: 1024);
+            return $"{normalizedTool}({canonical})";
+        }
+
+        void AddCommand(ExecutedCommand cmd)
+        {
+            if (entries.Count >= 50)
             {
                 return;
             }
 
-            var trimmed = entry.Trim();
-            trimmed = TruncateText(trimmed, maxChars: 512);
-
-            if (seen.Add(trimmed))
-            {
-                entries.Add(trimmed);
-            }
-        }
-
-        static string? BuildEntry(ExecutedCommand cmd)
-        {
             var tool = (cmd.Tool ?? string.Empty).Trim();
             if (string.IsNullOrWhiteSpace(tool))
             {
-                return null;
+                return;
             }
 
-            if (tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+            var key = BuildToolCacheKey(tool, cmd.Input);
+            if (string.IsNullOrWhiteSpace(key) || !seenKeys.Add(key))
             {
-                var path = TryGetString(cmd.Input, "path");
-                if (string.IsNullOrWhiteSpace(path))
-                {
-                    return "report_get(path=<missing>)";
-                }
-
-                var args = new List<string> { $"path=\"{path.Trim()}\"" };
-
-                var pageKind = TryGetString(cmd.Input, "pageKind");
-                if (!string.IsNullOrWhiteSpace(pageKind))
-                {
-                    args.Add($"pageKind=\"{pageKind.Trim()}\"");
-                }
-
-                if (cmd.Input.ValueKind == JsonValueKind.Object && cmd.Input.TryGetProperty("limit", out var limitEl))
-                {
-                    if (limitEl.ValueKind == JsonValueKind.Number && limitEl.TryGetInt32(out var limit))
-                    {
-                        args.Add($"limit={limit}");
-                    }
-                }
-
-                var select = TryGetStringArray(cmd.Input, "select");
-                if (select is { Count: > 0 })
-                {
-                    args.Add($"select=[{string.Join(",", select.Select(s => $"\"{s}\""))}]");
-                }
-
-                return $"report_get({string.Join(", ", args)})";
+                return;
             }
 
-            if (tool.Equals("exec", StringComparison.OrdinalIgnoreCase))
-            {
-                var command = TryGetString(cmd.Input, "command");
-                return string.IsNullOrWhiteSpace(command)
-                    ? "exec(command=<missing>)"
-                    : $"exec(command=\"{TruncateText(command.Trim(), maxChars: 512)}\")";
-            }
-
-            if (tool.Equals("inspect", StringComparison.OrdinalIgnoreCase))
-            {
-                var address = TryGetString(cmd.Input, "address");
-                return string.IsNullOrWhiteSpace(address)
-                    ? "inspect(address=<missing>)"
-                    : $"inspect(address=\"{address.Trim()}\")";
-            }
-
-            if (tool.Equals("get_thread_stack", StringComparison.OrdinalIgnoreCase))
-            {
-                var threadId = TryGetString(cmd.Input, "threadId");
-                return string.IsNullOrWhiteSpace(threadId)
-                    ? "get_thread_stack(threadId=<missing>)"
-                    : $"get_thread_stack(threadId=\"{threadId.Trim()}\")";
-            }
-
-            return $"{tool}({TruncateText(cmd.Input.ToString(), maxChars: 256)})";
+            entries.Add(FormatEntry(tool, cmd.Input));
         }
 
-        // Prefer including the baseline evidence report_get calls if they exist.
-        var baselinePaths = new[]
-        {
-            "metadata",
-            "analysis.summary",
-            "analysis.environment",
-            "analysis.exception.type",
-            "analysis.exception.message",
-            "analysis.exception.hResult",
-            "analysis.exception.stackTrace",
-            "analysis.exception.analysis"
-        };
-
-        foreach (var path in baselinePaths)
+        foreach (var path in BaselineEvidencePaths)
         {
             var cmd = commandsExecuted.FirstOrDefault(c =>
                 c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
@@ -5346,23 +5626,342 @@ Checkpoint JSON:
 
             if (cmd != null)
             {
-                Add(BuildEntry(cmd));
+                AddCommand(cmd);
             }
         }
 
-        // Fill with the most recent unique tool calls, bounded.
         for (var i = commandsExecuted.Count - 1; i >= 0 && entries.Count < 50; i--)
         {
-            Add(BuildEntry(commandsExecuted[i]));
+            AddCommand(commandsExecuted[i]);
         }
 
         return entries;
     }
 
-    private static string NormalizeCheckpointJson(string checkpointJson, List<ExecutedCommand> commandsExecuted)
+    private static HashSet<string> BuildExecutedToolKeySet(List<ExecutedCommand> commandsExecuted)
+    {
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var cmd in commandsExecuted)
+        {
+            var tool = (cmd.Tool ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(tool))
+            {
+                continue;
+            }
+
+            var key = BuildToolCacheKey(tool, cmd.Input);
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                keys.Add(key);
+            }
+        }
+
+        return keys;
+    }
+
+    private static JsonElement FilterCheckpointNextSteps(
+        JsonElement nextSteps,
+        IReadOnlySet<string> executedToolKeys)
+    {
+        if (nextSteps.ValueKind != JsonValueKind.Array)
+        {
+            return JsonSerializer.SerializeToElement(Array.Empty<object>());
+        }
+
+        var filtered = new List<object>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var item in nextSteps.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var tool = TryGetString(item, "tool");
+            var call = TryGetString(item, "call");
+            var why = TryGetString(item, "why");
+
+            if (string.IsNullOrWhiteSpace(tool) || string.IsNullOrWhiteSpace(call) || string.IsNullOrWhiteSpace(why))
+            {
+                continue;
+            }
+
+            var callKey = string.Empty;
+            if (TryParseCheckpointToolCall(tool, call, out var parsed))
+            {
+                callKey = parsed.ToolCacheKey;
+                if (!string.IsNullOrWhiteSpace(callKey))
+                {
+                    if (executedToolKeys.Contains(callKey))
+                    {
+                        continue;
+                    }
+
+                    if (!seen.Add(callKey))
+                    {
+                        continue;
+                    }
+                }
+            }
+
+            filtered.Add(new
+            {
+                tool = tool.Trim(),
+                call = TruncateText(call.Trim(), maxChars: 4096),
+                why = TruncateText(why.Trim(), maxChars: 2048)
+            });
+
+            if (filtered.Count >= 20)
+            {
+                break;
+            }
+        }
+
+        return JsonSerializer.SerializeToElement(filtered);
+    }
+
+    private readonly record struct ParsedToolCall(string ToolName, JsonElement ToolInput, string ToolCacheKey);
+
+    private static bool TryParseCheckpointToolCall(string tool, string call, out ParsedToolCall parsed)
+    {
+        parsed = default;
+
+        var toolName = (tool ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(toolName))
+        {
+            return false;
+        }
+
+        var text = (call ?? string.Empty).Trim();
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return false;
+        }
+
+        var openParen = text.IndexOf('(');
+        var closeParen = text.LastIndexOf(')');
+        if (openParen < 0 || closeParen < openParen)
+        {
+            return false;
+        }
+
+        var nameInCall = text.Substring(0, openParen).Trim();
+        if (!string.IsNullOrWhiteSpace(nameInCall))
+        {
+            toolName = nameInCall;
+        }
+
+        var args = text.Substring(openParen + 1, closeParen - openParen - 1).Trim();
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            return false;
+        }
+
+        JsonElement input;
+        if (args.StartsWith('{') && args.EndsWith('}'))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(args);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    return false;
+                }
+                input = doc.RootElement.Clone();
+            }
+            catch
+            {
+                return false;
+            }
+        }
+        else
+        {
+            if (!TryParseNamedArgs(args, out input))
+            {
+                return false;
+            }
+        }
+
+        var toolCacheKey = BuildToolCacheKey(toolName, input);
+        if (string.IsNullOrWhiteSpace(toolCacheKey))
+        {
+            return false;
+        }
+
+        parsed = new ParsedToolCall(toolName, input, toolCacheKey);
+        return true;
+    }
+
+    private static bool TryParseNamedArgs(string args, out JsonElement input)
+    {
+        input = default;
+        var pairs = SplitTopLevelArguments(args);
+        if (pairs.Count == 0)
+        {
+            return false;
+        }
+
+        var obj = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var part in pairs)
+        {
+            var token = part.Trim();
+            if (string.IsNullOrWhiteSpace(token))
+            {
+                continue;
+            }
+
+            var eq = token.IndexOf('=');
+            if (eq < 1)
+            {
+                continue;
+            }
+
+            var key = token.Substring(0, eq).Trim();
+            var valueText = token.Substring(eq + 1).Trim();
+            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(valueText))
+            {
+                continue;
+            }
+
+            if (TryParseJsonValue(valueText, out var value))
+            {
+                obj[key] = value;
+                continue;
+            }
+
+            obj[key] = valueText.Trim();
+        }
+
+        if (obj.Count == 0)
+        {
+            return false;
+        }
+
+        input = JsonSerializer.SerializeToElement(obj);
+        return true;
+    }
+
+    private static List<string> SplitTopLevelArguments(string args)
+    {
+        var parts = new List<string>();
+        if (string.IsNullOrWhiteSpace(args))
+        {
+            return parts;
+        }
+
+        var depth = 0;
+        var inString = false;
+        var escape = false;
+        var start = 0;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var c = args[i];
+            if (inString)
+            {
+                if (escape)
+                {
+                    escape = false;
+                    continue;
+                }
+
+                if (c == '\\')
+                {
+                    escape = true;
+                    continue;
+                }
+
+                if (c == '"')
+                {
+                    inString = false;
+                }
+
+                continue;
+            }
+
+            if (c == '"')
+            {
+                inString = true;
+                continue;
+            }
+
+            if (c is '[' or '{')
+            {
+                depth++;
+                continue;
+            }
+
+            if (c is ']' or '}')
+            {
+                depth = Math.Max(0, depth - 1);
+                continue;
+            }
+
+            if (c == ',' && depth == 0)
+            {
+                parts.Add(args.Substring(start, i - start));
+                start = i + 1;
+            }
+        }
+
+        if (start < args.Length)
+        {
+            parts.Add(args.Substring(start));
+        }
+
+        return parts;
+    }
+
+    private static bool TryParseJsonValue(string valueText, out object? value)
+    {
+        value = null;
+        var trimmed = valueText.Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+        {
+            return false;
+        }
+
+        if (trimmed.StartsWith('{') || trimmed.StartsWith('[') || (trimmed.StartsWith('"') && trimmed.EndsWith('"')))
+        {
+            try
+            {
+                using var doc = JsonDocument.Parse(trimmed);
+                value = doc.RootElement.Clone();
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        if (bool.TryParse(trimmed, out var b))
+        {
+            value = b;
+            return true;
+        }
+
+        if (int.TryParse(trimmed, out var i))
+        {
+            value = i;
+            return true;
+        }
+
+        if (trimmed.Equals("null", StringComparison.OrdinalIgnoreCase))
+        {
+            value = null;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string NormalizeCheckpointJson(string checkpointJson, List<ExecutedCommand> commandsExecuted, string baselineKey)
     {
         ArgumentNullException.ThrowIfNull(checkpointJson);
         ArgumentNullException.ThrowIfNull(commandsExecuted);
+        ArgumentNullException.ThrowIfNull(baselineKey);
 
         if (string.IsNullOrWhiteSpace(checkpointJson))
         {
@@ -5374,17 +5973,81 @@ Checkpoint JSON:
             return checkpointJson;
         }
 
-        var baselineComplete = IsBaselineEvidenceComplete(commandsExecuted);
+        var baselinePhase = ComputeBaselinePhaseState(commandsExecuted);
+        var existingFacts = TryGetStringArray(json, "facts") ?? new List<string>();
+        var facts = new List<string>(capacity: 50);
+        var factSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        var facts = TryGetStringArray(json, "facts") ?? new List<string>();
-        if (!facts.Any(f => f.TrimStart().StartsWith("baselineComplete=", StringComparison.OrdinalIgnoreCase)))
+        static bool IsOverriddenFact(string fact)
         {
-            facts.Add($"baselineComplete={baselineComplete.ToString().ToLowerInvariant()}");
+            if (string.IsNullOrWhiteSpace(fact))
+            {
+                return true;
+            }
+
+            var trimmed = fact.TrimStart();
+            return trimmed.StartsWith("baselineComplete=", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("BASELINE_KEY:", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("BASELINE_CALL:", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("PHASE: baselineComplete=", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("PHASE: baselineCallsCompleted=", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("PHASE: baselineMissing=", StringComparison.OrdinalIgnoreCase);
         }
 
-        if (facts.Count > 50)
+        void AddFact(string? fact)
         {
-            facts = facts.Take(50).ToList();
+            if (string.IsNullOrWhiteSpace(fact))
+            {
+                return;
+            }
+
+            if (facts.Count >= 50)
+            {
+                return;
+            }
+
+            var trimmed = TruncateText(fact.Trim(), maxChars: 2048);
+            if (!factSeen.Add(trimmed))
+            {
+                return;
+            }
+
+            facts.Add(trimmed);
+        }
+
+        AddFact($"BASELINE_KEY: {baselineKey.Trim()}");
+        AddFact($"PHASE: baselineComplete={baselinePhase.Complete.ToString().ToLowerInvariant()}");
+        AddFact($"PHASE: baselineCallsCompleted={JsonSerializer.Serialize(baselinePhase.Completed)}");
+        if (!baselinePhase.Complete)
+        {
+            AddFact($"PHASE: baselineMissing={JsonSerializer.Serialize(baselinePhase.Missing)}");
+        }
+
+        foreach (var baselineCallFact in BaselineCallFacts)
+        {
+            AddFact(baselineCallFact);
+        }
+
+        AddFact("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any changes, drop cursor and start a new query.");
+        AddFact("REPORT_GET SYNTAX: report_get.path is required. Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
+        AddFact("REPORT_GET STRUCTURE: do not guess .items; query the parent node first. Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
+        AddFact("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. If a property/index is invalid, stop guessing and query the nearest valid parent node.");
+        AddFact("META TOOL CONTRACT: analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required. Do not call meta tools with empty args.");
+
+        var lastToolFact = BuildLastToolFact(commandsExecuted);
+        if (!string.IsNullOrWhiteSpace(lastToolFact))
+        {
+            AddFact(lastToolFact);
+        }
+
+        foreach (var fact in existingFacts)
+        {
+            if (IsOverriddenFact(fact))
+            {
+                continue;
+            }
+
+            AddFact(fact);
         }
 
         var deterministicDoNotRepeat = BuildDeterministicDoNotRepeatList(commandsExecuted);
@@ -5430,8 +6093,9 @@ Checkpoint JSON:
         var evidence = json.TryGetProperty("evidence", out var evidenceEl)
             ? evidenceEl
             : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var executedToolKeys = BuildExecutedToolKeySet(commandsExecuted);
         var nextSteps = json.TryGetProperty("nextSteps", out var nextStepsEl)
-            ? nextStepsEl
+            ? FilterCheckpointNextSteps(nextStepsEl, executedToolKeys)
             : JsonSerializer.SerializeToElement(Array.Empty<object>());
 
         var normalized = JsonSerializer.Serialize(new
@@ -5476,20 +6140,51 @@ Checkpoint JSON:
     private static string BuildDeterministicCheckpointJson(
         string passName,
         List<ExecutedCommand> commandsExecuted,
-        int commandsExecutedAtLastCheckpoint)
+        int commandsExecutedAtLastCheckpoint,
+        string? baselineKey = null)
     {
         var evidence = BuildCheckpointEvidenceSnapshot(passName, commandsExecuted, commandsExecutedAtLastCheckpoint);
 
         var doNotRepeat = BuildDeterministicDoNotRepeatList(commandsExecuted);
-        var baselineComplete = IsBaselineEvidenceComplete(commandsExecuted);
+        var baselinePhase = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
+            ? ComputeBaselinePhaseState(commandsExecuted)
+            : new BaselinePhaseState(Complete: false, Completed: [], Missing: []);
 
         var facts = new List<string>
         {
             "Checkpoint synthesis unavailable; using deterministic fallback checkpoint.",
             $"pass={passName}",
-            $"baselineComplete={baselineComplete.ToString().ToLowerInvariant()}",
             $"uniqueToolCalls={doNotRepeat.Count}"
         };
+
+        if (passName.Equals("analysis", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(baselineKey))
+            {
+                facts.Add($"BASELINE_KEY: {baselineKey.Trim()}");
+            }
+
+            facts.Add($"PHASE: baselineComplete={baselinePhase.Complete.ToString().ToLowerInvariant()}");
+            facts.Add($"PHASE: baselineCallsCompleted={JsonSerializer.Serialize(baselinePhase.Completed)}");
+            if (!baselinePhase.Complete)
+            {
+                facts.Add($"PHASE: baselineMissing={JsonSerializer.Serialize(baselinePhase.Missing)}");
+            }
+
+            facts.AddRange(BaselineCallFacts);
+
+            facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any changes, drop cursor and start a new query.");
+            facts.Add("REPORT_GET SYNTAX: report_get.path is required. Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
+            facts.Add("REPORT_GET STRUCTURE: do not guess .items; query the parent node first. Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
+            facts.Add("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. If a property/index is invalid, stop guessing and query the nearest valid parent node.");
+            facts.Add("META TOOL CONTRACT: analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required. Do not call meta tools with empty args.");
+
+            var lastToolFact = BuildLastToolFact(commandsExecuted);
+            if (!string.IsNullOrWhiteSpace(lastToolFact))
+            {
+                facts.Add(lastToolFact);
+            }
+        }
 
         var evidenceMaxChars = 12_000;
         var doNotRepeatCount = doNotRepeat.Count;
@@ -5546,6 +6241,413 @@ Checkpoint JSON:
                     nextSteps = Array.Empty<object>()
                 }, new JsonSerializerOptions { WriteIndented = false });
         }
+    }
+
+    private static string BuildDeterministicLoopBreakCheckpointJson(
+        string passName,
+        List<ExecutedCommand> commandsExecuted,
+        int commandsExecutedAtLastCheckpoint,
+        string baselineKey,
+        string reason,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker,
+        bool forceFinalizeNow = false)
+    {
+        var doNotRepeat = BuildDeterministicDoNotRepeatList(commandsExecuted);
+        var baselinePhase = ComputeBaselinePhaseState(commandsExecuted);
+        var baselineEvidenceFact = BuildBaselineEvidenceMappingFact(evidenceLedger);
+
+        var facts = new List<string>(capacity: 50)
+        {
+            "Deterministic checkpoint injected to break a tool-calling loop.",
+            $"LOOP_GUARD: reason={reason}",
+            $"pass={passName}",
+            $"BASELINE_KEY: {baselineKey.Trim()}",
+            $"PHASE: baselineComplete={baselinePhase.Complete.ToString().ToLowerInvariant()}",
+            $"PHASE: baselineCallsCompleted={JsonSerializer.Serialize(baselinePhase.Completed)}"
+        };
+
+        if (!baselinePhase.Complete)
+        {
+            facts.Add($"PHASE: baselineMissing={JsonSerializer.Serialize(baselinePhase.Missing)}");
+        }
+
+        facts.Add(baselineEvidenceFact);
+        facts.AddRange(BaselineCallFacts);
+
+        facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any changes, drop cursor and start a new query.");
+        facts.Add("REPORT_GET SYNTAX: report_get.path is required. Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
+        facts.Add("REPORT_GET STRUCTURE: do not guess .items; query the parent node first. Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
+        facts.Add("REPORT_GET RECOVERY: if a tool error includes a \"Try:\" hint, follow it exactly. If a property/index is invalid, stop guessing and query the nearest valid parent node.");
+        facts.Add("META TOOL CONTRACT: analysis_hypothesis_register.hypotheses is required; analysis_evidence_add.items is required. Do not call meta tools with empty args.");
+
+        var lastToolFact = BuildLastToolFact(commandsExecuted);
+        if (!string.IsNullOrWhiteSpace(lastToolFact))
+        {
+            facts.Add(lastToolFact);
+        }
+
+        var nextSteps = BuildLoopBreakNextSteps(commandsExecuted, reason, forceFinalizeNow);
+
+        var checkpoint = new
+        {
+            facts = facts.Take(50).Select(f => TruncateText(f, maxChars: 2048)).ToList(),
+            hypotheses = Array.Empty<object>(),
+            evidence = BuildLastToolEvidence(commandsExecuted),
+            doNotRepeat = doNotRepeat.Take(50).ToList(),
+            nextSteps
+        };
+
+        var json = JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = false });
+        if (json.Length <= MaxCheckpointJsonChars)
+        {
+            return AugmentCheckpointWithConvergenceFacts(json, evidenceLedger, hypothesisTracker, forceFinalizeNow: forceFinalizeNow);
+        }
+
+        // If we exceed the max size, shrink doNotRepeat and drop baseline call facts first.
+        var reducedFacts = facts.Where(f => !f.StartsWith("BASELINE_CALL:", StringComparison.OrdinalIgnoreCase)).Take(30).ToList();
+        var reducedCheckpoint = new
+        {
+            facts = reducedFacts.Select(f => TruncateText(f, maxChars: 1024)).ToList(),
+            hypotheses = Array.Empty<object>(),
+            evidence = BuildLastToolEvidence(commandsExecuted),
+            doNotRepeat = doNotRepeat.Take(25).ToList(),
+            nextSteps
+        };
+
+        var reducedJson = JsonSerializer.Serialize(reducedCheckpoint, new JsonSerializerOptions { WriteIndented = false });
+        return reducedJson.Length <= MaxCheckpointJsonChars
+            ? AugmentCheckpointWithConvergenceFacts(reducedJson, evidenceLedger, hypothesisTracker, forceFinalizeNow: forceFinalizeNow)
+            : BuildDeterministicCheckpointJson(passName, commandsExecuted, commandsExecutedAtLastCheckpoint, baselineKey);
+    }
+
+    private static List<object> BuildLastToolEvidence(List<ExecutedCommand> commandsExecuted)
+    {
+        if (commandsExecuted.Count == 0)
+        {
+            return [];
+        }
+
+        var last = commandsExecuted[^1];
+        var tool = (last.Tool ?? string.Empty).Trim();
+        var input = last.Input;
+        var canonical = CanonicalizeJson(input);
+        canonical = TruncateText(canonical, maxChars: 512);
+        var source = string.IsNullOrWhiteSpace(tool) ? "last_tool" : $"{tool}({canonical})";
+        var finding = BuildToolOutputExcerpt(last.Output ?? string.Empty);
+        return
+        [
+            new
+            {
+                id = "E_LAST",
+                source,
+                finding
+            }
+        ];
+    }
+
+    private static string? BuildLastToolFact(List<ExecutedCommand> commandsExecuted)
+    {
+        if (commandsExecuted.Count == 0)
+        {
+            return null;
+        }
+
+        var last = commandsExecuted[^1];
+        var tool = (last.Tool ?? string.Empty).Trim();
+        var canonical = CanonicalizeJson(last.Input);
+        canonical = TruncateText(canonical, maxChars: 256);
+        var excerpt = BuildToolOutputExcerpt(last.Output ?? string.Empty);
+        return string.IsNullOrWhiteSpace(tool)
+            ? $"LAST_TOOL: ({canonical}) -> {excerpt}"
+            : $"LAST_TOOL: {tool}({canonical}) -> {excerpt}";
+    }
+
+    private static string BuildToolOutputExcerpt(string output)
+    {
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return "(empty)";
+        }
+
+        var trimmed = output.Trim();
+        if (TryParseFirstJsonObject(trimmed, out var json) && json.ValueKind == JsonValueKind.Object && json.TryGetProperty("error", out var errorEl))
+        {
+            var code = TryGetString(errorEl, "code");
+            var message = TryGetString(errorEl, "message");
+            var compact = string.IsNullOrWhiteSpace(code) ? (message ?? trimmed) : $"{code}: {message}";
+            return TruncateText(compact ?? trimmed, maxChars: 600);
+        }
+
+        var lines = trimmed.Split('\n');
+        var excerptLines = lines.Take(3).Select(l => l.TrimEnd()).ToList();
+        var excerpt = string.Join("\n", excerptLines);
+        return TruncateText(excerpt, maxChars: 600);
+    }
+
+    private static List<object> BuildLoopBreakNextSteps(List<ExecutedCommand> commandsExecuted, string reason, bool forceFinalizeNow)
+    {
+        var steps = new List<object>(capacity: 3);
+
+        if (forceFinalizeNow)
+        {
+            steps.Add(new
+            {
+                tool = "analysis_complete",
+                call = "analysis_complete(rootCause=\"...\", confidence=\"low|medium\", reasoning=\"...\", evidence=[\"E#\", ...])",
+                why = "Loop guard triggered repeatedly; finalize now using BASELINE_EVIDENCE mapping + evidence IDs. Do not restart baseline."
+            });
+            return steps;
+        }
+
+        if (reason.StartsWith("invalid_cursor", StringComparison.OrdinalIgnoreCase))
+        {
+            var lastInvalid = commandsExecuted.LastOrDefault(c =>
+                c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+                && TryGetReportGetErrorCode(c.Output ?? string.Empty, out var code)
+                && code.Equals("invalid_cursor", StringComparison.OrdinalIgnoreCase));
+
+            if (lastInvalid != null && lastInvalid.Input.ValueKind == JsonValueKind.Object)
+            {
+                var inputObj = lastInvalid.Input;
+                using var doc = JsonDocument.Parse(CanonicalizeJson(inputObj));
+                var root = doc.RootElement.Clone();
+                var withoutCursor = RemoveJsonProperty(root, "cursor");
+                steps.Add(new
+                {
+                    tool = "report_get",
+                    call = $"report_get({CanonicalizeJson(withoutCursor)})",
+                    why = "Retry the same query without cursor (cursor is only valid when query shape is unchanged)."
+                });
+                return steps;
+            }
+        }
+
+        if (reason.StartsWith("hypothesis_register_no_progress", StringComparison.OrdinalIgnoreCase))
+        {
+            steps.Add(new
+            {
+                tool = "analysis_hypothesis_score",
+                call = "analysis_hypothesis_score(updates=[{id:\"H1\", confidence:\"medium\", supportsEvidenceIds:[\"E#\"], contradictsEvidenceIds:[\"E#\"], notes:\"...\"}])",
+                why = "Stop adding new hypotheses (no progress). Update/score existing hypothesis IDs with discriminating evidence, or converge."
+            });
+            return steps;
+        }
+
+        steps.Add(new
+        {
+            tool = "report_get",
+            call = "report_get(path=\"analysis.modules\", limit=20, select=[\"name\",\"version\",\"path\",\"baseAddress\"])",
+            why = "Progress with a narrow, high-signal evidence fetch. Do not repeat baseline calls."
+        });
+        return steps;
+    }
+
+    private static JsonElement RemoveJsonProperty(JsonElement element, string propertyName)
+    {
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return element;
+        }
+
+        var obj = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var prop in element.EnumerateObject())
+        {
+            if (string.Equals(prop.Name, propertyName, StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            obj[prop.Name] = prop.Value.Clone();
+        }
+
+        return JsonSerializer.SerializeToElement(obj);
+    }
+
+    private static string BuildBaselineEvidenceMappingFact(AiEvidenceLedger evidenceLedger)
+    {
+        var idByBaseline = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var item in evidenceLedger.Items)
+        {
+            if (item.Tags == null || item.Tags.Count == 0)
+            {
+                continue;
+            }
+
+            foreach (var tag in item.Tags)
+            {
+                if (string.IsNullOrWhiteSpace(tag))
+                {
+                    continue;
+                }
+
+                var trimmed = tag.Trim();
+                if (!trimmed.StartsWith("BASELINE_", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var baselineId = trimmed.Substring("BASELINE_".Length);
+                if (string.IsNullOrWhiteSpace(baselineId))
+                {
+                    continue;
+                }
+
+                if (!idByBaseline.ContainsKey(baselineId))
+                {
+                    idByBaseline[baselineId] = item.Id;
+                }
+            }
+        }
+
+        var parts = BaselineCalls
+            .Select(c =>
+            {
+                var id = c.Id;
+                return idByBaseline.TryGetValue(id, out var evidenceId) && !string.IsNullOrWhiteSpace(evidenceId)
+                    ? $"{id}={evidenceId}"
+                    : $"{id}=<missing>";
+            })
+            .ToList();
+
+        return $"BASELINE_EVIDENCE: {string.Join(' ', parts)}";
+    }
+
+    private static string AugmentCheckpointWithConvergenceFacts(
+        string checkpointJson,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker,
+        bool forceFinalizeNow = false)
+    {
+        if (string.IsNullOrWhiteSpace(checkpointJson))
+        {
+            return checkpointJson;
+        }
+
+        if (!TryParseFirstJsonObject(checkpointJson, out var json) || json.ValueKind != JsonValueKind.Object)
+        {
+            return checkpointJson;
+        }
+
+        var facts = TryGetStringArray(json, "facts") ?? new List<string>();
+        var baselineEvidenceFact = BuildBaselineEvidenceMappingFact(evidenceLedger);
+
+        var finalizeNow = forceFinalizeNow || ShouldFinalizeNow(evidenceLedger, hypothesisTracker);
+
+        var updatedFacts = new List<string>(capacity: 50);
+        foreach (var fact in facts)
+        {
+            if (string.IsNullOrWhiteSpace(fact))
+            {
+                continue;
+            }
+
+            var trimmed = fact.Trim();
+            if (trimmed.StartsWith("PHASE: finalizeNow=", StringComparison.OrdinalIgnoreCase)
+                || trimmed.StartsWith("BASELINE_EVIDENCE:", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            updatedFacts.Add(trimmed);
+            if (updatedFacts.Count >= 45)
+            {
+                break;
+            }
+        }
+
+        updatedFacts.Add(baselineEvidenceFact);
+        updatedFacts.Add($"PHASE: finalizeNow={finalizeNow.ToString().ToLowerInvariant()}");
+
+        var hypotheses = json.TryGetProperty("hypotheses", out var hypothesesEl)
+            ? hypothesesEl
+            : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var evidence = json.TryGetProperty("evidence", out var evidenceEl)
+            ? evidenceEl
+            : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var doNotRepeat = json.TryGetProperty("doNotRepeat", out var dnrEl)
+            ? dnrEl
+            : JsonSerializer.SerializeToElement(Array.Empty<string>());
+
+        var nextSteps = json.TryGetProperty("nextSteps", out var nextStepsEl)
+            ? nextStepsEl
+            : JsonSerializer.SerializeToElement(Array.Empty<object>());
+
+        if (finalizeNow)
+        {
+            nextSteps = JsonSerializer.SerializeToElement(new[]
+            {
+                new
+                {
+                    tool = "analysis_complete",
+                    call = "analysis_complete(rootCause=\"...\", confidence=\"low|medium|high\", reasoning=\"...\", evidence=[\"E#\", ...])",
+                    why = "Finalize now: evidence + hypotheses are sufficient. Use BASELINE_EVIDENCE mapping + evidence IDs; do not restart baseline."
+                }
+            });
+        }
+
+        var augmented = JsonSerializer.Serialize(new
+        {
+            facts = updatedFacts.Take(50).Select(f => TruncateText(f, maxChars: 2048)).ToList(),
+            hypotheses,
+            evidence,
+            doNotRepeat,
+            nextSteps
+        }, new JsonSerializerOptions { WriteIndented = false });
+
+        return augmented.Length <= MaxCheckpointJsonChars
+            ? augmented
+            : checkpointJson;
+    }
+
+    private static bool ShouldFinalizeNow(AiEvidenceLedger evidenceLedger, AiHypothesisTracker hypothesisTracker)
+    {
+        if (evidenceLedger.Items.Count < 6)
+        {
+            return false;
+        }
+
+        var hypotheses = hypothesisTracker.Hypotheses;
+        if (hypotheses.Count < 3)
+        {
+            return false;
+        }
+
+        var hasBaselineStackTop = evidenceLedger.Items.Any(e => e.Tags?.Any(t => string.Equals(t, "BASELINE_STACK_TOP", StringComparison.OrdinalIgnoreCase)) == true);
+        var hasBaselineExc = evidenceLedger.Items.Any(e =>
+            e.Tags?.Any(t =>
+                string.Equals(t, "BASELINE_EXC_TYPE", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(t, "BASELINE_EXC_MESSAGE", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(t, "BASELINE_EXC_HRESULT", StringComparison.OrdinalIgnoreCase)) == true);
+
+        if (!hasBaselineExc || !hasBaselineStackTop)
+        {
+            return false;
+        }
+
+        var mediumOrHigh = hypotheses.Where(h =>
+            string.Equals(h.Confidence, "high", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(h.Confidence, "medium", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (mediumOrHigh.Any(h => string.Equals(h.Confidence, "high", StringComparison.OrdinalIgnoreCase) && h.SupportsEvidenceIds is { Count: > 0 }))
+        {
+            return true;
+        }
+
+        if (mediumOrHigh.Count == 0)
+        {
+            return false;
+        }
+
+        if (mediumOrHigh.Count <= 2
+            && mediumOrHigh.Any(h => string.Equals(h.Confidence, "medium", StringComparison.OrdinalIgnoreCase) && h.SupportsEvidenceIds is { Count: > 0 })
+            && hypotheses.Any(h => h.ContradictsEvidenceIds is { Count: > 0 }))
+        {
+            return true;
+        }
+
+        return false;
     }
 
     private static AiSummaryResult ParseSummaryRewriteComplete(
@@ -8142,9 +9244,11 @@ Phase 1 (MANDATORY): Baseline evidence (do NOT hypothesize before completing the
 - report_get(path="analysis.exception.message")
 - report_get(path="analysis.exception.hResult")
 - report_get(path="analysis.exception.stackTrace", limit=8, select=["frameNumber","instructionPointer","module","function","sourceFile","lineNumber","isManaged"])
-- report_get(path="analysis.exception.analysis", pageKind="object", limit=200)
 
 If any baseline call returns too_large, retry immediately using suggestedPaths and narrower select/limit before proceeding. Do not skip baseline evidence.
+
+Optional (use only if needed for further verification; do not loop on it):
+- report_get(path="analysis.exception.analysis", pageKind="object", limit=200)
 
 Phase 2: General workflow (follow these steps after baseline evidence)
 1. Review the initial crash report carefully
@@ -8209,6 +9313,18 @@ Be thorough but efficient. Don't run unnecessary commands.
         var excerptLimit = Math.Clamp(evidenceExcerptMaxChars, 64, 50_000);
         finding = TruncateText(finding, excerptLimit);
 
+        List<string>? baselineTags = null;
+        if (!toolWasError
+            && toolInput.ValueKind == JsonValueKind.Object
+            && toolName.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+        {
+            var path = TryGetString(toolInput, "path");
+            if (!string.IsNullOrWhiteSpace(path) && BaselineIdByPath.TryGetValue(path.Trim(), out var baselineId))
+            {
+                baselineTags = [$"BASELINE_{baselineId}"];
+            }
+        }
+
         var outputHash = ComputeSha256Prefixed(outputForModel ?? string.Empty);
         var addResult = evidenceLedger.AddOrUpdate(
         [
@@ -8216,6 +9332,7 @@ Be thorough but efficient. Don't run unnecessary commands.
             {
                 Source = source,
                 Finding = finding,
+                Tags = baselineTags,
                 ToolName = includeProvenanceMetadata ? (toolName ?? string.Empty).Trim() : null,
                 ToolKeyHash = includeProvenanceMetadata ? toolKeyHash : null,
                 ToolOutputHash = includeProvenanceMetadata ? outputHash : null,
@@ -8381,7 +9498,14 @@ Be thorough but efficient. Don't run unnecessary commands.
                 foreach (var property in element.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
                 {
                     writer.WritePropertyName(property.Name);
-                    WriteCanonicalJson(property.Value, writer);
+                    if (property.Name.Equals("select", StringComparison.Ordinal) && property.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        WriteCanonicalSelectArray(property.Value, writer);
+                    }
+                    else
+                    {
+                        WriteCanonicalJson(property.Value, writer);
+                    }
                 }
                 writer.WriteEndObject();
                 break;
@@ -8397,5 +9521,55 @@ Be thorough but efficient. Don't run unnecessary commands.
                 element.WriteTo(writer);
                 break;
         }
+    }
+
+    private static void WriteCanonicalSelectArray(JsonElement element, Utf8JsonWriter writer)
+    {
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            WriteCanonicalJson(element, writer);
+            return;
+        }
+
+        var fields = new List<string>();
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind == JsonValueKind.String)
+            {
+                var value = item.GetString();
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    fields.Add(value.Trim());
+                }
+            }
+            else
+            {
+                fields.Clear();
+                break;
+            }
+        }
+
+        if (fields.Count == 0)
+        {
+            writer.WriteStartArray();
+            foreach (var item in element.EnumerateArray())
+            {
+                WriteCanonicalJson(item, writer);
+            }
+            writer.WriteEndArray();
+            return;
+        }
+
+        var normalized = fields
+            .Distinct(StringComparer.Ordinal)
+            .OrderBy(s => s, StringComparer.Ordinal)
+            .ToList();
+
+        writer.WriteStartArray();
+        foreach (var field in normalized)
+        {
+            writer.WriteStringValue(field);
+        }
+        writer.WriteEndArray();
     }
 }
