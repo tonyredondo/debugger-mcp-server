@@ -4794,6 +4794,26 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public void BuildToolCacheKey_WhenPathIndexHasLeadingZeros_NormalizesToIntegerIndex()
+    {
+        var buildToolCacheKey = typeof(AiAnalysisOrchestrator).GetMethod("BuildToolCacheKey", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(buildToolCacheKey);
+
+        using var doc1 = JsonDocument.Parse("""
+        {"path":"analysis.threads.all[0]","limit":5}
+        """);
+
+        using var doc2 = JsonDocument.Parse("""
+        {"path":"analysis.threads.all[00]","limit":5}
+        """);
+
+        var key1 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc1.RootElement })!;
+        var key2 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc2.RootElement })!;
+
+        Assert.Equal(key1, key2);
+    }
+
+    [Fact]
     public void NormalizeCheckpointJson_FiltersNextStepsThatRepeatExecutedToolCalls_AndKeepsNonDuplicates()
     {
         var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);

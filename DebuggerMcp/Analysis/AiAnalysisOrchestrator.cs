@@ -10605,6 +10605,15 @@ Be thorough but efficient. Don't run unnecessary commands.
             return;
         }
 
+        if (currentPropertyName is not null &&
+            currentPropertyName.Equals("path", StringComparison.Ordinal) &&
+            element.ValueKind == JsonValueKind.String)
+        {
+            var rawPath = element.GetString() ?? string.Empty;
+            writer.WriteStringValue(NormalizeReportGetPath(rawPath));
+            return;
+        }
+
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
@@ -10704,6 +10713,104 @@ Be thorough but efficient. Don't run unnecessary commands.
 
         writer.WriteNumberValue(parsed);
         return true;
+    }
+
+    private static string NormalizeReportGetPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+        {
+            return path;
+        }
+
+        if (!path.StartsWith("analysis", StringComparison.OrdinalIgnoreCase) &&
+            !path.StartsWith("metadata", StringComparison.OrdinalIgnoreCase))
+        {
+            return path;
+        }
+
+        if (path.IndexOf('[') < 0)
+        {
+            return path;
+        }
+
+        StringBuilder? builder = null;
+        var lastCopyIndex = 0;
+
+        for (var i = 0; i < path.Length; i++)
+        {
+            if (path[i] != '[')
+            {
+                continue;
+            }
+
+            var open = i;
+            var j = open + 1;
+
+            while (j < path.Length && char.IsWhiteSpace(path[j]))
+            {
+                j++;
+            }
+
+            var digitsStart = j;
+            while (j < path.Length && char.IsDigit(path[j]))
+            {
+                j++;
+            }
+
+            var digitsEnd = j;
+
+            while (j < path.Length && char.IsWhiteSpace(path[j]))
+            {
+                j++;
+            }
+
+            if (digitsStart == digitsEnd || j >= path.Length || path[j] != ']')
+            {
+                continue;
+            }
+
+            var digitsSpan = path.AsSpan(digitsStart, digitsEnd - digitsStart);
+
+            var leadingZeros = 0;
+            while (leadingZeros < digitsSpan.Length && digitsSpan[leadingZeros] == '0')
+            {
+                leadingZeros++;
+            }
+
+            ReadOnlySpan<char> normalizedDigits;
+            if (leadingZeros == digitsSpan.Length)
+            {
+                normalizedDigits = "0".AsSpan();
+            }
+            else
+            {
+                normalizedDigits = digitsSpan.Slice(leadingZeros);
+            }
+
+            var hadWhitespace = digitsStart != open + 1 || digitsEnd != j;
+            var hadLeadingZeros = normalizedDigits.Length != digitsSpan.Length;
+            if (!hadWhitespace && !hadLeadingZeros)
+            {
+                continue;
+            }
+
+            builder ??= new StringBuilder(path.Length);
+            builder.Append(path, lastCopyIndex, open - lastCopyIndex);
+            builder.Append('[');
+            builder.Append(normalizedDigits);
+            builder.Append(']');
+
+            lastCopyIndex = j + 1;
+            i = j;
+        }
+
+        if (builder is null)
+        {
+            return path;
+        }
+
+        builder.Append(path, lastCopyIndex, path.Length - lastCopyIndex);
+        return builder.ToString();
     }
 
     private static bool TryWriteCanonicalWhereArray(JsonElement element, Utf8JsonWriter writer)
