@@ -4788,6 +4788,7 @@ public class AiAnalysisOrchestratorTests
         var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
         Assert.Contains(facts, f => f.StartsWith("BASELINE_KEY:", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(facts, f => f.StartsWith("PHASE: baselineComplete=", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(facts, f => f.StartsWith("OPTIONAL_CALL:", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(facts, f => f.StartsWith("REPORT_GET CURSOR:", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(facts, f => f.StartsWith("LAST_TOOL:", StringComparison.OrdinalIgnoreCase));
     }
@@ -4849,9 +4850,9 @@ public class AiAnalysisOrchestratorTests
             InvalidCursor(10)
         };
 
-        object?[] args = { 10, commands, true, 0, false, null };
+        object?[] args = { 10, commands, true, 0, 0, false, null };
         var shouldInject = (bool)method!.Invoke(null, args)!;
-        var reason = (string)args[5]!;
+        var reason = (string)args[6]!;
 
         Assert.True(shouldInject);
         Assert.Equal("invalid_cursor_loop", reason);
@@ -4874,12 +4875,37 @@ public class AiAnalysisOrchestratorTests
             }
         };
 
-        object?[] args = { 10, commands, true, 1, true, null };
+        object?[] args = { 10, commands, true, 2, 0, true, null };
         var shouldInject = (bool)method!.Invoke(null, args)!;
-        var reason = (string)args[5]!;
+        var reason = (string)args[6]!;
 
         Assert.True(shouldInject);
         Assert.Equal("checkpoint_no_progress", reason);
+    }
+
+    [Fact]
+    public void TryGetDeterministicCheckpointInjectionReason_WhenCheckpointHashRepeats_ReturnsCheckpointHashRepeat()
+    {
+        var method = typeof(AiAnalysisOrchestrator).GetMethod("TryGetDeterministicCheckpointInjectionReason", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = JsonSerializer.SerializeToElement(new { path = "analysis.modules", limit = 10 }),
+                Output = "{\"path\":\"analysis.modules\",\"value\":[]}",
+                Iteration = 10
+            }
+        };
+
+        object?[] args = { 10, commands, true, 0, 1, false, null };
+        var shouldInject = (bool)method!.Invoke(null, args)!;
+        var reason = (string)args[6]!;
+
+        Assert.True(shouldInject);
+        Assert.Equal("checkpoint_hash_repeat", reason);
     }
 
     [Fact]
@@ -4978,6 +5004,76 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public void BuildDeterministicLoopBreakCheckpointJson_WhenRepeated_IsDeterministicAndCanForceFinalize()
+    {
+        var build = typeof(AiAnalysisOrchestrator).GetMethod("BuildDeterministicLoopBreakCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(build);
+
+        using var doc = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace","limit":10,"cursor":"abc"}
+        """);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = doc.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.exception.stackTrace\",\"error\":{\"code\":\"invalid_cursor\",\"message\":\"Cursor does not match\"}}",
+                Iteration = 10
+            }
+        };
+
+        var evidenceLedger = new AiEvidenceLedger();
+        var hypothesisTracker = new AiHypothesisTracker(evidenceLedger);
+
+        var checkpoint1 = (string)build!.Invoke(null, new object[]
+        {
+            "analysis",
+            commands,
+            0,
+            "dumpId=x generatedAt=y",
+            "invalid_cursor_loop",
+            evidenceLedger,
+            hypothesisTracker,
+            false
+        })!;
+
+        var checkpoint2 = (string)build!.Invoke(null, new object[]
+        {
+            "analysis",
+            commands,
+            0,
+            "dumpId=x generatedAt=y",
+            "invalid_cursor_loop",
+            evidenceLedger,
+            hypothesisTracker,
+            false
+        })!;
+
+        Assert.Equal(checkpoint1, checkpoint2);
+
+        var finalize = (string)build!.Invoke(null, new object[]
+        {
+            "analysis",
+            commands,
+            0,
+            "dumpId=x generatedAt=y",
+            "invalid_cursor_loop:repeat",
+            evidenceLedger,
+            hypothesisTracker,
+            true
+        })!;
+
+        Assert.NotEqual(checkpoint1, finalize);
+
+        using var parsed = JsonDocument.Parse(finalize);
+        var nextSteps = parsed.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(nextSteps);
+        Assert.Equal("analysis_complete", nextSteps[0].GetProperty("tool").GetString());
+    }
+
+    [Fact]
     public void NormalizeCheckpointJson_WhenReportGetMissingPath_AddsContractFactsAndDoNotRepeatIncludesInvalidCall()
     {
         var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
@@ -5007,6 +5103,82 @@ public class AiAnalysisOrchestratorTests
 
         var doNotRepeat = doc.RootElement.GetProperty("doNotRepeat").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
         Assert.Contains(doNotRepeat, d => string.Equals("report_get({})", d, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenReportGetTooLargeIncludesExampleCalls_IncludesTryHintInLastTool()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        var output = JsonSerializer.Serialize(new
+        {
+            path = "analysis.exception",
+            error = new { code = "too_large", message = "Response exceeds maxChars." },
+            extra = new { exampleCalls = new[] { "report_get(path=\"analysis.exception.type\")" } }
+        });
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = JsonSerializer.SerializeToElement(new { path = "analysis.exception" }),
+                Output = output,
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        {"facts":[],"hypotheses":[],"evidence":[],"doNotRepeat":[],"nextSteps":[]}
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        var lastTool = facts.SingleOrDefault(f => f.StartsWith("LAST_TOOL:", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(lastTool);
+        Assert.Contains("Try:", lastTool!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("report_get(path=\"analysis.exception.type\")", lastTool!, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenInvalidCursorIncludesRetryWithoutCursor_IncludesTryHintInLastTool()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        var output = JsonSerializer.Serialize(new
+        {
+            path = "analysis.threads.all",
+            error = new { code = "invalid_cursor", message = "Cursor does not match." },
+            extra = new { recovery = new { retryWithoutCursor = "report_get(path=\"analysis.threads.all\", limit=10)" } }
+        });
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = JsonSerializer.SerializeToElement(new { path = "analysis.threads.all", cursor = "abc", limit = 10 }),
+                Output = output,
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        {"facts":[],"hypotheses":[],"evidence":[],"doNotRepeat":[],"nextSteps":[]}
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        var lastTool = facts.SingleOrDefault(f => f.StartsWith("LAST_TOOL:", StringComparison.OrdinalIgnoreCase));
+        Assert.NotNull(lastTool);
+        Assert.Contains("Try:", lastTool!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("report_get(path=\"analysis.threads.all\", limit=10)", lastTool!, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -5094,9 +5266,9 @@ public class AiAnalysisOrchestratorTests
             MissingPath(10)
         };
 
-        object?[] args = { 10, commands, true, 0, false, null };
+        object?[] args = { 10, commands, true, 0, 0, false, null };
         var shouldInject = (bool)method!.Invoke(null, args)!;
-        var reason = (string)args[5]!;
+        var reason = (string)args[6]!;
 
         Assert.True(shouldInject);
         Assert.Equal("tool_input_contract_loop", reason);
@@ -5123,9 +5295,9 @@ public class AiAnalysisOrchestratorTests
             NoProgress(10)
         };
 
-        object?[] args = { 10, commands, true, 0, false, null };
+        object?[] args = { 10, commands, true, 0, 0, false, null };
         var shouldInject = (bool)method!.Invoke(null, args)!;
-        var reason = (string)args[5]!;
+        var reason = (string)args[6]!;
 
         Assert.True(shouldInject);
         Assert.Equal("hypothesis_register_no_progress", reason);

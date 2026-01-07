@@ -229,7 +229,12 @@ internal static class ReportSectionApi
             var page = ResolvePage(trimmedPath, kind: "array", length: filtered.Count, limit, cursor, queryHash, out var pageError);
             if (pageError != null)
             {
-                return SerializeError(trimmedPath, "invalid_cursor", pageError, maxResponseChars);
+                return SerializeError(
+                    trimmedPath,
+                    "invalid_cursor",
+                    pageError,
+                    maxResponseChars,
+                    extra: BuildInvalidCursorExtra(trimmedPath, kind: "array", limit, cursor, queryHash, pageKind: effectivePageKind, select: effectiveSelect, where: effectiveWhere));
             }
 
             offset = page.Offset;
@@ -309,7 +314,12 @@ internal static class ReportSectionApi
             var page = ResolvePage(trimmedPath, kind: "object", length: properties.Count, limit, cursor, queryHash, out var pageError);
             if (pageError != null)
             {
-                return SerializeError(trimmedPath, "invalid_cursor", pageError, maxResponseChars);
+                return SerializeError(
+                    trimmedPath,
+                    "invalid_cursor",
+                    pageError,
+                    maxResponseChars,
+                    extra: BuildInvalidCursorExtra(trimmedPath, kind: "object", limit, cursor, queryHash, pageKind: effectivePageKind, select: effectiveSelect, where: null));
             }
 
             var endExclusive = Math.Min(properties.Count, page.Offset + page.Limit);
@@ -368,7 +378,13 @@ internal static class ReportSectionApi
 
         if (!string.IsNullOrWhiteSpace(cursor))
         {
-            return SerializeError(trimmedPath, "invalid_cursor", "Cursor cannot be used for this path because the value is not pageable (array, or object paging enabled via pageKind=\"object\").", maxResponseChars);
+            var message = "Cursor cannot be used for this path because the value is not pageable (array, or object paging enabled via pageKind=\"object\").";
+            return SerializeError(
+                trimmedPath,
+                "invalid_cursor",
+                message,
+                maxResponseChars,
+                extra: BuildInvalidCursorExtra(trimmedPath, kind: "scalar", limit, cursor, queryHash: string.Empty, pageKind: effectivePageKind, select: effectiveSelect, where: effectiveWhere));
         }
 
         return SerializeBounded(responseObj, maxResponseChars, trimmedPath, value, effectivePageKind, effectiveSelect, effectiveWhere);
@@ -746,6 +762,114 @@ internal static class ReportSectionApi
     }
 
     private sealed record ReportCursor(string Path, int Offset, int Limit, string Kind, string? QueryHash);
+
+    private static object BuildInvalidCursorExtra(
+        string path,
+        string kind,
+        int? limit,
+        string? cursor,
+        string queryHash,
+        string? pageKind,
+        IReadOnlyList<string>? select,
+        ReportWhere? where)
+    {
+        var retry = BuildReportGetCall(path, limit, cursor: null, pageKind, select, where);
+        var contract = new[]
+        {
+            "Cursor is only valid for the IDENTICAL query shape (same path/select/where/pageKind/limit).",
+            "If you change select/where/pageKind/limit, drop cursor and start a new query.",
+            "Prefer where filters over cursor paging for large arrays."
+        };
+
+        object? cursorDebug = null;
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            if (TryDecodeCursor(cursor, out var decoded, out var decodeError))
+            {
+                cursorDebug = new
+                {
+                    cursor = new
+                    {
+                        path = decoded.Path,
+                        kind = decoded.Kind,
+                        offset = decoded.Offset,
+                        limit = decoded.Limit,
+                        queryHash = decoded.QueryHash
+                    },
+                    expected = new
+                    {
+                        path,
+                        kind,
+                        queryHash
+                    }
+                };
+            }
+            else if (!string.IsNullOrWhiteSpace(decodeError))
+            {
+                cursorDebug = new { decodeError };
+            }
+        }
+
+        return new
+        {
+            cursorContract = contract,
+            recovery = new
+            {
+                action = "Retry the same query WITHOUT cursor to obtain a new cursor (or confirm the path is not pageable).",
+                retryWithoutCursor = retry
+            },
+            cursorDebug
+        };
+    }
+
+    private static string BuildReportGetCall(
+        string path,
+        int? limit,
+        string? cursor,
+        string? pageKind,
+        IReadOnlyList<string>? select,
+        ReportWhere? where)
+    {
+        var parts = new List<string>(capacity: 8)
+        {
+            $"path=\"{path}\""
+        };
+
+        if (limit.HasValue)
+        {
+            parts.Add($"limit={limit.Value}");
+        }
+
+        if (!string.IsNullOrWhiteSpace(cursor))
+        {
+            parts.Add($"cursor=\"{cursor}\"");
+        }
+
+        if (!string.IsNullOrWhiteSpace(pageKind) && !string.Equals(pageKind, "auto", StringComparison.OrdinalIgnoreCase))
+        {
+            parts.Add($"pageKind=\"{pageKind}\"");
+        }
+
+        if (select is { Count: > 0 })
+        {
+            var fields = select
+                .Where(s => !string.IsNullOrWhiteSpace(s))
+                .Select(s => s.Trim())
+                .Distinct(StringComparer.Ordinal)
+                .OrderBy(s => s, StringComparer.Ordinal)
+                .Take(8)
+                .Select(s => $"\"{s}\"");
+            parts.Add($"select=[{string.Join(",", fields)}]");
+        }
+
+        if (where != null)
+        {
+            var ci = where.CaseInsensitive ? "true" : "false";
+            parts.Add($"where={{field:\"{where.Field}\", equals:\"{where.EqualsValue}\", caseInsensitive:{ci}}}");
+        }
+
+        return $"report_get({string.Join(", ", parts)})";
+    }
 
     private static (int Offset, int Limit) ResolvePage(string path, string kind, int length, int? limit, string? cursor, string queryHash, out string? error)
     {

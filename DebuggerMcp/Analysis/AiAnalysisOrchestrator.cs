@@ -340,6 +340,7 @@ public sealed class AiAnalysisOrchestrator(
         string? lastCheckpointProgressSignature = null;
         var consecutiveNoProgressCheckpoints = 0;
         string? lastCheckpointHash = null;
+        var consecutiveIdenticalCheckpointHashes = 0;
         var lastDeterministicCheckpointIteration = 0;
         string? lastDeterministicCheckpointHash = null;
         string? lastDeterministicCheckpointReason = null;
@@ -1233,6 +1234,7 @@ public sealed class AiAnalysisOrchestrator(
                 commandsExecuted: commandsExecuted,
                 baselineComplete: baselineTracker.IsComplete,
                 consecutiveNoProgressCheckpoints: consecutiveNoProgressCheckpoints,
+                consecutiveIdenticalCheckpointHashes: consecutiveIdenticalCheckpointHashes,
                 noProgressSinceLastCheckpoint: noProgressSinceLastCheckpoint,
                 reason: out var deterministicReason);
 
@@ -1319,7 +1321,12 @@ public sealed class AiAnalysisOrchestrator(
                 lastCheckpointIteration = iteration;
                 commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
                 consecutiveNoProgressCheckpoints = noProgressSinceLastCheckpoint ? consecutiveNoProgressCheckpoints + 1 : 0;
-                lastCheckpointHash = ComputeSha256Prefixed(checkpoint);
+                var checkpointHash = ComputeSha256Prefixed(checkpoint);
+                consecutiveIdenticalCheckpointHashes = !string.IsNullOrWhiteSpace(lastCheckpointHash)
+                                                       && string.Equals(lastCheckpointHash, checkpointHash, StringComparison.OrdinalIgnoreCase)
+                    ? consecutiveIdenticalCheckpointHashes + 1
+                    : 0;
+                lastCheckpointHash = checkpointHash;
 
 	                messages.Clear();
 	                ApplyCheckpointToStateStores(
@@ -1552,6 +1559,11 @@ public sealed class AiAnalysisOrchestrator(
         ("STACK_TOP", "analysis.exception.stackTrace", "report_get(path=\"analysis.exception.stackTrace\", limit=8, select=[\"frameNumber\",\"instructionPointer\",\"module\",\"function\",\"sourceFile\",\"lineNumber\",\"isManaged\"])")
     ];
 
+    private static readonly (string Id, string Path, string Call)[] OptionalCalls =
+    [
+        ("EXC_ANALYSIS", "analysis.exception.analysis", "report_get(path=\"analysis.exception.analysis\", pageKind=\"object\", limit=200)")
+    ];
+
     private static readonly IReadOnlyDictionary<string, string> BaselineIdByPath =
         BaselineCalls.ToDictionary(c => c.Path, c => c.Id, StringComparer.OrdinalIgnoreCase);
 
@@ -1560,6 +1572,9 @@ public sealed class AiAnalysisOrchestrator(
 
     private static readonly IReadOnlyList<string> BaselineCallFacts =
         BaselineCalls.Select(c => $"BASELINE_CALL: {c.Id} = {c.Call}").ToList();
+
+    private static readonly IReadOnlyList<string> OptionalCallFacts =
+        OptionalCalls.Select(c => $"OPTIONAL_CALL: {c.Id} = {c.Call}").ToList();
 
     private readonly record struct BaselinePhaseState(bool Complete, List<string> Completed, List<string> Missing);
 
@@ -1601,6 +1616,37 @@ public sealed class AiAnalysisOrchestrator(
         var completedOrdered = orderedIds.Where(id => completed.Contains(id)).ToList();
         var missing = orderedIds.Where(id => !completed.Contains(id)).ToList();
         return new BaselinePhaseState(missing.Count == 0, completedOrdered, missing);
+    }
+
+    private static IReadOnlyList<string> BuildOptionalStatusFacts(List<ExecutedCommand> commandsExecuted)
+    {
+        if (commandsExecuted.Count == 0)
+        {
+            return Array.Empty<string>();
+        }
+
+        var facts = new List<string>();
+        foreach (var optional in OptionalCalls)
+        {
+            var attempts = commandsExecuted
+                .Where(c =>
+                    c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+                    && string.Equals(TryGetString(c.Input, "path")?.Trim(), optional.Path, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            if (attempts.Count == 0)
+            {
+                continue;
+            }
+
+            var last = attempts.Last();
+            if (TryGetReportGetErrorCode(last.Output ?? string.Empty, out var code) && !string.IsNullOrWhiteSpace(code))
+            {
+                facts.Add($"OPTIONAL_STATUS: {optional.Id}=blocked(reason={code})");
+            }
+        }
+
+        return facts;
     }
 
     private static string ComputeBaselineKey(string fullReportJson)
@@ -4700,6 +4746,7 @@ State snapshot (JSON):
         List<ExecutedCommand> commandsExecuted,
         bool baselineComplete,
         int consecutiveNoProgressCheckpoints,
+        int consecutiveIdenticalCheckpointHashes,
         bool noProgressSinceLastCheckpoint,
         out string reason)
     {
@@ -4710,7 +4757,13 @@ State snapshot (JSON):
             return false;
         }
 
-        if (noProgressSinceLastCheckpoint && consecutiveNoProgressCheckpoints >= 1)
+        if (consecutiveIdenticalCheckpointHashes >= 1)
+        {
+            reason = "checkpoint_hash_repeat";
+            return true;
+        }
+
+        if (noProgressSinceLastCheckpoint && consecutiveNoProgressCheckpoints >= 2)
         {
             reason = "checkpoint_no_progress";
             return true;
@@ -6202,6 +6255,16 @@ State snapshot (JSON):
             AddFact(baselineCallFact);
         }
 
+        foreach (var optionalCallFact in OptionalCallFacts)
+        {
+            AddFact(optionalCallFact);
+        }
+
+        foreach (var optionalStatusFact in BuildOptionalStatusFacts(commandsExecuted))
+        {
+            AddFact(optionalStatusFact);
+        }
+
         AddFact("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
         AddFact("REPORT_GET SYNTAX: report_get.path is required (never call report_get() / report_get({})). Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
         AddFact("REPORT_GET STRUCTURE: do not guess .items or report shape. If a segment/property is missing, query the nearest parent node first (pageKind=\"object\", limit<=50). Avoid report_get(path=\"analysis\"); fetch narrow subpaths.");
@@ -6350,6 +6413,8 @@ State snapshot (JSON):
             }
 
             facts.AddRange(BaselineCallFacts);
+            facts.AddRange(OptionalCallFacts);
+            facts.AddRange(BuildOptionalStatusFacts(commandsExecuted));
 
             facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
             facts.Add("REPORT_GET SYNTAX: report_get.path is required (never call report_get() / report_get({})). Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
@@ -6461,6 +6526,8 @@ State snapshot (JSON):
 
         facts.Add(baselineEvidenceFact);
         facts.AddRange(BaselineCallFacts);
+        facts.AddRange(OptionalCallFacts);
+        facts.AddRange(BuildOptionalStatusFacts(commandsExecuted));
 
         facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
         facts.Add("REPORT_GET SYNTAX: report_get.path is required (never call report_get() / report_get({})). Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
@@ -6566,14 +6633,96 @@ State snapshot (JSON):
         {
             var code = TryGetString(errorEl, "code");
             var message = TryGetString(errorEl, "message");
-            var compact = string.IsNullOrWhiteSpace(code) ? (message ?? trimmed) : $"{code}: {message}";
-            return TruncateText(compact ?? trimmed, maxChars: 600);
+            var baseLine = string.IsNullOrWhiteSpace(code) ? (message ?? trimmed) : $"{code}: {message}";
+
+            var errorLines = new List<string>(capacity: 2);
+            if (!string.IsNullOrWhiteSpace(baseLine))
+            {
+                errorLines.Add(baseLine.Trim());
+            }
+
+            if (TryBuildToolErrorTryHint(json, code, out var tryHint) && !string.IsNullOrWhiteSpace(tryHint))
+            {
+                errorLines.Add($"Try: {tryHint.Trim()}");
+            }
+
+            var compact = string.Join("\n", errorLines.Where(l => !string.IsNullOrWhiteSpace(l)).Take(3));
+            return TruncateText(string.IsNullOrWhiteSpace(compact) ? trimmed : compact, maxChars: 600);
         }
 
         var lines = trimmed.Split('\n');
         var excerptLines = lines.Take(3).Select(l => l.TrimEnd()).ToList();
         var excerpt = string.Join("\n", excerptLines);
         return TruncateText(excerpt, maxChars: 600);
+    }
+
+    private static bool TryBuildToolErrorTryHint(JsonElement root, string? code, out string tryHint)
+    {
+        tryHint = string.Empty;
+
+        if (root.ValueKind != JsonValueKind.Object || string.IsNullOrWhiteSpace(code))
+        {
+            return false;
+        }
+
+        if (!root.TryGetProperty("extra", out var extraEl) || extraEl.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (code.Equals("invalid_cursor", StringComparison.OrdinalIgnoreCase))
+        {
+            if (extraEl.TryGetProperty("recovery", out var recoveryEl) && recoveryEl.ValueKind == JsonValueKind.Object)
+            {
+                var retry = TryGetString(recoveryEl, "retryWithoutCursor");
+                if (!string.IsNullOrWhiteSpace(retry))
+                {
+                    tryHint = TruncateText(retry.Trim(), maxChars: 512);
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        if (code.Equals("too_large", StringComparison.OrdinalIgnoreCase))
+        {
+            if (extraEl.TryGetProperty("exampleCalls", out var callsEl) && callsEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in callsEl.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String)
+                    {
+                        var call = item.GetString();
+                        if (!string.IsNullOrWhiteSpace(call))
+                        {
+                            tryHint = TruncateText(call.Trim(), maxChars: 512);
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            if (extraEl.TryGetProperty("suggestedPaths", out var suggestedEl) && suggestedEl.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in suggestedEl.EnumerateArray())
+                {
+                    if (item.ValueKind == JsonValueKind.String)
+                    {
+                        var path = item.GetString();
+                        if (!string.IsNullOrWhiteSpace(path))
+                        {
+                            tryHint = $"report_get(path=\"{TruncateText(path.Trim(), maxChars: 256)}\")";
+                            return true;
+                        }
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        return false;
     }
 
     private static List<object> BuildLoopBreakNextSteps(List<ExecutedCommand> commandsExecuted, string reason, bool forceFinalizeNow)
