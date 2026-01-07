@@ -324,6 +324,7 @@ public sealed class AiAnalysisOrchestrator(
         var metaBookkeepingDone = false;
         var judgeAttemptState = new JudgeAttemptState();
         var internalToolChoiceModeCache = new InternalToolChoiceModeCache();
+        var optionalBaselineCallScheduler = new OptionalBaselineCallScheduler();
         var evidenceIdByToolKeyHash = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         var consecutiveNoProgressIterations = 0;
 
@@ -331,6 +332,7 @@ public sealed class AiAnalysisOrchestrator(
         string? lastModel = null;
         var toolIndexByIteration = new Dictionary<int, int>();
         var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
+        var toolAttemptCounts = new Dictionary<string, int>(StringComparer.Ordinal);
         var analysisCompleteRefusals = 0;
         var analysisCompleteValidationRefusals = 0;
         var consecutiveAnalysisCompleteValidationRefusals = 0;
@@ -805,6 +807,11 @@ public sealed class AiAnalysisOrchestrator(
 	                    }
 	                    else
 	                    {
+                            if (!string.IsNullOrWhiteSpace(toolCacheKey))
+                            {
+                                toolAttemptCounts[toolCacheKey] = toolAttemptCounts.TryGetValue(toolCacheKey, out var attempts) ? attempts + 1 : 1;
+                            }
+
 	                        var output = await ExecuteToolAsync(toolName, toolInput, fullReportJson, initialReport, debugger, clrMdAnalyzer, cancellationToken)
 	                            .ConfigureAwait(false);
                         outputForModel = TruncateForModel(output);
@@ -881,8 +888,18 @@ public sealed class AiAnalysisOrchestrator(
                     sw.Stop();
                     var message = ex.Message;
                     _logger.LogWarning(ex, "[AI] Tool execution failed: {Tool}", toolName);
-                    var messageForModel = TruncateForModel(message);
-                    if (!string.IsNullOrWhiteSpace(toolCacheKey))
+                    var isTransient = IsTransientToolException(ex);
+                    var attempt = 1;
+                    if (!string.IsNullOrWhiteSpace(toolCacheKey) && toolAttemptCounts.TryGetValue(toolCacheKey, out var attempts))
+                    {
+                        attempt = attempts;
+                    }
+
+                    var messageForModel = TruncateForModel(isTransient
+                        ? BuildTransientToolErrorPayload(message, attempt, TransientRetryMaxAttempts)
+                        : message);
+                    var shouldCache = !isTransient || attempt >= TransientRetryMaxAttempts;
+                    if (shouldCache && !string.IsNullOrWhiteSpace(toolCacheKey))
                     {
                         toolResultCache[toolCacheKey] = messageForModel;
                     }
@@ -1318,6 +1335,14 @@ public sealed class AiAnalysisOrchestrator(
                     checkpoint = AugmentCheckpointWithConvergenceFacts(checkpoint, evidenceLedger, hypothesisTracker);
                 }
 
+                checkpoint = AugmentCheckpointWithOptionalBaselineScheduling(
+                    checkpointJson: checkpoint,
+                    baselineKey: baselineKey,
+                    baselineComplete: baselineTracker.IsComplete,
+                    baselineBlocked: baselineBlocked,
+                    commandsExecuted: commandsExecuted,
+                    scheduler: optionalBaselineCallScheduler);
+
                 lastCheckpointIteration = iteration;
                 commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
                 consecutiveNoProgressCheckpoints = noProgressSinceLastCheckpoint ? consecutiveNoProgressCheckpoints + 1 : 0;
@@ -1479,6 +1504,54 @@ public sealed class AiAnalysisOrchestrator(
         return true;
     }
 
+    private static bool IsTransientToolException(Exception ex)
+    {
+        if (ex is ArgumentException)
+        {
+            return false;
+        }
+
+        if (ex is JsonException)
+        {
+            return false;
+        }
+
+        if (ex is InvalidOperationException)
+        {
+            return false;
+        }
+
+        if (ex is NotSupportedException)
+        {
+            return false;
+        }
+
+        if (ex is System.Security.SecurityException)
+        {
+            return false;
+        }
+
+        return true;
+    }
+
+    private static string BuildTransientToolErrorPayload(string message, int attempt, int maxAttempts)
+    {
+        var trimmed = string.IsNullOrWhiteSpace(message) ? "Transient tool error." : message.Trim();
+        return JsonSerializer.Serialize(new
+        {
+            error = new
+            {
+                code = TransientErrorCode,
+                message = trimmed
+            },
+            retry = new
+            {
+                attempt = Math.Clamp(attempt, 1, Math.Max(1, maxAttempts)),
+                maxAttempts = Math.Max(1, maxAttempts)
+            }
+        }, new JsonSerializerOptions { WriteIndented = false });
+    }
+
     private sealed class JudgeAttemptState
     {
         public bool Attempted { get; set; }
@@ -1547,6 +1620,9 @@ public sealed class AiAnalysisOrchestrator(
         "analysis.exception.hResult",
         "analysis.exception.stackTrace"
     ];
+
+    private const int TransientRetryMaxAttempts = 2;
+    private const string TransientErrorCode = "transient_error";
 
     private static readonly (string Id, string Path, string Call)[] BaselineCalls =
     [
@@ -1618,13 +1694,92 @@ public sealed class AiAnalysisOrchestrator(
         return new BaselinePhaseState(missing.Count == 0, completedOrdered, missing);
     }
 
-    private static IReadOnlyList<string> BuildOptionalStatusFacts(List<ExecutedCommand> commandsExecuted)
+    private static string BuildBaselineCompleteFact(BaselinePhaseState baselinePhase, List<ExecutedCommand> commandsExecuted)
     {
-        if (commandsExecuted.Count == 0)
+        if (baselinePhase.Complete)
         {
-            return Array.Empty<string>();
+            return "PHASE: baselineComplete=true";
         }
 
+        var reason = TryGetBaselineIncompleteReasonCode(commandsExecuted, baselinePhase.Missing);
+        return string.IsNullOrWhiteSpace(reason)
+            ? "PHASE: baselineComplete=false"
+            : $"PHASE: baselineComplete=false (reason: {TruncateText(reason.Trim(), maxChars: 64)})";
+    }
+
+    private static string? TryGetBaselineIncompleteReasonCode(List<ExecutedCommand> commandsExecuted, IReadOnlyList<string> missingBaselineIds)
+    {
+        if (commandsExecuted.Count == 0 || missingBaselineIds.Count == 0)
+        {
+            return null;
+        }
+
+        var missingPaths = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var id in missingBaselineIds)
+        {
+            if (string.IsNullOrWhiteSpace(id))
+            {
+                continue;
+            }
+
+            if (BaselinePathById.TryGetValue(id.Trim(), out var path) && !string.IsNullOrWhiteSpace(path))
+            {
+                missingPaths.Add(path.Trim());
+            }
+        }
+
+        if (missingPaths.Count == 0)
+        {
+            return null;
+        }
+
+        for (var i = commandsExecuted.Count - 1; i >= 0; i--)
+        {
+            var cmd = commandsExecuted[i];
+            if (!cmd.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var path = TryGetString(cmd.Input, "path");
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            path = path.Trim();
+            if (!missingPaths.Contains(path))
+            {
+                continue;
+            }
+
+            var output = cmd.Output ?? string.Empty;
+            if (TryGetReportGetErrorCode(output, out var code) && !string.IsNullOrWhiteSpace(code))
+            {
+                return code;
+            }
+
+            if (output.Contains("report_get.path is required", StringComparison.OrdinalIgnoreCase))
+            {
+                return "missing_required_parameter";
+            }
+
+            if (output.Contains("report_get input must be an object", StringComparison.OrdinalIgnoreCase))
+            {
+                return "invalid_argument";
+            }
+
+            if (output.Contains("Cursor does not match", StringComparison.OrdinalIgnoreCase))
+            {
+                return "invalid_cursor";
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<string> BuildOptionalStatusFacts(List<ExecutedCommand> commandsExecuted)
+    {
         var facts = new List<string>();
         foreach (var optional in OptionalCalls)
         {
@@ -1636,17 +1791,169 @@ public sealed class AiAnalysisOrchestrator(
 
             if (attempts.Count == 0)
             {
+                facts.Add($"OPTIONAL_STATUS: {optional.Id}=not_attempted");
                 continue;
             }
 
-            var last = attempts.Last();
-            if (TryGetReportGetErrorCode(last.Output ?? string.Empty, out var code) && !string.IsNullOrWhiteSpace(code))
+            var succeeded = attempts.Any(a =>
+                TryParseReportGetResponseHasError(a.Output ?? string.Empty, out var hasError) && !hasError);
+
+            if (succeeded)
             {
-                facts.Add($"OPTIONAL_STATUS: {optional.Id}=blocked(reason={code})");
+                facts.Add($"OPTIONAL_STATUS: {optional.Id}=done");
+                continue;
+            }
+
+            var deterministicError = attempts
+                .Select(a => a.Output ?? string.Empty)
+                .Select(output => TryGetReportGetErrorCode(output, out var code) ? code : string.Empty)
+                .Where(code => !string.IsNullOrWhiteSpace(code) && !code.Equals(TransientErrorCode, StringComparison.OrdinalIgnoreCase))
+                .LastOrDefault();
+
+            if (!string.IsNullOrWhiteSpace(deterministicError))
+            {
+                facts.Add($"OPTIONAL_STATUS: {optional.Id}=blocked(reason={deterministicError})");
+                continue;
+            }
+
+            var transientAttempts = attempts.Count(a => a.Cached != true && IsTransientToolFailure(a));
+            if (transientAttempts >= TransientRetryMaxAttempts)
+            {
+                facts.Add($"OPTIONAL_STATUS: {optional.Id}=blocked(reason=transient_retries_exhausted)");
+                continue;
+            }
+
+            facts.Add($"OPTIONAL_STATUS: {optional.Id}=not_attempted");
+        }
+
+        return facts;
+    }
+
+    private sealed class ToolAttemptInfo
+    {
+        public int Attempts { get; set; }
+        public bool HasNonTransientAttempt { get; set; }
+        public bool LastAttemptWasTransient { get; set; }
+        public ExecutedCommand? LastAttempt { get; set; }
+    }
+
+    private static IReadOnlyDictionary<string, ToolAttemptInfo> BuildToolAttemptInfoByKey(List<ExecutedCommand> commandsExecuted)
+    {
+        var attempts = new Dictionary<string, ToolAttemptInfo>(StringComparer.Ordinal);
+
+        foreach (var cmd in commandsExecuted)
+        {
+            if (cmd.Cached == true)
+            {
+                continue;
+            }
+
+            var tool = (cmd.Tool ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(tool))
+            {
+                continue;
+            }
+
+            var key = BuildToolCacheKey(tool, cmd.Input);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            if (!attempts.TryGetValue(key, out var info))
+            {
+                info = new ToolAttemptInfo();
+                attempts[key] = info;
+            }
+
+            info.Attempts++;
+
+            var isTransient = IsTransientToolFailure(cmd);
+            if (!isTransient)
+            {
+                info.HasNonTransientAttempt = true;
+            }
+
+            info.LastAttemptWasTransient = isTransient;
+            info.LastAttempt = cmd;
+        }
+
+        return attempts;
+    }
+
+    private static bool ShouldBlockRepeatingToolKey(string toolCacheKey, IReadOnlyDictionary<string, ToolAttemptInfo> attemptsByKey)
+    {
+        if (string.IsNullOrWhiteSpace(toolCacheKey))
+        {
+            return false;
+        }
+
+        if (!attemptsByKey.TryGetValue(toolCacheKey, out var info) || info == null)
+        {
+            return false;
+        }
+
+        if (info.HasNonTransientAttempt)
+        {
+            return true;
+        }
+
+        if (info.LastAttemptWasTransient && info.Attempts >= TransientRetryMaxAttempts)
+        {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static IReadOnlyList<string> BuildRetryFacts(List<ExecutedCommand> commandsExecuted)
+    {
+        var facts = new List<string>();
+
+        var attemptsByKey = BuildToolAttemptInfoByKey(commandsExecuted);
+        foreach (var kvp in attemptsByKey)
+        {
+            var info = kvp.Value;
+            if (info == null || !info.LastAttemptWasTransient || info.LastAttempt == null)
+            {
+                continue;
+            }
+
+            var attemptCount = Math.Clamp(info.Attempts, 1, TransientRetryMaxAttempts);
+            var exhausted = info.Attempts >= TransientRetryMaxAttempts;
+            var formattedCall = FormatToolCallForFacts(info.LastAttempt.Tool, info.LastAttempt.Input);
+            facts.Add($"RETRY: {formattedCall} attempts={attemptCount}/{TransientRetryMaxAttempts} exhausted={exhausted.ToString().ToLowerInvariant()}");
+
+            if (facts.Count >= 10)
+            {
+                break;
             }
         }
 
         return facts;
+    }
+
+    private static string FormatToolCallForFacts(string toolName, JsonElement toolInput)
+    {
+        var normalizedTool = (toolName ?? string.Empty).Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(normalizedTool))
+        {
+            normalizedTool = "tool";
+        }
+
+        if (normalizedTool.Equals("exec", StringComparison.OrdinalIgnoreCase))
+        {
+            var command = toolInput.ValueKind == JsonValueKind.Object ? TryGetString(toolInput, "command") : toolInput.ToString();
+            command = NormalizeDebuggerCommand(command ?? string.Empty);
+            command = TruncateText(command, maxChars: 256);
+            return string.IsNullOrWhiteSpace(command)
+                ? "exec(command=<missing>)"
+                : $"exec(command=\"{command}\")";
+        }
+
+        var canonical = CanonicalizeJson(toolInput);
+        canonical = TruncateText(canonical, maxChars: 256);
+        return $"{normalizedTool}({canonical})";
     }
 
     private static string ComputeBaselineKey(string fullReportJson)
@@ -1723,6 +2030,36 @@ public sealed class AiAnalysisOrchestrator(
             }
 
             _seen[path] = true;
+        }
+    }
+
+    private sealed class OptionalBaselineCallScheduler
+    {
+        private readonly HashSet<string> _scheduledOptionalIds = new(StringComparer.OrdinalIgnoreCase);
+        private string? _baselineKey;
+
+        public bool WasScheduled(string baselineKey, string optionalId)
+        {
+            EnsureBaselineKey(baselineKey);
+            return _scheduledOptionalIds.Contains(optionalId);
+        }
+
+        public bool MarkScheduled(string baselineKey, string optionalId)
+        {
+            EnsureBaselineKey(baselineKey);
+            return _scheduledOptionalIds.Add(optionalId);
+        }
+
+        private void EnsureBaselineKey(string baselineKey)
+        {
+            var normalized = baselineKey?.Trim() ?? string.Empty;
+            if (string.Equals(_baselineKey, normalized, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _baselineKey = normalized;
+            _scheduledOptionalIds.Clear();
         }
     }
 
@@ -4814,6 +5151,13 @@ State snapshot (JSON):
             return true;
         }
 
+        var transientRetryExhausted = CountTransientRetryExhausted(recent);
+        if (transientRetryExhausted > 0)
+        {
+            reason = "transient_retry_exhausted";
+            return true;
+        }
+
         var hypothesisNoProgress = CountHypothesisRegisterNoProgress(recent);
         if (hypothesisNoProgress >= 2)
         {
@@ -4923,6 +5267,18 @@ State snapshot (JSON):
         return true;
     }
 
+    private static int CountTransientRetryExhausted(List<ExecutedCommand> recent)
+    {
+        if (recent.Count == 0)
+        {
+            return 0;
+        }
+
+        var attemptsByKey = BuildToolAttemptInfoByKey(recent);
+        return attemptsByKey.Values.Count(v =>
+            v is { HasNonTransientAttempt: false, LastAttemptWasTransient: true } && v.Attempts >= TransientRetryMaxAttempts);
+    }
+
     private static string BuildCheckpointProgressSignature(int uniqueToolCalls, int evidenceCount, int hypothesisCount)
         => $"{uniqueToolCalls}|{evidenceCount}|{hypothesisCount}";
 
@@ -4969,6 +5325,36 @@ State snapshot (JSON):
         code = codeEl.ValueKind == JsonValueKind.String ? (codeEl.GetString() ?? string.Empty) : codeEl.ToString();
         code = code.Trim();
         return !string.IsNullOrWhiteSpace(code);
+    }
+
+    private static bool IsTransientToolFailure(ExecutedCommand command)
+    {
+        if (command == null)
+        {
+            return false;
+        }
+
+        if (TryGetReportGetErrorCode(command.Output ?? string.Empty, out var code))
+        {
+            return code.Equals(TransientErrorCode, StringComparison.OrdinalIgnoreCase)
+                   || code.Equals("rate_limited", StringComparison.OrdinalIgnoreCase)
+                   || code.Equals("rate_limit", StringComparison.OrdinalIgnoreCase)
+                   || code.Equals("timeout", StringComparison.OrdinalIgnoreCase)
+                   || code.Equals("temporarily_unavailable", StringComparison.OrdinalIgnoreCase);
+        }
+
+        var output = command.Output ?? string.Empty;
+        return output.Contains("timeout", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("timed out", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("temporarily unavailable", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("rate limit", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("429", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("502", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("503", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("504", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("connection reset", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("connection closed", StringComparison.OrdinalIgnoreCase)
+               || output.Contains("disconnected", StringComparison.OrdinalIgnoreCase);
     }
 
     private static bool IsToolInputContractError(ExecutedCommand command)
@@ -5799,6 +6185,7 @@ State snapshot (JSON):
     {
         var entries = new List<string>(capacity: 50);
         var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+        var attemptsByKey = BuildToolAttemptInfoByKey(commandsExecuted);
 
         static string FormatEntry(string toolName, JsonElement toolInput)
         {
@@ -5842,6 +6229,11 @@ State snapshot (JSON):
                 return;
             }
 
+            if (!ShouldBlockRepeatingToolKey(key, attemptsByKey))
+            {
+                return;
+            }
+
             entries.Add(FormatEntry(tool, cmd.Input));
         }
 
@@ -5868,18 +6260,12 @@ State snapshot (JSON):
     private static HashSet<string> BuildExecutedToolKeySet(List<ExecutedCommand> commandsExecuted)
     {
         var keys = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var cmd in commandsExecuted)
+        var attemptsByKey = BuildToolAttemptInfoByKey(commandsExecuted);
+        foreach (var kvp in attemptsByKey)
         {
-            var tool = (cmd.Tool ?? string.Empty).Trim();
-            if (string.IsNullOrWhiteSpace(tool))
+            if (ShouldBlockRepeatingToolKey(kvp.Key, attemptsByKey))
             {
-                continue;
-            }
-
-            var key = BuildToolCacheKey(tool, cmd.Input);
-            if (!string.IsNullOrWhiteSpace(key))
-            {
-                keys.Add(key);
+                keys.Add(kvp.Key);
             }
         }
 
@@ -5946,6 +6332,114 @@ State snapshot (JSON):
         }
 
         return JsonSerializer.SerializeToElement(filtered);
+    }
+
+    private static JsonElement AugmentNextStepsWithBaselineCorrections(
+        JsonElement nextSteps,
+        BaselinePhaseState baselinePhase,
+        List<ExecutedCommand> commandsExecuted,
+        IReadOnlySet<string> executedToolKeys)
+    {
+        if (baselinePhase.Complete || baselinePhase.Missing.Count == 0 || commandsExecuted.Count == 0)
+        {
+            return nextSteps;
+        }
+
+        if (nextSteps.ValueKind != JsonValueKind.Array)
+        {
+            return nextSteps;
+        }
+
+        var steps = new List<(string Tool, string Call, string Why)>();
+        var seenKeys = new HashSet<string>(StringComparer.Ordinal);
+
+        foreach (var item in nextSteps.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var tool = TryGetString(item, "tool");
+            var call = TryGetString(item, "call");
+            var why = TryGetString(item, "why");
+            if (string.IsNullOrWhiteSpace(tool) || string.IsNullOrWhiteSpace(call) || string.IsNullOrWhiteSpace(why))
+            {
+                continue;
+            }
+
+            if (TryParseCheckpointToolCall(tool, call, out var parsed) && !string.IsNullOrWhiteSpace(parsed.ToolCacheKey))
+            {
+                seenKeys.Add(parsed.ToolCacheKey);
+            }
+
+            steps.Add((tool.Trim(), call.Trim(), why.Trim()));
+            if (steps.Count >= 20)
+            {
+                break;
+            }
+        }
+
+        foreach (var missingId in baselinePhase.Missing)
+        {
+            if (string.IsNullOrWhiteSpace(missingId) || !BaselinePathById.TryGetValue(missingId.Trim(), out var missingPath))
+            {
+                continue;
+            }
+
+            var lastAttempt = commandsExecuted.LastOrDefault(c =>
+                c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(TryGetString(c.Input, "path")?.Trim(), missingPath, StringComparison.OrdinalIgnoreCase));
+
+            if (lastAttempt == null)
+            {
+                continue;
+            }
+
+            var output = lastAttempt.Output ?? string.Empty;
+            if (!TryParseFirstJsonObject(output, out var root) || root.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            if (!root.TryGetProperty("error", out var errorEl) || errorEl.ValueKind != JsonValueKind.Object)
+            {
+                continue;
+            }
+
+            var code = TryGetString(errorEl, "code");
+            if (string.IsNullOrWhiteSpace(code))
+            {
+                continue;
+            }
+
+            if (!TryBuildToolErrorTryHint(root, code, out var tryHint) || string.IsNullOrWhiteSpace(tryHint))
+            {
+                continue;
+            }
+
+            var tool = "report_get";
+            if (!TryParseCheckpointToolCall(tool, tryHint, out var parsedTry))
+            {
+                continue;
+            }
+
+            var callKey = parsedTry.ToolCacheKey;
+            if (string.IsNullOrWhiteSpace(callKey) || executedToolKeys.Contains(callKey) || !seenKeys.Add(callKey))
+            {
+                continue;
+            }
+
+            var why = $"Recover missing baseline '{missingId.Trim()}': follow the tool 'Try' hint exactly.";
+            steps.Insert(0, (tool, tryHint.Trim(), why));
+            if (steps.Count > 20)
+            {
+                steps.RemoveAt(steps.Count - 1);
+            }
+            break;
+        }
+
+        return JsonSerializer.SerializeToElement(steps.Select(s => new { tool = s.Tool, call = s.Call, why = s.Why }).ToList());
     }
 
     private readonly record struct ParsedToolCall(string ToolName, JsonElement ToolInput, string ToolCacheKey);
@@ -6216,6 +6710,8 @@ State snapshot (JSON):
             return trimmed.StartsWith("baselineComplete=", StringComparison.OrdinalIgnoreCase) ||
                    trimmed.StartsWith("BASELINE_KEY:", StringComparison.OrdinalIgnoreCase) ||
                    trimmed.StartsWith("BASELINE_CALL:", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("OPTIONAL_STATUS:", StringComparison.OrdinalIgnoreCase) ||
+                   trimmed.StartsWith("RETRY:", StringComparison.OrdinalIgnoreCase) ||
                    trimmed.StartsWith("PHASE: baselineComplete=", StringComparison.OrdinalIgnoreCase) ||
                    trimmed.StartsWith("PHASE: baselineCallsCompleted=", StringComparison.OrdinalIgnoreCase) ||
                    trimmed.StartsWith("PHASE: baselineMissing=", StringComparison.OrdinalIgnoreCase);
@@ -6243,7 +6739,7 @@ State snapshot (JSON):
         }
 
         AddFact($"BASELINE_KEY: {baselineKey.Trim()}");
-        AddFact($"PHASE: baselineComplete={baselinePhase.Complete.ToString().ToLowerInvariant()}");
+        AddFact(BuildBaselineCompleteFact(baselinePhase, commandsExecuted));
         AddFact($"PHASE: baselineCallsCompleted={JsonSerializer.Serialize(baselinePhase.Completed)}");
         if (!baselinePhase.Complete)
         {
@@ -6263,6 +6759,11 @@ State snapshot (JSON):
         foreach (var optionalStatusFact in BuildOptionalStatusFacts(commandsExecuted))
         {
             AddFact(optionalStatusFact);
+        }
+
+        foreach (var retryFact in BuildRetryFacts(commandsExecuted))
+        {
+            AddFact(retryFact);
         }
 
         AddFact("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
@@ -6339,6 +6840,8 @@ State snapshot (JSON):
             ? FilterCheckpointNextSteps(nextStepsEl, executedToolKeys)
             : JsonSerializer.SerializeToElement(Array.Empty<object>());
 
+        nextSteps = AugmentNextStepsWithBaselineCorrections(nextSteps, baselinePhase, commandsExecuted, executedToolKeys);
+
         var normalized = JsonSerializer.Serialize(new
         {
             facts,
@@ -6390,6 +6893,16 @@ State snapshot (JSON):
         var baselinePhase = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
             ? ComputeBaselinePhaseState(commandsExecuted)
             : new BaselinePhaseState(Complete: false, Completed: [], Missing: []);
+        var executedToolKeys = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
+            ? BuildExecutedToolKeySet(commandsExecuted)
+            : new HashSet<string>(StringComparer.Ordinal);
+        var nextSteps = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
+            ? AugmentNextStepsWithBaselineCorrections(
+                JsonSerializer.SerializeToElement(Array.Empty<object>()),
+                baselinePhase,
+                commandsExecuted,
+                executedToolKeys)
+            : JsonSerializer.SerializeToElement(Array.Empty<object>());
 
         var facts = new List<string>
         {
@@ -6405,7 +6918,7 @@ State snapshot (JSON):
                 facts.Add($"BASELINE_KEY: {baselineKey.Trim()}");
             }
 
-            facts.Add($"PHASE: baselineComplete={baselinePhase.Complete.ToString().ToLowerInvariant()}");
+            facts.Add(BuildBaselineCompleteFact(baselinePhase, commandsExecuted));
             facts.Add($"PHASE: baselineCallsCompleted={JsonSerializer.Serialize(baselinePhase.Completed)}");
             if (!baselinePhase.Complete)
             {
@@ -6415,6 +6928,7 @@ State snapshot (JSON):
             facts.AddRange(BaselineCallFacts);
             facts.AddRange(OptionalCallFacts);
             facts.AddRange(BuildOptionalStatusFacts(commandsExecuted));
+            facts.AddRange(BuildRetryFacts(commandsExecuted));
 
             facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
             facts.Add("REPORT_GET SYNTAX: report_get.path is required (never call report_get() / report_get({})). Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
@@ -6447,7 +6961,7 @@ State snapshot (JSON):
                     new { id = "E0", source = "deterministic", finding = TruncateText(evidence, maxChars: evidenceMaxChars) }
                 },
                 doNotRepeat = doNotRepeat.Take(doNotRepeatCount).ToList(),
-                nextSteps = Array.Empty<object>()
+                nextSteps
             };
 
             var json = JsonSerializer.Serialize(checkpoint, new JsonSerializerOptions { WriteIndented = false });
@@ -6510,7 +7024,7 @@ State snapshot (JSON):
             $"LOOP_GUARD: reason={reason}",
             $"pass={passName}",
             $"BASELINE_KEY: {baselineKey.Trim()}",
-            $"PHASE: baselineComplete={baselinePhase.Complete.ToString().ToLowerInvariant()}",
+            BuildBaselineCompleteFact(baselinePhase, commandsExecuted),
             $"PHASE: baselineCallsCompleted={JsonSerializer.Serialize(baselinePhase.Completed)}"
         };
 
@@ -6528,6 +7042,7 @@ State snapshot (JSON):
         facts.AddRange(BaselineCallFacts);
         facts.AddRange(OptionalCallFacts);
         facts.AddRange(BuildOptionalStatusFacts(commandsExecuted));
+        facts.AddRange(BuildRetryFacts(commandsExecuted));
 
         facts.Add("REPORT_GET CURSOR: cursor is valid only for identical query shape (same path/select/where/pageKind/limit). If any change, drop cursor. Prefer where filters over cursor paging for large arrays.");
         facts.Add("REPORT_GET SYNTAX: report_get.path is required (never call report_get() / report_get({})). Array indices must be numeric (stackTrace[0] valid; stackTrace[0:5] invalid).");
@@ -6984,6 +7499,194 @@ State snapshot (JSON):
         return augmented.Length <= MaxCheckpointJsonChars
             ? augmented
             : checkpointJson;
+    }
+
+    private static bool ShouldRemoveOptionalBaselineNextStep(JsonElement step, string optionalToolCacheKey, string optionalCall)
+    {
+        if (step.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        var tool = TryGetString(step, "tool");
+        var call = TryGetString(step, "call");
+        if (string.IsNullOrWhiteSpace(tool) || string.IsNullOrWhiteSpace(call))
+        {
+            return false;
+        }
+
+        if (!string.IsNullOrWhiteSpace(optionalToolCacheKey)
+            && TryParseCheckpointToolCall(tool, call, out var parsed)
+            && string.Equals(parsed.ToolCacheKey, optionalToolCacheKey, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return string.Equals(tool.Trim(), "report_get", StringComparison.OrdinalIgnoreCase)
+               && string.Equals(call.Trim(), optionalCall, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string AugmentCheckpointWithOptionalBaselineScheduling(
+        string checkpointJson,
+        string baselineKey,
+        bool baselineComplete,
+        bool baselineBlocked,
+        List<ExecutedCommand> commandsExecuted,
+        OptionalBaselineCallScheduler scheduler)
+    {
+        ArgumentNullException.ThrowIfNull(commandsExecuted);
+        ArgumentNullException.ThrowIfNull(scheduler);
+
+        if (string.IsNullOrWhiteSpace(checkpointJson))
+        {
+            return checkpointJson;
+        }
+
+        if (!TryParseFirstJsonObject(checkpointJson, out var json) || json.ValueKind != JsonValueKind.Object)
+        {
+            return checkpointJson;
+        }
+
+        var facts = TryGetStringArray(json, "facts") ?? new List<string>();
+        var nextSteps = json.TryGetProperty("nextSteps", out var nextStepsEl) ? nextStepsEl : JsonSerializer.SerializeToElement(Array.Empty<object>());
+
+        var isFinalizing = facts.Any(f => string.Equals(f?.Trim(), "PHASE: finalizeNow=true", StringComparison.OrdinalIgnoreCase))
+                           || (nextSteps.ValueKind == JsonValueKind.Array
+                               && nextSteps.EnumerateArray().Any(s =>
+                                   s.ValueKind == JsonValueKind.Object
+                                   && string.Equals(TryGetString(s, "tool")?.Trim(), "analysis_complete", StringComparison.OrdinalIgnoreCase)));
+
+        foreach (var optional in OptionalCalls)
+        {
+            if (string.IsNullOrWhiteSpace(optional.Id))
+            {
+                continue;
+            }
+
+            var attempted = commandsExecuted.Any(c =>
+                c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(TryGetString(c.Input, "path")?.Trim(), optional.Path, StringComparison.OrdinalIgnoreCase));
+
+            var hasStatus = facts.Any(f => f != null && f.TrimStart().StartsWith($"OPTIONAL_STATUS: {optional.Id}=", StringComparison.OrdinalIgnoreCase));
+            if (!hasStatus)
+            {
+                continue;
+            }
+
+            if (attempted || baselineBlocked || isFinalizing || !baselineComplete)
+            {
+                continue;
+            }
+
+            var optionalStepKey = string.Empty;
+            if (TryParseCheckpointToolCall("report_get", optional.Call, out var parsedOptional))
+            {
+                optionalStepKey = parsedOptional.ToolCacheKey;
+            }
+
+            var hasOptionalNextStep = false;
+            if (nextSteps.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var step in nextSteps.EnumerateArray())
+                {
+                    if (step.ValueKind != JsonValueKind.Object)
+                    {
+                        continue;
+                    }
+
+                    var tool = TryGetString(step, "tool");
+                    var call = TryGetString(step, "call");
+                    if (string.IsNullOrWhiteSpace(tool) || string.IsNullOrWhiteSpace(call))
+                    {
+                        continue;
+                    }
+
+                    if (TryParseCheckpointToolCall(tool, call, out var parsedStep)
+                        && !string.IsNullOrWhiteSpace(optionalStepKey)
+                        && string.Equals(parsedStep.ToolCacheKey, optionalStepKey, StringComparison.Ordinal))
+                    {
+                        hasOptionalNextStep = true;
+                        break;
+                    }
+
+                    if (string.IsNullOrWhiteSpace(optionalStepKey)
+                        && string.Equals(tool.Trim(), "report_get", StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(call.Trim(), optional.Call, StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasOptionalNextStep = true;
+                        break;
+                    }
+                }
+            }
+
+            if (hasOptionalNextStep && !string.IsNullOrWhiteSpace(optionalStepKey))
+            {
+                scheduler.MarkScheduled(baselineKey, optional.Id);
+            }
+
+            if (!scheduler.WasScheduled(baselineKey, optional.Id))
+            {
+                scheduler.MarkScheduled(baselineKey, optional.Id);
+
+                if (hasOptionalNextStep)
+                {
+                    continue;
+                }
+
+                if (nextSteps.ValueKind != JsonValueKind.Array)
+                {
+                    continue;
+                }
+
+                var existing = nextSteps.EnumerateArray().ToList();
+                if (existing.Count >= 5)
+                {
+                    continue;
+                }
+
+                existing.Add(JsonSerializer.SerializeToElement(new
+                {
+                    tool = "report_get",
+                    call = optional.Call,
+                    why = "Optional baseline (run at most once): fetch exception analysis details if it helps type/method resolution; skip if it errors."
+                }));
+
+                nextSteps = JsonSerializer.SerializeToElement(existing);
+            }
+            else
+            {
+                // Scheduled once but still not attempted: mark as skipped to avoid repeated low-ROI suggestions.
+                facts = facts
+                    .Where(f => f == null || !f.TrimStart().StartsWith($"OPTIONAL_STATUS: {optional.Id}=", StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                facts.Add($"OPTIONAL_STATUS: {optional.Id}=skipped(reason=low_roi)");
+
+                if (nextSteps.ValueKind == JsonValueKind.Array && hasOptionalNextStep)
+                {
+                    var filtered = nextSteps.EnumerateArray()
+                        .Where(s =>
+                            s.ValueKind != JsonValueKind.Object || !ShouldRemoveOptionalBaselineNextStep(s, optionalStepKey, optional.Call))
+                        .ToList();
+
+                    nextSteps = JsonSerializer.SerializeToElement(filtered);
+                }
+            }
+        }
+
+        var hypotheses = json.TryGetProperty("hypotheses", out var hypothesesEl) ? hypothesesEl : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var evidence = json.TryGetProperty("evidence", out var evidenceEl) ? evidenceEl : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var doNotRepeat = json.TryGetProperty("doNotRepeat", out var dnrEl) ? dnrEl : JsonSerializer.SerializeToElement(Array.Empty<string>());
+
+        var updated = JsonSerializer.Serialize(new
+        {
+            facts = facts.Take(50).Select(f => TruncateText(f ?? string.Empty, maxChars: 2048)).Where(f => !string.IsNullOrWhiteSpace(f)).ToList(),
+            hypotheses,
+            evidence,
+            doNotRepeat,
+            nextSteps
+        }, new JsonSerializerOptions { WriteIndented = false });
+
+        return updated.Length <= MaxCheckpointJsonChars ? updated : checkpointJson;
     }
 
     private static bool ShouldFinalizeNow(AiEvidenceLedger evidenceLedger, AiHypothesisTracker hypothesisTracker)

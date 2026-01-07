@@ -4794,6 +4794,360 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public void NormalizeCheckpointJson_WhenTransientToolFailureFirstAttempt_AllowsRetryAndEmitsRetryFact()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var execInput = JsonDocument.Parse("{\"command\":\"!clrstack\"}");
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "exec",
+                Input = execInput.RootElement.Clone(),
+                Output = "{\"error\":{\"code\":\"transient_error\",\"message\":\"timeout\"}}",
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        {
+          "facts": [],
+          "hypotheses": [],
+          "evidence": [],
+          "doNotRepeat": [],
+          "nextSteps": [
+            { "tool": "exec", "call": "exec(command=\"!clrstack\")", "why": "retry once if transient" }
+          ]
+        }
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var doNotRepeat = doc.RootElement.GetProperty("doNotRepeat").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Empty(doNotRepeat);
+
+        var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(nextSteps);
+        Assert.Contains("exec(command=\"!clrstack\")", nextSteps[0].GetProperty("call").GetString() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.StartsWith("RETRY:", StringComparison.OrdinalIgnoreCase) && f.Contains("attempts=1/2", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(facts, f => f.StartsWith("RETRY:", StringComparison.OrdinalIgnoreCase) && f.Contains("exhausted=false", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenTransientToolFailureExhausted_BlocksRetryAndEmitsExhaustedRetryFact()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var execInput = JsonDocument.Parse("{\"command\":\"!clrstack\"}");
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "exec",
+                Input = execInput.RootElement.Clone(),
+                Output = "{\"error\":{\"code\":\"transient_error\",\"message\":\"timeout\"}}",
+                Iteration = 1
+            },
+            new()
+            {
+                Tool = "exec",
+                Input = execInput.RootElement.Clone(),
+                Output = "{\"error\":{\"code\":\"transient_error\",\"message\":\"timeout\"}}",
+                Iteration = 2
+            }
+        };
+
+        var checkpointJson = """
+        {
+          "facts": [],
+          "hypotheses": [],
+          "evidence": [],
+          "doNotRepeat": [],
+          "nextSteps": [
+            { "tool": "exec", "call": "exec(command=\"!clrstack\")", "why": "do not retry forever" }
+          ]
+        }
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var doNotRepeat = doc.RootElement.GetProperty("doNotRepeat").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(doNotRepeat, d => d.StartsWith("exec(", StringComparison.OrdinalIgnoreCase));
+
+        var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Empty(nextSteps);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.StartsWith("RETRY:", StringComparison.OrdinalIgnoreCase) && f.Contains("attempts=2/2", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(facts, f => f.StartsWith("RETRY:", StringComparison.OrdinalIgnoreCase) && f.Contains("exhausted=true", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenBaselineCallTooLarge_IncludesBaselineReasonAndCorrectiveNextStep()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var input = JsonDocument.Parse("""
+        {"path":"analysis.summary","pageKind":"object","select":["crashType","description","recommendations","threadCount","moduleCount","assemblyCount"]}
+        """);
+
+        var output = """
+        {
+          "path": "analysis.summary",
+          "error": { "code": "too_large", "message": "Error response exceeded maxChars." },
+          "extra": { "exampleCalls": [ "report_get(path=\"analysis.summary\", pageKind=\"object\", limit=10)" ] }
+        }
+        """;
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = output,
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        { "facts": [], "hypotheses": [], "evidence": [], "doNotRepeat": [], "nextSteps": [] }
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.Contains("PHASE: baselineComplete=false", StringComparison.OrdinalIgnoreCase) && f.Contains("reason: too_large", StringComparison.OrdinalIgnoreCase));
+
+        var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.NotEmpty(nextSteps);
+        var call = nextSteps[0].GetProperty("call").GetString() ?? string.Empty;
+        Assert.Contains("analysis.summary", call, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("limit=10", call, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenOptionalCallNotAttempted_EmitsNotAttemptedStatus()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        var normalized = (string)normalize!.Invoke(null, new object[]
+        {
+            "{\"facts\":[],\"hypotheses\":[],\"evidence\":[],\"doNotRepeat\":[],\"nextSteps\":[]}",
+            new List<ExecutedCommand>(),
+            "dumpId=x generatedAt=y"
+        })!;
+
+        using var doc = JsonDocument.Parse(normalized);
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => string.Equals("OPTIONAL_STATUS: EXC_ANALYSIS=not_attempted", f, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenOptionalCallSucceeds_EmitsDoneStatus()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var input = JsonDocument.Parse("{\"path\":\"analysis.exception.analysis\",\"pageKind\":\"object\",\"limit\":200}");
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.exception.analysis\",\"value\":{\"ok\":true}}",
+                Iteration = 1
+            }
+        };
+
+        var normalized = (string)normalize!.Invoke(null, new object[]
+        {
+            "{\"facts\":[],\"hypotheses\":[],\"evidence\":[],\"doNotRepeat\":[],\"nextSteps\":[]}",
+            commands,
+            "dumpId=x generatedAt=y"
+        })!;
+
+        using var doc = JsonDocument.Parse(normalized);
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => string.Equals("OPTIONAL_STATUS: EXC_ANALYSIS=done", f, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenOptionalCallTooLarge_EmitsBlockedStatus()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var input = JsonDocument.Parse("{\"path\":\"analysis.exception.analysis\",\"pageKind\":\"object\",\"limit\":200}");
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.exception.analysis\",\"error\":{\"code\":\"too_large\",\"message\":\"Error response exceeded maxChars.\"}}",
+                Iteration = 1
+            }
+        };
+
+        var normalized = (string)normalize!.Invoke(null, new object[]
+        {
+            "{\"facts\":[],\"hypotheses\":[],\"evidence\":[],\"doNotRepeat\":[],\"nextSteps\":[]}",
+            commands,
+            "dumpId=x generatedAt=y"
+        })!;
+
+        using var doc = JsonDocument.Parse(normalized);
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => string.Equals("OPTIONAL_STATUS: EXC_ANALYSIS=blocked(reason=too_large)", f, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenOptionalCallTransientRetriesExhausted_EmitsBlockedTransientExhaustedStatus()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var input = JsonDocument.Parse("{\"path\":\"analysis.exception.analysis\",\"pageKind\":\"object\",\"limit\":200}");
+        var output = "{\"error\":{\"code\":\"transient_error\",\"message\":\"timeout\"}}";
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = output,
+                Iteration = 1
+            },
+            new()
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = output,
+                Iteration = 2
+            }
+        };
+
+        var normalized = (string)normalize!.Invoke(null, new object[]
+        {
+            "{\"facts\":[],\"hypotheses\":[],\"evidence\":[],\"doNotRepeat\":[],\"nextSteps\":[]}",
+            commands,
+            "dumpId=x generatedAt=y"
+        })!;
+
+        using var doc = JsonDocument.Parse(normalized);
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => string.Equals("OPTIONAL_STATUS: EXC_ANALYSIS=blocked(reason=transient_retries_exhausted)", f, StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenCheckpointContainsConflictingOptionalAndRetryFacts_UsesDerivedFactsOnly()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var execInput = JsonDocument.Parse("{\"command\":\"!clrstack\"}");
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "exec",
+                Input = execInput.RootElement.Clone(),
+                Output = "{\"error\":{\"code\":\"transient_error\",\"message\":\"timeout\"}}",
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        {
+          "facts": [
+            "OPTIONAL_STATUS: EXC_ANALYSIS=done",
+            "RETRY: exec(command=\"!clrstack\") attempts=2/2 exhausted=true"
+          ],
+          "hypotheses": [],
+          "evidence": [],
+          "doNotRepeat": [],
+          "nextSteps": []
+        }
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => string.Equals("OPTIONAL_STATUS: EXC_ANALYSIS=not_attempted", f, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(facts, f => string.Equals("OPTIONAL_STATUS: EXC_ANALYSIS=done", f, StringComparison.OrdinalIgnoreCase));
+
+        Assert.Contains(facts, f => f.StartsWith("RETRY:", StringComparison.OrdinalIgnoreCase) && f.Contains("attempts=1/2", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(facts, f => f.StartsWith("RETRY:", StringComparison.OrdinalIgnoreCase) && f.Contains("attempts=2/2", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void AugmentCheckpointWithOptionalBaselineScheduling_SchedulesOnceThenSkips()
+    {
+        var augment = typeof(AiAnalysisOrchestrator).GetMethod("AugmentCheckpointWithOptionalBaselineScheduling", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(augment);
+
+        var schedulerType = typeof(AiAnalysisOrchestrator).GetNestedType("OptionalBaselineCallScheduler", BindingFlags.NonPublic);
+        Assert.NotNull(schedulerType);
+
+        var scheduler = Activator.CreateInstance(schedulerType!, nonPublic: true);
+        Assert.NotNull(scheduler);
+
+        var checkpointJson = """
+        {
+          "facts": ["OPTIONAL_STATUS: EXC_ANALYSIS=not_attempted"],
+          "hypotheses": [],
+          "evidence": [],
+          "doNotRepeat": [],
+          "nextSteps": []
+        }
+        """;
+
+        var first = (string)augment!.Invoke(null, new object[]
+        {
+            checkpointJson,
+            "dumpId=x generatedAt=y",
+            true,
+            false,
+            new List<ExecutedCommand>(),
+            scheduler!
+        })!;
+
+        using var firstDoc = JsonDocument.Parse(first);
+        var firstSteps = firstDoc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(firstSteps);
+        Assert.Contains("analysis.exception.analysis", firstSteps[0].GetProperty("call").GetString() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
+
+        var second = (string)augment!.Invoke(null, new object[]
+        {
+            first,
+            "dumpId=x generatedAt=y",
+            true,
+            false,
+            new List<ExecutedCommand>(),
+            scheduler!
+        })!;
+
+        using var secondDoc = JsonDocument.Parse(second);
+        var secondFacts = secondDoc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(secondFacts, f => string.Equals("OPTIONAL_STATUS: EXC_ANALYSIS=skipped(reason=low_roi)", f, StringComparison.OrdinalIgnoreCase));
+        Assert.Empty(secondDoc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList());
+    }
+
+    [Fact]
     public void IsBaselineEvidenceComplete_DoesNotRequireAnalysisExceptionAnalysis()
     {
         var isComplete = typeof(AiAnalysisOrchestrator).GetMethod("IsBaselineEvidenceComplete", BindingFlags.NonPublic | BindingFlags.Static);
@@ -4856,6 +5210,38 @@ public class AiAnalysisOrchestratorTests
 
         Assert.True(shouldInject);
         Assert.Equal("invalid_cursor_loop", reason);
+    }
+
+    [Fact]
+    public void TryGetDeterministicCheckpointInjectionReason_WhenTransientRetryExhausted_ReturnsTransientRetryExhausted()
+    {
+        var method = typeof(AiAnalysisOrchestrator).GetMethod("TryGetDeterministicCheckpointInjectionReason", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        static ExecutedCommand TransientExec(int iteration)
+        {
+            using var doc = JsonDocument.Parse("{\"command\":\"!clrstack\"}");
+            return new ExecutedCommand
+            {
+                Tool = "exec",
+                Input = doc.RootElement.Clone(),
+                Output = "{\"error\":{\"code\":\"transient_error\",\"message\":\"timeout\"}}",
+                Iteration = iteration
+            };
+        }
+
+        var commands = new List<ExecutedCommand>
+        {
+            TransientExec(9),
+            TransientExec(10)
+        };
+
+        object?[] args = { 10, commands, true, 0, 0, false, null };
+        var shouldInject = (bool)method!.Invoke(null, args)!;
+        var reason = (string)args[6]!;
+
+        Assert.True(shouldInject);
+        Assert.Equal("transient_retry_exhausted", reason);
     }
 
     [Fact]
