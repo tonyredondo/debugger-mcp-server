@@ -10595,29 +10595,52 @@ Be thorough but efficient. Don't run unnecessary commands.
 
     private static void WriteCanonicalJson(JsonElement element, Utf8JsonWriter writer)
     {
+        WriteCanonicalJson(element, writer, null);
+    }
+
+    private static void WriteCanonicalJson(JsonElement element, Utf8JsonWriter writer, string? currentPropertyName)
+    {
+        if (currentPropertyName is not null && TryWriteCanonicalInteger(element, writer, currentPropertyName))
+        {
+            return;
+        }
+
         switch (element.ValueKind)
         {
             case JsonValueKind.Object:
                 writer.WriteStartObject();
-                foreach (var property in element.EnumerateObject().OrderBy(p => p.Name, StringComparer.Ordinal))
+                foreach (var property in element.EnumerateObject()
+                    .Where(p => p.Value.ValueKind is not (JsonValueKind.Null or JsonValueKind.Undefined))
+                    .OrderBy(p => p.Name, StringComparer.Ordinal))
                 {
                     writer.WritePropertyName(property.Name);
                     if (property.Name.Equals("select", StringComparison.Ordinal) && property.Value.ValueKind == JsonValueKind.Array)
                     {
                         WriteCanonicalSelectArray(property.Value, writer);
                     }
+                    else if (property.Name.Equals("where", StringComparison.Ordinal) && property.Value.ValueKind == JsonValueKind.Array)
+                    {
+                        WriteCanonicalJson(property.Value, writer, "where");
+                    }
                     else
                     {
-                        WriteCanonicalJson(property.Value, writer);
+                        WriteCanonicalJson(property.Value, writer, property.Name);
                     }
                 }
                 writer.WriteEndObject();
                 break;
             case JsonValueKind.Array:
+                if (currentPropertyName is not null &&
+                    currentPropertyName.Equals("where", StringComparison.Ordinal) &&
+                    TryWriteCanonicalWhereArray(element, writer))
+                {
+                    return;
+                }
+
                 writer.WriteStartArray();
                 foreach (var item in element.EnumerateArray())
                 {
-                    WriteCanonicalJson(item, writer);
+                    WriteCanonicalJson(item, writer, currentPropertyName);
                 }
                 writer.WriteEndArray();
                 break;
@@ -10627,11 +10650,122 @@ Be thorough but efficient. Don't run unnecessary commands.
         }
     }
 
+    private static bool TryWriteCanonicalInteger(JsonElement element, Utf8JsonWriter writer, string propertyName)
+    {
+        if (!propertyName.Equals("limit", StringComparison.Ordinal) &&
+            !propertyName.Equals("maxChars", StringComparison.Ordinal) &&
+            !propertyName.Equals("maxDepth", StringComparison.Ordinal) &&
+            !propertyName.Equals("offset", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (element.ValueKind == JsonValueKind.Number)
+        {
+            if (element.TryGetInt64(out var value))
+            {
+                writer.WriteNumberValue(value);
+                return true;
+            }
+
+            if (element.TryGetDouble(out var floating))
+            {
+                if (double.IsFinite(floating))
+                {
+                    var rounded = Math.Round(floating);
+                    if (Math.Abs(floating - rounded) < 0.000000001d &&
+                        rounded >= long.MinValue &&
+                        rounded <= long.MaxValue)
+                    {
+                        writer.WriteNumberValue((long)rounded);
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        if (element.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        var raw = element.GetString();
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return false;
+        }
+
+        if (!long.TryParse(raw.Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out var parsed))
+        {
+            return false;
+        }
+
+        writer.WriteNumberValue(parsed);
+        return true;
+    }
+
+    private static bool TryWriteCanonicalWhereArray(JsonElement element, Utf8JsonWriter writer)
+    {
+        if (element.ValueKind != JsonValueKind.Array)
+        {
+            return false;
+        }
+
+        var items = new List<(string Key, JsonElement Item)>();
+        foreach (var item in element.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object)
+            {
+                items.Clear();
+                break;
+            }
+
+            var field = item.TryGetProperty("field", out var fieldEl) && fieldEl.ValueKind == JsonValueKind.String
+                ? (fieldEl.GetString() ?? string.Empty).Trim()
+                : string.Empty;
+
+            string opName = string.Empty;
+            string opValue = string.Empty;
+
+            var opCandidate = item.EnumerateObject()
+                .Where(p => !p.Name.Equals("field", StringComparison.Ordinal) && !p.Name.Equals("caseInsensitive", StringComparison.Ordinal))
+                .OrderBy(p => p.Name, StringComparer.Ordinal)
+                .FirstOrDefault();
+
+            if (!string.IsNullOrWhiteSpace(opCandidate.Name))
+            {
+                opName = opCandidate.Name;
+                opValue = opCandidate.Value.ValueKind == JsonValueKind.String
+                    ? (opCandidate.Value.GetString() ?? string.Empty).Trim()
+                    : (opCandidate.Value.ToString() ?? string.Empty);
+            }
+
+            items.Add(($"{field}\u001f{opName}\u001f{opValue}", item));
+        }
+
+        if (items.Count == 0)
+        {
+            return false;
+        }
+
+        items.Sort((left, right) => StringComparer.Ordinal.Compare(left.Key, right.Key));
+
+        writer.WriteStartArray();
+        foreach (var (_, item) in items)
+        {
+            WriteCanonicalJson(item, writer, null);
+        }
+        writer.WriteEndArray();
+        return true;
+    }
+
     private static void WriteCanonicalSelectArray(JsonElement element, Utf8JsonWriter writer)
     {
         if (element.ValueKind != JsonValueKind.Array)
         {
-            WriteCanonicalJson(element, writer);
+            WriteCanonicalJson(element, writer, null);
             return;
         }
 
@@ -10658,7 +10792,7 @@ Be thorough but efficient. Don't run unnecessary commands.
             writer.WriteStartArray();
             foreach (var item in element.EnumerateArray())
             {
-                WriteCanonicalJson(item, writer);
+                WriteCanonicalJson(item, writer, null);
             }
             writer.WriteEndArray();
             return;

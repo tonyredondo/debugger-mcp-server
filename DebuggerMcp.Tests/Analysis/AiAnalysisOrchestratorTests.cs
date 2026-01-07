@@ -4734,6 +4734,66 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public void BuildToolCacheKey_WhenNumericFieldIsString_NormalizesToInteger()
+    {
+        var buildToolCacheKey = typeof(AiAnalysisOrchestrator).GetMethod("BuildToolCacheKey", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(buildToolCacheKey);
+
+        using var doc1 = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace","limit":8}
+        """);
+
+        using var doc2 = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace","limit":"8"}
+        """);
+
+        var key1 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc1.RootElement })!;
+        var key2 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc2.RootElement })!;
+
+        Assert.Equal(key1, key2);
+    }
+
+    [Fact]
+    public void BuildToolCacheKey_WhenOptionalParamIsNull_TreatsAsOmitted()
+    {
+        var buildToolCacheKey = typeof(AiAnalysisOrchestrator).GetMethod("BuildToolCacheKey", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(buildToolCacheKey);
+
+        using var doc1 = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace"}
+        """);
+
+        using var doc2 = JsonDocument.Parse("""
+        {"path":"analysis.exception.stackTrace","cursor":null}
+        """);
+
+        var key1 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc1.RootElement })!;
+        var key2 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc2.RootElement })!;
+
+        Assert.Equal(key1, key2);
+    }
+
+    [Fact]
+    public void BuildToolCacheKey_WhenWhereArrayOrderDiffers_IsOrderInsensitive()
+    {
+        var buildToolCacheKey = typeof(AiAnalysisOrchestrator).GetMethod("BuildToolCacheKey", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(buildToolCacheKey);
+
+        using var doc1 = JsonDocument.Parse("""
+        {"path":"analysis.modules","where":[{"field":"name","equals":"alpha"},{"field":"path","equals":"beta"}],"limit":5}
+        """);
+
+        using var doc2 = JsonDocument.Parse("""
+        {"path":"analysis.modules","where":[{"field":"path","equals":"beta"},{"field":"name","equals":"alpha"}],"limit":5}
+        """);
+
+        var key1 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc1.RootElement })!;
+        var key2 = (string)buildToolCacheKey!.Invoke(null, new object[] { "report_get", doc2.RootElement })!;
+
+        Assert.Equal(key1, key2);
+    }
+
+    [Fact]
     public void NormalizeCheckpointJson_FiltersNextStepsThatRepeatExecutedToolCalls_AndKeepsNonDuplicates()
     {
         var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
