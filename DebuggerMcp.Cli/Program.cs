@@ -5162,6 +5162,14 @@ public class Program
         CliTranscriptStore transcript,
         CancellationToken cancellationToken)
     {
+        var sessionState = LlmAgentSessionStateStore.GetOrCreate(state.Settings.ServerUrl, state.SessionId, state.DumpId);
+
+        // Carry-forward checkpoint for this scope (durable “memory” across pruning).
+        if (!string.IsNullOrWhiteSpace(sessionState.LastCheckpointJson))
+        {
+            seedMessages = InsertLlmAgentCheckpoint(seedMessages, sessionState.LastCheckpointJson);
+        }
+
         var tools = LlmAgentTools.GetDefaultTools().ToList();
         if (reports.Count > 0)
         {
@@ -5169,59 +5177,146 @@ public class Program
         }
         var approvalState = new LlmAgentApprovalState(confirmationsEnabled: llmSettings.AgentModeConfirmToolCalls);
 
+        Task<ChatCompletionResult> CompleteWithToolsAsync(IReadOnlyList<ChatMessage> messages, CancellationToken ct)
+            => output.WithSpinnerAsync(
+                "LLM agent thinking...",
+                () => completeAsync(new ChatCompletionRequest
+                {
+                    Messages = messages,
+                    Tools = tools,
+                    ToolChoice = new ChatToolChoice { Mode = "auto" },
+                    MaxTokens = null,
+                    ReasoningEffort = llmSettings.GetEffectiveReasoningEffort()
+                }, ct));
+
+        async Task<string> ExecuteToolWithApprovalsAsync(ChatToolCall toolCall, CancellationToken ct)
+        {
+            if (approvalState.ConfirmationsEnabled && !approvalState.IsAllowed(toolCall.Name))
+            {
+                var preview = BuildAgentToolArgsPreview(toolCall);
+                var decision = output.PromptLlmAgentToolApproval(toolCall.Name, preview);
+                approvalState.ApplyDecision(toolCall.Name, decision);
+
+                switch (decision)
+                {
+                    case LlmAgentToolApprovalDecision.CancelRun:
+                        throw new OperationCanceledException("Agent run canceled by user.");
+                    case LlmAgentToolApprovalDecision.DenyOnce:
+                        return "ERROR: Tool call denied by user.";
+                }
+            }
+
+            if (reports.Count > 0 && LlmReportAgentTools.IsReportTool(toolCall.Name))
+            {
+                var result = await LlmReportAgentTools.ExecuteAsync(toolCall, reports, ct).ConfigureAwait(false);
+                AppendLlmToolTranscript(transcript, state, toolCall, result);
+                return result;
+            }
+
+            var toolResult = await ExecuteAgentToolCallAsync(output, state, mcpClient, toolCall, ct).ConfigureAwait(false);
+            AppendLlmToolTranscript(transcript, state, toolCall, toolResult);
+            return toolResult;
+        }
+
         var runner = new LlmAgentRunner(
-            async (messages, ct) =>
-            {
-                return await output.WithSpinnerAsync(
-                    "LLM agent thinking...",
-                    () => completeAsync(new ChatCompletionRequest
-                    {
-                        Messages = messages,
-                        Tools = tools,
-                        ToolChoice = new ChatToolChoice { Mode = "auto" },
-                        MaxTokens = null,
-                        ReasoningEffort = llmSettings.GetEffectiveReasoningEffort()
-                    }, ct));
-            },
-            async (toolCall, ct) =>
-            {
-                if (approvalState.ConfirmationsEnabled && !approvalState.IsAllowed(toolCall.Name))
-                {
-                    var preview = BuildAgentToolArgsPreview(toolCall);
-                    var decision = output.PromptLlmAgentToolApproval(toolCall.Name, preview);
-                    approvalState.ApplyDecision(toolCall.Name, decision);
-
-                    switch (decision)
-                    {
-                        case LlmAgentToolApprovalDecision.CancelRun:
-                            throw new OperationCanceledException("Agent run canceled by user.");
-                        case LlmAgentToolApprovalDecision.DenyOnce:
-                            return "ERROR: Tool call denied by user.";
-                    }
-                }
-
-                if (reports.Count > 0 && LlmReportAgentTools.IsReportTool(toolCall.Name))
-                {
-                    var result = await LlmReportAgentTools.ExecuteAsync(toolCall, reports, ct).ConfigureAwait(false);
-                    AppendLlmToolTranscript(transcript, state, toolCall, result);
-                    return result;
-                }
-
-                var toolResult = await ExecuteAgentToolCallAsync(output, state, mcpClient, toolCall, ct).ConfigureAwait(false);
-                AppendLlmToolTranscript(transcript, state, toolCall, toolResult);
-                return toolResult;
-            },
+            CompleteWithToolsAsync,
+            ExecuteToolWithApprovalsAsync,
+            sessionState,
             maxIterations: 20);
 
         try
         {
             var run = await runner.RunAsync(seedMessages, cancellationToken).ConfigureAwait(false);
-            return run.FinalText;
+
+            var lastUserPrompt = seedMessages.LastOrDefault(m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))?.Content ?? string.Empty;
+            var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeeking(lastUserPrompt);
+
+            if (!wantsConclusion ||
+                string.IsNullOrWhiteSpace(run.FinalText) ||
+                run.FinalText.TrimStart().StartsWith("(", StringComparison.Ordinal))
+            {
+                return run.FinalText;
+            }
+
+            // Juror pass (tools disabled) for conclusion-seeking prompts.
+            var jurorMessages = LlmAgentJuror.BuildJurorMessages(sessionState, seedMessages, run.FinalText);
+            ChatCompletionResult jurorCompletion;
+            try
+            {
+                jurorCompletion = await output.WithSpinnerAsync(
+                    "Juror reviewing conclusion...",
+                    () => completeAsync(new ChatCompletionRequest
+                    {
+                        Messages = jurorMessages,
+                        Tools = null,
+                        ToolChoice = null,
+                        MaxTokens = null,
+                        ReasoningEffort = llmSettings.GetEffectiveReasoningEffort()
+                    }, cancellationToken));
+            }
+            catch
+            {
+                // If the juror fails (provider quirks), fall back to the agent answer.
+                return run.FinalText;
+            }
+
+            if (!LlmAgentJuror.TryParseVerdict(jurorCompletion.Text, out var verdict))
+            {
+                return run.FinalText;
+            }
+
+            var isLow = string.Equals(verdict.Confidence, "low", StringComparison.OrdinalIgnoreCase);
+            if (!isLow || verdict.MissingEvidenceNextSteps.Count == 0)
+            {
+                return run.FinalText;
+            }
+
+            // One bounded correction cycle: feed juror verdict back to the agent and let it gather missing evidence.
+            var jurorJson = jurorCompletion.Text ?? string.Empty;
+            var correctionSeed = seedMessages
+                .Concat(
+                [
+                    new ChatMessage("assistant", run.FinalText),
+                    new ChatMessage("system",
+                        "JUROR_FEEDBACK (machine-readable JSON):\n" + jurorJson + "\n\n" +
+                        "Action: follow missingEvidenceNextSteps (max 2 tool calls), then update your conclusion with explicit evidence IDs. Do not loop.")
+                ])
+                .ToList();
+
+            var correctionRunner = new LlmAgentRunner(
+                CompleteWithToolsAsync,
+                ExecuteToolWithApprovalsAsync,
+                sessionState,
+                maxIterations: 10);
+
+            var correction = await correctionRunner.RunAsync(correctionSeed, cancellationToken).ConfigureAwait(false);
+            return correction.FinalText;
         }
         catch (OperationCanceledException)
         {
             return "(LLM agent canceled)";
         }
+    }
+
+    private static IReadOnlyList<ChatMessage> InsertLlmAgentCheckpoint(IReadOnlyList<ChatMessage> seedMessages, string checkpointJson)
+    {
+        var messages = seedMessages.ToList();
+        if (messages.Count == 0)
+        {
+            return seedMessages;
+        }
+
+        // Insert immediately after the system prompt (and after the optional runtime context user message).
+        var insertAt = 1;
+        if (messages.Count > 1 &&
+            string.Equals(messages[1].Role, "user", StringComparison.OrdinalIgnoreCase) &&
+            (messages[1].Content?.StartsWith("CLI runtime context", StringComparison.OrdinalIgnoreCase) ?? false))
+        {
+            insertAt = 2;
+        }
+
+        messages.Insert(insertAt, new ChatMessage("system", "INTERNAL CHECKPOINT (machine-readable JSON, authoritative):\n" + checkpointJson));
+        return messages;
     }
 
     private static void AppendLlmToolTranscript(CliTranscriptStore transcript, ShellState state, ChatToolCall toolCall, string toolResult)

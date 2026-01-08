@@ -760,6 +760,8 @@ llmagent> Analyze the current dump and run whatever commands you need
 
 Notes:
 - `llmagent` supports `/help`, `/reset`, `/reset conversation`, `/tools`, `/exit`.
+- In `llmagent`, the CLI maintains an internal evidence ledger (`E1`, `E2`, ...) and compact checkpoints to keep the agent grounded across pruning/loops; when you ask for a conclusion it may run a tool-disabled “juror” pass to sanity-check the answer and (at most once) gather missing evidence.
+- `llmagent` does not tool-result cache: repeated tool calls execute (useful when you’re iterating interactively), but if the model repeats calls without producing new evidence the CLI will prompt you to steer it.
 - `llm reset` clears LLM context for the current server/session/dump scope.
 - When provider is `openai` and no API key is configured, the CLI will try to fall back to `~/.codex/auth.json` (expects `OPENAI_API_KEY`). Override with `DEBUGGER_MCP_CODEX_AUTH_PATH`.
 

@@ -12,6 +12,7 @@ namespace DebuggerMcp.Cli.Llm;
 internal sealed class LlmAgentRunner(
     Func<IReadOnlyList<ChatMessage>, CancellationToken, Task<ChatCompletionResult>> completeAsync,
     Func<ChatToolCall, CancellationToken, Task<string>> executeToolAsync,
+    LlmAgentSessionState sessionState,
     int maxIterations = 20,
     int maxToolResultChars = 20_000)
 {
@@ -20,6 +21,8 @@ internal sealed class LlmAgentRunner(
 
     private readonly Func<ChatToolCall, CancellationToken, Task<string>> _executeToolAsync =
         executeToolAsync ?? throw new ArgumentNullException(nameof(executeToolAsync));
+
+    private readonly LlmAgentSessionState _sessionState = sessionState ?? throw new ArgumentNullException(nameof(sessionState));
 
     private readonly int _maxIterations = maxIterations <= 0 ? 20 : maxIterations;
     private readonly int _maxToolResultChars = maxToolResultChars <= 512 ? 20_000 : maxToolResultChars;
@@ -34,8 +37,11 @@ internal sealed class LlmAgentRunner(
         var messages = new List<ChatMessage>(seedMessages);
         var finalText = string.Empty;
         var toolCallsExecuted = 0;
-        var toolResultCache = new Dictionary<string, string>(StringComparer.Ordinal);
-        var consecutiveCacheOnlyIterations = 0;
+        var consecutiveNoProgressIterations = 0;
+        var loopBreaksIssued = 0;
+        var totalNewEvidence = 0;
+        var baselineEnforcementAttempts = 0;
+        var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeeking(TryGetLastUserPrompt(seedMessages));
 
         for (var iteration = 1; iteration <= _maxIterations; iteration++)
         {
@@ -48,6 +54,38 @@ internal sealed class LlmAgentRunner(
 
             if (completion.ToolCalls.Count == 0)
             {
+                if (wantsConclusion &&
+                    !IsBaselineComplete(_sessionState) &&
+                    baselineEnforcementAttempts < 2)
+                {
+                    baselineEnforcementAttempts++;
+                    var checkpoint = LlmAgentCheckpointBuilder.BuildBaselineRequiredCheckpoint(
+                        sessionState: _sessionState,
+                        seedMessages: seedMessages,
+                        iteration: iteration,
+                        toolCallsExecuted: toolCallsExecuted);
+
+                    _sessionState.LastCheckpointJson = checkpoint;
+                    messages = ApplyCheckpointPrune(messages, checkpoint);
+                    continue;
+                }
+
+                if (wantsConclusion && !IsBaselineComplete(_sessionState))
+                {
+                    // Avoid returning a confident conclusion with missing baseline evidence.
+                    return new LlmAgentRunResult(
+                        FinalText: "(Baseline is incomplete and the model is not requesting tools. Please allow the agent to call report_get/report_index, or ask a narrower question. Suggested next: report_index() then report_get(path=\"analysis.exception.type\"), report_get(path=\"analysis.exception.message\"), and report_get(path=\"analysis.exception.stackTrace\", limit=8).)",
+                        Iterations: iteration,
+                        ToolCallsExecuted: toolCallsExecuted);
+                }
+
+                _sessionState.LastCheckpointJson = LlmAgentCheckpointBuilder.BuildCarryForwardCheckpoint(
+                    sessionState: _sessionState,
+                    seedMessages: seedMessages,
+                    iteration: iteration,
+                    toolCallsExecuted: toolCallsExecuted,
+                    totalNewEvidence: totalNewEvidence);
+
                 return new LlmAgentRunResult(
                     FinalText: string.IsNullOrWhiteSpace(finalText) ? "(LLM returned no content)" : finalText,
                     Iterations: iteration,
@@ -62,48 +100,84 @@ internal sealed class LlmAgentRunner(
                 contentJson: completion.RawMessageContent,
                 providerMessageFields: completion.ProviderMessageFields));
 
-            var executedAtIterationStart = toolCallsExecuted;
+            var newEvidenceThisIteration = 0;
             foreach (var toolCall in completion.ToolCalls)
             {
-                var toolKey = BuildToolCacheKey(toolCall);
-                string toolResult;
-                if (toolResultCache.TryGetValue(toolKey, out var cached))
+                // llmagent does not tool-result cache: always execute requested tools (subject to user confirmation).
+                var toolResultRaw = await _executeToolAsync(toolCall, cancellationToken).ConfigureAwait(false);
+                toolCallsExecuted++;
+
+                // Defense-in-depth: redact sensitive values before sending tool output to the model.
+                var toolResultRedacted = TranscriptRedactor.RedactText(toolResultRaw);
+                var toolResultForModel = TruncateForModel(toolResultRedacted, _maxToolResultChars);
+
+                // Report snapshot tracking (only for report_get metadata).
+                if (string.Equals(toolCall.Name, "report_get", StringComparison.OrdinalIgnoreCase) &&
+                    string.Equals(TryReadJsonStringProperty(toolCall.ArgumentsJson, "path"), "metadata", StringComparison.OrdinalIgnoreCase))
                 {
-                    toolResult = $"[cached tool result] Duplicate tool call detected: {toolCall.Name} {toolCall.ArgumentsJson}\n" +
-                                 "Do not repeat identical tool calls; use this cached output as evidence.\n\n" +
-                                 cached;
-                }
-                else
-                {
-                    toolResult = await _executeToolAsync(toolCall, cancellationToken).ConfigureAwait(false);
-                    toolCallsExecuted++;
-                    // Defense-in-depth: redact sensitive values before sending tool output to the model.
-                    toolResult = TranscriptRedactor.RedactText(toolResult);
-                    toolResult = TruncateForModel(toolResult, _maxToolResultChars);
-                    toolResultCache[toolKey] = toolResult;
+                    _sessionState.TryUpdateSnapshotFromMetadataToolResult(toolResultForModel, out _);
                 }
 
-                // Even for cached results, apply truncation again in case cache entries were created before a limit change.
-                toolResult = TruncateForModel(toolResult, _maxToolResultChars);
-                messages.Add(new ChatMessage("tool", toolResult, toolCall.Id, toolCalls: null));
+                var toolKey = BuildToolCacheKey(toolCall);
+                var tags = LlmAgentToolTagger.GetTags(toolCall.Name, toolCall.ArgumentsJson);
+                var toolWasError = LlmAgentToolResultClassifier.IsError(toolResultForModel);
+
+                var evidenceUpdate = _sessionState.Evidence.AddOrUpdate(
+                    toolName: toolCall.Name,
+                    argumentsJson: toolCall.ArgumentsJson,
+                    toolKey: toolKey,
+                    toolResultForHashing: toolResultForModel,
+                    toolResultPreview: BuildEvidencePreview(toolResultForModel),
+                    tags: tags,
+                    toolWasError: toolWasError,
+                    timestampUtc: DateTimeOffset.UtcNow);
+
+                if (evidenceUpdate.IsNewEvidence)
+                {
+                    newEvidenceThisIteration++;
+                    totalNewEvidence++;
+                }
+
+                messages.Add(new ChatMessage("tool", toolResultForModel, toolCall.Id, toolCalls: null));
             }
 
-            if (toolCallsExecuted == executedAtIterationStart)
+            if (newEvidenceThisIteration == 0)
             {
-                consecutiveCacheOnlyIterations++;
-                if (consecutiveCacheOnlyIterations >= 2)
+                consecutiveNoProgressIterations++;
+                if (consecutiveNoProgressIterations >= 2)
                 {
-                    return new LlmAgentRunResult(
-                        FinalText: "(LLM agent appears stuck repeating identical tool calls; stopping. Try `llm reset` or ask a more specific question.)",
-                        Iterations: iteration,
-                        ToolCallsExecuted: toolCallsExecuted);
+                    loopBreaksIssued++;
+                    var checkpoint = LlmAgentCheckpointBuilder.BuildLoopBreakCheckpoint(
+                        sessionState: _sessionState,
+                        seedMessages: seedMessages,
+                        iteration: iteration,
+                        toolCallsExecuted: toolCallsExecuted);
+
+                    _sessionState.LastCheckpointJson = checkpoint;
+                    messages = ApplyCheckpointPrune(messages, checkpoint);
+                    consecutiveNoProgressIterations = 0;
+
+                    if (loopBreaksIssued >= 3)
+                    {
+                        return new LlmAgentRunResult(
+                            FinalText: "(LLM agent appears stuck repeating the same actions. Please guide me: do you want me to follow the latest 'Try:' hint (if any), run report_index() to re-orient, or run a specific report_get/exec command?)",
+                            Iterations: iteration,
+                            ToolCallsExecuted: toolCallsExecuted);
+                    }
                 }
             }
             else
             {
-                consecutiveCacheOnlyIterations = 0;
+                consecutiveNoProgressIterations = 0;
             }
         }
+
+        _sessionState.LastCheckpointJson = LlmAgentCheckpointBuilder.BuildCarryForwardCheckpoint(
+            sessionState: _sessionState,
+            seedMessages: seedMessages,
+            iteration: _maxIterations,
+            toolCallsExecuted: toolCallsExecuted,
+            totalNewEvidence: totalNewEvidence);
 
         return new LlmAgentRunResult(
             FinalText: string.IsNullOrWhiteSpace(finalText)
@@ -111,6 +185,77 @@ internal sealed class LlmAgentRunner(
                 : $"(LLM agent stopped after {_maxIterations} steps)\n{finalText}",
             Iterations: _maxIterations,
             ToolCallsExecuted: toolCallsExecuted);
+    }
+
+    private static string BuildEvidencePreview(string toolResult)
+    {
+        if (string.IsNullOrWhiteSpace(toolResult))
+        {
+            return string.Empty;
+        }
+
+        var normalized = toolResult.Replace("\r\n", "\n").Trim();
+        if (normalized.Length <= 400)
+        {
+            return normalized;
+        }
+
+        return normalized[..400] + "...";
+    }
+
+    private static bool IsBaselineComplete(LlmAgentSessionState sessionState)
+    {
+        foreach (var item in LlmAgentBaselinePolicy.RequiredBaseline)
+        {
+            var entry = sessionState.Evidence.TryGetLatestByTag(item.Tag);
+            if (entry == null || entry.ToolWasError)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string TryGetLastUserPrompt(IReadOnlyList<ChatMessage> seedMessages)
+    {
+        for (var i = seedMessages.Count - 1; i >= 0; i--)
+        {
+            if (string.Equals(seedMessages[i].Role, "user", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrWhiteSpace(seedMessages[i].Content))
+            {
+                return seedMessages[i].Content;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static List<ChatMessage> ApplyCheckpointPrune(List<ChatMessage> messages, string checkpointJson)
+    {
+        const int tailKeep = 12;
+
+        var system = messages.FirstOrDefault(m => string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase));
+        var runtimeContext = messages.Skip(1).FirstOrDefault(m =>
+            string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase) &&
+            (m.Content?.StartsWith("CLI runtime context", StringComparison.OrdinalIgnoreCase) ?? false));
+
+        var tail = messages.TakeLast(tailKeep).Where(m => !string.Equals(m.Role, "system", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        var pruned = new List<ChatMessage>();
+        if (system != null)
+        {
+            pruned.Add(system);
+        }
+
+        if (runtimeContext != null)
+        {
+            pruned.Add(runtimeContext);
+        }
+
+        pruned.Add(new ChatMessage("system", "INTERNAL CHECKPOINT (machine-readable JSON, authoritative):\n" + checkpointJson));
+        pruned.AddRange(tail);
+        return pruned;
     }
 
     private static string BuildToolCacheKey(ChatToolCall toolCall)

@@ -76,6 +76,9 @@ internal static class LlmAgentInteractiveCommands
 
     internal static void Reset(CliTranscriptStore transcript, ShellState state, bool conversationOnly)
     {
+        // Reset in-memory orchestration state so checkpoints/evidence do not carry across an explicit reset.
+        LlmAgentSessionStateStore.Reset(state.Settings.ServerUrl, state.SessionId, state.DumpId);
+
         if (conversationOnly)
         {
             transcript.FilterInPlace(e =>
@@ -115,4 +118,3 @@ internal static class LlmAgentInteractiveCommands
         output.Markup("  [cyan]/exit[/]                 Exit llmagent mode");
     }
 }
-

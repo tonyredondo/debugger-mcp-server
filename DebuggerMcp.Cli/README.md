@@ -320,6 +320,7 @@ Note: `analyze crash`, `analyze ai`, and `report -o <file> --format json` all us
 ### LLM Commands
 
 Note: when you enter `llmagent`, the CLI temporarily sets `llm set-agent-confirm false` so tool calls can run autonomously. The previous setting is restored when you exit `llmagent`.
+In `llmagent`, tool results are not cached: repeated tool calls execute (subject to your current confirmation settings). For stability, the CLI maintains an internal evidence ledger (`E1`, `E2`, ...) plus compact checkpoints across pruning/loops, and may run a tool-disabled “juror” pass when you ask for a conclusion.
 
 | Command | Description |
 |---------|-------------|
@@ -345,7 +346,7 @@ Note: when you enter `llmagent`, the CLI temporarily sets `llm set-agent-confirm
 
 In agent mode, the LLM can also call report tools to avoid re-running expensive analysis:
 - `report_index` (small report index: summary + TOC)
-- `report_get` (fetch a report section by path, with paging + projection + simple filtering; supports array indices/slices like `analysis.exception.stackTrace[0]` and `analysis.exception.stackTrace[0:5]`; objects can be paged via `pageKind="object"`)
+- `report_get` (fetch a report section by path, with paging + projection + simple filtering; supports numeric array indices like `analysis.exception.stackTrace[0]` (no slices); arrays can be paged via `limit`/`cursor`; objects can be paged via `pageKind="object"`)
 
 ### Comparison Commands
 

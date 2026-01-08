@@ -99,6 +99,7 @@ In `llmagent` mode:
 - Exit with `exit`/Ctrl+C or `/exit`
 - Use `/help`, `/tools`, `/reset`, `/reset conversation`
 - Tool confirmations are disabled by default for the duration of the session (the previous setting is restored on exit)
+- Tool results are not cached: repeated tool calls execute. The CLI keeps an internal evidence ledger (`E1`, `E2`, ...) and compact checkpoints to reduce loops, and may run a tool-disabled “juror” pass when you ask for a conclusion.
 
 ### Advanced (`help advanced`)
 - `watch add/list/eval/remove/clear` - Watch expressions
