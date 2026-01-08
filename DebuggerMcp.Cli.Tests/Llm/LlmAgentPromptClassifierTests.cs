@@ -13,12 +13,13 @@ public class LlmAgentPromptClassifierTests
     }
 
     [Fact]
-    public void IsConclusionSeekingOrContinuation_WhenContinuationAndPriorCheckpointWasConclusionAndBaselineIncomplete_ReturnsTrue()
+    public void IsConclusionSeekingOrContinuation_WhenPriorCheckpointWasConclusionAndBaselineIncomplete_ReturnsTrueForAnyFollowUp()
     {
         var state = LlmAgentSessionStateStore.GetOrCreate("pc2", "s", "d");
         state.LastCheckpointJson = """{ "promptKind": "conclusion" }""";
 
-        Assert.True(LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(state, "do it"));
+        Assert.True(LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(state, "please do it"));
+        Assert.True(LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(state, "hazlo por favor"));
     }
 
     [Fact]
@@ -52,4 +53,3 @@ public class LlmAgentPromptClassifierTests
         Assert.False(LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(state, "do it"));
     }
 }
-

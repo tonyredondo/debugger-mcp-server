@@ -408,49 +408,13 @@ internal static class LlmAgentPromptClassifier
             return true;
         }
 
-        if (!IsContinuationPrompt(prompt))
-        {
-            return false;
-        }
-
         if (IsBaselineComplete(sessionState.Evidence))
         {
-            // If baseline is already complete, treat short “do it” prompts as interactive unless the user explicitly
-            // asks for a conclusion again. This avoids unnecessary juror passes and baseline enforcement.
             return false;
         }
 
         var prior = TryGetCheckpointPromptKind(sessionState.LastCheckpointJson);
         return string.Equals(prior, "conclusion", StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static bool IsContinuationPrompt(string? prompt)
-    {
-        if (string.IsNullOrWhiteSpace(prompt))
-        {
-            return false;
-        }
-
-        var p = prompt.Trim().TrimEnd('.', '!', '?').ToLowerInvariant();
-        return p is
-            "do it" or
-            "do that" or
-            "do this" or
-            "do so" or
-            "run it" or
-            "go ahead" or
-            "continue" or
-            "proceed" or
-            "retry" or
-            "try again" or
-            "again" or
-            "yes" or
-            "y" or
-            "yeah" or
-            "yep" or
-            "ok" or
-            "okay" or
-            "sure";
     }
 
     private static string? TryGetCheckpointPromptKind(string? checkpointJson)
