@@ -4577,16 +4577,7 @@ public class AiAnalysisOrchestratorTests
             .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "metadata" }))
             .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "metadata" }))
             .EnqueueResult(CreateMessageResultWithToolUse("report_get", new { path = "metadata" }))
-            .EnqueueResult(CreateMessageResultWithText("""
-            {
-              "rootCause": "stopped",
-              "confidence": "low",
-              "reasoning": "no progress",
-              "evidence": [],
-              "recommendations": [],
-              "additionalFindings": []
-            }
-            """));
+            .EnqueueResult(CreateMessageResultWithText("unused"));
 
         var orchestrator = new AiAnalysisOrchestrator(sampling, NullLogger<AiAnalysisOrchestrator>.Instance)
         {
@@ -4602,11 +4593,10 @@ public class AiAnalysisOrchestratorTests
             new FakeDebuggerManager(),
             clrMdAnalyzer: null);
 
-        Assert.Equal("stopped", result.RootCause);
-
-        var finalRequest = requests.Last();
-        Assert.Null(finalRequest.Tools);
-        Assert.Null(finalRequest.ToolChoice);
+        Assert.NotNull(result);
+        Assert.False(string.IsNullOrWhiteSpace(result.RootCause));
+        Assert.Equal("low", result.Confidence);
+        Assert.Equal(3, requests.Count);
     }
 
     [Fact]
@@ -4962,7 +4952,9 @@ public class AiAnalysisOrchestratorTests
         Assert.Contains(doNotRepeat, d => d.StartsWith("exec(", StringComparison.OrdinalIgnoreCase));
 
         var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
-        Assert.Empty(nextSteps);
+        Assert.Single(nextSteps);
+        Assert.Equal("report_get", nextSteps[0].GetProperty("tool").GetString());
+        Assert.Contains("metadata", nextSteps[0].GetProperty("call").GetString() ?? string.Empty, StringComparison.OrdinalIgnoreCase);
 
         var facts = doc.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
         Assert.Contains(facts, f => f.StartsWith("RETRY:", StringComparison.OrdinalIgnoreCase) && f.Contains("attempts=2/2", StringComparison.OrdinalIgnoreCase));
@@ -5013,6 +5005,186 @@ public class AiAnalysisOrchestratorTests
         var call = nextSteps[0].GetProperty("call").GetString() ?? string.Empty;
         Assert.Contains("analysis.summary", call, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("limit=10", call, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void NormalizeCheckpointJson_WhenBaselineIncompleteWithoutTryHint_IncludesBaselineProgressionNextStep()
+    {
+        var normalize = typeof(AiAnalysisOrchestrator).GetMethod("NormalizeCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(normalize);
+
+        using var input = JsonDocument.Parse("""
+        {"path":"metadata","pageKind":"object","limit":50}
+        """);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = "{\"path\":\"metadata\",\"value\":{\"debuggerType\":\"LLDB\"}}",
+                Iteration = 1
+            }
+        };
+
+        var checkpointJson = """
+        { "facts": [], "hypotheses": [], "evidence": [], "doNotRepeat": [], "nextSteps": [] }
+        """;
+
+        var normalized = (string)normalize!.Invoke(null, new object[] { checkpointJson, commands, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(normalized);
+
+        var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(nextSteps);
+        var call = nextSteps[0].GetProperty("call").GetString() ?? string.Empty;
+        Assert.Contains("analysis.summary", call, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildDeterministicCheckpointJson_WhenBaselineIncompleteWithoutTryHint_IncludesBaselineProgressionNextStep()
+    {
+        var build = typeof(AiAnalysisOrchestrator).GetMethod("BuildDeterministicCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(build);
+
+        using var input = JsonDocument.Parse("""
+        {"path":"metadata","pageKind":"object","limit":50}
+        """);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = "{\"path\":\"metadata\",\"value\":{\"debuggerType\":\"LLDB\"}}",
+                Iteration = 1
+            }
+        };
+
+        var checkpoint = (string)build!.Invoke(null, new object[] { "analysis", commands, 0, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(checkpoint);
+
+        var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(nextSteps);
+        var call = nextSteps[0].GetProperty("call").GetString() ?? string.Empty;
+        Assert.Contains("analysis.summary", call, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void BuildDeterministicCheckpointJson_WhenDoNotRepeatIsTruncated_UniqueToolCallsReflectsAllDistinctToolKeys()
+    {
+        var build = typeof(AiAnalysisOrchestrator).GetMethod("BuildDeterministicCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(build);
+
+        var commands = new List<ExecutedCommand>();
+        for (var i = 0; i < 60; i++)
+        {
+            using var input = JsonDocument.Parse($$"""{"path":"analysis.synthetic.{{i}}","limit":1}""");
+            commands.Add(new ExecutedCommand
+            {
+                Tool = "report_get",
+                Input = input.RootElement.Clone(),
+                Output = $"{{\"path\":\"analysis.synthetic.{i}\",\"value\":{{\"ok\":true}}}}",
+                Iteration = 1
+            });
+        }
+
+        var checkpoint = (string)build!.Invoke(null, new object[] { "analysis", commands, 0, "dumpId=x generatedAt=y" })!;
+        using var doc = JsonDocument.Parse(checkpoint);
+
+        var facts = doc.RootElement.GetProperty("facts")
+            .EnumerateArray()
+            .Select(e => e.GetString() ?? string.Empty)
+            .ToList();
+
+        Assert.Contains(facts, f => string.Equals("uniqueToolCalls=60", f, StringComparison.OrdinalIgnoreCase));
+        Assert.True(doc.RootElement.GetProperty("doNotRepeat").GetArrayLength() <= 50);
+    }
+
+    [Fact]
+    public void RefreshCheckpointCarryForwardMessageIfDirty_WhenNewToolCallsArrive_RegeneratesCheckpointFacts()
+    {
+        var buildCheckpoint = typeof(AiAnalysisOrchestrator).GetMethod("BuildDeterministicCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        var buildMessage = typeof(AiAnalysisOrchestrator).GetMethod("BuildCheckpointCarryForwardMessage", BindingFlags.NonPublic | BindingFlags.Static);
+        var refresh = typeof(AiAnalysisOrchestrator).GetMethod("RefreshCheckpointCarryForwardMessageIfDirty", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(buildCheckpoint);
+        Assert.NotNull(buildMessage);
+        Assert.NotNull(refresh);
+
+        using var metaInput = JsonDocument.Parse("""
+        {"path":"metadata","pageKind":"object","limit":50}
+        """);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = metaInput.RootElement.Clone(),
+                Output = "{\"path\":\"metadata\",\"value\":{\"debuggerType\":\"LLDB\"}}",
+                Iteration = 1
+            }
+        };
+
+        var checkpoint = (string)buildCheckpoint!.Invoke(null, new object[] { "analysis", commands, 0, "dumpId=x generatedAt=y" })!;
+        var message = (SamplingMessage)buildMessage!.Invoke(null, new object?[] { checkpoint, "analysis", null })!;
+        var messages = new List<SamplingMessage> { message };
+
+        object[] args =
+        {
+            messages,
+            "analysis",
+            commands,
+            commands.Count,
+            "dumpId=x generatedAt=y",
+            null!
+        };
+
+        using var summaryInput = JsonDocument.Parse("""
+        {"path":"analysis.summary","pageKind":"object","select":["crashType","description","recommendations","threadCount","moduleCount","assemblyCount"]}
+        """);
+
+        commands.Add(new ExecutedCommand
+        {
+            Tool = "report_get",
+            Input = summaryInput.RootElement.Clone(),
+            Output = "{\"path\":\"analysis.summary\",\"value\":{\"crashType\":\".NET Managed Exception\"}}",
+            Iteration = 2
+        });
+
+        var refreshed = (bool)refresh!.Invoke(null, args)!;
+        Assert.True(refreshed);
+        Assert.Equal(commands.Count, (int)args[3]);
+
+        var prompt = messages[0].Content!.OfType<TextContentBlock>().Select(b => b.Text).FirstOrDefault() ?? string.Empty;
+        var jsonText = ExtractCheckpointJsonFromPrompt(prompt);
+
+        using var parsed = JsonDocument.Parse(jsonText);
+        var facts = parsed.RootElement.GetProperty("facts").EnumerateArray().Select(e => e.GetString() ?? string.Empty).ToList();
+        Assert.Contains(facts, f => f.StartsWith("PHASE: baselineCallsCompleted=", StringComparison.OrdinalIgnoreCase) && f.Contains("\"SUMMARY\"", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(facts, f => f.StartsWith("PHASE: baselineMissing=", StringComparison.OrdinalIgnoreCase) && f.Contains("\"SUMMARY\"", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(facts, f => string.Equals("uniqueToolCalls=2", f, StringComparison.OrdinalIgnoreCase));
+
+        var nextSteps = parsed.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.Single(nextSteps);
+        var call = nextSteps[0].GetProperty("call").GetString() ?? string.Empty;
+        Assert.Contains("analysis.environment", call, StringComparison.OrdinalIgnoreCase);
+
+        static string ExtractCheckpointJsonFromPrompt(string prompt)
+        {
+            var idx = prompt.IndexOf("Checkpoint JSON:", StringComparison.OrdinalIgnoreCase);
+            Assert.True(idx >= 0, "Expected checkpoint carry-forward message to contain 'Checkpoint JSON:' marker.");
+
+            var afterMarker = prompt[(idx + "Checkpoint JSON:".Length)..].Trim();
+            var stateIdx = afterMarker.IndexOf("Stable state JSON", StringComparison.OrdinalIgnoreCase);
+            if (stateIdx >= 0)
+            {
+                afterMarker = afterMarker[..stateIdx].Trim();
+            }
+
+            return afterMarker;
+        }
     }
 
     [Fact]

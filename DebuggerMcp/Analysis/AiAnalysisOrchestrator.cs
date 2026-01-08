@@ -380,6 +380,24 @@ public sealed class AiAnalysisOrchestrator(
 
             for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
             {
+                var refreshedCheckpoint = RefreshCheckpointCarryForwardMessageIfDirty(
+                    messages: messages,
+                    passName: "analysis",
+                    commandsExecuted: commandsExecuted,
+                    commandsExecutedAtLastCheckpoint: ref commandsExecutedAtLastCheckpoint,
+                    baselineKey: baselineKey,
+                    stateJsonFactory: () => BuildStateSnapshotJson(evidenceLedger, hypothesisTracker));
+                if (refreshedCheckpoint)
+                {
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-attempt-{attempt:00}-checkpoint-refreshed.json", new
+                    {
+                        passName = "analysis",
+                        iteration,
+                        attempt,
+                        commandsExecuted = commandsExecuted.Count
+                    });
+                }
+
                 var requestMessages = new List<SamplingMessage>(messages);
                 var request = new CreateMessageRequestParams
                 {
@@ -542,19 +560,18 @@ public sealed class AiAnalysisOrchestrator(
                         "[AI] No progress detected for {Count} consecutive iterations; finalizing analysis early.",
                         consecutiveNoProgressIterations);
 
-                    var final = await FinalizeAnalysisAfterNoProgressDetectedAsync(
-                            systemPrompt: SystemPrompt,
-                            messages: messages,
-                            commandsExecuted: commandsExecuted,
-                            iteration: iteration,
-                            maxTokens: maxTokens,
-                            consecutiveNoProgressIterations: consecutiveNoProgressIterations,
-                            uniqueToolCalls: toolResultCache.Count,
-                            lastModel: response.Model,
-                            traceRunDir: traceRunDir,
-                            cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
+                    var final = FinalizeAnalysisAfterNoProgressDetected(
+                        commandsExecuted: commandsExecuted,
+                        evidenceLedger: evidenceLedger,
+                        hypothesisTracker: hypothesisTracker,
+                        baselineKey: baselineKey,
+                        iteration: iteration,
+                        consecutiveNoProgressIterations: consecutiveNoProgressIterations,
+                        uniqueToolCalls: toolResultCache.Count,
+                        lastModel: response.Model,
+                        traceRunDir: traceRunDir);
 
+                    judgeAttemptState.Attempted = true;
                     await ApplyJudgeDrivenFinalizationAsync(
                             result: final,
                             commandsExecuted: commandsExecuted,
@@ -1388,19 +1405,18 @@ public sealed class AiAnalysisOrchestrator(
                         "[AI] No progress detected for {Count} consecutive iterations; finalizing analysis early.",
                         consecutiveNoProgressIterations);
 
-                    var final = await FinalizeAnalysisAfterNoProgressDetectedAsync(
-                            systemPrompt: SystemPrompt,
-                            messages: messages,
-                            commandsExecuted: commandsExecuted,
-                            iteration: iteration,
-                            maxTokens: maxTokens,
-                            consecutiveNoProgressIterations: consecutiveNoProgressIterations,
-                            uniqueToolCalls: toolResultCache.Count,
-                            lastModel: response.Model,
-                            traceRunDir: traceRunDir,
-                            cancellationToken: cancellationToken)
-                        .ConfigureAwait(false);
+                    var final = FinalizeAnalysisAfterNoProgressDetected(
+                        commandsExecuted: commandsExecuted,
+                        evidenceLedger: evidenceLedger,
+                        hypothesisTracker: hypothesisTracker,
+                        baselineKey: baselineKey,
+                        iteration: iteration,
+                        consecutiveNoProgressIterations: consecutiveNoProgressIterations,
+                        uniqueToolCalls: toolResultCache.Count,
+                        lastModel: response.Model,
+                        traceRunDir: traceRunDir);
 
+                    judgeAttemptState.Attempted = true;
                     await ApplyJudgeDrivenFinalizationAsync(
                             result: final,
                             commandsExecuted: commandsExecuted,
@@ -4518,6 +4534,22 @@ State snapshot (JSON):
 
             for (var attempt = 1; attempt <= Math.Max(1, MaxSamplingRequestAttempts); attempt++)
             {
+                var refreshedCheckpoint = RefreshCheckpointCarryForwardMessageIfDirty(
+                    messages: messages,
+                    passName: passName,
+                    commandsExecuted: commandsExecuted,
+                    commandsExecutedAtLastCheckpoint: ref commandsExecutedAtLastCheckpoint);
+                if (refreshedCheckpoint)
+                {
+                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-attempt-{attempt:00}-checkpoint-refreshed.json", new
+                    {
+                        passName,
+                        iteration,
+                        attempt,
+                        commandsExecuted = commandsExecuted.Count
+                    });
+                }
+
                 var requestMessages = new List<SamplingMessage>(messages);
                 var request = new CreateMessageRequestParams
                 {
@@ -5621,6 +5653,41 @@ State snapshot (JSON):
         return normalized;
     }
 
+    private static int FindLatestCheckpointCarryForwardMessageIndex(IReadOnlyList<SamplingMessage> messages, string passName)
+    {
+        for (var i = messages.Count - 1; i >= 0; i--)
+        {
+            var message = messages[i];
+            if (message.Role != Role.User)
+            {
+                continue;
+            }
+
+            if (message.Content == null || message.Content.Count == 0)
+            {
+                continue;
+            }
+
+            var text = message.Content
+                .OfType<TextContentBlock>()
+                .Select(b => b.Text)
+                .FirstOrDefault();
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            if (text.Contains("Checkpoint JSON:", StringComparison.OrdinalIgnoreCase)
+                && text.Contains($"pass \"{passName}\"", StringComparison.OrdinalIgnoreCase))
+            {
+                return i;
+            }
+        }
+
+        return -1;
+    }
+
     private static SamplingMessage? FindLatestCheckpointCarryForwardMessage(IReadOnlyList<SamplingMessage> messages, string passName)
     {
         for (var i = messages.Count - 1; i >= 0; i--)
@@ -5654,6 +5721,40 @@ State snapshot (JSON):
         }
 
         return null;
+    }
+
+    private static bool RefreshCheckpointCarryForwardMessageIfDirty(
+        List<SamplingMessage> messages,
+        string passName,
+        List<ExecutedCommand> commandsExecuted,
+        ref int commandsExecutedAtLastCheckpoint,
+        string? baselineKey = null,
+        Func<string?>? stateJsonFactory = null)
+    {
+        ArgumentNullException.ThrowIfNull(messages);
+        ArgumentNullException.ThrowIfNull(passName);
+        ArgumentNullException.ThrowIfNull(commandsExecuted);
+
+        var index = FindLatestCheckpointCarryForwardMessageIndex(messages, passName);
+        if (index < 0)
+        {
+            return false;
+        }
+
+        if (commandsExecuted.Count <= commandsExecutedAtLastCheckpoint)
+        {
+            return false;
+        }
+
+        var checkpoint = BuildDeterministicCheckpointJson(
+            passName: passName,
+            commandsExecuted: commandsExecuted,
+            commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
+            baselineKey: baselineKey);
+
+        commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+        messages[index] = BuildCheckpointCarryForwardMessage(checkpoint, passName: passName, stateJson: stateJsonFactory?.Invoke());
+        return true;
     }
 
     private bool TryExtractCheckpointFromToolUse(CreateMessageResult response, out string checkpointJson)
@@ -6272,6 +6373,34 @@ State snapshot (JSON):
         return keys;
     }
 
+    private static int CountDistinctToolCacheKeys(List<ExecutedCommand> commandsExecuted)
+    {
+        if (commandsExecuted.Count == 0)
+        {
+            return 0;
+        }
+
+        var keys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var cmd in commandsExecuted)
+        {
+            var tool = (cmd.Tool ?? string.Empty).Trim();
+            if (string.IsNullOrWhiteSpace(tool))
+            {
+                continue;
+            }
+
+            var key = BuildToolCacheKey(tool, cmd.Input);
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                continue;
+            }
+
+            keys.Add(key);
+        }
+
+        return keys.Count;
+    }
+
     private static JsonElement FilterCheckpointNextSteps(
         JsonElement nextSteps,
         IReadOnlySet<string> executedToolKeys)
@@ -6440,6 +6569,68 @@ State snapshot (JSON):
         }
 
         return JsonSerializer.SerializeToElement(steps.Select(s => new { tool = s.Tool, call = s.Call, why = s.Why }).ToList());
+    }
+
+    private static JsonElement EnsureBaselineProgressionNextStep(
+        JsonElement nextSteps,
+        BaselinePhaseState baselinePhase,
+        IReadOnlySet<string> executedToolKeys)
+    {
+        if (baselinePhase.Complete || baselinePhase.Missing.Count == 0)
+        {
+            return nextSteps;
+        }
+
+        if (nextSteps.ValueKind != JsonValueKind.Array)
+        {
+            return nextSteps;
+        }
+
+        if (nextSteps.GetArrayLength() > 0)
+        {
+            return nextSteps;
+        }
+
+        foreach (var missingId in baselinePhase.Missing)
+        {
+            if (string.IsNullOrWhiteSpace(missingId))
+            {
+                continue;
+            }
+
+            var trimmedId = missingId.Trim();
+            var baselineCall = BaselineCalls.FirstOrDefault(c => string.Equals(c.Id, trimmedId, StringComparison.OrdinalIgnoreCase));
+            if (string.IsNullOrWhiteSpace(baselineCall.Call))
+            {
+                continue;
+            }
+
+            var call = baselineCall.Call.Trim();
+            var callIsBlocked = TryParseCheckpointToolCall("report_get", call, out var parsed)
+                                && !string.IsNullOrWhiteSpace(parsed.ToolCacheKey)
+                                && executedToolKeys.Contains(parsed.ToolCacheKey);
+
+            if (callIsBlocked)
+            {
+                continue;
+            }
+
+            var why = string.IsNullOrWhiteSpace(baselineCall.Path)
+                ? $"Advance baseline evidence collection: request baseline '{trimmedId}'."
+                : $"Advance baseline evidence collection: request baseline '{trimmedId}' ({baselineCall.Path.Trim()}).";
+
+            return JsonSerializer.SerializeToElement(new[]
+            {
+                new
+                {
+                    tool = "report_get",
+                    call,
+                    why
+                }
+            });
+        }
+
+        return nextSteps;
     }
 
     private readonly record struct ParsedToolCall(string ToolName, JsonElement ToolInput, string ToolCacheKey);
@@ -6841,6 +7032,7 @@ State snapshot (JSON):
             : JsonSerializer.SerializeToElement(Array.Empty<object>());
 
         nextSteps = AugmentNextStepsWithBaselineCorrections(nextSteps, baselinePhase, commandsExecuted, executedToolKeys);
+        nextSteps = EnsureBaselineProgressionNextStep(nextSteps, baselinePhase, executedToolKeys);
 
         var normalized = JsonSerializer.Serialize(new
         {
@@ -6890,25 +7082,25 @@ State snapshot (JSON):
         var evidence = BuildCheckpointEvidenceSnapshot(passName, commandsExecuted, commandsExecutedAtLastCheckpoint);
 
         var doNotRepeat = BuildDeterministicDoNotRepeatList(commandsExecuted);
+        var uniqueToolCalls = CountDistinctToolCacheKeys(commandsExecuted);
         var baselinePhase = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
             ? ComputeBaselinePhaseState(commandsExecuted)
             : new BaselinePhaseState(Complete: false, Completed: [], Missing: []);
         var executedToolKeys = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
             ? BuildExecutedToolKeySet(commandsExecuted)
             : new HashSet<string>(StringComparer.Ordinal);
-        var nextSteps = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
-            ? AugmentNextStepsWithBaselineCorrections(
-                JsonSerializer.SerializeToElement(Array.Empty<object>()),
-                baselinePhase,
-                commandsExecuted,
-                executedToolKeys)
-            : JsonSerializer.SerializeToElement(Array.Empty<object>());
+        var nextSteps = JsonSerializer.SerializeToElement(Array.Empty<object>());
+        if (passName.Equals("analysis", StringComparison.OrdinalIgnoreCase))
+        {
+            nextSteps = AugmentNextStepsWithBaselineCorrections(nextSteps, baselinePhase, commandsExecuted, executedToolKeys);
+            nextSteps = EnsureBaselineProgressionNextStep(nextSteps, baselinePhase, executedToolKeys);
+        }
 
         var facts = new List<string>
         {
             "Checkpoint synthesis unavailable; using deterministic fallback checkpoint.",
             $"pass={passName}",
-            $"uniqueToolCalls={doNotRepeat.Count}"
+            $"uniqueToolCalls={uniqueToolCalls}"
         };
 
         if (passName.Equals("analysis", StringComparison.OrdinalIgnoreCase))
@@ -8747,118 +8939,357 @@ Return ONLY valid JSON (no markdown, no code fences) with this schema:
         return parsed;
     }
 
-    private async Task<AiAnalysisResult> FinalizeAnalysisAfterNoProgressDetectedAsync(
-        string systemPrompt,
-        List<SamplingMessage> messages,
+    private AiAnalysisResult FinalizeAnalysisAfterNoProgressDetected(
         List<ExecutedCommand> commandsExecuted,
+        AiEvidenceLedger evidenceLedger,
+        AiHypothesisTracker hypothesisTracker,
+        string baselineKey,
         int iteration,
-        int maxTokens,
         int consecutiveNoProgressIterations,
         int uniqueToolCalls,
         string? lastModel,
-        string? traceRunDir,
-        CancellationToken cancellationToken)
+        string? traceRunDir)
     {
-        if (_toolHistoryModeCache.IsCheckpointOnly && messages.Count > 1 && commandsExecuted.Count > 0)
+        ArgumentNullException.ThrowIfNull(commandsExecuted);
+        ArgumentNullException.ThrowIfNull(evidenceLedger);
+        ArgumentNullException.ThrowIfNull(hypothesisTracker);
+        ArgumentNullException.ThrowIfNull(baselineKey);
+
+        var baselinePhase = ComputeBaselinePhaseState(commandsExecuted);
+        var completedBaseline = baselinePhase.Completed;
+        var missingBaseline = baselinePhase.Missing;
+
+        var evidenceLines = new List<string>();
+        foreach (var id in completedBaseline)
         {
-            var checkpoint = BuildDeterministicCheckpointJson(
-                passName: "analysis",
-                commandsExecuted: commandsExecuted,
-                commandsExecutedAtLastCheckpoint: 0);
-
-            messages = [BuildCheckpointCarryForwardMessage(checkpoint, passName: "analysis")];
-        }
-
-        const string analysisSchema = """
-{
-  "rootCause": "string",
-  "confidence": "high|medium|low|unknown",
-  "reasoning": "string",
-  "evidence": ["string"],
-  "recommendations": ["string"],
-  "additionalFindings": ["string"]
-}
-""";
-
-        var finalPrompt = $"""
-The investigation appears to be stuck: there has been no progress for {consecutiveNoProgressIterations} consecutive iteration(s).
-
-You MUST NOT request any tools. Instead, synthesize the best possible conclusion based ONLY on evidence already collected in this conversation
-(tool outputs already shown). If evidence is insufficient, set confidence to "low" and list the most important missing evidence items.
-
-Notes:
-- Repeating tool calls that already have results is not progress; treat cached/repeated calls as already known.
-- If the conversation contains tool requests without corresponding tool results, those tool requests were NOT executed and must be ignored.
-- Unique evidence tool calls seen so far: {uniqueToolCalls}
-
-Return ONLY valid JSON (no markdown, no code fences) with this schema:
-{analysisSchema}
-""";
-
-        var finalMessages = new List<SamplingMessage>(messages)
-        {
-            new()
+            if (string.IsNullOrWhiteSpace(id) || !BaselinePathById.TryGetValue(id.Trim(), out var path) || string.IsNullOrWhiteSpace(path))
             {
-                Role = Role.User,
-                Content =
-                [
-                    new TextContentBlock { Text = finalPrompt }
-                ]
+                continue;
             }
+
+            var cmd = commandsExecuted.LastOrDefault(c =>
+                c.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase)
+                && string.Equals(TryGetString(c.Input, "path")?.Trim(), path.Trim(), StringComparison.OrdinalIgnoreCase)
+                && TryParseReportGetResponseHasError(c.Output ?? string.Empty, out var hasError)
+                && !hasError);
+
+            if (cmd == null)
+            {
+                continue;
+            }
+
+            if (TryBuildReportGetEvidenceDigest(path.Trim(), cmd.Output ?? string.Empty, out var digest) && !string.IsNullOrWhiteSpace(digest))
+            {
+                evidenceLines.Add($"report_get(path=\"{path.Trim()}\") -> {digest}");
+            }
+            else
+            {
+                evidenceLines.Add($"report_get(path=\"{path.Trim()}\") -> (captured)");
+            }
+
+            if (evidenceLines.Count >= 12)
+            {
+                break;
+            }
+        }
+
+        var rootCause = "Unknown (no progress; insufficient evidence to determine root cause).";
+        if (TryGetBaselineExceptionSummary(commandsExecuted, out var exceptionSummary) && !string.IsNullOrWhiteSpace(exceptionSummary))
+        {
+            rootCause = TruncateText(exceptionSummary, maxChars: 512);
+        }
+
+        var reasoning = new StringBuilder();
+        reasoning.AppendLine("No progress detected; finalizing deterministically without requesting any tools.");
+        reasoning.AppendLine($"consecutiveNoProgressIterations={consecutiveNoProgressIterations}");
+        reasoning.AppendLine($"uniqueToolCalls={uniqueToolCalls}");
+        reasoning.AppendLine($"baselineKey={baselineKey.Trim()}");
+        reasoning.AppendLine($"baselineComplete={baselinePhase.Complete.ToString().ToLowerInvariant()}");
+        reasoning.AppendLine($"baselineCallsCompleted={JsonSerializer.Serialize(completedBaseline)}");
+        if (!baselinePhase.Complete)
+        {
+            reasoning.AppendLine($"baselineMissing={JsonSerializer.Serialize(missingBaseline)}");
+        }
+
+        if (evidenceLedger.Items.Count > 0)
+        {
+            reasoning.AppendLine();
+            reasoning.AppendLine("Evidence ledger digest:");
+            foreach (var item in evidenceLedger.Items.Take(8))
+            {
+                reasoning.AppendLine($"- {item.Id}: {TruncateText(item.Finding ?? string.Empty, maxChars: 256)}");
+            }
+        }
+
+        var recommendations = new List<string>();
+        if (!baselinePhase.Complete && missingBaseline.Count > 0)
+        {
+            foreach (var id in missingBaseline.Take(7))
+            {
+                if (string.IsNullOrWhiteSpace(id))
+                {
+                    continue;
+                }
+
+                var trimmed = id.Trim();
+                var call = BaselineCalls.FirstOrDefault(c => string.Equals(c.Id, trimmed, StringComparison.OrdinalIgnoreCase)).Call;
+                if (!string.IsNullOrWhiteSpace(call))
+                {
+                    recommendations.Add($"Collect missing baseline evidence ({trimmed}): {call.Trim()}");
+                }
+            }
+
+            if (missingBaseline.Count > 7)
+            {
+                recommendations.Add($"Collect the remaining baseline evidence items ({missingBaseline.Count - 7} more) using their BASELINE_CALL entries.");
+            }
+        }
+        else
+        {
+            recommendations.Add("Re-run analysis with additional evidence if available (modules/assemblies, type resolution, thread stacks) to strengthen confidence.");
+        }
+
+        var additionalFindings = new List<string>();
+        if (!baselinePhase.Complete)
+        {
+            var reason = TryGetBaselineIncompleteReasonCode(commandsExecuted, missingBaseline);
+            if (!string.IsNullOrWhiteSpace(reason))
+            {
+                additionalFindings.Add($"Baseline incomplete reason: {reason.Trim()}");
+            }
+        }
+
+        var result = new AiAnalysisResult
+        {
+            RootCause = rootCause,
+            Confidence = "low",
+            Reasoning = reasoning.ToString().TrimEnd(),
+            Evidence = evidenceLines.Count == 0 ? null : evidenceLines,
+            Recommendations = recommendations.Count == 0 ? null : recommendations,
+            AdditionalFindings = additionalFindings.Count == 0 ? null : additionalFindings,
+            Iterations = iteration,
+            CommandsExecuted = commandsExecuted.Count == 0 ? null : commandsExecuted,
+            Model = lastModel,
+            AnalyzedAt = DateTime.UtcNow
         };
 
-        var request = new CreateMessageRequestParams
+        WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-no-progress-deterministic.json", new
         {
-            SystemPrompt = systemPrompt,
-            Messages = finalMessages,
-            MaxTokens = GetFinalSynthesisMaxTokens(fallbackMaxTokens: maxTokens),
-            Tools = null,
-            ToolChoice = null
+            passName = "analysis",
+            iteration,
+            consecutiveNoProgressIterations,
+            uniqueToolCalls,
+            baselineComplete = baselinePhase.Complete,
+            baselineCallsCompleted = completedBaseline,
+            baselineMissing = missingBaseline,
+            evidenceCount = evidenceLedger.Items.Count,
+            hypothesisCount = hypothesisTracker.Hypotheses.Count
+        });
+
+        return result;
+    }
+
+    private static bool TryBuildReportGetEvidenceDigest(string path, string outputForModel, out string digest)
+    {
+        digest = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(outputForModel))
+        {
+            return false;
+        }
+
+        if (!TryParseFirstJsonObject(outputForModel, out var json) || json.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        if (json.TryGetProperty("error", out _))
+        {
+            return false;
+        }
+
+        if (!json.TryGetProperty("value", out var value))
+        {
+            return false;
+        }
+
+        path = path.Trim();
+
+        if (path.Equals("analysis.exception.type", StringComparison.OrdinalIgnoreCase) && value.ValueKind == JsonValueKind.String)
+        {
+            digest = value.GetString() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(digest);
+        }
+
+        if (path.Equals("analysis.exception.message", StringComparison.OrdinalIgnoreCase) && value.ValueKind == JsonValueKind.String)
+        {
+            digest = TruncateText(value.GetString() ?? string.Empty, maxChars: 512);
+            return !string.IsNullOrWhiteSpace(digest);
+        }
+
+        if (path.Equals("analysis.exception.hResult", StringComparison.OrdinalIgnoreCase) && value.ValueKind == JsonValueKind.String)
+        {
+            digest = value.GetString() ?? string.Empty;
+            return !string.IsNullOrWhiteSpace(digest);
+        }
+
+        if (path.Equals("metadata", StringComparison.OrdinalIgnoreCase) && value.ValueKind == JsonValueKind.Object)
+        {
+            var debuggerType = TryGetString(value, "debuggerType");
+            var sosLoaded = value.TryGetProperty("sosLoaded", out var sosEl) && sosEl.ValueKind == JsonValueKind.True
+                ? "true"
+                : value.TryGetProperty("sosLoaded", out sosEl) && sosEl.ValueKind == JsonValueKind.False
+                    ? "false"
+                    : null;
+
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(debuggerType))
+            {
+                parts.Add($"debuggerType={debuggerType!.Trim()}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(sosLoaded))
+            {
+                parts.Add($"sosLoaded={sosLoaded}");
+            }
+
+            digest = parts.Count == 0 ? "(metadata captured)" : string.Join(", ", parts);
+            return true;
+        }
+
+        if (path.Equals("analysis.summary", StringComparison.OrdinalIgnoreCase) && value.ValueKind == JsonValueKind.Object)
+        {
+            var crashType = TryGetString(value, "crashType");
+            var description = TryGetString(value, "description");
+            var threadCount = TryGetInt(value, "threadCount");
+            var moduleCount = TryGetInt(value, "moduleCount");
+            var assemblyCount = TryGetInt(value, "assemblyCount");
+
+            var parts = new List<string>();
+            if (!string.IsNullOrWhiteSpace(crashType))
+            {
+                parts.Add($"crashType={crashType!.Trim()}");
+            }
+
+            if (threadCount.HasValue)
+            {
+                parts.Add($"threadCount={threadCount.Value}");
+            }
+
+            if (moduleCount.HasValue)
+            {
+                parts.Add($"moduleCount={moduleCount.Value}");
+            }
+
+            if (assemblyCount.HasValue)
+            {
+                parts.Add($"assemblyCount={assemblyCount.Value}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(description))
+            {
+                parts.Add($"description={TruncateText(description!.Trim(), maxChars: 256)}");
+            }
+
+            digest = parts.Count == 0 ? "(summary captured)" : string.Join(", ", parts);
+            return true;
+        }
+
+        if (path.Equals("analysis.exception.stackTrace", StringComparison.OrdinalIgnoreCase) && value.ValueKind == JsonValueKind.Array)
+        {
+            var first = value.EnumerateArray().FirstOrDefault();
+            if (first.ValueKind == JsonValueKind.Object)
+            {
+                var fn = TryGetString(first, "function");
+                var mod = TryGetString(first, "module");
+                if (!string.IsNullOrWhiteSpace(fn))
+                {
+                    digest = string.IsNullOrWhiteSpace(mod) ? fn!.Trim() : $"{mod!.Trim()}!{fn!.Trim()}";
+                    digest = TruncateText(digest, maxChars: 512);
+                    return true;
+                }
+            }
+
+            digest = "(stackTrace captured)";
+            return true;
+        }
+
+        digest = value.ValueKind switch
+        {
+            JsonValueKind.String => TruncateText(value.GetString() ?? string.Empty, maxChars: 512),
+            JsonValueKind.Number => value.GetRawText(),
+            JsonValueKind.True => "true",
+            JsonValueKind.False => "false",
+            JsonValueKind.Object => "(object captured)",
+            JsonValueKind.Array => "(array captured)",
+            _ => "(captured)"
         };
 
-        CreateMessageResult response;
-        try
+        return true;
+
+        static int? TryGetInt(JsonElement obj, string name)
         {
-            _logger.LogInformation("[AI] Finalizing analysis early due to no progress...");
-            WriteSamplingTraceFile(traceRunDir, $"final-no-progress-synthesis-request.json", BuildTraceRequest(iteration, request));
-            response = await _samplingClient.RequestCompletionAsync(request, cancellationToken).ConfigureAwait(false);
+            if (obj.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (!obj.TryGetProperty(name, out var el))
+            {
+                return null;
+            }
+
+            return el.ValueKind == JsonValueKind.Number && el.TryGetInt32(out var n) ? n : null;
         }
-        catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
+    }
+
+    private static bool TryGetBaselineExceptionSummary(List<ExecutedCommand> commandsExecuted, out string summary)
+    {
+        summary = string.Empty;
+
+        string? type = null;
+        string? message = null;
+
+        foreach (var cmd in commandsExecuted)
         {
-            return BuildFallbackSynthesisResult(
-                prefix: $"No progress detected. Final synthesis request failed: {ex.Message}",
-                text: string.Empty,
-                commandsExecuted: commandsExecuted,
-                iteration: iteration,
-                model: lastModel);
+            if (!cmd.Tool.Equals("report_get", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var path = TryGetString(cmd.Input, "path")?.Trim();
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            if (!TryParseReportGetResponseHasError(cmd.Output ?? string.Empty, out var hasError) || hasError)
+            {
+                continue;
+            }
+
+            if (path.Equals("analysis.exception.type", StringComparison.OrdinalIgnoreCase)
+                && TryBuildReportGetEvidenceDigest(path, cmd.Output ?? string.Empty, out var digestType))
+            {
+                type = digestType;
+            }
+
+            if (path.Equals("analysis.exception.message", StringComparison.OrdinalIgnoreCase)
+                && TryBuildReportGetEvidenceDigest(path, cmd.Output ?? string.Empty, out var digestMessage))
+            {
+                message = digestMessage;
+            }
         }
 
-        WriteSamplingTraceFile(traceRunDir, $"final-no-progress-synthesis-response.json", BuildTraceResponse(iteration, response));
-
-        var text = ExtractAssistantText(response);
-        if (string.IsNullOrWhiteSpace(text))
+        if (string.IsNullOrWhiteSpace(type) && string.IsNullOrWhiteSpace(message))
         {
-            return BuildFallbackSynthesisResult(
-                prefix: "No progress detected. Final synthesis returned empty content.",
-                text: string.Empty,
-                commandsExecuted: commandsExecuted,
-                iteration: iteration,
-                model: response.Model ?? lastModel);
+            return false;
         }
 
-        if (!TryParseFirstJsonObject(text, out var json))
-        {
-            return BuildFallbackSynthesisResult(
-                prefix: "No progress detected. Final synthesis produced unstructured output.",
-                text: text,
-                commandsExecuted: commandsExecuted,
-                iteration: iteration,
-                model: response.Model ?? lastModel);
-        }
-
-        var parsed = ParseAnalysisComplete(json, commandsExecuted, iteration, response.Model ?? lastModel);
-        parsed.AnalyzedAt = DateTime.UtcNow;
-        return parsed;
+        summary = string.IsNullOrWhiteSpace(message)
+            ? $"Crash caused by managed exception: {type}"
+            : $"Crash caused by managed exception: {type} ({message})";
+        return true;
     }
 
     private async Task<AiAnalysisResult> FinalizeAnalysisAfterMaxIterationsReachedAsync(

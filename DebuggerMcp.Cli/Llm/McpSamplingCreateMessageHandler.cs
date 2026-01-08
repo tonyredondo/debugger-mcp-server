@@ -34,7 +34,16 @@ internal sealed class McpSamplingCreateMessageHandler(
         var systemPrompt = TryGetString(parameters.Value, "systemPrompt") ?? TryGetString(parameters.Value, "SystemPrompt");
         var request = BuildChatCompletionRequest(systemPrompt, parameters.Value);
 
-        var response = await _complete(request, cancellationToken).ConfigureAwait(false);
+        ChatCompletionResult response;
+        try
+        {
+            response = await _complete(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (!cancellationToken.IsCancellationRequested && IsStreamAlreadyConsumedError(ex))
+        {
+            _progress?.Invoke("AI request failed due to a stream-consumption error; retrying once...");
+            response = await _complete(request, cancellationToken).ConfigureAwait(false);
+        }
         response = ApplyMcpToolUseFallback(response);
 
         if (string.IsNullOrWhiteSpace(response.Text) && (response.ToolCalls == null || response.ToolCalls.Count == 0))
@@ -68,6 +77,25 @@ internal sealed class McpSamplingCreateMessageHandler(
             Model = response.Model ?? _settings.GetEffectiveModel(),
             Content = BuildSamplingContentBlocks(response)
         };
+    }
+
+    private static bool IsStreamAlreadyConsumedError(Exception ex)
+    {
+        for (Exception? current = ex; current != null; current = current.InnerException)
+        {
+            var message = current.Message ?? string.Empty;
+            if (message.Length == 0)
+            {
+                continue;
+            }
+
+            if (message.Contains("stream was already consumed", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static ChatCompletionResult ApplyMcpToolUseFallback(ChatCompletionResult response)

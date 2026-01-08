@@ -9,6 +9,40 @@ namespace DebuggerMcp.Cli.Tests.Llm;
 public class McpSamplingCreateMessageHandlerEdgeCaseTests
 {
     [Fact]
+    public async Task HandleAsync_WhenProviderThrowsStreamAlreadyConsumed_RetriesOnce()
+    {
+        var settings = new LlmSettings { Provider = "openrouter", OpenRouterModel = "openrouter/test" };
+        var attempts = 0;
+
+        var handler = new McpSamplingCreateMessageHandler(
+            settings,
+            (_, _) =>
+            {
+                attempts++;
+                if (attempts == 1)
+                {
+                    throw new InvalidOperationException("The stream was already consumed. It cannot be read again.");
+                }
+
+                return Task.FromResult(new ChatCompletionResult { Text = "ok" });
+            });
+
+        using var doc = JsonDocument.Parse("""
+        {
+          "messages": [
+            { "role": "user", "content": "Hello" }
+          ]
+        }
+        """);
+
+        var result = await handler.HandleAsync(doc.RootElement, CancellationToken.None);
+
+        Assert.Equal(2, attempts);
+        Assert.Contains(result.Content, b => string.Equals(b.Type, "text", StringComparison.OrdinalIgnoreCase) &&
+                                            string.Equals(b.Text, "ok", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task HandleAsync_WhenToolUseJsonEmbeddedInText_ExtractsToolCallAndCleansText()
     {
         var settings = new LlmSettings { Provider = "openrouter", OpenRouterModel = "openrouter/test" };

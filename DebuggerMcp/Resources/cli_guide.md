@@ -85,6 +85,7 @@ symbols datadog config
 - `compare <s1> <s2>` - Compare dumps
 
 Note: Some OpenRouter models reject `tool_choice="required"` during MCP sampling; the server detects this (often a 404 mentioning `tool_choice`) and caches a `tool_choice="auto"` fallback for the rest of the run to avoid repeated failures/budget waste.
+Note: If an LLM provider call fails with a transient “The stream was already consumed” error during MCP sampling, the `dbg-mcp` CLI retries the provider request once before returning an error to the server.
 
 ### LLM (`help llm`)
 - `llm <prompt>` - Ask a configured LLM (OpenRouter/OpenAI/Anthropic) using your CLI transcript as context
@@ -173,6 +174,11 @@ export DEBUGGER_MCP_LLM_REASONING_EFFORT="medium"   # low|medium|high|unset
 # If provider is "openai" and no API key is configured, the CLI can fall back to ~/.codex/auth.json (expects OPENAI_API_KEY).
 # Override the Codex auth file path with:
 export DEBUGGER_MCP_CODEX_AUTH_PATH="/path/to/auth.json"
+
+# Optional: trace LLM HTTP requests/responses for sampling (may include sensitive content)
+export DEBUGGER_MCP_LLM_HTTP_TRACE_SAMPLING=true
+export DEBUGGER_MCP_LLM_HTTP_TRACE_DIR="/path/to/logs"
+export DEBUGGER_MCP_LLM_HTTP_TRACE_MAX_FILE_BYTES=2000000
 ```
 
 ### Config File (`~/.dbg-mcp/config.json`)

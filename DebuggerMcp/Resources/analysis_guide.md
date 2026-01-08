@@ -156,7 +156,7 @@ During AI sampling, the model has access to evidence-gathering tools (`report_ge
 
 When the AI asks for more evidence, prefer:
 - `report_get(path: "analysis.exception", select: ["type","message","hResult"])` and `report_get(path: "analysis.threads.faultingThread")` for structured report sections.
-- If a section is too large, use the returned `suggestedPaths` and retry with a narrower path. For arrays, page via `limit/cursor` (and reduce payload via `select`). You can also fetch a single element by index (e.g., `analysis.exception.stackTrace[0]`) or request a bounded window via trailing slice syntax (e.g., `analysis.exception.stackTrace[0:10]`). If a slice fails with `invalid_path`, fall back to `limit/cursor`. For objects, page via `pageKind: "object"` + `limit/cursor`.
+- If a section is too large, use the returned `suggestedPaths` and retry with a narrower path. For arrays, page via `limit/cursor` (and reduce payload via `select`). You can also fetch a single element by numeric index (e.g., `analysis.exception.stackTrace[0]`). Array ranges like `stackTrace[0:10]` are not supported; use `limit` and (when provided) `cursor` instead. For objects, page via `pageKind: "object"` + `limit/cursor`.
 - For arrays, reduce payload via `select: [...]` and (when applicable) `where: { field: "...", equals: "..." }`.
 - If you accidentally request common wrong paths like `analysis.runtime` / `analysis.process` / `analysis.platform` / `analysis.threads.faulting`, the server rewrites them to their canonical equivalents under `analysis.environment.*` / `analysis.threads.faultingThread` (but prefer the canonical paths).
 - `inspect(address: "0x...", maxDepth: 3)` for managed object inspection (more complete and safer than `exec "sos dumpobj ..."`).
@@ -169,6 +169,12 @@ To reduce run-to-run variance and avoid context truncation, the sampling loop ma
 - An **evidence ledger** (stable IDs like `E12`) **auto-generated from tool outputs** (optionally annotated via `analysis_evidence_add`)
 - A set of **competing hypotheses** (stable IDs like `H2`) via `analysis_hypothesis_register` and `analysis_hypothesis_score`
 - Periodic **checkpoints** via `checkpoint_complete` (summarize what we know so far and prune the conversation context)
+
+The server can also inject a deterministic fallback checkpoint when it needs a stable “carry-forward” state (for example, when a sampling request must be retried or when the provider cannot handle full tool history). These deterministic checkpoints:
+- Preserve baseline progress so completed baseline calls (e.g., `metadata`, `analysis.summary`) never regress to “missing”.
+- Include an actionable `nextSteps` entry when baseline evidence is incomplete (to guide weaker tool-using models).
+- Keep `uniqueToolCalls` monotonic and independent from any `doNotRepeat` truncation.
+- Produce a deterministic, evidence-ledger-consistent final result when the run is finalized due to “no progress” (no extra LLM synthesis step).
 
 Recommended pattern:
 1. Gather baseline evidence first (summary + exception + faulting thread + key assemblies/modules).

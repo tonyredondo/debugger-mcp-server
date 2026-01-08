@@ -278,6 +278,27 @@ xcode-select --install
 - Upgrade to a server version that includes the cached fallback behavior.
 - If the model still cannot make progress even with `tool_choice="auto"`, try a different OpenRouter model or provider that supports tool use reliably.
 
+### "The stream was already consumed. It cannot be read again."
+
+**Cause**: A transient request-pipeline issue where an HTTP request body stream is read/consumed more than once (can appear as a sampling/createMessage failure).
+
+**Behavior**:
+- The `dbg-mcp` sampling client retries the provider request once when this exact error is detected.
+- The server may also retry the MCP sampling request.
+- If a deterministic checkpoint carry-forward is used during retries, it is refreshed when new tool calls arrive so baseline progress cannot regress (prevents “SUMMARY loops” after a retry succeeds).
+
+**Solutions**:
+- Upgrade to the latest CLI + server version (includes client-side retry and stale-checkpoint hardening).
+- If it persists, enable both sampling traces (server-side) and provider HTTP traces (client-side) and try another model/provider.
+
+### "The AI keeps repeating the same baseline tool call" (e.g., `analysis.summary`)
+
+**Cause**: The model is not retaining baseline progress (often because context is pruned and a stale checkpoint is reused), so it keeps requesting already-collected baseline evidence.
+
+**Solutions**:
+- Upgrade to a server version that refreshes deterministic checkpoint carry-forward facts when new tool calls are recorded (prevents stale baseline status after retries).
+- Prefer “baseline progression” patterns (META → SUMMARY → ENV → exception fields → stack top) and avoid invalid `report_get` paths like array ranges (`stackTrace[0:10]` is not supported).
+
 ### "I can't see what was sent to the LLM" / "Sampling is truncated"
 
 Enable server-side sampling traces (may include sensitive debugger output):
@@ -292,6 +313,16 @@ export DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4
 Trace files are written under:
 - `LOG_STORAGE_PATH/ai-sampling`
   - In `docker-compose.yml`, each service mounts a different host logs directory (e.g., `./logs`, `./logs-alpine`, `./logs-x64`). Trace files appear under the corresponding directory in `ai-sampling/`.
+
+To trace what the sampling client sent to the LLM provider (OpenRouter/OpenAI/Anthropic), enable CLI-side provider HTTP tracing:
+```bash
+export DEBUGGER_MCP_LLM_HTTP_TRACE_SAMPLING=true
+export DEBUGGER_MCP_LLM_HTTP_TRACE_DIR=/path/to/logs
+export DEBUGGER_MCP_LLM_HTTP_TRACE_MAX_FILE_BYTES=2000000
+```
+
+Provider HTTP trace files are written under:
+- `LOG_STORAGE_PATH/llm-http` (or the directory set via `DEBUGGER_MCP_LLM_HTTP_TRACE_DIR`)
 
 ### "The AI keeps using dumpobj instead of inspect"
 
