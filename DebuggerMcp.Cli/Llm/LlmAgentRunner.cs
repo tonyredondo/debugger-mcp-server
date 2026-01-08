@@ -40,7 +40,7 @@ internal sealed class LlmAgentRunner(
         var consecutiveNoProgressIterations = 0;
         var loopBreaksIssued = 0;
         var totalNewEvidence = 0;
-        var baselineEnforcementAttempts = 0;
+        var baselinePrefetchAttempts = 0;
         var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(_sessionState, TryGetLastUserPrompt(seedMessages));
 
         for (var iteration = 1; iteration <= _maxIterations; iteration++)
@@ -54,27 +54,29 @@ internal sealed class LlmAgentRunner(
 
             if (completion.ToolCalls.Count == 0)
             {
-                if (wantsConclusion &&
-                    !IsBaselineComplete(_sessionState) &&
-                    baselineEnforcementAttempts < 2)
-                {
-                    baselineEnforcementAttempts++;
-                    var checkpoint = LlmAgentCheckpointBuilder.BuildBaselineRequiredCheckpoint(
-                        sessionState: _sessionState,
-                        seedMessages: seedMessages,
-                        iteration: iteration,
-                        toolCallsExecuted: toolCallsExecuted);
-
-                    _sessionState.LastCheckpointJson = checkpoint;
-                    messages = ApplyCheckpointPrune(messages, checkpoint);
-                    continue;
-                }
-
                 if (wantsConclusion && !IsBaselineComplete(_sessionState))
                 {
+                    if (baselinePrefetchAttempts < 1)
+                    {
+                        baselinePrefetchAttempts++;
+                        var didExecute = await TryExecuteMissingBaselineAsync(
+                                messages: messages,
+                                iteration: iteration,
+                                cancellationToken: cancellationToken)
+                            .ConfigureAwait(false);
+
+                        toolCallsExecuted += didExecute.ToolCallsExecuted;
+                        totalNewEvidence += didExecute.NewEvidenceCount;
+
+                        if (didExecute.ToolCallsExecuted > 0)
+                        {
+                            continue;
+                        }
+                    }
+
                     // Avoid returning a confident conclusion with missing baseline evidence.
                     return new LlmAgentRunResult(
-                        FinalText: "(Baseline is incomplete and the model is not requesting tools. Please allow the agent to call report_get/report_index, or ask a narrower question. Suggested next: report_index() then report_get(path=\"analysis.exception.type\"), report_get(path=\"analysis.exception.message\"), and report_get(path=\"analysis.exception.stackTrace\", limit=8).)",
+                        FinalText: BuildBaselineIncompleteMessage(_sessionState),
                         Iterations: iteration,
                         ToolCallsExecuted: toolCallsExecuted);
                 }
@@ -185,6 +187,107 @@ internal sealed class LlmAgentRunner(
                 : $"(LLM agent stopped after {_maxIterations} steps)\n{finalText}",
             Iterations: _maxIterations,
             ToolCallsExecuted: toolCallsExecuted);
+    }
+
+    private async Task<(int ToolCallsExecuted, int NewEvidenceCount)> TryExecuteMissingBaselineAsync(
+        List<ChatMessage> messages,
+        int iteration,
+        CancellationToken cancellationToken)
+    {
+        var missing = new List<LlmAgentBaselineItem>();
+        foreach (var item in LlmAgentBaselinePolicy.RequiredBaseline)
+        {
+            var entry = _sessionState.Evidence.TryGetLatestByTag(item.Tag);
+            if (entry == null || entry.ToolWasError)
+            {
+                missing.Add(item);
+            }
+        }
+
+        if (missing.Count == 0)
+        {
+            return (ToolCallsExecuted: 0, NewEvidenceCount: 0);
+        }
+
+        var baselineToolCalls = new List<ChatToolCall>(missing.Count);
+        foreach (var item in missing)
+        {
+            baselineToolCalls.Add(new ChatToolCall(
+                id: $"baseline-{iteration}-{item.Tag}",
+                name: item.PlannedCall.ToolName,
+                argumentsJson: item.PlannedCall.ArgumentsJson));
+        }
+
+        messages.Add(new ChatMessage(
+            "assistant",
+            "Gathering missing baseline crash info...",
+            toolCallId: null,
+            toolCalls: baselineToolCalls));
+
+        var toolCallsExecuted = 0;
+        var newEvidence = 0;
+        foreach (var toolCall in baselineToolCalls)
+        {
+            var toolResultRaw = await _executeToolAsync(toolCall, cancellationToken).ConfigureAwait(false);
+            toolCallsExecuted++;
+
+            // Defense-in-depth: redact sensitive values before sending tool output to the model.
+            var toolResultRedacted = TranscriptRedactor.RedactText(toolResultRaw);
+            var toolResultForModel = TruncateForModel(toolResultRedacted, _maxToolResultChars);
+
+            // Report snapshot tracking (only for report_get metadata).
+            if (string.Equals(toolCall.Name, "report_get", StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(TryReadJsonStringProperty(toolCall.ArgumentsJson, "path"), "metadata", StringComparison.OrdinalIgnoreCase))
+            {
+                _sessionState.TryUpdateSnapshotFromMetadataToolResult(toolResultForModel, out _);
+            }
+
+            var toolKey = BuildToolCacheKey(toolCall);
+            var tags = LlmAgentToolTagger.GetTags(toolCall.Name, toolCall.ArgumentsJson);
+            var toolWasError = LlmAgentToolResultClassifier.IsError(toolResultForModel);
+
+            var evidenceUpdate = _sessionState.Evidence.AddOrUpdate(
+                toolName: toolCall.Name,
+                argumentsJson: toolCall.ArgumentsJson,
+                toolKey: toolKey,
+                toolResultForHashing: toolResultForModel,
+                toolResultPreview: BuildEvidencePreview(toolResultForModel),
+                tags: tags,
+                toolWasError: toolWasError,
+                timestampUtc: DateTimeOffset.UtcNow);
+
+            if (evidenceUpdate.IsNewEvidence)
+            {
+                newEvidence++;
+            }
+
+            messages.Add(new ChatMessage("tool", toolResultForModel, toolCall.Id, toolCalls: null));
+        }
+
+        return (ToolCallsExecuted: toolCallsExecuted, NewEvidenceCount: newEvidence);
+    }
+
+    private static string BuildBaselineIncompleteMessage(LlmAgentSessionState sessionState)
+    {
+        var missing = new List<string>();
+        LlmAgentPlannedToolCall? nextCall = null;
+        foreach (var item in LlmAgentBaselinePolicy.RequiredBaseline)
+        {
+            var entry = sessionState.Evidence.TryGetLatestByTag(item.Tag);
+            if (entry != null && !entry.ToolWasError)
+            {
+                continue;
+            }
+
+            missing.Add(item.Tag);
+            nextCall ??= item.PlannedCall;
+        }
+
+        var next = nextCall == null
+            ? string.Empty
+            : $" Suggested next: {nextCall.ToolName}({nextCall.ArgumentsJson}).";
+
+        return $"(Baseline is incomplete and the model is not requesting tools. Missing: {string.Join(", ", missing)}.{next})";
     }
 
     private static string BuildEvidencePreview(string toolResult)

@@ -33,7 +33,7 @@ public class LlmAgentRunnerTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenPromptIsContinuationOfConclusion_EnforcesBaseline()
+    public async Task RunAsync_WhenPromptIsContinuationOfConclusion_PrefetchesBaselineAndContinues()
     {
         Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> _, CancellationToken __)
             => Task.FromResult(new ChatCompletionResult { Text = "No tools", ToolCalls = [] });
@@ -44,9 +44,9 @@ public class LlmAgentRunnerTests
         var runner = new LlmAgentRunner(CompleteAsync, (_, _) => Task.FromResult("ok"), state, maxIterations: 10);
         var result = await runner.RunAsync([new ChatMessage("user", "do it")], CancellationToken.None);
 
-        Assert.Contains("Baseline is incomplete", result.FinalText, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, result.ToolCallsExecuted);
-        Assert.Equal(3, result.Iterations);
+        Assert.Equal("No tools", result.FinalText);
+        Assert.Equal(7, result.ToolCallsExecuted);
+        Assert.Equal(2, result.Iterations);
     }
 
     [Fact]
@@ -319,7 +319,7 @@ public class LlmAgentRunnerTests
     }
 
     [Fact]
-    public async Task RunAsync_WhenConclusionPromptAndBaselineMissing_DoesNotReturnConclusion()
+    public async Task RunAsync_WhenConclusionPromptAndBaselineMissing_PrefetchesBaselineThenReturnsConclusion()
     {
         var state = LlmAgentSessionStateStore.GetOrCreate("server10", "session10", "dump10");
 
@@ -334,7 +334,7 @@ public class LlmAgentRunnerTests
 
         var result = await runner.RunAsync([new ChatMessage("user", "analyze this crash")], CancellationToken.None);
 
-        Assert.Contains("Baseline is incomplete", result.FinalText, StringComparison.OrdinalIgnoreCase);
-        Assert.Equal(0, result.ToolCallsExecuted);
+        Assert.Equal("Here is my conclusion.", result.FinalText);
+        Assert.Equal(7, result.ToolCallsExecuted);
     }
 }
