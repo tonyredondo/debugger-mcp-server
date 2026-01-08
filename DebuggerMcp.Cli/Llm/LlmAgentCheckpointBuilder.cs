@@ -103,6 +103,55 @@ internal static class LlmAgentCheckpointBuilder
     }
 
     /// <summary>
+    /// Builds a checkpoint emitted when the agent hits its iteration limit mid-investigation.
+    /// </summary>
+    public static string BuildIterationLimitCheckpoint(
+        LlmAgentSessionState sessionState,
+        IReadOnlyList<ChatMessage> seedMessages,
+        int iteration,
+        int toolCallsExecuted)
+    {
+        var baseline = ComputeBaselineState(sessionState.Evidence);
+        var prompt = TryGetLastUserPrompt(seedMessages);
+        var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(sessionState, prompt);
+
+        var latest = sessionState.Evidence.Entries.LastOrDefault();
+        var tryHints = latest == null ? Array.Empty<LlmAgentSuggestedToolCall>() : LlmAgentToolResultClassifier.ExtractTryHints(latest.ToolResultPreview);
+
+        var next = SelectNextStep(latest, baseline, wantsConclusion, tryHints);
+
+        var payload = new
+        {
+            version = 1,
+            kind = "iteration_limit",
+            iteration,
+            toolCallsExecuted,
+            promptKind = wantsConclusion ? "conclusion" : "interactive",
+            reportSnapshot = new
+            {
+                dumpId = sessionState.LastReportDumpId ?? string.Empty,
+                generatedAt = sessionState.LastReportGeneratedAt ?? string.Empty
+            },
+            phase = new
+            {
+                baselineComplete = baseline.IsComplete,
+                missingBaseline = baseline.MissingTags
+            },
+            baselineEvidence = baseline.BaselineEvidenceByTag,
+            evidenceIndex = BuildEvidenceIndex(sessionState.Evidence, maxItems: 25),
+            facts = new[]
+            {
+                "Iteration limit reached: the agent stopped mid-investigation.",
+                "Continue by following nextSteps[0]. Avoid repeating the immediately prior failing call without changing the query."
+            },
+            doNotRepeat = latest == null ? Array.Empty<string>() : new[] { latest.ToolKey },
+            nextSteps = next == null ? Array.Empty<object>() : new[] { next }
+        };
+
+        return JsonSerializer.Serialize(payload, new JsonSerializerOptions { WriteIndented = true });
+    }
+
+    /// <summary>
     /// Builds a checkpoint that enforces baseline collection for conclusion-seeking prompts.
     /// </summary>
     public static string BuildBaselineRequiredCheckpoint(

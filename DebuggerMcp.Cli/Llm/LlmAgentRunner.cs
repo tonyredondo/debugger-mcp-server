@@ -181,12 +181,78 @@ internal sealed class LlmAgentRunner(
             toolCallsExecuted: toolCallsExecuted,
             totalNewEvidence: totalNewEvidence);
 
+        var iterationLimitCheckpoint = LlmAgentCheckpointBuilder.BuildIterationLimitCheckpoint(
+            sessionState: _sessionState,
+            seedMessages: seedMessages,
+            iteration: _maxIterations,
+            toolCallsExecuted: toolCallsExecuted);
+
+        _sessionState.LastCheckpointJson = iterationLimitCheckpoint;
+        var nextStep = TryGetFirstCheckpointNextStep(iterationLimitCheckpoint);
+        var nextStepHint = nextStep == null ? string.Empty : $"\nSuggested next: {nextStep.Value.Tool}({nextStep.Value.ArgsJson})";
+
         return new LlmAgentRunResult(
             FinalText: string.IsNullOrWhiteSpace(finalText)
-                ? $"(LLM agent stopped after {_maxIterations} steps without a final answer)"
-                : $"(LLM agent stopped after {_maxIterations} steps)\n{finalText}",
+                ? $"(LLM agent stopped after {_maxIterations} steps without a final answer){nextStepHint}"
+                : $"(LLM agent stopped after {_maxIterations} steps){nextStepHint}\n{finalText}",
             Iterations: _maxIterations,
             ToolCallsExecuted: toolCallsExecuted);
+    }
+
+    private static (string Tool, string ArgsJson)? TryGetFirstCheckpointNextStep(string checkpointJson)
+    {
+        if (string.IsNullOrWhiteSpace(checkpointJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(checkpointJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (!doc.RootElement.TryGetProperty("nextSteps", out var steps) || steps.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            var first = steps.EnumerateArray().FirstOrDefault();
+            if (first.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (!first.TryGetProperty("tool", out var toolProp) || toolProp.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            if (!first.TryGetProperty("argsJson", out var argsProp) || argsProp.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            var tool = toolProp.GetString();
+            var argsJson = argsProp.GetString();
+            if (string.IsNullOrWhiteSpace(tool) || string.IsNullOrWhiteSpace(argsJson))
+            {
+                return null;
+            }
+
+            if (argsJson.Length > 300)
+            {
+                argsJson = argsJson[..300] + "...";
+            }
+
+            return (tool, argsJson);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private async Task<(int ToolCallsExecuted, int NewEvidenceCount)> TryExecuteMissingBaselineAsync(

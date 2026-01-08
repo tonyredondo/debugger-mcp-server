@@ -120,6 +120,7 @@ public class LlmAgentRunnerTests
         Assert.Contains("stopped after 2 steps", result.FinalText);
         Assert.Equal(2, result.Iterations);
         Assert.Equal(2, result.ToolCallsExecuted);
+        Assert.Contains("\"kind\": \"iteration_limit\"", state.LastCheckpointJson, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

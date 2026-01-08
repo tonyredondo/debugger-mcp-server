@@ -5222,7 +5222,7 @@ public class Program
             CompleteWithToolsAsync,
             ExecuteToolWithApprovalsAsync,
             sessionState,
-            maxIterations: 40);
+            maxIterations: 80);
 
         try
         {
@@ -5287,7 +5287,7 @@ public class Program
                 CompleteWithToolsAsync,
                 ExecuteToolWithApprovalsAsync,
                 sessionState,
-                maxIterations: 15);
+                maxIterations: 20);
 
             var correction = await correctionRunner.RunAsync(correctionSeed, cancellationToken).ConfigureAwait(false);
             return correction.FinalText;
