@@ -195,7 +195,17 @@ internal static class LlmAgentCheckpointBuilder
                 if (TryReadJsonStringProperty(latest.ArgumentsJson, "path", out var path) &&
                     !string.IsNullOrWhiteSpace(path))
                 {
-                    var argsJson = JsonSerializer.Serialize(new { path = path.Trim(), limit = 10 });
+                    var trimmedPath = path.Trim();
+                    var bracket = trimmedPath.IndexOf('[', StringComparison.Ordinal);
+                    if (bracket >= 0)
+                    {
+                        // The tool does not support slice syntax like [0:5]. When an invalid array index is detected,
+                        // fall back to the base array path and rely on limit/cursor paging.
+                        trimmedPath = trimmedPath[..bracket];
+                    }
+
+                    trimmedPath = trimmedPath.TrimEnd('.');
+                    var argsJson = JsonSerializer.Serialize(new { path = trimmedPath, limit = 10 });
                     return new { tool = "report_get", argsJson };
                 }
             }
