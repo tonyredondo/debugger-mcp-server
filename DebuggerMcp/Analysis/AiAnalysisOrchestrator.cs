@@ -461,21 +461,30 @@ public sealed class AiAnalysisOrchestrator(
                     WriteSamplingTraceFile(traceRunDir, errorFileName, new { iteration, attempt, error = ex.ToString(), message = ex.Message });
                 }
 
-                if (attempt < Math.Max(1, MaxSamplingRequestAttempts) && messages.Count > 2)
-                {
-                    var fallbackCheckpoint = BuildDeterministicCheckpointJson(
-                        passName: "analysis",
-                        commandsExecuted: commandsExecuted,
-                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
-                        baselineKey: baselineKey);
-                    lastCheckpointIteration = iteration;
-                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
-                    messages.Clear();
-                    messages.Add(BuildCheckpointCarryForwardMessage(
-                        fallbackCheckpoint,
-                        passName: "analysis",
-                        stateJson: BuildStateSnapshotJson(evidenceLedger, hypothesisTracker)));
-                }
+	                if (attempt < Math.Max(1, MaxSamplingRequestAttempts) && messages.Count > 2)
+	                {
+	                    var fallbackCheckpoint = BuildDeterministicCheckpointJson(
+	                        passName: "analysis",
+	                        commandsExecuted: commandsExecuted,
+	                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint,
+	                        baselineKey: baselineKey);
+	                    lastCheckpointIteration = iteration;
+	                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+	                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-attempt-{attempt:00}-checkpoint-injected.json", new
+	                    {
+	                        passName = "analysis",
+	                        iteration,
+	                        attempt,
+	                        reason = "sampling_attempt_failed",
+	                        message = lastSamplingError?.Message,
+	                        commandsExecuted = commandsExecuted.Count
+	                    });
+	                    messages.Clear();
+	                    messages.Add(BuildCheckpointCarryForwardMessage(
+	                        fallbackCheckpoint,
+	                        passName: "analysis",
+	                        stateJson: BuildStateSnapshotJson(evidenceLedger, hypothesisTracker)));
+	                }
             }
 
             if (response == null || response.Content == null || response.Content.Count == 0)
@@ -4610,17 +4619,26 @@ State snapshot (JSON):
                     WriteSamplingTraceFile(traceRunDir, errorFileName, new { passName, iteration, attempt, error = ex.ToString(), message = ex.Message });
                 }
 
-                if (attempt < Math.Max(1, MaxSamplingRequestAttempts) && messages.Count > 2)
-                {
-                    var fallbackCheckpoint = BuildDeterministicCheckpointJson(
-                        passName: passName,
-                        commandsExecuted: commandsExecuted,
-                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
-                    lastCheckpointIteration = iteration;
-                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
-                    messages.Clear();
-                    messages.Add(BuildCheckpointCarryForwardMessage(fallbackCheckpoint, passName: passName));
-                }
+	                if (attempt < Math.Max(1, MaxSamplingRequestAttempts) && messages.Count > 2)
+	                {
+	                    var fallbackCheckpoint = BuildDeterministicCheckpointJson(
+	                        passName: passName,
+	                        commandsExecuted: commandsExecuted,
+	                        commandsExecutedAtLastCheckpoint: commandsExecutedAtLastCheckpoint);
+	                    lastCheckpointIteration = iteration;
+	                    commandsExecutedAtLastCheckpoint = commandsExecuted.Count;
+	                    WriteSamplingTraceFile(traceRunDir, $"iter-{iteration:0000}-attempt-{attempt:00}-checkpoint-injected.json", new
+	                    {
+	                        passName,
+	                        iteration,
+	                        attempt,
+	                        reason = "sampling_attempt_failed",
+	                        message = lastSamplingError?.Message,
+	                        commandsExecuted = commandsExecuted.Count
+	                    });
+	                    messages.Clear();
+	                    messages.Add(BuildCheckpointCarryForwardMessage(fallbackCheckpoint, passName: passName));
+	                }
             }
 
             if (response == null || response.Content == null || response.Content.Count == 0)
@@ -7073,20 +7091,22 @@ State snapshot (JSON):
             }, new JsonSerializerOptions { WriteIndented = false });
     }
 
-    private static string BuildDeterministicCheckpointJson(
-        string passName,
-        List<ExecutedCommand> commandsExecuted,
-        int commandsExecutedAtLastCheckpoint,
-        string? baselineKey = null)
-    {
-        var evidence = BuildCheckpointEvidenceSnapshot(passName, commandsExecuted, commandsExecutedAtLastCheckpoint);
+	    private static string BuildDeterministicCheckpointJson(
+	        string passName,
+	        List<ExecutedCommand> commandsExecuted,
+	        int commandsExecutedAtLastCheckpoint,
+	        string? baselineKey = null)
+	    {
+	        var evidence = BuildCheckpointEvidenceSnapshot(passName, commandsExecuted, commandsExecutedAtLastCheckpoint);
 
-        var doNotRepeat = BuildDeterministicDoNotRepeatList(commandsExecuted);
-        var uniqueToolCalls = CountDistinctToolCacheKeys(commandsExecuted);
-        var baselinePhase = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
-            ? ComputeBaselinePhaseState(commandsExecuted)
-            : new BaselinePhaseState(Complete: false, Completed: [], Missing: []);
-        var executedToolKeys = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
+	        var doNotRepeat = BuildDeterministicDoNotRepeatList(commandsExecuted)
+	            .Select(entry => TruncateText(entry, maxChars: 512))
+	            .ToList();
+	        var uniqueToolCalls = CountDistinctToolCacheKeys(commandsExecuted);
+	        var baselinePhase = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
+	            ? ComputeBaselinePhaseState(commandsExecuted)
+	            : new BaselinePhaseState(Complete: false, Completed: [], Missing: []);
+	        var executedToolKeys = passName.Equals("analysis", StringComparison.OrdinalIgnoreCase)
             ? BuildExecutedToolKeySet(commandsExecuted)
             : new HashSet<string>(StringComparer.Ordinal);
         var nextSteps = JsonSerializer.SerializeToElement(Array.Empty<object>());
@@ -7168,33 +7188,33 @@ State snapshot (JSON):
                 continue;
             }
 
-            if (doNotRepeatCount > 10)
-            {
-                doNotRepeatCount = Math.Max(10, doNotRepeatCount / 2);
-                continue;
-            }
+	            if (doNotRepeatCount > 10)
+	            {
+	                doNotRepeatCount = Math.Max(10, doNotRepeatCount / 2);
+	                continue;
+	            }
 
-            var minimal = JsonSerializer.Serialize(new
-            {
-                facts = facts.Take(10).Select(f => TruncateText(f, maxChars: 256)).ToList(),
-                hypotheses = Array.Empty<object>(),
-                evidence = Array.Empty<object>(),
-                doNotRepeat = doNotRepeat.Take(doNotRepeatCount).ToList(),
-                nextSteps = Array.Empty<object>()
-            }, new JsonSerializerOptions { WriteIndented = false });
+	            var minimal = JsonSerializer.Serialize(new
+	            {
+	                facts = facts.Take(10).Select(f => TruncateText(f, maxChars: 256)).ToList(),
+	                hypotheses = Array.Empty<object>(),
+	                evidence = Array.Empty<object>(),
+	                doNotRepeat = Array.Empty<string>(),
+	                nextSteps
+	            }, new JsonSerializerOptions { WriteIndented = false });
 
-            return minimal.Length <= MaxCheckpointJsonChars
-                ? minimal
-                : JsonSerializer.Serialize(new
-                {
-                    facts = new[] { "Deterministic checkpoint exceeded size limits; using minimal fallback." },
-                    hypotheses = Array.Empty<object>(),
-                    evidence = Array.Empty<object>(),
-                    doNotRepeat = Array.Empty<string>(),
-                    nextSteps = Array.Empty<object>()
-                }, new JsonSerializerOptions { WriteIndented = false });
-        }
-    }
+	            return minimal.Length <= MaxCheckpointJsonChars
+	                ? minimal
+	                : JsonSerializer.Serialize(new
+	                {
+	                    facts = new[] { "Deterministic checkpoint exceeded size limits; using minimal fallback." },
+	                    hypotheses = Array.Empty<object>(),
+	                    evidence = Array.Empty<object>(),
+	                    doNotRepeat = Array.Empty<string>(),
+	                    nextSteps
+	                }, new JsonSerializerOptions { WriteIndented = false });
+	        }
+	    }
 
     private static string BuildDeterministicLoopBreakCheckpointJson(
         string passName,

@@ -5103,6 +5103,67 @@ public class AiAnalysisOrchestratorTests
     }
 
     [Fact]
+    public void BuildDeterministicCheckpointJson_WhenDoNotRepeatEntryIsHuge_DoesNotDropBaselineNextSteps()
+    {
+        var build = typeof(AiAnalysisOrchestrator).GetMethod("BuildDeterministicCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(build);
+
+        var maxCharsField = typeof(AiAnalysisOrchestrator).GetField("MaxCheckpointJsonChars", BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(maxCharsField);
+        var maxChars = (int)(maxCharsField!.GetRawConstantValue() ?? 0);
+        Assert.True(maxChars > 0);
+
+        using var metaInput = JsonDocument.Parse("""
+        {"path":"metadata","pageKind":"object","limit":50}
+        """);
+
+        var hugeValue = new string('a', 100_000);
+        var hugeJson = JsonSerializer.Serialize(new
+        {
+            path = "analysis.synthetic",
+            pageKind = "object",
+            where = new { field = "x", equals = hugeValue }
+        });
+        using var hugeInput = JsonDocument.Parse(hugeJson);
+
+        var commands = new List<ExecutedCommand>
+        {
+            new()
+            {
+                Tool = "report_get",
+                Input = metaInput.RootElement.Clone(),
+                Output = "{\"path\":\"metadata\",\"value\":{\"debuggerType\":\"LLDB\"}}",
+                Iteration = 1
+            },
+            new()
+            {
+                Tool = "report_get",
+                Input = hugeInput.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.synthetic\",\"value\":{\"ok\":true}}",
+                Iteration = 1
+            },
+            new()
+            {
+                Tool = "report_get",
+                Input = hugeInput.RootElement.Clone(),
+                Output = "{\"path\":\"analysis.synthetic\",\"value\":{\"ok\":true}}",
+                Iteration = 2
+            }
+        };
+
+        var checkpoint = (string)build!.Invoke(null, new object[] { "analysis", commands, 0, "dumpId=x generatedAt=y" })!;
+        Assert.True(checkpoint.Length <= maxChars, $"checkpoint length {checkpoint.Length} should be <= {maxChars}");
+
+        using var doc = JsonDocument.Parse(checkpoint);
+
+        var nextSteps = doc.RootElement.GetProperty("nextSteps").EnumerateArray().ToList();
+        Assert.NotEmpty(nextSteps);
+
+        var call = nextSteps[0].GetProperty("call").GetString() ?? string.Empty;
+        Assert.Contains("analysis.summary", call, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void RefreshCheckpointCarryForwardMessageIfDirty_WhenNewToolCallsArrive_RegeneratesCheckpointFacts()
     {
         var buildCheckpoint = typeof(AiAnalysisOrchestrator).GetMethod("BuildDeterministicCheckpointJson", BindingFlags.NonPublic | BindingFlags.Static);
