@@ -41,7 +41,7 @@ internal sealed class LlmAgentRunner(
         var loopBreaksIssued = 0;
         var totalNewEvidence = 0;
         var baselineEnforcementAttempts = 0;
-        var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeeking(TryGetLastUserPrompt(seedMessages));
+        var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(_sessionState, TryGetLastUserPrompt(seedMessages));
 
         for (var iteration = 1; iteration <= _maxIterations; iteration++)
         {

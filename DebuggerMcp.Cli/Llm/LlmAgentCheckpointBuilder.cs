@@ -27,7 +27,7 @@ internal static class LlmAgentCheckpointBuilder
             iteration,
             toolCallsExecuted,
             totalNewEvidence,
-            promptKind = LlmAgentPromptClassifier.IsConclusionSeeking(prompt) ? "conclusion" : "interactive",
+            promptKind = LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(sessionState, prompt) ? "conclusion" : "interactive",
             reportSnapshot = new
             {
                 dumpId = sessionState.LastReportDumpId ?? string.Empty,
@@ -64,7 +64,7 @@ internal static class LlmAgentCheckpointBuilder
     {
         var baseline = ComputeBaselineState(sessionState.Evidence);
         var prompt = TryGetLastUserPrompt(seedMessages);
-        var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeeking(prompt);
+        var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(sessionState, prompt);
 
         var latest = sessionState.Evidence.Entries.LastOrDefault();
         var tryHints = latest == null ? Array.Empty<LlmAgentSuggestedToolCall>() : LlmAgentToolResultClassifier.ExtractTryHints(latest.ToolResultPreview);
@@ -113,7 +113,7 @@ internal static class LlmAgentCheckpointBuilder
     {
         var baseline = ComputeBaselineState(sessionState.Evidence);
         var prompt = TryGetLastUserPrompt(seedMessages);
-        var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeeking(prompt);
+        var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(sessionState, prompt);
 
         var next = wantsConclusion && baseline.MissingPlannedCalls.Count > 0
             ? new { tool = baseline.MissingPlannedCalls[0].ToolName, argsJson = baseline.MissingPlannedCalls[0].ArgumentsJson }
@@ -399,5 +399,99 @@ internal static class LlmAgentPromptClassifier
                p.Contains("conclusion") ||
                p.Contains("explain the crash") ||
                p.Contains("explain this crash");
+    }
+
+    public static bool IsConclusionSeekingOrContinuation(LlmAgentSessionState sessionState, string? prompt)
+    {
+        if (IsConclusionSeeking(prompt))
+        {
+            return true;
+        }
+
+        if (!IsContinuationPrompt(prompt))
+        {
+            return false;
+        }
+
+        if (IsBaselineComplete(sessionState.Evidence))
+        {
+            // If baseline is already complete, treat short “do it” prompts as interactive unless the user explicitly
+            // asks for a conclusion again. This avoids unnecessary juror passes and baseline enforcement.
+            return false;
+        }
+
+        var prior = TryGetCheckpointPromptKind(sessionState.LastCheckpointJson);
+        return string.Equals(prior, "conclusion", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsContinuationPrompt(string? prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt))
+        {
+            return false;
+        }
+
+        var p = prompt.Trim().TrimEnd('.', '!', '?').ToLowerInvariant();
+        return p is
+            "do it" or
+            "do that" or
+            "do this" or
+            "do so" or
+            "run it" or
+            "go ahead" or
+            "continue" or
+            "proceed" or
+            "retry" or
+            "try again" or
+            "again" or
+            "yes" or
+            "y" or
+            "yeah" or
+            "yep" or
+            "ok" or
+            "okay" or
+            "sure";
+    }
+
+    private static string? TryGetCheckpointPromptKind(string? checkpointJson)
+    {
+        if (string.IsNullOrWhiteSpace(checkpointJson))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(checkpointJson);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return null;
+            }
+
+            if (!doc.RootElement.TryGetProperty("promptKind", out var kind) || kind.ValueKind != JsonValueKind.String)
+            {
+                return null;
+            }
+
+            return kind.GetString();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static bool IsBaselineComplete(LlmAgentEvidenceLedger ledger)
+    {
+        foreach (var item in LlmAgentBaselinePolicy.RequiredBaseline)
+        {
+            var entry = ledger.TryGetLatestByTag(item.Tag);
+            if (entry == null || entry.ToolWasError)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

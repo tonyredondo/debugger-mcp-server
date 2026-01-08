@@ -33,6 +33,23 @@ public class LlmAgentRunnerTests
     }
 
     [Fact]
+    public async Task RunAsync_WhenPromptIsContinuationOfConclusion_EnforcesBaseline()
+    {
+        Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> _, CancellationToken __)
+            => Task.FromResult(new ChatCompletionResult { Text = "No tools", ToolCalls = [] });
+
+        var state = LlmAgentSessionStateStore.GetOrCreate("server2b", "session2b", "dump2b");
+        state.LastCheckpointJson = """{ "promptKind": "conclusion" }""";
+
+        var runner = new LlmAgentRunner(CompleteAsync, (_, _) => Task.FromResult("ok"), state, maxIterations: 10);
+        var result = await runner.RunAsync([new ChatMessage("user", "do it")], CancellationToken.None);
+
+        Assert.Contains("Baseline is incomplete", result.FinalText, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, result.ToolCallsExecuted);
+        Assert.Equal(3, result.Iterations);
+    }
+
+    [Fact]
     public async Task RunAsync_ExecutesToolCallsAndReturnsFinalText()
     {
         var state = LlmAgentSessionStateStore.GetOrCreate("server3", "session3", "dump3");

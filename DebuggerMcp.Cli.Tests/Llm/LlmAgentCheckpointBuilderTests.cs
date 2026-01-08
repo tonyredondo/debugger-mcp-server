@@ -38,5 +38,25 @@ public class LlmAgentCheckpointBuilderTests
         Assert.Equal("analysis.exception.stackTrace", argsDoc.RootElement.GetProperty("path").GetString());
         Assert.Equal(10, argsDoc.RootElement.GetProperty("limit").GetInt32());
     }
-}
 
+    [Fact]
+    public void BuildBaselineRequiredCheckpoint_WhenContinuationPrompt_SuggestsMissingBaselineStep()
+    {
+        var state = LlmAgentSessionStateStore.GetOrCreate("chk2", "s", "d");
+        state.LastCheckpointJson = """{ "promptKind": "conclusion" }""";
+
+        var checkpointJson = LlmAgentCheckpointBuilder.BuildBaselineRequiredCheckpoint(
+            sessionState: state,
+            seedMessages: [new ChatMessage("user", "do it")],
+            iteration: 1,
+            toolCallsExecuted: 0);
+
+        using var doc = JsonDocument.Parse(checkpointJson);
+        var nextSteps = doc.RootElement.GetProperty("nextSteps");
+        Assert.True(nextSteps.GetArrayLength() > 0);
+
+        var argsJson = nextSteps[0].GetProperty("argsJson").GetString();
+        Assert.NotNull(argsJson);
+        Assert.Contains("\"path\":\"metadata\"", argsJson!, StringComparison.OrdinalIgnoreCase);
+    }
+}

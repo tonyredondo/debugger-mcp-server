@@ -5229,7 +5229,7 @@ public class Program
             var run = await runner.RunAsync(seedMessages, cancellationToken).ConfigureAwait(false);
 
             var lastUserPrompt = seedMessages.LastOrDefault(m => string.Equals(m.Role, "user", StringComparison.OrdinalIgnoreCase))?.Content ?? string.Empty;
-            var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeeking(lastUserPrompt);
+            var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(sessionState, lastUserPrompt);
 
             if (!wantsConclusion ||
                 string.IsNullOrWhiteSpace(run.FinalText) ||
