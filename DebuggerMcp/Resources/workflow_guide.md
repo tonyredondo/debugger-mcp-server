@@ -563,7 +563,12 @@ ZIP extraction rules:
 
 ## 📚 Additional Resources
 
-- **MCP Resources**: Use `debugger://windbg-commands`, `debugger://lldb-commands`, `debugger://sos-commands` for command references
+- **MCP Resources**:
+  - Tools + contracts: `debugger://mcp-tools`
+  - Workflow/analysis: `debugger://workflow-guide`, `debugger://analysis-guide`
+  - CLI usage: `debugger://cli-guide`
+  - Troubleshooting: `debugger://troubleshooting`
+  - Command references: `debugger://windbg-commands`, `debugger://lldb-commands`, `debugger://sos-commands`
 - [WinDbg Command Reference](https://learn.microsoft.com/en-us/windows-hardware/drivers/debuggercmds/)
 - [SOS Debugging Extension](https://learn.microsoft.com/en-us/dotnet/framework/tools/sos-dll-sos-debugging-extension)
 - [LLDB Documentation](https://lldb.llvm.org/)

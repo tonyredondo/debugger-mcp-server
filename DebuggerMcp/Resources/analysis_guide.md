@@ -1388,7 +1388,9 @@ For PDF output:
 
 ## 📚 Related Resources
 
+- `debugger://mcp-tools` - Canonical MCP tool list and contracts
 - `debugger://workflow-guide` - Complete workflow guide
+- `debugger://cli-guide` - CLI client usage guide
 - `debugger://windbg-commands` - WinDbg command reference
 - `debugger://lldb-commands` - LLDB command reference
 - `debugger://sos-commands` - SOS command reference
