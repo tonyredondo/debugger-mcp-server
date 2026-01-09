@@ -263,7 +263,7 @@ xcode-select --install
 
 **Solutions**:
 - Ensure your MCP client supports sampling (`sampling/createMessage`) with tools enabled.
-  - The `dbg-mcp` CLI supports sampling when an LLM provider is configured (`OPENROUTER_API_KEY` or `OPENAI_API_KEY` + `llm provider openai`).
+  - The `dbg-mcp` CLI supports sampling when an LLM provider is configured (`OPENROUTER_API_KEY`, or `OPENAI_API_KEY` + `llm provider openai`, or `ANTHROPIC_API_KEY` + `llm provider anthropic`).
 - Try a different model/provider (some providers have stricter tool-call requirements).
 
 ### "No endpoints found that support the provided 'tool_choice' value." (OpenRouter 404)

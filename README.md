@@ -82,6 +82,8 @@ A cross-platform MCP (Model Context Protocol) server to control debuggers (WinDb
 The server exposes documentation and guides as MCP resources for easy access:
 - 📖 **Workflow Guide**: Complete workflow for analyzing memory dumps
 - 📖 **Analysis Guide**: Crash analysis, .NET analysis, and dump comparison features
+- 📖 **MCP Tools Reference**: Compact MCP tool list + tool contracts
+- 📖 **AI Crash Analysis Guide**: How `analyze(kind="ai")` works (sampling, checkpoints, evidence/hypotheses, judge pass)
 - 📖 **WinDbg Commands Reference**: Common WinDbg commands for crash analysis
 - 📖 **LLDB Commands Reference**: Common LLDB commands for macOS/Linux debugging
 - 📖 **.NET SOS Commands Reference**: SOS commands for .NET application debugging
