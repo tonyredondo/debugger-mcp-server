@@ -338,4 +338,61 @@ public class LlmAgentRunnerTests
         Assert.Equal("Here is my conclusion.", result.FinalText);
         Assert.Equal(7, result.ToolCallsExecuted);
     }
+
+    [Fact]
+    public async Task RunAsync_WhenModelPlansFollowUpWithoutToolCalls_AutoContinuesOnce()
+    {
+        var state = LlmAgentSessionStateStore.GetOrCreate("server11", "session11", "dump11");
+        var executed = new List<ChatToolCall>();
+        var completions = 0;
+
+        Task<ChatCompletionResult> CompleteAsync(IReadOnlyList<ChatMessage> messages, CancellationToken _)
+        {
+            completions++;
+            if (completions == 1)
+            {
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "Investigating...",
+                    ToolCalls = [new ChatToolCall("c1", "inspect_object", "{\"address\":\"0x1\"}")]
+                });
+            }
+
+            if (completions == 2)
+            {
+                Assert.Contains(messages, m => m.Role == "tool" && m.ToolCallId == "c1");
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "Let me check the method table:",
+                    ToolCalls = []
+                });
+            }
+
+            if (completions == 3)
+            {
+                Assert.Contains(messages, m => m.Role == "user" && m.Content.Contains("Continue your investigation", StringComparison.Ordinal));
+                return Task.FromResult(new ChatCompletionResult
+                {
+                    Text = "Running dumpmt",
+                    ToolCalls = [new ChatToolCall("c2", "exec", "{\"command\":\"dumpmt -md 0x1234\"}")]
+                });
+            }
+
+            return Task.FromResult(new ChatCompletionResult { Text = "Done", ToolCalls = [] });
+        }
+
+        Task<string> ExecuteToolAsync(ChatToolCall call, CancellationToken _)
+        {
+            executed.Add(call);
+            return Task.FromResult("ok");
+        }
+
+        var runner = new LlmAgentRunner(CompleteAsync, ExecuteToolAsync, state, maxIterations: 10);
+        var result = await runner.RunAsync([new ChatMessage("user", "hi")], CancellationToken.None);
+
+        Assert.Equal("Done", result.FinalText);
+        Assert.Equal(4, result.Iterations);
+        Assert.Equal(2, result.ToolCallsExecuted);
+        Assert.Equal(2, executed.Count);
+    }
 }

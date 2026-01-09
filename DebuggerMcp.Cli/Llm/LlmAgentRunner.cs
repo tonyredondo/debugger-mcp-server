@@ -41,15 +41,17 @@ internal sealed class LlmAgentRunner(
         var loopBreaksIssued = 0;
         var totalNewEvidence = 0;
         var baselinePrefetchAttempts = 0;
+        var autoContinueNudges = 0;
         var wantsConclusion = LlmAgentPromptClassifier.IsConclusionSeekingOrContinuation(_sessionState, TryGetLastUserPrompt(seedMessages));
 
         for (var iteration = 1; iteration <= _maxIterations; iteration++)
         {
             var completion = await _completeAsync(messages, cancellationToken).ConfigureAwait(false);
 
-            if (!string.IsNullOrWhiteSpace(completion.Text))
+            var completionText = completion.Text?.Trim() ?? string.Empty;
+            if (!string.IsNullOrWhiteSpace(completionText))
             {
-                finalText = completion.Text.Trim();
+                finalText = completionText;
             }
 
             if (completion.ToolCalls.Count == 0)
@@ -79,6 +81,28 @@ internal sealed class LlmAgentRunner(
                         FinalText: BuildBaselineIncompleteMessage(_sessionState),
                         Iterations: iteration,
                         ToolCallsExecuted: toolCallsExecuted);
+                }
+
+                if (autoContinueNudges < 1 && LooksLikePlannedFollowUpWithoutToolCalls(completionText))
+                {
+                    autoContinueNudges++;
+
+                    // Preserve the assistant output so the follow-up continuation prompt has context.
+                    messages.Add(new ChatMessage(
+                        "assistant",
+                        completion.Text ?? string.Empty,
+                        toolCallId: null,
+                        toolCalls: null,
+                        contentJson: completion.RawMessageContent,
+                        providerMessageFields: completion.ProviderMessageFields));
+
+                    // Nudge the model to continue by calling tools instead of narrating an intended next step.
+                    messages.Add(new ChatMessage(
+                        "user",
+                        "Continue your investigation. If you need more evidence, CALL a tool now (report_get/exec/inspect_object/clr_stack/analyze). " +
+                        "Do not describe what you will do next; either call the tool(s) or give your best answer based on existing evidence."));
+
+                    continue;
                 }
 
                 _sessionState.LastCheckpointJson = LlmAgentCheckpointBuilder.BuildCarryForwardCheckpoint(
@@ -253,6 +277,39 @@ internal sealed class LlmAgentRunner(
         {
             return null;
         }
+    }
+
+    private static bool LooksLikePlannedFollowUpWithoutToolCalls(string completionText)
+    {
+        if (string.IsNullOrWhiteSpace(completionText))
+        {
+            return false;
+        }
+
+        var trimmed = completionText.TrimEnd();
+        if (trimmed.EndsWith(":", StringComparison.Ordinal) ||
+            trimmed.EndsWith("...", StringComparison.Ordinal) ||
+            trimmed.EndsWith("…", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var lower = trimmed.ToLowerInvariant();
+        return (lower.Contains("let me check", StringComparison.Ordinal) ||
+                lower.Contains("let me inspect", StringComparison.Ordinal) ||
+                lower.Contains("let me verify", StringComparison.Ordinal) ||
+                lower.Contains("i will check", StringComparison.Ordinal) ||
+                lower.Contains("i'll check", StringComparison.Ordinal) ||
+                lower.Contains("i will inspect", StringComparison.Ordinal) ||
+                lower.Contains("i'll inspect", StringComparison.Ordinal) ||
+                lower.Contains("next i will", StringComparison.Ordinal) ||
+                lower.Contains("now let me", StringComparison.Ordinal)) &&
+               (lower.Contains("report_get", StringComparison.Ordinal) ||
+                lower.Contains("exec", StringComparison.Ordinal) ||
+                lower.Contains("inspect", StringComparison.Ordinal) ||
+                lower.Contains("dump", StringComparison.Ordinal) ||
+                lower.Contains("methodtable", StringComparison.Ordinal) ||
+                lower.Contains("stack", StringComparison.Ordinal));
     }
 
     private async Task<(int ToolCallsExecuted, int NewEvidenceCount)> TryExecuteMissingBaselineAsync(
