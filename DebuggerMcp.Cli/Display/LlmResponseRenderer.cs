@@ -346,7 +346,9 @@ internal sealed class LlmResponseRenderer
         var sb = new StringBuilder();
         foreach (var line in codeBlock.Lines.Lines)
         {
-            sb.Append(line.ToString());
+            // Markdig's StringLine.ToString() does not include line terminators, so we must
+            // re-add them to preserve multi-line formatting inside Spectre panels.
+            sb.AppendLine(line.ToString());
         }
 
         var code = sb.ToString();

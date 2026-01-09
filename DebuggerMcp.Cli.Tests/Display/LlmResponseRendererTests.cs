@@ -383,6 +383,22 @@ public class LlmResponseRendererTests
     }
 
     [Fact]
+    public void Render_CodeBlock_PreservesLineBreaks()
+    {
+        var renderer = new LlmResponseRenderer();
+        var blocks = renderer.Render("```txt\nLINE_ONE\nLINE_TWO\n```\n", consoleWidth: 80);
+
+        using var console = new TestConsole().Width(80);
+        console.Write(new Spectre.Console.Rows(blocks));
+
+        var lines = console.Lines.ToList();
+        Assert.Contains(lines, l => l.Contains("LINE_ONE", StringComparison.Ordinal));
+        Assert.Contains(lines, l => l.Contains("LINE_TWO", StringComparison.Ordinal));
+        Assert.DoesNotContain(lines, l => l.Contains("LINE_ONE", StringComparison.Ordinal) && l.Contains("LINE_TWO", StringComparison.Ordinal));
+        Assert.DoesNotContain(string.Join('\n', lines), "LINE_ONELINE_TWO", StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Render_WhenMarkdownExceedsMaxChars_FallsBackToAnsiText()
     {
         var renderer = new LlmResponseRenderer(new LlmResponseRenderer.Options { MaxMarkdownChars = 10 });
