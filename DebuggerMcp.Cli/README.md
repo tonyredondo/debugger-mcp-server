@@ -321,6 +321,7 @@ Note: `analyze crash`, `analyze ai`, and `report -o <file> --format json` all us
 
 Note: when you enter `llmagent`, the CLI temporarily sets `llm set-agent-confirm false` so tool calls can run autonomously. The previous setting is restored when you exit `llmagent`.
 In `llmagent`, tool results are not cached: repeated tool calls execute (subject to your current confirmation settings). For stability, the CLI maintains an internal evidence ledger (`E1`, `E2`, ...) plus compact checkpoints across pruning/loops, and may run a tool-disabled “juror” pass when you ask for a conclusion.
+For a detailed guide to the interactive workflow (baseline enforcement, checkpoints/evidence, juror pass, loop guards), see: `DebuggerMcp.Cli/llmagent.md`.
 
 | Command | Description |
 |---------|-------------|
