@@ -33,7 +33,7 @@ public class AnalysisTools(
     /// <param name="sessionId">The session ID.</param>
     /// <param name="userId">The user ID that owns the session (for security validation).</param>
     /// <param name="includeWatches">Include watch expression evaluations in the report.</param>
-    /// <returns>Canonical JSON report document (same schema as <c>report --format json</c>).</returns>
+    /// <returns>Canonical JSON report document (same schema as <c>report -o ./report.json --format json</c>).</returns>
     /// <remarks>
     /// This tool automatically:
     /// - Analyzes the crash dump to determine crash type

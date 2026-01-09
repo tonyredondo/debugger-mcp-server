@@ -388,6 +388,8 @@ watch remove w1
 
 ### Report Commands
 
+Note: For `report`, `--format` is an alias for `-f` (e.g., `report -o ./report.json -f json`).
+
 | Command | Description |
 |---------|-------------|
 | `report -o <file>` | Generate report (required) |

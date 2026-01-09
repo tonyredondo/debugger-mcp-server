@@ -104,6 +104,7 @@ In `llmagent` mode:
 ### Advanced (`help advanced`)
 - `watch add/list/eval/remove/clear` - Watch expressions
 - `report -o <file> [-f markdown|html|json] [--summary] [--refresh] [--no-watches]` - Generate reports (output file required)
+  - Note: `--format` is an alias for `-f` (e.g., `report -o ./report.json --format json` or `report -o ./report.json -f json`).
 - `sourcelink <path>` - Resolve to source URL
 
 ## Interactive Features
