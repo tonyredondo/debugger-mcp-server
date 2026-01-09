@@ -152,6 +152,8 @@ For a detailed explanation of the AI sampling pipeline (tools, checkpoints, evid
 analyze(kind: "ai", sessionId: "your-session-id", userId: "your-user-id")
 ```
 
+AI runs are disk-cached per dump. Use `refreshCache: true` (or CLI `--refresh`) to force a recompute; optionally pass `llmProvider` / `llmModel` / `llmReasoningEffort` to key the cache per provider/model (recommended when you run the same dump through multiple models). These cache fields do not control which LLM the client uses for sampling.
+
 ### Tool Guidance (for the LLM)
 
 During AI sampling, the model has access to evidence-gathering tools (`report_get`, `exec`, `inspect`, `get_thread_stack`) plus orchestration/meta tools (`analysis_complete`, `checkpoint_complete`, `analysis_evidence_add`, `analysis_hypothesis_register`, `analysis_hypothesis_score`).
@@ -194,7 +196,7 @@ Enable server-side tracing (may include sensitive debugger output):
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true` (write full payloads)
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000` (per-file cap)
 - `DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4` (override checkpoint interval; default is 4)
-- `DEBUGGER_MCP_AI_EVIDENCE_PROVENANCE=true` (enable auto evidence provenance and keep `analysis_evidence_add` annotation-only)
+- `DEBUGGER_MCP_AI_EVIDENCE_PROVENANCE=false` (evidence provenance is enabled by default; set to `false` to disable. When enabled, `analysis_evidence_add` is treated as annotation-only.)
 - `DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS=2048` (max chars stored per auto-generated evidence finding)
 
 Trace files are written under `LOG_STORAGE_PATH/ai-sampling` (in Docker: `/app/logs/ai-sampling`).
@@ -1288,7 +1290,7 @@ Generate comprehensive, shareable reports from your crash analysis in multiple f
 | `report(action="full")` | Generate full analysis report | `sessionId`, `userId`, `format`, `includeWatches`, `includeSecurity`, `maxStackFrames` |
 | `report(action="summary")` | Generate brief summary report | `sessionId`, `userId`, `format` |
 | `report(action="index")` | Get a small report index (summary + TOC) | `sessionId`, `userId` |
-| `report(action="get")` | Fetch a specific report section by path (paged for arrays; objects can be paged via `pageKind="object"`) | `sessionId`, `userId`, `path`, `limit?`, `cursor?`, `pageKind?`, `select?`, `whereField?`, `whereEquals?`, `whereCaseInsensitive?`, `maxChars?` (default: 20000; returns an error if exceeded). `path` supports indices/slices like `analysis.exception.stackTrace[0]` and `analysis.exception.stackTrace[0:10]`. |
+| `report(action="get")` | Fetch a specific report section by path (paged for arrays; objects can be paged via `pageKind="object"`) | `sessionId`, `userId`, `path`, `limit?`, `cursor?`, `pageKind?`, `select?`, `whereField?`, `whereEquals?`, `whereCaseInsensitive?`, `maxChars?` (default: 20000; returns an error if exceeded). `path` supports numeric indices like `analysis.exception.stackTrace[0]` (ranges like `analysis.exception.stackTrace[0:10]` are not supported). |
 
 ### Supported Formats
 
@@ -1316,8 +1318,8 @@ report(action: "index", sessionId: "abc", userId: "user1")
 // Fetch a specific report section (paged for arrays)
 report(action: "get", sessionId: "abc", userId: "user1", path: "analysis.threads.all", limit: 25)
 
-// Fetch a bounded slice of the exception stack trace (avoid huge responses)
-report(action: "get", sessionId: "abc", userId: "user1", path: "analysis.exception.stackTrace[0:10]", select: ["frameNumber","function","module","sourceFile","lineNumber"])
+// Fetch the first 10 frames of the exception stack trace (avoid huge responses)
+report(action: "get", sessionId: "abc", userId: "user1", path: "analysis.exception.stackTrace", limit: 10, select: ["frameNumber","function","module","sourceFile","lineNumber"])
 
 // Filter arrays by exact field match (case-insensitive by default)
 report(action: "get", sessionId: "abc", userId: "user1", path: "analysis.assemblies.items", whereField: "name", whereEquals: "System.Private.CoreLib", limit: 5, select: ["name","assemblyVersion","path"])

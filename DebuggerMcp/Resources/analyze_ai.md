@@ -290,7 +290,7 @@ Common environment variables:
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true` (write full payloads)
 - `DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000` (per-file cap)
 - `DEBUGGER_MCP_AI_SAMPLING_CHECKPOINT_EVERY_ITERATIONS=4` (override checkpoint interval; default is 4)
-- `DEBUGGER_MCP_AI_EVIDENCE_PROVENANCE=true` (enable evidence provenance; default is true)
+- `DEBUGGER_MCP_AI_EVIDENCE_PROVENANCE=false` (evidence provenance is enabled by default; set to `false` to disable)
 - `DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS=2048` (max chars stored per auto evidence finding)
 
 Trace files are written under the configured log storage directory (often `LOG_STORAGE_PATH/ai-sampling`).
@@ -309,4 +309,3 @@ Trace files are written under the configured log storage directory (often `LOG_S
 - whether watches/security were included
 
 Use `refreshCache=true` (or CLI `--refresh`) to force a fresh AI analysis run.
-

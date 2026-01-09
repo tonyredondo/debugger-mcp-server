@@ -51,14 +51,14 @@ Optional parameters:
 - `pageKind` (get only, optional; default: "array") controls paging behavior: `"array"` pages arrays, `"object"` pages object properties, `"auto"` enables both.
 - `select` (get only, optional) projects object fields (applies to object results and array items that are objects).
 - `whereField` / `whereEquals` (get only, optional; arrays only) filters array items by exact field match; `whereCaseInsensitive` defaults to true.
-- `path` supports array indices like `analysis.exception.stackTrace[0]` and array slices like `analysis.exception.stackTrace[0:5]` (slices ignore cursors and return a bounded window of items).
+- `path` supports numeric array indices like `analysis.exception.stackTrace[0]`. Array slices/ranges like `analysis.exception.stackTrace[0:5]` are not supported; to bound results, request the array node and page it via `limit` and (when provided) `cursor`.
 - Compatibility: some common mistaken prefixes are rewritten (e.g., `analysis.runtime` → `analysis.environment.runtime`, `analysis.process` → `analysis.environment.process`, `analysis.platform` → `analysis.environment.platform`, `analysis.threads.faulting` → `analysis.threads.faultingThread`).
 
 ### 5) `analyze`
 Run analysis on the currently open dump.
 
 - **crash**: `analyze(kind: "crash", sessionId: "...", userId: "...")`
-- **ai**: `analyze(kind: "ai", sessionId: "...", userId: "...", maxIterations: 100, maxTokens: 8192, includeWatches: true, includeSecurity: true)`
+- **ai**: `analyze(kind: "ai", sessionId: "...", userId: "...", maxIterations: 100, maxTokens: 8192, includeWatches: true, includeSecurity: true, refreshCache: false)`
 - **performance**: `analyze(kind: "performance", sessionId: "...", userId: "...")`
 - **cpu**: `analyze(kind: "cpu", sessionId: "...", userId: "...")`
 - **allocations**: `analyze(kind: "allocations", sessionId: "...", userId: "...")`
@@ -69,6 +69,7 @@ Run analysis on the currently open dump.
 
 Notes:
 - `kind: "ai"` requires the connected MCP client to support sampling (`sampling/createMessage`) with tools enabled.
+- AI results are disk-cached per dump. Use `refreshCache: true` to recompute; optionally pass `llmProvider` / `llmModel` / `llmReasoningEffort` to key the cache per provider/model (recommended when you run the same dump through multiple models). These cache fields do not control which LLM the client uses for sampling.
 - `kind: "crash"` and `kind: "ai"` return the same canonical JSON report document schema as `report(format: "json")`.
 - For AI runs, the result is enriched under `analysis.aiAnalysis` and the server also rewrites `analysis.summary.description` / `analysis.summary.recommendations`, plus adds an evidence-backed `analysis.aiAnalysis.threadNarrative` and `analysis.threads.summary.description`.
   - For traceability/stability, AI runs also include `analysis.aiAnalysis.evidenceLedger` (evidence IDs like `E12`) and `analysis.aiAnalysis.hypotheses` (competing hypotheses IDs like `H2` linked to evidence).
