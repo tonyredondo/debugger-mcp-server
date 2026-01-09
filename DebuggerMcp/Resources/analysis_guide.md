@@ -136,7 +136,7 @@ Use `analyze(kind: "ai")` to run an AI-assisted analysis loop. The server will:
 5. Rewrite `analysis.summary.description` / `analysis.summary.recommendations` using a separate sampling pass over the full report
 6. Add `analysis.aiAnalysis.threadNarrative` and populate `analysis.threads.summary.description` with an evidence-backed “what the process was doing” narrative
 
-For a detailed explanation of the AI sampling pipeline (tools, checkpoints, evidence ledger, judge step, provenance, loop guards), see: `DebuggerMcp/Resources/analyze_ai.md`.
+For a detailed explanation of the AI sampling pipeline (tools, checkpoints, evidence ledger, judge step, provenance, loop guards), see the repository doc: `DebuggerMcp/Resources/analyze_ai.md`.
 
 ### Prerequisites
 

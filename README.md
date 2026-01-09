@@ -83,12 +83,15 @@ The server exposes documentation and guides as MCP resources for easy access:
 - 📖 **Workflow Guide**: Complete workflow for analyzing memory dumps
 - 📖 **Analysis Guide**: Crash analysis, .NET analysis, and dump comparison features
 - 📖 **MCP Tools Reference**: Compact MCP tool list + tool contracts
-- 📖 **AI Crash Analysis Guide**: How `analyze(kind="ai")` works (sampling, checkpoints, evidence/hypotheses, judge pass)
 - 📖 **WinDbg Commands Reference**: Common WinDbg commands for crash analysis
 - 📖 **LLDB Commands Reference**: Common LLDB commands for macOS/Linux debugging
 - 📖 **.NET SOS Commands Reference**: SOS commands for .NET application debugging
 - 📖 **Troubleshooting Guide**: Solutions to common issues
 - 📖 **CLI Guide**: Using the dbg-mcp command-line client
+
+Additional repository docs (not exposed as `debugger://` resources):
+- `DebuggerMcp/Resources/analyze_ai.md` — Deep dive into `analyze(kind="ai")` (sampling, checkpoints, evidence/hypotheses, judge pass)
+- `DebuggerMcp.Cli/llmagent.md` — Deep dive into `llmagent` (baseline enforcement, checkpoints/evidence, juror pass, loop guards)
 
 ### Security Features
 - 🔒 **API Key Authentication**: Optional authentication via `X-API-Key` header
