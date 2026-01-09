@@ -25,6 +25,7 @@ services:
       - DEBUGGER_MCP_AI_SAMPLING_TRACE=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
+      - DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS=4096
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:
@@ -63,6 +64,7 @@ services:
       - DEBUGGER_MCP_AI_SAMPLING_TRACE=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
+      - DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS=4096
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:
@@ -107,6 +109,7 @@ services:
       - DEBUGGER_MCP_AI_SAMPLING_TRACE=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
+      - DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS=4096
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:
@@ -147,6 +150,7 @@ services:
       - DEBUGGER_MCP_AI_SAMPLING_TRACE=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES=true
       - DEBUGGER_MCP_AI_SAMPLING_TRACE_MAX_FILE_BYTES=2000000
+      - DEBUGGER_MCP_AI_EVIDENCE_EXCERPT_MAX_CHARS=4096
       # Uncomment to enable API key authentication:
       # - API_KEY=your-secret-key-here
       # Uncomment to configure CORS:
