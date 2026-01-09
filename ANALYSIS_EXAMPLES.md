@@ -139,7 +139,7 @@ analyze(kind="ai", sessionId="session-123", userId="user1")
 - Requires an MCP client that supports sampling (`sampling/createMessage`) with tools enabled.
 - When the AI needs object details, prefer the first-class sampling tool (`inspect(address=\"0x...\", maxDepth=3)`) over raw SOS `dumpobj` commands.
 - Prefer `report(action=\"index\")` to seed LLM context and `report(action=\"get\", path=...)` (or the sampling tool `report_get(path=...)`) to fetch additional evidence instead of re-running full analysis.
-  - Use `select=[...]` to project only needed fields, `where={field,equals}` for simple array filtering, and `pageKind=\"object\"` to page large objects when needed.
+  - Use `select=[...]` to project only needed fields. For array filtering, use `report_get(where={field:\"...\",equals:\"...\"})` (sampling tool) or `report(action:\"get\", whereField:\"...\", whereEquals:\"...\")` (MCP tool). Use `pageKind=\"object\"` to page large objects when needed.
   - Arrays do not support slice/range syntax (e.g., `analysis.exception.stackTrace[0:10]` is invalid). To bound responses, use `limit` + (when provided) `cursor`, and/or reduce payload via `select` (example: `report_get(path="analysis.exception.stackTrace", limit=10, select=["frameNumber","function","module","sourceFile","lineNumber"])`).
 - To debug sampling prompts/responses on the server, enable `DEBUGGER_MCP_AI_SAMPLING_TRACE` and `DEBUGGER_MCP_AI_SAMPLING_TRACE_FILES` (writes to `LOG_STORAGE_PATH/ai-sampling`).
 - Some OpenRouter models reject `tool_choice=\"required\"` during sampling; the server detects this (often a 404 mentioning `tool_choice`) and caches a `tool_choice=\"auto\"` fallback for the rest of the run to avoid repeated failures/budget waste.
