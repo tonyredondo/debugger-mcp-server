@@ -12,10 +12,10 @@ public static partial class DumpObjParser
     [GeneratedRegex(@"^Name:\s+(.+)$", RegexOptions.Multiline)]
     private static partial Regex NameRegex();
 
-    [GeneratedRegex(@"^MethodTable:\s+([0-9a-fA-F]+)$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^MethodTable:\s+([0-9a-fA-F]+)\s*$", RegexOptions.Multiline)]
     private static partial Regex MethodTableRegex();
 
-    [GeneratedRegex(@"^Canonical MethodTable:\s+([0-9a-fA-F]+)$", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"^Canonical MethodTable:\s+([0-9a-fA-F]+)\s*$", RegexOptions.Multiline | RegexOptions.IgnoreCase)]
     private static partial Regex CanonicalMethodTableRegex();
 
     [GeneratedRegex(@"^Size:\s+(\d+)\s*\(", RegexOptions.Multiline)]
@@ -30,7 +30,7 @@ public static partial class DumpObjParser
     [GeneratedRegex(@"^Array:\s+Rank\s+(\d+),\s+Number of elements\s+(\d+),\s+Type\s+(.+)$", RegexOptions.Multiline)]
     private static partial Regex ArrayInfoRegex();
 
-    [GeneratedRegex(@"^Element Methodtable:\s+([0-9a-fA-F]+)$", RegexOptions.Multiline)]
+    [GeneratedRegex(@"^Element Methodtable:\s+([0-9a-fA-F]+)\s*$", RegexOptions.Multiline)]
     private static partial Regex ElementMethodTableRegex();
 
     // Field line regex - matches lines like:
@@ -116,7 +116,7 @@ public static partial class DumpObjParser
             var stringMatch = StringValueRegex().Match(output);
             if (stringMatch.Success)
             {
-                result.StringValue = stringMatch.Groups[1].Value;
+                result.StringValue = stringMatch.Groups[1].Value.TrimEnd('\r');
             }
         }
 

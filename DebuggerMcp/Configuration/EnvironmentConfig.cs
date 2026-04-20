@@ -345,6 +345,20 @@ public static class EnvironmentConfig
     /// </summary>
     public const int DefaultSymbolDownloadTimeoutMinutes = 10;
 
+    /// <summary>
+    /// Environment variable name for WinDbg command timeout in seconds.
+    /// </summary>
+    /// <remarks>
+    /// This timeout bounds individual WinDbg operations that execute through the DbgEng COM layer.
+    /// When a timeout is reached, the server attempts to interrupt the engine and recover it.
+    /// </remarks>
+    public const string WinDbgCommandTimeoutSeconds = "WINDBG_COMMAND_TIMEOUT_SECONDS";
+
+    /// <summary>
+    /// Default WinDbg command timeout in seconds.
+    /// </summary>
+    public const int DefaultWinDbgCommandTimeoutSeconds = 30;
+
     // ========== Server Configuration ==========
 
     /// <summary>
@@ -638,6 +652,13 @@ public static class EnvironmentConfig
     /// </summary>
     /// <returns>The symbol download timeout from environment or default (10 minutes).</returns>
     public static int GetSymbolDownloadTimeoutMinutes() => GetInt(SymbolDownloadTimeoutMinutes, DefaultSymbolDownloadTimeoutMinutes);
+
+    /// <summary>
+    /// Gets the configured WinDbg command timeout in seconds.
+    /// </summary>
+    /// <returns>The timeout to apply to individual WinDbg operations.</returns>
+    public static int GetWinDbgCommandTimeoutSeconds()
+        => GetInt(WinDbgCommandTimeoutSeconds, DefaultWinDbgCommandTimeoutSeconds);
 
     /// <summary>
     /// Gets the configured HTTP server port.

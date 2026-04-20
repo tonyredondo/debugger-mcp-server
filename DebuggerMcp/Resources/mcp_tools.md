@@ -21,6 +21,10 @@ Open/close a dump inside a session.
 - **open**: `dump(action: "open", sessionId: "...", userId: "...", dumpId: "...")`
 - **close**: `dump(action: "close", sessionId: "...", userId: "...")`
 
+Notes:
+- Fresh open and restored reopen use the same preparation flow for metadata, symbols, executable-path handling, and source-resolution state.
+- One dump per session remains the product model. Close the current dump before opening a different one in the same session.
+
 ### 3) `exec`
 Execute a raw debugger command (WinDbg/LLDB syntax). Use as a last resort.
 
@@ -105,6 +109,8 @@ Symbol management.
 Notes:
 - Symbol files are uploaded via the HTTP API (`/api/symbols/*`) and stored under `.symbols_<dumpId>/` on the server.
 - ZIP uploads extract only symbol-related entries and apply defensive extraction limits; see `debugger://workflow-guide`.
+- LLDB rejects unsupported URL-based additional symbol inputs explicitly instead of silently ignoring them.
+- When a dump is already open, supported symbol changes rebuild source-resolution state so later stack/source lookups use the updated inputs.
 
 ### 9) `source_link`
 Source link utilities for the current session/dump.

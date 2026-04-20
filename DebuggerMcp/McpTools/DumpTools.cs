@@ -1,9 +1,7 @@
 using System.ComponentModel;
-using System.Text.Json;
-using DebuggerMcp.Analysis;
-using DebuggerMcp.Controllers;
+using DebuggerMcp.Dumps;
 using DebuggerMcp.Security;
-using DebuggerMcp.Serialization;
+using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
 
@@ -25,9 +23,19 @@ public class DumpTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
     WatchStore watchStore,
-    ILogger<DumpTools> logger)
+    ILogger<DumpTools> logger,
+    DumpOpenCoordinator? dumpOpenCoordinator = null)
     : DebuggerToolsBase(sessionManager, symbolManager, watchStore, logger)
 {
+    /// <summary>
+    /// Canonical dump-open workflow shared with session restore.
+    /// </summary>
+    private DumpOpenCoordinator DumpOpenCoordinator { get; } = dumpOpenCoordinator ??
+        new DumpOpenCoordinator(
+            symbolManager,
+            new SourceResolutionStateRefresher(symbolManager, logger),
+            logger);
+
     /// <summary>
     /// Opens a memory dump file for analysis.
     /// </summary>
@@ -68,135 +76,24 @@ public class DumpTools(
             var session = GetSessionInfo(sessionId, sanitizedUserId);
             Logger.LogDebug("[OpenDump] Session retrieved - DebuggerType: {DebuggerType}", manager.DebuggerType);
 
-            // Initialize the debugger if not already initialized
-            // This is done lazily on first use to avoid overhead for sessions that may not be used
-            // Uses async initialization to avoid blocking ThreadPool threads in ASP.NET
-            if (!manager.IsInitialized)
-            {
-                Logger.LogInformation("[OpenDump] Initializing debugger ({DebuggerType})...", manager.DebuggerType);
-                await manager.InitializeAsync();
-                Logger.LogInformation("[OpenDump] Debugger initialized - Elapsed: {Elapsed}ms", sw.ElapsedMilliseconds);
-            }
-
-            // Resolve the dumpId to a file path using the user's dump storage directory
-            // This follows the pattern: {dumpStoragePath}/{userId}/{dumpId}.dmp
-            var dumpPath = SessionManager.GetDumpPath(sanitizedDumpId, sanitizedUserId);
-            Logger.LogInformation("[OpenDump] Dump path resolved: {DumpPath}", dumpPath);
-
-            // Check if there's a custom executable for this dump (standalone apps)
-            string? executablePath = null;
-            var dumpDir = Path.GetDirectoryName(dumpPath);
-            if (dumpDir != null)
-            {
-                // Check both naming conventions for metadata
-                var metadataPath = Path.Combine(dumpDir, $"{sanitizedDumpId}.json");
-                var altMetadataPath = Path.Combine(dumpDir, $".metadata_{sanitizedDumpId}.json");
-                var actualMetadataPath = File.Exists(metadataPath) ? metadataPath :
-                                         File.Exists(altMetadataPath) ? altMetadataPath : null;
-                
-                if (actualMetadataPath != null)
-                {
-                    try
-                    {
-                        var metadataJson = await File.ReadAllTextAsync(actualMetadataPath);
-                        var metadata = System.Text.Json.JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
-                        if (metadata?.ExecutablePath != null && File.Exists(metadata.ExecutablePath))
-                        {
-                            executablePath = metadata.ExecutablePath;
-                            Logger.LogInformation("[OpenDump] Found custom executable for standalone app: {ExecutablePath}", executablePath);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.LogDebug(ex, "[OpenDump] Failed to read dump metadata for executable path");
-                    }
-                }
-            }
-
-            // Configure symbols automatically for this dump
-            // This includes Microsoft Symbol Server + dump-specific symbols if they exist
-            Logger.LogDebug("[OpenDump] Configuring symbol paths...");
-            SymbolManager.ConfigureSessionSymbolPaths(sessionId, sanitizedDumpId, includeMicrosoftSymbols: true);
-
-            // Get the configured symbol path and apply it to the debugger
-            // WinDbg uses semicolon-separated paths, LLDB uses a different format
-            var symbolPath = manager.DebuggerType == "WinDbg"
-                ? SymbolManager.BuildWinDbgSymbolPath(sessionId)
-                : SymbolManager.BuildLldbSymbolPath(sessionId);
-
-            // Apply symbol path if one was configured
-            if (!string.IsNullOrWhiteSpace(symbolPath))
-            {
-                Logger.LogDebug("[OpenDump] Applying symbol path: {SymbolPath}", symbolPath);
-                manager.ConfigureSymbolPath(symbolPath);
-            }
-
-            // Open the dump file in the debugger
             Logger.LogInformation("[OpenDump] Opening dump file (this may take a while for large dumps)...");
-            manager.OpenDumpFile(dumpPath, executablePath);
-            Logger.LogInformation("[OpenDump] Dump file opened - Elapsed: {Elapsed}ms", sw.ElapsedMilliseconds);
-
-            // Open with ClrMD for metadata enrichment (after debugger opens the dump)
-            try
+            var openResult = await DumpOpenCoordinator.OpenDumpAsync(new DumpOpenCoordinatorRequest
             {
-                var clrMdAnalyzer = new ClrMdAnalyzer(Logger);
-                if (clrMdAnalyzer.OpenDump(dumpPath))
-                {
-                    session.ClrMdAnalyzer = clrMdAnalyzer;
-                    Logger.LogInformation("[OpenDump] ClrMD analyzer attached for metadata enrichment");
+                SessionId = sessionId,
+                UserId = sanitizedUserId,
+                DumpId = sanitizedDumpId,
+                Session = session,
+                Manager = manager,
+                DumpPathResolver = () => SessionManager.GetDumpPath(sanitizedDumpId, sanitizedUserId),
+                AllowAlreadyOpenSameDump = true,
+                UpdateMetadataIfIncomplete = true
+            });
+            Logger.LogInformation("[OpenDump] Dump open workflow completed - Elapsed: {Elapsed}ms", sw.ElapsedMilliseconds);
 
-	                    // Set up SequencePointResolver for source location resolution in ClrStack
-	                    try
-	                    {
-	                        var seqResolver = new SourceLink.SequencePointResolver(Logger);
-
-	                        var pdbPaths = SourceLink.PdbSearchPathBuilder.BuildExistingPaths(
-	                            dumpPath,
-	                            dumpId: sanitizedDumpId,
-	                            runtime: clrMdAnalyzer.Runtime);
-
-	                        if (pdbPaths.Count > 0)
-	                        {
-	                            Logger.LogInformation(
-	                                "[OpenDump] PDB search paths for ClrStack ({Count}): {Paths}",
-	                                pdbPaths.Count,
-	                                string.Join(" | ", pdbPaths));
-	                        }
-
-	                        foreach (var path in pdbPaths)
-	                        {
-	                            seqResolver.AddPdbSearchPath(path);
-	                        }
-	                        
-	                        clrMdAnalyzer.SetSequencePointResolver(seqResolver);
-	                        Logger.LogDebug("[OpenDump] SequencePointResolver configured for ClrStack");
-	                    }
-                    catch (Exception seqEx)
-                    {
-                        Logger.LogDebug(seqEx, "[OpenDump] SequencePointResolver setup failed, ClrStack will work without source locations");
-                    }
-                }
-                else
-                {
-                    Logger.LogDebug("[OpenDump] ClrMD could not open dump (non-.NET or architecture mismatch)");
-                    clrMdAnalyzer.Dispose();
-                }
-            }
-            catch (Exception clrMdEx)
+            if (openResult.RequiresPersistence)
             {
-                // Don't fail the dump opening if ClrMD fails - it's optional enrichment
-                Logger.LogDebug(clrMdEx, "[OpenDump] ClrMD initialization failed, continuing without metadata enrichment");
+                SessionManager.PersistSession(sessionId);
             }
-
-            // Dump changed: clear any cached report from a prior dump.
-            session.ClearCachedReport();
-
-            // Track which dump is open in this session and persist to disk
-            session.CurrentDumpId = sanitizedDumpId;
-            SessionManager.PersistSession(sessionId);
-
-            // Check and update dump metadata if incomplete (Alpine/RuntimeVersion detection)
-            await UpdateDumpMetadataIfIncompleteAsync(dumpPath, sanitizedUserId, sanitizedDumpId);
 
             // Build response with symbol information and timing
             var hasSymbols = SymbolManager.HasSymbols(sanitizedDumpId);
@@ -220,6 +117,11 @@ public class DumpTools(
             var timingInfo = elapsedSeconds > 30
                 ? $" (took {elapsedSeconds:F0}s - symbols were downloaded from server)"
                 : $" (took {elapsedSeconds:F0}s - symbols were cached)";
+
+            if (openResult.AlreadyOpen)
+            {
+                return $"Dump already open: {sanitizedDumpId}. {symbolInfo}.{dotNetInfo}{timingInfo}";
+            }
 
             return $"Dump opened: {sanitizedDumpId}. {symbolInfo}.{dotNetInfo}{timingInfo}";
         }
@@ -279,6 +181,8 @@ public class DumpTools(
         session.ClearCachedReport();
 
         // Clear the tracked dump ID and persist to disk
+        SymbolManager.ConfigureSessionSymbolPaths(sessionId, dumpId: null, includeMicrosoftSymbols: true);
+        session.SymbolConfiguration = SymbolManager.GetPersistedSessionSymbolConfiguration(sessionId);
         session.CurrentDumpId = null;
         SessionManager.PersistSession(sessionId);
 
@@ -430,101 +334,4 @@ public class DumpTools(
         }
     }
 
-    /// <summary>
-    /// Checks if dump metadata is incomplete and updates it with analysis results.
-    /// </summary>
-    /// <param name="dumpPath">Path to the dump file.</param>
-    /// <param name="userId">The sanitized user ID.</param>
-    /// <param name="dumpId">The sanitized dump ID.</param>
-    /// <remarks>
-    /// This ensures dumps uploaded before Alpine/RuntimeVersion detection was added
-    /// get their metadata updated when opened.
-    /// </remarks>
-    private async Task UpdateDumpMetadataIfIncompleteAsync(string dumpPath, string userId, string dumpId)
-    {
-        try
-        {
-            // Get metadata file path
-            var userDir = Path.GetDirectoryName(dumpPath);
-            if (userDir == null) return;
-
-            // Check both naming conventions for metadata
-            var metadataPath = Path.Combine(userDir, $"{dumpId}.json");
-            var altMetadataPath = Path.Combine(userDir, $".metadata_{dumpId}.json");
-            var actualMetadataPath = File.Exists(metadataPath) ? metadataPath :
-                                     File.Exists(altMetadataPath) ? altMetadataPath : null;
-
-            // Check if metadata file exists
-            if (actualMetadataPath == null)
-            {
-                Logger.LogDebug("[OpenDump] No metadata file found for dump {DumpId}", dumpId);
-                return;
-            }
-
-            // Read existing metadata
-            var metadataJson = await File.ReadAllTextAsync(actualMetadataPath);
-            var metadata = JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
-
-            if (metadata == null)
-            {
-                Logger.LogWarning("[OpenDump] Failed to deserialize metadata for dump {DumpId}", dumpId);
-                return;
-            }
-
-            // Check if metadata is incomplete (missing Alpine, RuntimeVersion, or Architecture)
-            if (metadata.IsAlpineDump.HasValue &&
-                !string.IsNullOrEmpty(metadata.RuntimeVersion) &&
-                !string.IsNullOrEmpty(metadata.Architecture))
-            {
-                Logger.LogDebug("[OpenDump] Metadata is complete for dump {DumpId}", dumpId);
-                return;
-            }
-
-            Logger.LogInformation("[OpenDump] Dump metadata incomplete, running analysis for {DumpId}...", dumpId);
-
-            // Run analysis to detect Alpine, RuntimeVersion, and Architecture
-            var analysisResult = await DumpAnalyzer.AnalyzeDumpAsync(dumpPath, Logger);
-
-            // Update metadata with analysis results
-            var updated = false;
-
-            if (!metadata.IsAlpineDump.HasValue && analysisResult.IsAlpine.HasValue)
-            {
-                metadata.IsAlpineDump = analysisResult.IsAlpine;
-                updated = true;
-                Logger.LogInformation("[OpenDump] Updated IsAlpineDump to {IsAlpine} for dump {DumpId}",
-                    analysisResult.IsAlpine, dumpId);
-            }
-
-            if (string.IsNullOrEmpty(metadata.RuntimeVersion) && !string.IsNullOrEmpty(analysisResult.RuntimeVersion))
-            {
-                metadata.RuntimeVersion = analysisResult.RuntimeVersion;
-                updated = true;
-                Logger.LogInformation("[OpenDump] Updated RuntimeVersion to {Version} for dump {DumpId}",
-                    analysisResult.RuntimeVersion, dumpId);
-            }
-
-            if (string.IsNullOrEmpty(metadata.Architecture) && !string.IsNullOrEmpty(analysisResult.Architecture))
-            {
-                metadata.Architecture = analysisResult.Architecture;
-                updated = true;
-                Logger.LogInformation("[OpenDump] Updated Architecture to {Architecture} for dump {DumpId}",
-                    analysisResult.Architecture, dumpId);
-            }
-
-            // Save updated metadata if changes were made (back to the same file we read from)
-            if (updated)
-            {
-                await File.WriteAllTextAsync(
-                    actualMetadataPath,
-                    JsonSerializer.Serialize(metadata, JsonSerializationDefaults.Indented));
-                Logger.LogInformation("[OpenDump] Saved updated metadata for dump {DumpId}", dumpId);
-            }
-        }
-        catch (Exception ex)
-        {
-            // Don't fail the open operation if metadata update fails
-            Logger.LogWarning(ex, "[OpenDump] Failed to update dump metadata for {DumpId}", dumpId);
-        }
-    }
 }

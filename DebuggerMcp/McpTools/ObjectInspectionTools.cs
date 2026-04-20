@@ -497,10 +497,10 @@ public class ObjectInspectionTools(
             }
 
             // Add registers if requested
-            if (includeRegisters && session.Manager is LldbManager lldb)
+            if (includeRegisters && session.Manager is IDebuggerDiagnostics debuggerDiagnostics)
             {
                 var threadIds = result.Threads.Select(t => t.OSThreadId);
-                var registers = lldb.GetTopFrameRegisters(threadIds);
+                var registers = debuggerDiagnostics.GetTopFrameRegisters(threadIds);
 
                 foreach (var thread in result.Threads)
                 {

@@ -5,7 +5,9 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using DebuggerMcp.Configuration;
+using DebuggerMcp.Dumps;
 using DebuggerMcp.Serialization;
+using DebuggerMcp.Symbols;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -19,7 +21,7 @@ namespace DebuggerMcp;
 /// communication to send commands and receive output. It implements the same interface as
 /// WinDbgManager to provide a consistent API across platforms.
 /// </remarks>
-public class LldbManager : IDebuggerManager
+public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
 {
     /// <summary>
     /// Logger for diagnostic output.
@@ -1364,59 +1366,23 @@ public class LldbManager : IDebuggerManager
     /// <returns>The metadata JSON path (same name as dump, but <c>.json</c>), or <c>null</c> if invalid.</returns>
     internal static string? GetMetadataPathForDump(string? dumpPath)
     {
-        if (string.IsNullOrEmpty(dumpPath))
-        {
-            return null;
-        }
-
-        var dumpDir = Path.GetDirectoryName(dumpPath);
-        var dumpName = Path.GetFileNameWithoutExtension(dumpPath);
-        if (string.IsNullOrEmpty(dumpDir) || string.IsNullOrEmpty(dumpName))
-        {
-            return null;
-        }
-
-        return Path.Combine(dumpDir, $"{dumpName}.json");
+        return DumpMetadataStore.GetPreferredMetadataPath(dumpPath);
     }
 
     /// <summary>
     /// Attempts to load dump metadata from a JSON file.
     /// </summary>
-    internal static Controllers.DumpMetadata? TryLoadDumpMetadata(string metadataPath, ILogger? logger = null)
+    internal static DumpMetadata? TryLoadDumpMetadata(string metadataPath, ILogger? logger = null)
     {
-        try
-        {
-            if (!File.Exists(metadataPath))
-            {
-                return null;
-            }
-
-            var json = File.ReadAllText(metadataPath);
-            return JsonSerializer.Deserialize<Controllers.DumpMetadata>(json);
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "[LLDB] Failed to load dump metadata: {Path}", metadataPath);
-            return null;
-        }
+        return DumpMetadataStore.TryLoadDumpMetadata(metadataPath, logger);
     }
 
     /// <summary>
     /// Attempts to save dump metadata to a JSON file.
     /// </summary>
-    internal static bool TrySaveDumpMetadata(string metadataPath, Controllers.DumpMetadata metadata, ILogger? logger = null)
+    internal static bool TrySaveDumpMetadata(string metadataPath, DumpMetadata metadata, ILogger? logger = null)
     {
-        try
-        {
-            var updatedJson = JsonSerializer.Serialize(metadata, JsonSerializationDefaults.Indented);
-            File.WriteAllText(metadataPath, updatedJson);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "[LLDB] Failed to save dump metadata: {Path}", metadataPath);
-            return false;
-        }
+        return DumpMetadataStore.TrySaveDumpMetadata(metadataPath, metadata, logger);
     }
 
     /// <summary>
@@ -1424,10 +1390,7 @@ public class LldbManager : IDebuggerManager
     /// </summary>
     internal static string? TryLoadRuntimeVersionFromMetadata(string metadataPath, ILogger? logger = null)
     {
-        var metadata = TryLoadDumpMetadata(metadataPath, logger);
-        return metadata != null && !string.IsNullOrEmpty(metadata.RuntimeVersion)
-            ? metadata.RuntimeVersion
-            : null;
+        return DumpMetadataStore.TryLoadRuntimeVersionFromMetadata(metadataPath, logger);
     }
 
     /// <summary>
@@ -1435,14 +1398,7 @@ public class LldbManager : IDebuggerManager
     /// </summary>
     internal static bool TrySaveRuntimeVersionToMetadata(string metadataPath, string runtimeVersion, ILogger? logger = null)
     {
-        var metadata = TryLoadDumpMetadata(metadataPath, logger);
-        if (metadata == null)
-        {
-            return false;
-        }
-
-        metadata.RuntimeVersion = runtimeVersion;
-        return TrySaveDumpMetadata(metadataPath, metadata, logger);
+        return DumpMetadataStore.TrySaveRuntimeVersionToMetadata(metadataPath, runtimeVersion, logger);
     }
 
     /// <summary>
@@ -1450,8 +1406,7 @@ public class LldbManager : IDebuggerManager
     /// </summary>
     internal static List<string>? TryLoadSymbolFilesFromMetadata(string metadataPath, ILogger? logger = null)
     {
-        var metadata = TryLoadDumpMetadata(metadataPath, logger);
-        return metadata?.SymbolFiles;
+        return DumpMetadataStore.TryLoadSymbolFilesFromMetadata(metadataPath, logger);
     }
 
     /// <summary>
@@ -1459,14 +1414,7 @@ public class LldbManager : IDebuggerManager
     /// </summary>
     internal static bool TrySaveSymbolFilesToMetadata(string metadataPath, List<string> symbolFiles, ILogger? logger = null)
     {
-        var metadata = TryLoadDumpMetadata(metadataPath, logger);
-        if (metadata == null)
-        {
-            return false;
-        }
-
-        metadata.SymbolFiles = symbolFiles;
-        return TrySaveDumpMetadata(metadataPath, metadata, logger);
+        return DumpMetadataStore.TrySaveSymbolFilesToMetadata(metadataPath, symbolFiles, logger);
     }
 
     /// <summary>
@@ -2633,74 +2581,7 @@ public class LldbManager : IDebuggerManager
     /// <returns>The path to dotnet-symbol, or null if not found.</returns>
     private string? FindDotnetSymbolTool()
     {
-        // Allow an explicit override (useful for tests and custom deployments).
-        var overridePath = EnvironmentConfig.GetDotnetSymbolToolPath();
-        if (!string.IsNullOrWhiteSpace(overridePath))
-        {
-            if (File.Exists(overridePath))
-            {
-                _logger.LogDebug("[dotnet-symbol] Using override path: {Path}", overridePath);
-                return overridePath;
-            }
-
-            _logger.LogWarning("[dotnet-symbol] DOTNET_SYMBOL_TOOL_PATH set but file does not exist: {Path}", overridePath);
-        }
-
-        var searchPaths = new[]
-        {
-            // Dockerfile copies tools to /tools
-            "/tools/dotnet-symbol",
-            // Global tool installation
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "tools", "dotnet-symbol"),
-            // Root user in Docker
-            "/root/.dotnet/tools/dotnet-symbol",
-            // System PATH (just the command name)
-            "dotnet-symbol"
-        };
-
-        _logger.LogDebug("[dotnet-symbol] Searching for tool in: {Paths}", string.Join(", ", searchPaths));
-
-        foreach (var path in searchPaths)
-        {
-            // If it's just the command name, check if it's in PATH
-            if (path == "dotnet-symbol")
-            {
-                try
-                {
-                    var whichProcess = new Process
-                    {
-                        StartInfo = new ProcessStartInfo
-                        {
-                            FileName = "which",
-                            UseShellExecute = false,
-                            RedirectStandardOutput = true,
-                            CreateNoWindow = true
-                        }
-                    };
-                    whichProcess.StartInfo.ArgumentList.Add("dotnet-symbol");
-                    whichProcess.Start();
-                    var result = whichProcess.StandardOutput.ReadToEnd().Trim();
-                    whichProcess.WaitForExit();
-                    if (whichProcess.ExitCode == 0 && !string.IsNullOrEmpty(result))
-                    {
-                        _logger.LogDebug("[dotnet-symbol] Found via 'which' at: {Path}", result);
-                        return result;
-                    }
-                }
-                catch
-                {
-                    // which command failed, continue searching
-                }
-            }
-            else if (File.Exists(path))
-            {
-                _logger.LogDebug("[dotnet-symbol] Found at: {Path}", path);
-                return path;
-            }
-        }
-
-        _logger.LogDebug("[dotnet-symbol] Tool not found in any location");
-        return null;
+        return DotnetSymbolRunner.FindToolPath(_logger);
     }
 
     /// <summary>
@@ -2734,27 +2615,7 @@ public class LldbManager : IDebuggerManager
     /// <returns>The runtime version (e.g., <c>9.0.10</c>) or null if not found.</returns>
     internal static string? ExtractRuntimeVersionFromDotnetSymbolLine(string outputLine)
     {
-        if (string.IsNullOrWhiteSpace(outputLine))
-        {
-            return null;
-        }
-
-        // Pattern: Microsoft.NETCore.App/X.Y.Z
-        var netCoreAppIndex = outputLine.IndexOf("Microsoft.NETCore.App/", StringComparison.OrdinalIgnoreCase);
-        if (netCoreAppIndex < 0)
-        {
-            return null;
-        }
-
-        var versionStart = netCoreAppIndex + "Microsoft.NETCore.App/".Length;
-        var versionEnd = outputLine.IndexOfAny(['/', ' ', '"', '\\'], versionStart);
-        if (versionEnd < 0)
-        {
-            versionEnd = outputLine.Length;
-        }
-
-        var version = outputLine[versionStart..versionEnd].Trim();
-        return IsValidVersionString(version) ? version : null;
+        return DotnetSymbolRunner.ExtractRuntimeVersionFromLine(outputLine);
     }
 
     /// <summary>
@@ -2762,14 +2623,7 @@ public class LldbManager : IDebuggerManager
     /// </summary>
     internal static bool IsValidVersionString(string version)
     {
-        if (string.IsNullOrWhiteSpace(version))
-            return false;
-
-        var parts = version.Split('.');
-        if (parts.Length < 2 || parts.Length > 4)
-            return false;
-
-        return parts.All(p => int.TryParse(p, out _));
+        return DotnetSymbolRunner.IsValidVersionString(version);
     }
 
     /// <summary>
@@ -3098,6 +2952,47 @@ public class LldbManager : IDebuggerManager
         _disposed = true;
     }
 
+    /// <summary>
+    /// Returns normalized platform information for the current dump using cached verifycore data
+    /// when available.
+    /// </summary>
+    /// <returns>The best normalized platform information currently available.</returns>
+    public Analysis.PlatformInfo? GetPlatformInfo()
+    {
+        if (!IsDumpOpen)
+        {
+            return null;
+        }
+
+        var verifyCore = VerifiedCorePlatform;
+        if (verifyCore == null && !string.IsNullOrWhiteSpace(CurrentDumpPath))
+        {
+            verifyCore = VerifyCore(CurrentDumpPath);
+        }
+
+        var platform = new Analysis.PlatformInfo
+        {
+            Os = OperatingSystem.IsMacOS() ? "macOS" : "Linux",
+            Architecture = verifyCore?.Architecture ?? string.Empty,
+            RuntimeVersion = _detectedRuntimeVersion
+        };
+
+        if (platform.Os == "Linux")
+        {
+            if (verifyCore?.IsAlpine == true)
+            {
+                platform.IsAlpine = true;
+                platform.LibcType = "musl";
+            }
+            else
+            {
+                platform.LibcType = "glibc";
+            }
+        }
+
+        return platform;
+    }
+
     #region Register Fetching for ClrStack
 
     /// <summary>
@@ -3121,12 +3016,17 @@ public class LldbManager : IDebuggerManager
         if (!IsInitialized || !IsDumpOpen)
             return result;
 
+        var threadIdToIndex = BuildThreadIdToIndexMap();
+
         foreach (var tid in threadIds)
         {
             try
             {
                 // Select thread
-                var selectOutput = ExecuteCommandInternal($"thread select {tid}");
+                var threadSelector = threadIdToIndex.TryGetValue(tid, out var threadIndex)
+                    ? threadIndex.ToString()
+                    : tid.ToString();
+                var selectOutput = ExecuteCommandInternal($"thread select {threadSelector}");
                 if (selectOutput.Contains("error", StringComparison.OrdinalIgnoreCase) || 
                     selectOutput.Contains("invalid", StringComparison.OrdinalIgnoreCase))
                 {
@@ -3152,6 +3052,247 @@ public class LldbManager : IDebuggerManager
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Fetches registers for frames of a specific OS thread.
+    /// </summary>
+    /// <param name="threadId">The OS thread identifier to inspect.</param>
+    /// <returns>Per-frame register payloads for frames whose stack pointers can be determined.</returns>
+    public IReadOnlyList<DebuggerFrameRegisters> GetPerFrameRegisters(uint threadId)
+    {
+        var result = new List<DebuggerFrameRegisters>();
+
+        if (!IsInitialized || !IsDumpOpen)
+        {
+            return result;
+        }
+
+        try
+        {
+            var threadIdToIndex = BuildThreadIdToIndexMap();
+            if (!threadIdToIndex.TryGetValue(threadId, out var threadIndex))
+            {
+                _logger?.LogDebug("[LLDB] No thread-list mapping found for OS thread {ThreadId}", threadId);
+                return result;
+            }
+
+            var selectOutput = ExecuteCommandInternal($"thread select {threadIndex}");
+            if (selectOutput.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                selectOutput.Contains("invalid", StringComparison.OrdinalIgnoreCase))
+            {
+                return result;
+            }
+
+            var backtraceOutput = ExecuteCommandInternal("bt 200");
+            var framesWithStackPointers = ParseBacktraceForStackPointers(backtraceOutput);
+            var processedFrames = new HashSet<int>();
+
+            foreach (var (frameIndex, stackPointer) in framesWithStackPointers)
+            {
+                if (TryCaptureFrameRegisters(frameIndex, threadId, stackPointer, out var frameRegisters))
+                {
+                    result.Add(frameRegisters);
+                    processedFrames.Add(frameIndex);
+                }
+            }
+
+            var maxFrameIndex = framesWithStackPointers.Count > 0 ? framesWithStackPointers.Max(frame => frame.FrameIndex) : 0;
+            for (var frameIndex = 0; frameIndex <= maxFrameIndex + 10; frameIndex++)
+            {
+                if (processedFrames.Contains(frameIndex))
+                {
+                    continue;
+                }
+
+                try
+                {
+                    var frameSelectOutput = ExecuteCommandInternal($"frame select {frameIndex}");
+                    if (frameSelectOutput.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+                        frameSelectOutput.Contains("invalid", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    var frameInfoOutput = ExecuteCommandInternal("frame info");
+                    var stackPointerMatch = System.Text.RegularExpressions.Regex.Match(
+                        frameInfoOutput,
+                        @"SP\s*=\s*(0x[0-9a-fA-F]+)",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                    if (!stackPointerMatch.Success ||
+                        !ulong.TryParse(
+                            stackPointerMatch.Groups[1].Value.AsSpan(2),
+                            System.Globalization.NumberStyles.HexNumber,
+                            null,
+                            out var stackPointer))
+                    {
+                        continue;
+                    }
+
+                    if (TryCaptureFrameRegisters(frameIndex, threadId, stackPointer, out var frameRegisters))
+                    {
+                        result.Add(frameRegisters);
+                    }
+                }
+                catch
+                {
+                    // Keep best-effort behavior for frames without usable debugger context.
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[LLDB] Failed to fetch per-frame registers for thread {ThreadId}", threadId);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Parses LLDB backtrace output to extract frame indices with explicit stack pointers.
+    /// </summary>
+    /// <param name="backtraceOutput">The LLDB backtrace output.</param>
+    /// <returns>Frame indices paired with their stack pointers.</returns>
+    internal static List<(int FrameIndex, ulong StackPointer)> ParseBacktraceForStackPointers(string backtraceOutput)
+    {
+        var result = new List<(int FrameIndex, ulong StackPointer)>();
+        var lines = backtraceOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var line in lines)
+        {
+            var frameMatch = System.Text.RegularExpressions.Regex.Match(line, @"frame\s*#(\d+)");
+            if (!frameMatch.Success ||
+                !int.TryParse(frameMatch.Groups[1].Value, out var frameIndex))
+            {
+                continue;
+            }
+
+            var stackPointerMatch = System.Text.RegularExpressions.Regex.Match(
+                line,
+                @"SP\s*=\s*(0x[0-9a-fA-F]+)",
+                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!stackPointerMatch.Success ||
+                !ulong.TryParse(
+                    stackPointerMatch.Groups[1].Value.AsSpan(2),
+                    System.Globalization.NumberStyles.HexNumber,
+                    null,
+                    out var stackPointer))
+            {
+                continue;
+            }
+
+            result.Add((frameIndex, stackPointer));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Parses register output into normalized lower-case name/value pairs.
+    /// </summary>
+    /// <param name="output">The raw register output.</param>
+    /// <returns>Normalized register payload.</returns>
+    internal static Dictionary<string, string> ParseRegisterOutput(string output)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        var matches = System.Text.RegularExpressions.Regex.Matches(
+            output,
+            @"(\w+)\s*=\s*(0x[0-9a-fA-F]+)",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+        foreach (System.Text.RegularExpressions.Match match in matches)
+        {
+            var name = match.Groups[1].Value.ToLowerInvariant();
+            var value = match.Groups[2].Value;
+            result[name] = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value : $"0x{value}";
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Builds a mapping from OS thread ID to LLDB thread index.
+    /// </summary>
+    /// <returns>The mapping extracted from <c>thread list</c> output.</returns>
+    internal Dictionary<uint, int> BuildThreadIdToIndexMap()
+    {
+        var result = new Dictionary<uint, int>();
+        var threadListOutput = ExecuteCommandInternal("thread list");
+        if (string.IsNullOrWhiteSpace(threadListOutput))
+        {
+            return result;
+        }
+
+        var lines = threadListOutput.Split('\n');
+        foreach (var line in lines)
+        {
+            var indexMatch = System.Text.RegularExpressions.Regex.Match(line, @"thread\s+#(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (!indexMatch.Success)
+            {
+                continue;
+            }
+
+            var threadIndex = int.Parse(indexMatch.Groups[1].Value);
+
+            var decimalThreadIdMatch = System.Text.RegularExpressions.Regex.Match(line, @"tid\s*=\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (decimalThreadIdMatch.Success)
+            {
+                result[uint.Parse(decimalThreadIdMatch.Groups[1].Value)] = threadIndex;
+                continue;
+            }
+
+            var hexThreadIdMatch = System.Text.RegularExpressions.Regex.Match(line, @"tid\s*=\s*0x([0-9a-fA-F]+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            if (hexThreadIdMatch.Success)
+            {
+                result[uint.Parse(hexThreadIdMatch.Groups[1].Value, System.Globalization.NumberStyles.HexNumber)] = threadIndex;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Selects a frame and captures its register output.
+    /// </summary>
+    /// <param name="frameIndex">The frame index to select.</param>
+    /// <param name="threadId">The OS thread identifier being inspected.</param>
+    /// <param name="stackPointer">The frame stack pointer.</param>
+    /// <param name="frameRegisters">When successful, receives the captured frame register payload.</param>
+    /// <returns><c>true</c> when registers were captured; otherwise <c>false</c>.</returns>
+    private bool TryCaptureFrameRegisters(
+        int frameIndex,
+        uint threadId,
+        ulong stackPointer,
+        out DebuggerFrameRegisters frameRegisters)
+    {
+        frameRegisters = new DebuggerFrameRegisters();
+
+        var frameSelectOutput = ExecuteCommandInternal($"frame select {frameIndex}");
+        if (frameSelectOutput.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+            frameSelectOutput.Contains("invalid", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        var registerOutput = ExecuteCommandInternal("register read");
+        if (string.IsNullOrWhiteSpace(registerOutput))
+        {
+            return false;
+        }
+
+        var registers = ParseRegisterOutput(registerOutput);
+        if (registers.Count == 0)
+        {
+            return false;
+        }
+
+        frameRegisters = new DebuggerFrameRegisters
+        {
+            ThreadId = threadId,
+            StackPointer = stackPointer,
+            Registers = registers
+        };
+        return true;
     }
 
     /// <summary>

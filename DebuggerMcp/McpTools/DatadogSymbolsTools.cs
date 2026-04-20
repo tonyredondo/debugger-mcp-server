@@ -23,13 +23,20 @@ public class DatadogSymbolsTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
     WatchStore watchStore,
-    ILogger<DatadogSymbolsTools> logger)
+    ILogger<DatadogSymbolsTools> logger,
+    SourceResolutionStateRefresher? sourceResolutionStateRefresher = null)
     : DebuggerToolsBase(sessionManager, symbolManager, watchStore, logger)
 {
     /// <summary>
     /// JSON serialization options for results.
     /// </summary>
     private static readonly JsonSerializerOptions JsonOptions = JsonSerializationDefaults.Indented;
+
+    /// <summary>
+    /// Refreshes source-resolution state after Datadog symbol changes on an already open dump.
+    /// </summary>
+    private SourceResolutionStateRefresher SourceResolutionStateRefresher { get; } = sourceResolutionStateRefresher ??
+        new SourceResolutionStateRefresher(symbolManager, logger);
 
     /// <summary>
     /// Downloads Datadog.Trace symbols from Azure Pipelines or GitHub for a specific commit.
@@ -97,8 +104,8 @@ public class DatadogSymbolsTools(
         {
             // Use 'image list' to get native module paths which include architecture info
             // e.g., /lib/ld-musl-aarch64.so.1 tells us it's musl (Alpine) and aarch64 (ARM64)
-            var imageListOutput = debuggerManager.ExecuteCommand("image list");
-            platform = DetectPlatformFromSession(session, imageListOutput);
+            var platformDetectionOutput = GetPlatformDetectionOutput(debuggerManager);
+            platform = DetectPlatformFromSession(session, platformDetectionOutput);
             Logger.LogInformation("[DatadogSymbols] Detected platform: {Os} {Arch} (Alpine: {IsAlpine})",
                 platform.Os, platform.Architecture, platform.IsAlpine);
         }
@@ -188,8 +195,8 @@ public class DatadogSymbolsTools(
             // Clear command cache after loading new symbols so subsequent commands
             // Note: ClrMD handles most operations now, no cache to clear
 
-            // Loading new symbols can change stacks/source resolution; invalidate cached report + resolver.
-            session.ClearSourceLinkResolver();
+            // Loading new symbols can change stacks/source resolution; rebuild the live source state.
+            RefreshOpenDumpSourceResolutionState(sessionId, session, debuggerManager);
             session.ClearCachedReport();
         }
 
@@ -290,8 +297,8 @@ public class DatadogSymbolsTools(
         {
             // Use 'image list' to get native module paths which include architecture info
             // e.g., /lib/ld-musl-aarch64.so.1 tells us it's musl (Alpine) and aarch64 (ARM64)
-            var imageListOutput = debuggerManager.ExecuteCommand("image list");
-            platform = DetectPlatformFromSession(session, imageListOutput);
+            var platformDetectionOutput = GetPlatformDetectionOutput(debuggerManager);
+            platform = DetectPlatformFromSession(session, platformDetectionOutput);
             Logger.LogInformation("[DatadogSymbols] Detected platform: {Os} {Arch} (Alpine: {IsAlpine})",
                 platform.Os, platform.Architecture, platform.IsAlpine);
         }
@@ -330,8 +337,8 @@ public class DatadogSymbolsTools(
         // Note: ClrMD handles most operations now, no cache to clear
         if (loadIntoDebugger && prepResult.LoadResult != null)
         {
-            // Loading new symbols can change stacks/source resolution; invalidate cached report + resolver.
-            session.ClearSourceLinkResolver();
+            // Loading new symbols can change stacks/source resolution; rebuild the live source state.
+            RefreshOpenDumpSourceResolutionState(sessionId, session, debuggerManager);
             session.ClearCachedReport();
         }
 
@@ -634,8 +641,8 @@ public class DatadogSymbolsTools(
             // Session not found or expired - that's okay, we still cleared the files
         }
 
-        // Removing symbols can change stack/source resolution; invalidate cached report + resolver.
-        session.ClearSourceLinkResolver();
+        // Removing symbols can change stack/source resolution; rebuild the live source state.
+        RefreshOpenDumpSourceResolutionState(sessionId, session, GetSessionManager(sessionId, sanitizedUserId));
         session.ClearCachedReport();
 
         var response = new
@@ -659,41 +666,29 @@ public class DatadogSymbolsTools(
     /// </summary>
     private PlatformInfo DetectPlatformFromSession(DebuggerSession session, string debuggerOutput)
     {
-        var (platform, detectedArchitectureFromDebugger, detectedAlpineFromDebugger) = DetectPlatformFromDebuggerOutput(debuggerOutput);
-        
-        // If LLDB didn't give us enough info (e.g., standalone app), try dotnet-symbol --verifycore
-        // This is the most reliable method as it directly parses the dump's module list
-        if ((!detectedAlpineFromDebugger || !detectedArchitectureFromDebugger) && session.Manager is LldbManager lldbManager)
+        var (fallbackPlatform, detectedArchitectureFromDebugger, detectedAlpineFromDebugger) = DetectPlatformFromDebuggerOutput(debuggerOutput);
+        var platform = (session.Manager as IDebuggerDiagnostics)?.GetPlatformInfo() ?? new PlatformInfo();
+        var detectedArchitectureFromDiagnostics = !string.IsNullOrWhiteSpace(platform.Architecture);
+        var detectedAlpineFromDiagnostics = platform.IsAlpine == true;
+
+        if (string.IsNullOrWhiteSpace(platform.Os))
         {
-            Logger.LogDebug("[DatadogSymbols] Checking dotnet-symbol --verifycore result...");
-            
-            // Check if we already have verified core result (populated during dump open), or run it now
-            var verifyCoreResult = lldbManager.VerifiedCorePlatform;
-            if (verifyCoreResult == null && !string.IsNullOrEmpty(lldbManager.CurrentDumpPath))
-            {
-                Logger.LogDebug("[DatadogSymbols] Running dotnet-symbol --verifycore for platform detection...");
-                verifyCoreResult = lldbManager.VerifyCore(lldbManager.CurrentDumpPath);
-            }
-            
-            if (verifyCoreResult != null)
-            {
-                if (!detectedAlpineFromDebugger && verifyCoreResult.IsAlpine)
-                {
-                    platform.IsAlpine = true;
-                    platform.LibcType = "musl";
-                    Logger.LogInformation("[DatadogSymbols] Detected Alpine/musl via dotnet-symbol --verifycore");
-                }
-                
-                if (!detectedArchitectureFromDebugger && !string.IsNullOrEmpty(verifyCoreResult.Architecture))
-                {
-                    platform.Architecture = verifyCoreResult.Architecture;
-                    Logger.LogInformation("[DatadogSymbols] Detected architecture {Arch} via dotnet-symbol --verifycore", verifyCoreResult.Architecture);
-                }
-            }
+            platform.Os = fallbackPlatform.Os;
         }
-        
+
+        if (!detectedArchitectureFromDiagnostics && detectedArchitectureFromDebugger)
+        {
+            platform.Architecture = fallbackPlatform.Architecture;
+        }
+
+        if (!detectedAlpineFromDiagnostics && detectedAlpineFromDebugger)
+        {
+            platform.IsAlpine = fallbackPlatform.IsAlpine;
+            platform.LibcType = fallbackPlatform.LibcType;
+        }
+
         // Fallback to ClrMD if dotnet-symbol didn't work
-        if ((platform.IsAlpine != true || !detectedArchitectureFromDebugger) && session.ClrMdAnalyzer != null)
+        if ((platform.IsAlpine != true || string.IsNullOrWhiteSpace(platform.Architecture)) && session.ClrMdAnalyzer != null)
         {
             Logger.LogDebug("[DatadogSymbols] Trying ClrMD native modules as final fallback...");
             
@@ -807,6 +802,56 @@ public class DatadogSymbolsTools(
         }
 
         var dumpName = Path.GetFileNameWithoutExtension(currentDumpId);
-        return Path.Combine(dumpStoragePath, sanitizedUserId, $".symbols_{dumpName}", ".datadog");
+        var basePath = Path.Combine(dumpStoragePath, sanitizedUserId, $".symbols_{dumpName}");
+        return LooksLikePosixPath(dumpStoragePath)
+            ? $"{basePath.Replace('\\', '/')}/.datadog"
+            : Path.Combine(basePath, ".datadog");
+    }
+
+    /// <summary>
+    /// Reads debugger output that can help with platform detection without assuming one debugger command exists everywhere.
+    /// </summary>
+    /// <param name="debuggerManager">The debugger manager serving the current session.</param>
+    /// <returns>Best-effort debugger output for platform detection.</returns>
+    private static string GetPlatformDetectionOutput(IDebuggerManager debuggerManager)
+    {
+        return string.Equals(debuggerManager.DebuggerType, "WinDbg", StringComparison.OrdinalIgnoreCase)
+            ? debuggerManager.ExecuteCommand("lm")
+            : debuggerManager.ExecuteCommand("image list");
+    }
+
+    /// <summary>
+    /// Rebuilds source-resolution state for the current dump after Datadog symbol changes.
+    /// </summary>
+    /// <param name="sessionId">The session identifier.</param>
+    /// <param name="session">The session whose state should be refreshed.</param>
+    /// <param name="debuggerManager">The debugger manager currently serving the session.</param>
+    private void RefreshOpenDumpSourceResolutionState(string sessionId, DebuggerSession session, IDebuggerManager debuggerManager)
+    {
+        if (!debuggerManager.IsDumpOpen ||
+            string.IsNullOrWhiteSpace(session.CurrentDumpId) ||
+            string.IsNullOrWhiteSpace(debuggerManager.CurrentDumpPath))
+        {
+            session.ClearSourceLinkResolver();
+            return;
+        }
+
+        SourceResolutionStateRefresher.Refresh(
+            session,
+            sessionId,
+            session.CurrentDumpId,
+            debuggerManager.CurrentDumpPath);
+    }
+
+    /// <summary>
+    /// Returns whether a path is clearly using POSIX separators and should preserve that style.
+    /// </summary>
+    /// <param name="path">The path to inspect.</param>
+    /// <returns><c>true</c> when the path looks like POSIX input; otherwise <c>false</c>.</returns>
+    private static bool LooksLikePosixPath(string path)
+    {
+        return !string.IsNullOrWhiteSpace(path) &&
+               path.StartsWith("/", StringComparison.Ordinal) &&
+               !path.Contains('\\');
     }
 }

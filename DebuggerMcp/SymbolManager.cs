@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using DebuggerMcp.Configuration;
 using DebuggerMcp.Controllers;
+using DebuggerMcp.Symbols;
 
 namespace DebuggerMcp;
 
@@ -65,9 +66,14 @@ public class SymbolManager
     private readonly ConcurrentDictionary<string, string> _dumpSymbolDirectories = new();
 
     /// <summary>
-    /// Thread-safe dictionary mapping sessionId to configured symbol paths.
+    /// Thread-safe dictionary mapping sessionId to effective runtime symbol configuration.
     /// </summary>
-    private readonly ConcurrentDictionary<string, List<string>> _sessionSymbolPaths = new();
+    private readonly ConcurrentDictionary<string, EffectiveSessionSymbolConfiguration> _sessionSymbolConfigurations = new();
+
+    /// <summary>
+    /// Thread-safe dictionary mapping sessionId to persisted user-scoped symbol inputs.
+    /// </summary>
+    private readonly ConcurrentDictionary<string, PersistedSessionSymbolConfiguration> _persistedSessionSymbolConfigurations = new();
 
     /// <summary>
     /// Base directory for caching symbol server downloads.
@@ -592,46 +598,90 @@ public class SymbolManager
     }
 
     /// <summary>
-    /// Configures symbol paths for a session, including dump-specific symbols and remote servers.
+    /// Rehydrates the persisted user-scoped symbol configuration for a session.
     /// </summary>
-    /// <param name="sessionId">Session ID to configure symbols for.</param>
-    /// <param name="dumpId">Dump ID to include symbols from (optional).</param>
-    /// <param name="additionalPaths">Additional symbol server URLs or paths (optional).</param>
-    /// <param name="includeMicrosoftSymbols">Whether to include Microsoft Symbol Server (default: true).</param>
-    public void ConfigureSessionSymbolPaths(string sessionId, string? dumpId = null, string? additionalPaths = null, bool includeMicrosoftSymbols = true)
+    /// <param name="sessionId">Session ID to rehydrate.</param>
+    /// <param name="configuration">Persisted user-scoped symbol inputs from session metadata.</param>
+    /// <param name="includeMicrosoftSymbols">Whether the effective runtime configuration should include the product-defined Microsoft source.</param>
+    public void RehydrateSessionSymbolConfiguration(
+        string sessionId,
+        PersistedSessionSymbolConfiguration? configuration,
+        bool includeMicrosoftSymbols = true)
     {
         if (string.IsNullOrWhiteSpace(sessionId))
         {
             throw new ArgumentException("Session ID cannot be null or empty.", nameof(sessionId));
         }
 
-        var paths = new List<string>();
+        var persistedConfiguration = NormalizePersistedConfiguration(configuration);
+        _persistedSessionSymbolConfigurations[sessionId] = persistedConfiguration;
+        _sessionSymbolConfigurations[sessionId] = CreateEffectiveSessionSymbolConfiguration(
+            persistedConfiguration,
+            dumpSymbolDirectories: Array.Empty<string>(),
+            includeMicrosoftSymbols);
+    }
 
-        // Add Microsoft Symbol Server if requested
-        if (includeMicrosoftSymbols)
+    /// <summary>
+    /// Gets the persisted user-scoped symbol configuration for a session.
+    /// </summary>
+    /// <param name="sessionId">Session ID to look up.</param>
+    /// <returns>A cloned copy of the persisted configuration, or an empty configuration when none exists.</returns>
+    public PersistedSessionSymbolConfiguration GetPersistedSessionSymbolConfiguration(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
         {
-            paths.Add(MicrosoftSymbolServer);
+            return new PersistedSessionSymbolConfiguration();
         }
 
-        // Add all dump-specific symbol directories that exist
-        if (!string.IsNullOrWhiteSpace(dumpId))
+        return _persistedSessionSymbolConfigurations.TryGetValue(sessionId, out var configuration)
+            ? configuration.Clone()
+            : new PersistedSessionSymbolConfiguration();
+    }
+
+    /// <summary>
+    /// Configures symbol paths for a session, preserving persisted user intent and recomputing any
+    /// dump-derived local directories from the current dump context.
+    /// </summary>
+    /// <param name="sessionId">Session ID to configure symbols for.</param>
+    /// <param name="dumpId">Dump ID to include symbols from (optional).</param>
+    /// <param name="additionalPaths">Additional symbol server URLs or paths (optional).</param>
+    /// <param name="includeMicrosoftSymbols">Whether to include Microsoft Symbol Server (default: true).</param>
+    /// <param name="userId">Optional user ID used to resolve dump-scoped symbol directories without global scans.</param>
+    /// <param name="dumpPath">Optional resolved dump path used to resolve sibling symbol directories directly.</param>
+    public void ConfigureSessionSymbolPaths(
+        string sessionId,
+        string? dumpId = null,
+        string? additionalPaths = null,
+        bool includeMicrosoftSymbols = true,
+        string? userId = null,
+        string? dumpPath = null)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
         {
-            var allSymbolDirs = GetAllDumpSymbolDirectories(dumpId);
-            paths.AddRange(allSymbolDirs);
+            throw new ArgumentException("Session ID cannot be null or empty.", nameof(sessionId));
         }
 
-        // Add additional paths if provided
+        var persistedConfiguration = GetPersistedSessionSymbolConfiguration(sessionId);
+
         if (!string.IsNullOrWhiteSpace(additionalPaths))
         {
-            var additionalPathList = additionalPaths.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
-                .Select(p => p.Trim())
-                .Where(p => !string.IsNullOrWhiteSpace(p));
-
-            paths.AddRange(additionalPathList);
+            var parsedPaths = ParseConfiguredPathList(additionalPaths);
+            persistedConfiguration = MergePersistedConfiguration(
+                persistedConfiguration,
+                parsedPaths.Where(path => !IsRemoteSymbolPath(path)),
+                parsedPaths.Where(IsRemoteSymbolPath));
         }
 
-        // Store paths for session
-        _sessionSymbolPaths[sessionId] = paths;
+        _persistedSessionSymbolConfigurations[sessionId] = persistedConfiguration;
+
+        IEnumerable<string> dumpSymbolDirectories = string.IsNullOrWhiteSpace(dumpId)
+            ? Array.Empty<string>()
+            : GetAllDumpSymbolDirectories(dumpId, userId, dumpPath);
+
+        _sessionSymbolConfigurations[sessionId] = CreateEffectiveSessionSymbolConfiguration(
+            persistedConfiguration,
+            dumpSymbolDirectories,
+            includeMicrosoftSymbols);
     }
 
     /// <summary>
@@ -639,7 +689,7 @@ public class SymbolManager
     /// </summary>
     /// <param name="dumpId">The dump ID to look up.</param>
     /// <returns>List of all symbol directories that exist for the dump.</returns>
-    private List<string> GetAllDumpSymbolDirectories(string dumpId)
+    private List<string> GetAllDumpSymbolDirectories(string dumpId, string? userId = null, string? dumpPath = null)
     {
         var directories = new List<string>();
 
@@ -655,26 +705,48 @@ public class SymbolManager
             cleanDumpId = dumpId;
         }
 
-        // 1. Check in user subdirectories: {dumpStoragePath}/{userId}/.symbols_{dumpId}/
-        // This is where dotnet-symbol downloads symbols
-        if (Directory.Exists(_dumpStorageBasePath))
+        if (!string.IsNullOrWhiteSpace(dumpPath))
         {
+            var dumpDirectory = Path.GetDirectoryName(dumpPath);
+            if (!string.IsNullOrWhiteSpace(dumpDirectory))
+            {
+                var siblingSymbolDir = Path.Combine(dumpDirectory, $".symbols_{cleanDumpId}");
+                if (Directory.Exists(siblingSymbolDir) && HasSymbolFiles(siblingSymbolDir))
+                {
+                    // First preference: symbols stored directly alongside the resolved dump path.
+                    directories.Add(siblingSymbolDir);
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(userId))
+        {
+            var scopedSymbolDir = Path.Combine(_dumpStorageBasePath, userId, $".symbols_{cleanDumpId}");
+            if (Directory.Exists(scopedSymbolDir) && HasSymbolFiles(scopedSymbolDir) &&
+                !directories.Any(path => string.Equals(path, scopedSymbolDir, StringComparison.OrdinalIgnoreCase)))
+            {
+                // Second preference when we know the owner but not the resolved dump path.
+                directories.Add(scopedSymbolDir);
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(dumpPath) && Directory.Exists(_dumpStorageBasePath))
+        {
+            // Compatibility fallback for older callers that do not know the owning user or dump path.
             foreach (var userDir in Directory.GetDirectories(_dumpStorageBasePath))
             {
                 var symbolDirInUserDir = Path.Combine(userDir, $".symbols_{cleanDumpId}");
                 if (Directory.Exists(symbolDirInUserDir) && HasSymbolFiles(symbolDirInUserDir))
                 {
-                    // First preference: symbols stored alongside the dump in the user folder.
                     directories.Add(symbolDirInUserDir);
                 }
             }
         }
 
-        // 2. Root-level symbols when user directory is unknown
+        // Root-level symbols remain as a compatibility fallback for older upload paths.
         var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
-        if (Directory.Exists(rootSymbolDir) && HasSymbolFiles(rootSymbolDir))
+        if (Directory.Exists(rootSymbolDir) && HasSymbolFiles(rootSymbolDir) &&
+            !directories.Any(path => string.Equals(path, rootSymbolDir, StringComparison.OrdinalIgnoreCase)))
         {
-            // Fallback when we can't resolve a user-scoped path (e.g., uploaded without user context).
             directories.Add(rootSymbolDir);
         }
 
@@ -693,7 +765,23 @@ public class SymbolManager
             return new List<string>();
         }
 
-        return _sessionSymbolPaths.TryGetValue(sessionId, out var paths) ? paths : new List<string>();
+        if (!_sessionSymbolConfigurations.TryGetValue(sessionId, out var configuration))
+        {
+            return new List<string>();
+        }
+
+        var paths = new List<string>();
+
+        if (configuration.IncludeMicrosoftSymbols)
+        {
+            paths.Add(MicrosoftSymbolServer);
+        }
+
+        paths.AddRange(configuration.DumpSymbolDirectories);
+        paths.AddRange(configuration.AdditionalLocalDirectories);
+        paths.AddRange(configuration.AdditionalRemoteUrls);
+
+        return DistinctSymbolPaths(paths);
     }
 
     /// <summary>
@@ -704,13 +792,18 @@ public class SymbolManager
     /// <returns>WinDbg symbol path string (e.g., "srv*cache*https://...; C:\symbols").</returns>
     public string BuildWinDbgSymbolPath(string sessionId, bool includeLocalCache = true)
     {
-        var paths = GetSessionSymbolPaths(sessionId);
-        if (paths.Count == 0)
+        if (!_sessionSymbolConfigurations.TryGetValue(sessionId, out var configuration))
         {
             return string.Empty;
         }
 
         var pathParts = new List<string>();
+        var remoteServers = configuration.IncludeMicrosoftSymbols
+            ? configuration.AdditionalRemoteUrls.Prepend(MicrosoftSymbolServer)
+            : configuration.AdditionalRemoteUrls.AsEnumerable();
+        var distinctRemoteServers = DistinctSymbolPaths(remoteServers);
+        var localDirs = DistinctSymbolPaths(configuration.DumpSymbolDirectories
+            .Concat(configuration.AdditionalLocalDirectories));
 
         // Add cache directive if requested
         if (includeLocalCache)
@@ -722,8 +815,7 @@ public class SymbolManager
             }
 
             // Add remote symbol servers with cache
-            var remoteServers = paths.Where(p => p.StartsWith("http://") || p.StartsWith("https://"));
-            foreach (var server in remoteServers)
+            foreach (var server in distinctRemoteServers)
             {
                 pathParts.Add($"srv*{cacheDir}*{server}");
             }
@@ -731,12 +823,10 @@ public class SymbolManager
         else
         {
             // Add remote servers without cache
-            var remoteServers = paths.Where(p => p.StartsWith("http://") || p.StartsWith("https://"));
-            pathParts.AddRange(remoteServers.Select(s => $"srv*{s}"));
+            pathParts.AddRange(distinctRemoteServers.Select(server => $"srv*{server}"));
         }
 
         // Add local directories
-        var localDirs = paths.Where(p => !p.StartsWith("http://") && !p.StartsWith("https://"));
         pathParts.AddRange(localDirs);
 
         return string.Join(";", pathParts);
@@ -752,16 +842,31 @@ public class SymbolManager
     /// </remarks>
     public string BuildLldbSymbolPath(string sessionId)
     {
-        var paths = GetSessionSymbolPaths(sessionId);
-        if (paths.Count == 0)
+        if (!_sessionSymbolConfigurations.TryGetValue(sessionId, out var configuration))
         {
             return string.Empty;
         }
 
-        // LLDB only supports local directories, filter out URLs
-        var localDirs = paths.Where(p => !p.StartsWith("http://") && !p.StartsWith("https://"));
-
+        // LLDB only supports local directories. Remote URLs are handled explicitly by callers.
+        var localDirs = DistinctSymbolPaths(configuration.DumpSymbolDirectories
+            .Concat(configuration.AdditionalLocalDirectories));
         return string.Join(" ", localDirs);
+    }
+
+    /// <summary>
+    /// Gets the effective local symbol directories for a session.
+    /// </summary>
+    /// <param name="sessionId">Session ID to inspect.</param>
+    /// <returns>The local directories that currently participate in the effective session model.</returns>
+    public IReadOnlyList<string> GetEffectiveLocalSymbolDirectories(string sessionId)
+    {
+        if (!_sessionSymbolConfigurations.TryGetValue(sessionId, out var configuration))
+        {
+            return Array.Empty<string>();
+        }
+
+        return DistinctSymbolPaths(configuration.DumpSymbolDirectories
+            .Concat(configuration.AdditionalLocalDirectories));
     }
 
     /// <summary>
@@ -772,8 +877,128 @@ public class SymbolManager
     {
         if (!string.IsNullOrWhiteSpace(sessionId))
         {
-            _sessionSymbolPaths.TryRemove(sessionId, out _);
+            _sessionSymbolConfigurations.TryRemove(sessionId, out _);
+            _persistedSessionSymbolConfigurations.TryRemove(sessionId, out _);
         }
+    }
+
+    /// <summary>
+    /// Splits a user-provided symbol-path string into normalized path entries.
+    /// </summary>
+    /// <param name="additionalPaths">Comma- or semicolon-separated path string.</param>
+    /// <returns>Normalized path entries with empty values removed.</returns>
+    internal static List<string> ParseConfiguredPathList(string additionalPaths)
+    {
+        if (string.IsNullOrWhiteSpace(additionalPaths))
+        {
+            return new List<string>();
+        }
+
+        return DistinctSymbolPaths(
+            additionalPaths.Split(new[] { ',', ';' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(path => path.Trim())
+                .Where(path => !string.IsNullOrWhiteSpace(path)));
+    }
+
+    /// <summary>
+    /// Returns whether a configured symbol input is a remote URL.
+    /// </summary>
+    /// <param name="path">The configured symbol input to classify.</param>
+    /// <returns><see langword="true"/> when the path is an HTTP(S) URL; otherwise <see langword="false"/>.</returns>
+    internal static bool IsRemoteSymbolPath(string path)
+    {
+        return path.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
+               path.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Builds the effective runtime symbol configuration for the current session state.
+    /// </summary>
+    /// <param name="persistedConfiguration">The user-scoped symbol inputs that survived persistence.</param>
+    /// <param name="dumpSymbolDirectories">The dump-derived local symbol directories for the current dump.</param>
+    /// <param name="includeMicrosoftSymbols">Whether the Microsoft public symbol source should participate.</param>
+    /// <returns>The composed runtime symbol configuration.</returns>
+    private static EffectiveSessionSymbolConfiguration CreateEffectiveSessionSymbolConfiguration(
+        PersistedSessionSymbolConfiguration persistedConfiguration,
+        IEnumerable<string> dumpSymbolDirectories,
+        bool includeMicrosoftSymbols)
+    {
+        var configuration = new EffectiveSessionSymbolConfiguration
+        {
+            IncludeMicrosoftSymbols = includeMicrosoftSymbols
+        };
+
+        configuration.DumpSymbolDirectories.AddRange(DistinctSymbolPaths(dumpSymbolDirectories));
+        configuration.AdditionalLocalDirectories.AddRange(DistinctSymbolPaths(persistedConfiguration.AdditionalLocalDirectories));
+        configuration.AdditionalRemoteUrls.AddRange(DistinctSymbolPaths(persistedConfiguration.AdditionalRemoteUrls));
+        return configuration;
+    }
+
+    /// <summary>
+    /// Merges newly provided user-scoped symbol inputs into the persisted configuration.
+    /// </summary>
+    /// <param name="existingConfiguration">The current persisted configuration.</param>
+    /// <param name="additionalLocalDirectories">New local directories to preserve.</param>
+    /// <param name="additionalRemoteUrls">New remote URLs to preserve.</param>
+    /// <returns>A merged configuration with duplicate inputs removed.</returns>
+    private static PersistedSessionSymbolConfiguration MergePersistedConfiguration(
+        PersistedSessionSymbolConfiguration existingConfiguration,
+        IEnumerable<string> additionalLocalDirectories,
+        IEnumerable<string> additionalRemoteUrls)
+    {
+        return new PersistedSessionSymbolConfiguration
+        {
+            AdditionalLocalDirectories = DistinctSymbolPaths(existingConfiguration.AdditionalLocalDirectories
+                .Concat(additionalLocalDirectories)),
+            AdditionalRemoteUrls = DistinctSymbolPaths(existingConfiguration.AdditionalRemoteUrls
+                .Concat(additionalRemoteUrls))
+        };
+    }
+
+    /// <summary>
+    /// Normalizes a persisted configuration instance and removes duplicate inputs.
+    /// </summary>
+    /// <param name="configuration">The configuration to normalize.</param>
+    /// <returns>A normalized deep copy that is safe to store internally.</returns>
+    private static PersistedSessionSymbolConfiguration NormalizePersistedConfiguration(
+        PersistedSessionSymbolConfiguration? configuration)
+    {
+        if (configuration == null)
+        {
+            return new PersistedSessionSymbolConfiguration();
+        }
+
+        return new PersistedSessionSymbolConfiguration
+        {
+            AdditionalLocalDirectories = DistinctSymbolPaths(configuration.AdditionalLocalDirectories),
+            AdditionalRemoteUrls = DistinctSymbolPaths(configuration.AdditionalRemoteUrls)
+        };
+    }
+
+    /// <summary>
+    /// Removes duplicate symbol inputs while preserving their original order.
+    /// </summary>
+    /// <param name="paths">The symbol inputs to normalize.</param>
+    /// <returns>A de-duplicated list that preserves the first occurrence of each input.</returns>
+    private static List<string> DistinctSymbolPaths(IEnumerable<string> paths)
+    {
+        var distinctPaths = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                continue;
+            }
+
+            if (seen.Add(path))
+            {
+                distinctPaths.Add(path);
+            }
+        }
+
+        return distinctPaths;
     }
 
 

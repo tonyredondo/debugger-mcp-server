@@ -20,73 +20,23 @@ internal static class PdbSearchPathBuilder
     /// <returns>Ordered, de-duplicated list of existing directories.</returns>
     internal static IReadOnlyList<string> BuildExistingPaths(string dumpPath, string? dumpId, ClrRuntime? runtime)
     {
-        var paths = new List<string>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var localSymbolDirectories = new List<string>();
 
-        void AddIfExists(string? path)
+        if (!string.IsNullOrWhiteSpace(dumpPath))
         {
-            if (string.IsNullOrWhiteSpace(path))
+            var dumpDirectory = Path.GetDirectoryName(dumpPath);
+            if (!string.IsNullOrWhiteSpace(dumpDirectory) && !string.IsNullOrWhiteSpace(dumpId))
             {
-                return;
-            }
-
-            try
-            {
-                var full = Path.GetFullPath(path);
-                if (!Directory.Exists(full))
-                {
-                    return;
-                }
-                if (seen.Add(full))
-                {
-                    paths.Add(full);
-                }
-            }
-            catch
-            {
-                // Best-effort; ignore invalid paths.
+                localSymbolDirectories.Add(Path.Combine(dumpDirectory, $".symbols_{dumpId}"));
             }
         }
 
-        // 1) Side-by-side PDBs next to the dump.
-        var dumpDirectory = Path.GetDirectoryName(dumpPath);
-        AddIfExists(dumpDirectory);
-
-        // 2) Per-dump symbol cache directory.
-        if (!string.IsNullOrWhiteSpace(dumpDirectory))
-        {
-            var suffix = !string.IsNullOrWhiteSpace(dumpId)
-                ? dumpId
-                : Path.GetFileNameWithoutExtension(dumpPath);
-
-            if (!string.IsNullOrWhiteSpace(suffix))
-            {
-                var symbolDir = Path.Combine(dumpDirectory, $".symbols_{suffix}");
-                AddIfExists(symbolDir);
-
-                // Datadog symbols are stored under a ".datadog" subdirectory of the per-dump symbol cache.
-                AddIfExists(Path.Combine(symbolDir, ".datadog"));
-            }
-        }
-
-        // 3) Common symbol cache locations.
-        var homeDir = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
-        if (!string.IsNullOrWhiteSpace(homeDir))
-        {
-            AddIfExists(Path.Combine(homeDir, ".dotnet", "symbolcache"));
-            AddIfExists(Path.Combine(homeDir, ".nuget", "packages"));
-        }
-
-        // 4) Runtime module directories (framework shared folders, etc.).
-        if (runtime != null)
-        {
-            foreach (var module in runtime.EnumerateModules())
-            {
-                AddIfExists(Path.GetDirectoryName(module.Name));
-            }
-        }
-
-        return paths;
+        return SourceResolutionPathBuilder.BuildExistingPaths(
+            dumpPath,
+            dumpId,
+            executablePath: null,
+            localSymbolDirectories,
+            runtime);
     }
 }
 

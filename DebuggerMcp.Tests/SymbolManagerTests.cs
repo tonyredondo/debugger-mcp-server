@@ -1,5 +1,6 @@
 using Xunit;
 using DebuggerMcp;
+using DebuggerMcp.Symbols;
 using System;
 using System.IO;
 using System.Text;
@@ -111,6 +112,44 @@ public class SymbolManagerTests
         Assert.NotEmpty(paths);
         Assert.Contains("https://custom-symbols.com", paths);
         Assert.Contains("/local/symbols", paths);
+    }
+
+    /// <summary>
+    /// Verifies that user-configured symbol inputs survive later dump-specific recomposition.
+    /// </summary>
+    [Fact]
+    public void ConfigureSessionSymbolPaths_PreservesPersistedInputs_WhenAddingDumpContext()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        Directory.CreateDirectory(tempRoot);
+
+        var userId = "user1";
+        var sessionId = "test-session";
+        var dumpId = "test-dump";
+        var userDumpDir = Path.Combine(tempRoot, userId);
+        Directory.CreateDirectory(userDumpDir);
+
+        var dumpPath = Path.Combine(userDumpDir, $"{dumpId}.dmp");
+        File.WriteAllText(dumpPath, "dump");
+
+        var symbolDir = Path.Combine(userDumpDir, $".symbols_{dumpId}");
+        Directory.CreateDirectory(symbolDir);
+        File.WriteAllText(Path.Combine(symbolDir, "test.pdb"), "x");
+
+        var manager = new SymbolManager(symbolCacheBasePath: tempRoot, dumpStorageBasePath: tempRoot);
+        manager.RehydrateSessionSymbolConfiguration(sessionId, new PersistedSessionSymbolConfiguration
+        {
+            AdditionalLocalDirectories = new List<string> { "/local/symbols" },
+            AdditionalRemoteUrls = new List<string> { "https://custom-symbols.com" }
+        });
+
+        manager.ConfigureSessionSymbolPaths(sessionId, dumpId, includeMicrosoftSymbols: true, userId: userId, dumpPath: dumpPath);
+
+        var paths = manager.GetSessionSymbolPaths(sessionId);
+        Assert.Contains(SymbolManager.MicrosoftSymbolServer, paths);
+        Assert.Contains(symbolDir, paths);
+        Assert.Contains("/local/symbols", paths);
+        Assert.Contains("https://custom-symbols.com", paths);
     }
 
     /// <summary>

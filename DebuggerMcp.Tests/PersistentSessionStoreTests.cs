@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using DebuggerMcp;
+using DebuggerMcp.Symbols;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -66,6 +67,11 @@ public class PersistentSessionStoreTests : IDisposable
             LastAccessedAt = now,
             CurrentDumpId = "dump1",
             CurrentDumpPath = "/tmp/dump1.dmp",
+            SymbolConfiguration = new PersistedSessionSymbolConfiguration
+            {
+                AdditionalLocalDirectories = new List<string> { "/tmp/symbols" },
+                AdditionalRemoteUrls = new List<string> { "https://symbols.example.com" }
+            },
             LastServerId = "server-1"
         };
 
@@ -78,6 +84,8 @@ public class PersistentSessionStoreTests : IDisposable
         Assert.Equal(metadata.UserId, loaded.UserId);
         Assert.Equal(metadata.CurrentDumpId, loaded.CurrentDumpId);
         Assert.Equal(metadata.CurrentDumpPath, loaded.CurrentDumpPath);
+        Assert.Equal(metadata.SymbolConfiguration.AdditionalLocalDirectories, loaded.SymbolConfiguration.AdditionalLocalDirectories);
+        Assert.Equal(metadata.SymbolConfiguration.AdditionalRemoteUrls, loaded.SymbolConfiguration.AdditionalRemoteUrls);
         Assert.Equal(metadata.LastServerId, loaded.LastServerId);
         Assert.True(loaded.LastAccessedAt >= metadata.LastAccessedAt.AddSeconds(-1));
     }

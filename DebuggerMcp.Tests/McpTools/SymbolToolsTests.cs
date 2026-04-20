@@ -169,7 +169,7 @@ public class SymbolToolsTests : IDisposable
     }
 
     [Fact]
-    public void ConfigureAdditionalSymbols_WhenDebuggerIsLldbAndOnlyUrlsProvided_DoesNotConfigureDebuggerSymbolPath()
+    public void ConfigureAdditionalSymbols_WhenDebuggerIsLldbAndUserProvidesRemoteUrl_ThrowsInvalidOperationException()
     {
         // Arrange
         var userId = "test-user";
@@ -178,15 +178,28 @@ public class SymbolToolsTests : IDisposable
         var manager = (FakeDebuggerManager)_sessionManager.GetSession(sessionId, userId);
         manager.DebuggerType = "LLDB";
 
-        // Act
-        var result = _tools.ConfigureAdditionalSymbols(
-            sessionId,
-            userId,
-            $"{SymbolManager.NuGetSymbolServer}");
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            _tools.ConfigureAdditionalSymbols(
+                sessionId,
+                userId,
+                $"{SymbolManager.NuGetSymbolServer}"));
 
-        // Assert
-        Assert.Contains("Debugger: LLDB", result);
+        Assert.Contains("LLDB does not support user-added remote symbol URLs", ex.Message);
         Assert.Empty(manager.ConfiguredSymbolPaths);
+    }
+
+    [Fact]
+    public void ConfigureAdditionalSymbols_PersistsSessionSymbolConfiguration()
+    {
+        var userId = "test-user";
+        var sessionId = _sessionManager.CreateSession(userId);
+        var manager = (FakeDebuggerManager)_sessionManager.GetSession(sessionId, userId);
+        manager.DebuggerType = "WinDbg";
+
+        _ = _tools.ConfigureAdditionalSymbols(sessionId, userId, "/path/to/symbols");
+
+        var session = _sessionManager.GetSessionInfo(sessionId, userId);
+        Assert.Contains("/path/to/symbols", session.SymbolConfiguration.AdditionalLocalDirectories);
     }
 
     [Fact]

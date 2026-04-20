@@ -5,6 +5,12 @@ A cross-platform MCP (Model Context Protocol) server for controlling debuggers (
 - An optional HTTP API for dump uploads, symbol management, and report download
 - A companion CLI (`dbg-mcp`) for interactive analysis
 
+The product aims for the same user-visible dump workflow on every supported platform:
+- fresh open and restored reopen follow the same preparation model
+- symbols, dump metadata, and per-dump caches use one product model on WinDbg and LLDB
+- managed dumps auto-load SOS when possible
+- supported live symbol changes rebuild source-resolution state without requiring a hidden reopen
+
 If you’re looking for the deeper reference material (Docker multi-platform, Claude config, full env-var reference, architecture, etc.), see `ADVANCED.md`.
 
 ---
@@ -189,6 +195,8 @@ Quick workflow:
 
 For the full configuration reference, see `ADVANCED.md`. Key analysis/integration knobs include:
 
+- `DOTNET_SYMBOL_TOOL_PATH`, `SOS_PLUGIN_PATH` (override helper discovery when you need non-default locations)
+- `WINDBG_COMMAND_TIMEOUT_SECONDS` (bounds individual WinDbg operations and enables automatic recovery attempts)
 - `GITHUB_API_ENABLED`, `GITHUB_TOKEN`, `GH_TOKEN` (optional commit/release enrichment)
 - `SKIP_HEAP_ENUM`, `SKIP_SYNC_BLOCKS` (heap/sync-block enumeration safety valve)
 - `DEBUGGERMCP_SOURCE_CONTEXT_ROOTS` (local source context snippet roots)

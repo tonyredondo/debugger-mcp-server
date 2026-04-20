@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using DebuggerMcp.Symbols;
 
 namespace DebuggerMcp;
 
@@ -49,11 +50,22 @@ public class SessionMetadata
     /// Gets or sets the full path to the dump file, if one is open.
     /// </summary>
     /// <remarks>
-    /// This is the resolved path to the dump file, allowing restoration
-    /// without needing to re-resolve the dump ID.
+    /// This is the last resolved absolute path to the dump file. Restore prefers resolving from
+    /// the current user ID and dump ID under the active storage root, and uses this path only as a
+    /// compatibility fallback when the current storage-root lookup fails.
     /// </remarks>
     [JsonPropertyName("currentDumpPath")]
     public string? CurrentDumpPath { get; set; }
+
+    /// <summary>
+    /// Gets or sets the user-scoped symbol inputs that should survive session restore.
+    /// </summary>
+    /// <remarks>
+    /// This model stores user intent only. Dump-derived symbol directories are recomputed from the
+    /// currently opened dump and are not persisted here.
+    /// </remarks>
+    [JsonPropertyName("symbolConfiguration")]
+    public PersistedSessionSymbolConfiguration SymbolConfiguration { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the server ID that last handled this session.
@@ -77,6 +89,7 @@ public class SessionMetadata
             LastAccessedAt = session.LastAccessedAt,
             CurrentDumpId = session.CurrentDumpId,
             CurrentDumpPath = session.Manager?.CurrentDumpPath,
+            SymbolConfiguration = session.SymbolConfiguration?.Clone() ?? new PersistedSessionSymbolConfiguration(),
             LastServerId = serverId
         };
     }

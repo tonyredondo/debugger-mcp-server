@@ -64,26 +64,6 @@ if (isHttpMode || isMcpHttpMode)
     var sessionManager = app.Services.GetRequiredService<DebuggerSessionManager>();
     var symbolManager = app.Services.GetRequiredService<SymbolManager>();
     sessionManager.OnSessionClosed = symbolManager.ClearSessionSymbolPaths;
-    
-    // Wire up session restore to configure symbol paths (fixes symbols not working after restore)
-    sessionManager.OnSessionRestored = (sessionId, dumpId, manager) =>
-    {
-        if (!string.IsNullOrEmpty(dumpId))
-        {
-            // Configure symbol paths for the restored session
-            symbolManager.ConfigureSessionSymbolPaths(sessionId, dumpId);
-            
-            // Build and apply the symbol path to the debugger
-            var symbolPath = manager.DebuggerType == "WinDbg"
-                ? symbolManager.BuildWinDbgSymbolPath(sessionId)
-                : symbolManager.BuildLldbSymbolPath(sessionId);
-            
-            if (!string.IsNullOrWhiteSpace(symbolPath))
-            {
-                manager.ConfigureSymbolPath(symbolPath);
-            }
-        }
-    };
 
     // Configure middleware
     // Swagger is enabled by default in development, or when ENABLE_SWAGGER=true
@@ -188,26 +168,6 @@ else
     var sessionManager = host.Services.GetRequiredService<DebuggerSessionManager>();
     var symbolManager = host.Services.GetRequiredService<SymbolManager>();
     sessionManager.OnSessionClosed = symbolManager.ClearSessionSymbolPaths;
-    
-    // Wire up session restore to configure symbol paths (fixes symbols not working after restore)
-    sessionManager.OnSessionRestored = (sessionId, dumpId, manager) =>
-    {
-        if (!string.IsNullOrEmpty(dumpId))
-        {
-            // Configure symbol paths for the restored session
-            symbolManager.ConfigureSessionSymbolPaths(sessionId, dumpId);
-            
-            // Build and apply the symbol path to the debugger
-            var symbolPath = manager.DebuggerType == "WinDbg"
-                ? symbolManager.BuildWinDbgSymbolPath(sessionId)
-                : symbolManager.BuildLldbSymbolPath(sessionId);
-            
-            if (!string.IsNullOrWhiteSpace(symbolPath))
-            {
-                manager.ConfigureSymbolPath(symbolPath);
-            }
-        }
-    };
 
     // Run the MCP server
     await host.RunAsync();

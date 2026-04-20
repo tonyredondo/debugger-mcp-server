@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Configuration;
+using DebuggerMcp.Dumps;
 using DebuggerMcp.Reporting;
 using DebuggerMcp.Security;
 using DebuggerMcp.SourceLink;
@@ -232,7 +233,6 @@ public class DumpController : ControllerBase
             };
 
             // Save metadata to a sidecar JSON file for later retrieval
-            var metadataPath = Path.Combine(userDir, $"{dumpId}.json");
             var metadata = new DumpMetadata
             {
                 DumpId = dumpId,
@@ -246,8 +246,11 @@ public class DumpController : ControllerBase
                 RuntimeVersion = analysisResult.RuntimeVersion,
                 Architecture = analysisResult.Architecture
             };
-            await System.IO.File.WriteAllTextAsync(metadataPath,
-                System.Text.Json.JsonSerializer.Serialize(metadata, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+            var metadataPath = DumpMetadataStore.GetPreferredMetadataPath(filePath);
+            if (metadataPath == null || !DumpMetadataStore.TrySaveDumpMetadata(metadataPath, metadata, _logger))
+            {
+                return StatusCode(500, new { error = "Failed to save dump metadata" });
+            }
 
             _logger.LogInformation(
                 "Dump file uploaded successfully for user {UserId}, dumpId {DumpId}, isAlpine: {IsAlpine}, runtimeVersion: {RuntimeVersion}, architecture: {Architecture}",
@@ -294,8 +297,6 @@ public class DumpController : ControllerBase
             // Construct file path
             var userDir = Path.Combine(_sessionManager.GetDumpStoragePath(), sanitizedUserId);
             var filePath = Path.Combine(userDir, $"{sanitizedDumpId}.dmp");
-            var metadataPath = Path.Combine(userDir, $"{sanitizedDumpId}.json");
-
             // Check if file exists
             if (!System.IO.File.Exists(filePath))
             {
@@ -316,32 +317,21 @@ public class DumpController : ControllerBase
             };
 
             // Try to load metadata if it exists (check both old and new naming conventions)
-            var altMetadataPath = Path.Combine(userDir, $".metadata_{sanitizedDumpId}.json");
-            var actualMetadataPath = System.IO.File.Exists(metadataPath) ? metadataPath : 
-                                     System.IO.File.Exists(altMetadataPath) ? altMetadataPath : null;
-            
+            var actualMetadataPath = DumpMetadataStore.ResolveExistingMetadataPath(userDir, sanitizedDumpId);
             if (actualMetadataPath != null)
             {
-                try
+                var metadata = DumpMetadataStore.TryLoadDumpMetadata(actualMetadataPath, _logger);
+                if (metadata != null)
                 {
-                    var metadataJson = System.IO.File.ReadAllText(actualMetadataPath);
-                    var metadata = System.Text.Json.JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
-                    if (metadata != null)
-                    {
-                        response.FileName = metadata.FileName;
-                        response.UploadedAt = metadata.UploadedAt;
-                        response.Description = metadata.Description;
-                        response.DumpFormat = metadata.DumpFormat;
-                        response.IsAlpineDump = metadata.IsAlpineDump;
-                        response.RuntimeVersion = metadata.RuntimeVersion;
-                        response.Architecture = metadata.Architecture;
-                        response.HasExecutable = !string.IsNullOrEmpty(metadata.ExecutablePath);
-                        response.ExecutableName = metadata.ExecutableName;
-                    }
-                }
-                catch
-                {
-                    // Ignore metadata read errors - file info is still available
+                    response.FileName = metadata.FileName;
+                    response.UploadedAt = metadata.UploadedAt;
+                    response.Description = metadata.Description;
+                    response.DumpFormat = metadata.DumpFormat;
+                    response.IsAlpineDump = metadata.IsAlpineDump;
+                    response.RuntimeVersion = metadata.RuntimeVersion;
+                    response.Architecture = metadata.Architecture;
+                    response.HasExecutable = !string.IsNullOrEmpty(metadata.ExecutablePath);
+                    response.ExecutableName = metadata.ExecutableName;
                 }
             }
 
@@ -397,9 +387,6 @@ public class DumpController : ControllerBase
             {
                 var fileInfo = new FileInfo(filePath);
                 var dumpId = Path.GetFileNameWithoutExtension(fileInfo.Name);
-                var metadataPath = Path.Combine(userDir, $"{dumpId}.json");
-                var altMetadataPath = Path.Combine(userDir, $".metadata_{dumpId}.json");
-
                 var response = new DumpInfoResponse
                 {
                     DumpId = dumpId,
@@ -410,30 +397,21 @@ public class DumpController : ControllerBase
                 };
 
                 // Try to load metadata if it exists (check both naming conventions)
-                var actualMetadataPath = System.IO.File.Exists(metadataPath) ? metadataPath :
-                                         System.IO.File.Exists(altMetadataPath) ? altMetadataPath : null;
+                var actualMetadataPath = DumpMetadataStore.ResolveExistingMetadataPath(userDir, dumpId);
                 if (actualMetadataPath != null)
                 {
-                    try
+                    var metadata = DumpMetadataStore.TryLoadDumpMetadata(actualMetadataPath, _logger);
+                    if (metadata != null)
                     {
-                        var metadataJson = System.IO.File.ReadAllText(actualMetadataPath);
-                        var metadata = System.Text.Json.JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
-                        if (metadata != null)
-                        {
-                            response.FileName = metadata.FileName;
-                            response.UploadedAt = metadata.UploadedAt;
-                            response.Description = metadata.Description;
-                            response.DumpFormat = metadata.DumpFormat;
-                            response.IsAlpineDump = metadata.IsAlpineDump;
-                            response.RuntimeVersion = metadata.RuntimeVersion;
-                            response.Architecture = metadata.Architecture;
-                            response.HasExecutable = !string.IsNullOrEmpty(metadata.ExecutablePath);
-                            response.ExecutableName = metadata.ExecutableName;
-                        }
-                    }
-                    catch
-                    {
-                        // Ignore metadata read errors - file info is still available
+                        response.FileName = metadata.FileName;
+                        response.UploadedAt = metadata.UploadedAt;
+                        response.Description = metadata.Description;
+                        response.DumpFormat = metadata.DumpFormat;
+                        response.IsAlpineDump = metadata.IsAlpineDump;
+                        response.RuntimeVersion = metadata.RuntimeVersion;
+                        response.Architecture = metadata.Architecture;
+                        response.HasExecutable = !string.IsNullOrEmpty(metadata.ExecutablePath);
+                        response.ExecutableName = metadata.ExecutableName;
                     }
                 }
 
@@ -484,8 +462,6 @@ public class DumpController : ControllerBase
             // Construct file paths
             var userDir = Path.Combine(_sessionManager.GetDumpStoragePath(), sanitizedUserId);
             var filePath = Path.Combine(userDir, $"{sanitizedDumpId}.dmp");
-            var metadataPath = Path.Combine(userDir, $"{sanitizedDumpId}.json");
-
             // Check if file exists
             if (!System.IO.File.Exists(filePath))
             {
@@ -496,11 +472,12 @@ public class DumpController : ControllerBase
             System.IO.File.Delete(filePath);
 
             // Delete metadata file if it exists (check both naming conventions)
+            var metadataPath = DumpMetadataStore.GetPreferredMetadataPath(userDir, sanitizedDumpId);
             if (System.IO.File.Exists(metadataPath))
             {
                 System.IO.File.Delete(metadataPath);
             }
-            var altMetadataPath = Path.Combine(userDir, $".metadata_{sanitizedDumpId}.json");
+            var altMetadataPath = DumpMetadataStore.GetLegacyMetadataPath(userDir, sanitizedDumpId);
             if (System.IO.File.Exists(altMetadataPath))
             {
                 System.IO.File.Delete(altMetadataPath);
@@ -583,21 +560,14 @@ public class DumpController : ControllerBase
             // Find the dump metadata (check both naming conventions)
             var dumpStorage = _sessionManager.GetDumpStoragePath();
             var userDumpPath = Path.Combine(dumpStorage, sanitizedUserId);
-            var metadataPath = Path.Combine(userDumpPath, $"{sanitizedDumpId}.json");
-            var altMetadataPath = Path.Combine(userDumpPath, $".metadata_{sanitizedDumpId}.json");
-            
-            // Use whichever exists
-            var actualMetadataPath = System.IO.File.Exists(metadataPath) ? metadataPath :
-                                     System.IO.File.Exists(altMetadataPath) ? altMetadataPath : null;
+            var actualMetadataPath = DumpMetadataStore.ResolveExistingMetadataPath(userDumpPath, sanitizedDumpId);
 
             if (actualMetadataPath == null)
             {
                 return NotFound(new { error = $"Dump '{dumpId}' not found for user '{userId}'" });
             }
 
-            // Load existing metadata
-            var metadataJson = await System.IO.File.ReadAllTextAsync(actualMetadataPath);
-            var metadata = System.Text.Json.JsonSerializer.Deserialize<DumpMetadata>(metadataJson);
+            var metadata = DumpMetadataStore.TryLoadDumpMetadata(actualMetadataPath, _logger);
             if (metadata == null)
             {
                 return StatusCode(500, new { error = "Failed to read dump metadata" });
@@ -653,11 +623,10 @@ public class DumpController : ControllerBase
             metadata.ExecutableName = sanitizedFileName;
 
             // Save updated metadata back to the same file we read from
-            var updatedMetadataJson = System.Text.Json.JsonSerializer.Serialize(metadata, new System.Text.Json.JsonSerializerOptions
+            if (!DumpMetadataStore.TrySaveDumpMetadata(actualMetadataPath, metadata, _logger))
             {
-                WriteIndented = true
-            });
-            await System.IO.File.WriteAllTextAsync(actualMetadataPath, updatedMetadataJson);
+                return StatusCode(500, new { error = "Failed to update dump metadata" });
+            }
 
             _logger.LogInformation("Uploaded binary '{FileName}' ({Size} bytes) for dump {DumpId}", 
                 sanitizedFileName, file.Length, sanitizedDumpId);
@@ -1202,68 +1171,10 @@ public class DumpUploadResponse
 }
 
 /// <summary>
-/// Metadata stored alongside dump files for later retrieval.
+/// Compatibility wrapper for the shared dump metadata model.
 /// </summary>
-public class DumpMetadata
+public class DumpMetadata : DebuggerMcp.Dumps.DumpMetadata
 {
-    /// <summary>Gets or sets the dump identifier.</summary>
-    public string DumpId { get; set; } = string.Empty;
-
-    /// <summary>Gets or sets the user identifier.</summary>
-    public string UserId { get; set; } = string.Empty;
-
-    /// <summary>Gets or sets the original file name.</summary>
-    public string? FileName { get; set; }
-
-    /// <summary>Gets or sets the file size in bytes.</summary>
-    public long Size { get; set; }
-
-    /// <summary>Gets or sets the upload timestamp.</summary>
-    public DateTime UploadedAt { get; set; }
-
-    /// <summary>Gets or sets the optional description.</summary>
-    public string? Description { get; set; }
-
-    /// <summary>Gets or sets the detected dump format.</summary>
-    public string? DumpFormat { get; set; }
-
-    /// <summary>Gets or sets the detected .NET runtime version (e.g., "9.0.10").</summary>
-    /// <remarks>
-    /// This is populated by dotnet-symbol when analyzing the dump.
-    /// Used by LLDB/SOS to find the correct DAC for debugging.
-    /// </remarks>
-    public string? RuntimeVersion { get; set; }
-
-    /// <summary>Gets or sets whether this dump is from an Alpine Linux system (musl libc).</summary>
-    /// <remarks>
-    /// This is critical because Alpine Linux uses musl libc instead of glibc,
-    /// which means Alpine dumps can only be debugged on Alpine hosts.
-    /// Detected by checking for musl indicators in module paths (e.g., ld-musl, linux-musl).
-    /// </remarks>
-    public bool? IsAlpineDump { get; set; }
-
-    /// <summary>Gets or sets the processor architecture of the dump (e.g., "arm64", "x64").</summary>
-    public string? Architecture { get; set; }
-
-    /// <summary>Gets or sets the list of symbol files downloaded by dotnet-symbol.</summary>
-    /// <remarks>
-    /// This list is used to verify that all required symbol files are present.
-    /// If any file is missing, dotnet-symbol will be run again to download missing files.
-    /// The list contains relative paths from the symbol cache directory.
-    /// </remarks>
-    public List<string>? SymbolFiles { get; set; }
-    
-    /// <summary>Gets or sets the path to a custom executable for standalone apps.</summary>
-    /// <remarks>
-    /// For standalone .NET apps (self-contained deployments), LLDB needs the original
-    /// executable to properly load modules and resolve symbols. When this is set,
-    /// the dump will be opened with: target create -c &lt;corefile&gt; -- &lt;executable&gt;
-    /// instead of just: target create -c &lt;corefile&gt;
-    /// </remarks>
-    public string? ExecutablePath { get; set; }
-    
-    /// <summary>Gets or sets the original name of the uploaded executable.</summary>
-    public string? ExecutableName { get; set; }
 }
 
 /// <summary>
@@ -1512,63 +1423,25 @@ public class DumpComparisonRequest
 }
 
 /// <summary>
-/// Result of dump analysis from dotnet-symbol --verifycore and file command.
+/// Compatibility wrapper for the shared dump-analysis result model.
 /// </summary>
-public class DumpAnalysisResult
+public class DumpAnalysisResult : DebuggerMcp.Dumps.DumpAnalysisResult
 {
-    /// <summary>
-    /// Whether the dump is from an Alpine Linux system (musl libc).
-    /// </summary>
-    public bool? IsAlpine { get; set; }
-
-    /// <summary>
-    /// The detected .NET runtime version required to debug this dump (e.g., "9.0.10").
-    /// </summary>
-    public string? RuntimeVersion { get; set; }
-
-    /// <summary>
-    /// The processor architecture of the dump (e.g., "arm64", "x64").
-    /// </summary>
-    public string? Architecture { get; set; }
 }
 
 /// <summary>
-/// Helper to analyze dumps using dotnet-symbol --verifycore and file command.
+/// Compatibility wrapper for the shared dump analyzer.
 /// </summary>
 public static class DumpAnalyzer
 {
-    // Regex to match .NET runtime paths like:
-    // /usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Runtime.dll
-    // /dotnet/shared/Microsoft.NETCore.App/8.0.5/libcoreclr.so
-    private static readonly System.Text.RegularExpressions.Regex RuntimeVersionRegex = new(
-        @"Microsoft\.NETCore\.App[/\\](\d+\.\d+\.\d+)[/\\]",
-        System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    // Regex to extract architecture from file command output
-    // Examples:
-    // "ELF 64-bit LSB core file, ARM aarch64" -> arm64
-    // "ELF 64-bit LSB core file, x86-64" -> x64
-    // "platform: 'aarch64'" -> arm64
-    private static readonly System.Text.RegularExpressions.Regex ArchitectureRegex = new(
-        @"(ARM aarch64|aarch64|x86-64|x86_64|AMD64|i386|i686|Intel 80386|ARM,|armv7)",
-        System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-
     /// <summary>
-    /// Detects whether a dump appears to be from Alpine Linux (musl) based on <c>dotnet-symbol --verifycore</c> output.
-    /// </summary>
-    /// <param name="verifyCoreOutput">Raw output from <c>dotnet-symbol --verifycore</c>.</param>
-    /// <returns>True if musl indicators are found; otherwise false.</returns>
+     /// Detects whether a dump appears to be from Alpine Linux (musl) based on <c>dotnet-symbol --verifycore</c> output.
+     /// </summary>
+     /// <param name="verifyCoreOutput">Raw output from <c>dotnet-symbol --verifycore</c>.</param>
+     /// <returns>True if musl indicators are found; otherwise false.</returns>
     internal static bool DetectIsAlpineFromVerifyCoreOutput(string verifyCoreOutput)
     {
-        if (string.IsNullOrEmpty(verifyCoreOutput))
-            return false;
-
-        // Alpine uses musl libc, which shows up as:
-        // - /lib/ld-musl-aarch64.so.1 or /lib/ld-musl-x86_64.so.1
-        // - linux-musl-arm64 or linux-musl-x64 in native library paths
-        return verifyCoreOutput.Contains("/ld-musl-", StringComparison.OrdinalIgnoreCase) ||
-               verifyCoreOutput.Contains("linux-musl-", StringComparison.OrdinalIgnoreCase) ||
-               verifyCoreOutput.Contains("/musl-", StringComparison.OrdinalIgnoreCase);
+        return DebuggerMcp.Dumps.DumpAnalyzer.DetectIsAlpineFromVerifyCoreOutput(verifyCoreOutput);
     }
 
     /// <summary>
@@ -1578,11 +1451,7 @@ public static class DumpAnalyzer
     /// <returns>The runtime version if found; otherwise null.</returns>
     internal static string? TryExtractRuntimeVersionFromVerifyCoreOutput(string verifyCoreOutput)
     {
-        if (string.IsNullOrEmpty(verifyCoreOutput))
-            return null;
-
-        var match = RuntimeVersionRegex.Match(verifyCoreOutput);
-        return match.Success ? match.Groups[1].Value : null;
+        return DebuggerMcp.Dumps.DumpAnalyzer.TryExtractRuntimeVersionFromVerifyCoreOutput(verifyCoreOutput);
     }
 
     /// <summary>
@@ -1592,24 +1461,7 @@ public static class DumpAnalyzer
     /// <returns>Normalized architecture (e.g., <c>arm64</c>, <c>x64</c>) or null if not detected.</returns>
     internal static string? TryExtractArchitectureFromFileOutput(string fileOutput)
     {
-        if (string.IsNullOrEmpty(fileOutput))
-            return null;
-
-        var match = ArchitectureRegex.Match(fileOutput);
-        if (!match.Success)
-            return null;
-
-        var arch = match.Groups[1].Value.ToLowerInvariant();
-
-        return arch switch
-        {
-            "arm aarch64" or "aarch64" => "arm64",
-            "x86-64" or "x86_64" or "amd64" => "x64",
-            "intel 80386" => "x86",
-            "i386" or "i686" => "x86",
-            "arm," or "armv7" => "arm",
-            _ => arch
-        };
+        return DebuggerMcp.Dumps.DumpAnalyzer.TryExtractArchitectureFromFileOutput(fileOutput);
     }
 
     /// <summary>
@@ -1625,85 +1477,13 @@ public static class DumpAnalyzer
     /// </remarks>
     public static async Task<DumpAnalysisResult> AnalyzeDumpAsync(string dumpFilePath, ILogger? logger = null)
     {
-        var result = new DumpAnalysisResult();
-
-        try
+        var sharedResult = await DebuggerMcp.Dumps.DumpAnalyzer.AnalyzeDumpAsync(dumpFilePath, logger).ConfigureAwait(false);
+        return new DumpAnalysisResult
         {
-            // Find dotnet-symbol tool
-            var dotnetSymbolPath = FindDotnetSymbolTool();
-            if (string.IsNullOrEmpty(dotnetSymbolPath))
-            {
-                logger?.LogWarning("dotnet-symbol tool not found, cannot analyze dump");
-                return result;
-            }
-
-            var startInfo = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = dotnetSymbolPath,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            startInfo.ArgumentList.Add("--verifycore");
-            startInfo.ArgumentList.Add(dumpFilePath);
-
-            using var process = new System.Diagnostics.Process { StartInfo = startInfo };
-            var output = new System.Text.StringBuilder();
-
-            process.OutputDataReceived += (_, e) =>
-            {
-                if (e.Data != null)
-                {
-                    output.AppendLine(e.Data);
-                }
-            };
-
-            process.Start();
-            process.BeginOutputReadLine();
-
-            // Wait up to 30 seconds for the verification
-            var completed = await Task.Run(() => process.WaitForExit(30000));
-
-            if (!completed)
-            {
-                try
-                {
-                    process.Kill();
-                }
-                catch (Exception ex)
-                {
-                    logger?.LogDebug(ex, "Exception while killing timed-out dotnet-symbol process (may have already exited)");
-                }
-                finally
-                {
-                    process.Dispose();
-                }
-                logger?.LogWarning("dotnet-symbol --verifycore timed out");
-                return result;
-            }
-
-            var outputStr = output.ToString();
-
-            result.IsAlpine = DetectIsAlpineFromVerifyCoreOutput(outputStr);
-
-            // Extract runtime version from paths like:
-            // /usr/share/dotnet/shared/Microsoft.NETCore.App/9.0.10/System.Runtime.dll
-            result.RuntimeVersion = TryExtractRuntimeVersionFromVerifyCoreOutput(outputStr);
-
-            // Detect architecture using file command
-            result.Architecture = await DetectArchitectureAsync(dumpFilePath, logger);
-
-            logger?.LogInformation("Dump analysis for {DumpFile}: IsAlpine={IsAlpine}, RuntimeVersion={RuntimeVersion}, Architecture={Architecture}",
-                System.IO.Path.GetFileName(dumpFilePath), result.IsAlpine, result.RuntimeVersion ?? "(not detected)", result.Architecture ?? "(not detected)");
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Failed to analyze dump");
-            return result;
-        }
+            IsAlpine = sharedResult.IsAlpine,
+            RuntimeVersion = sharedResult.RuntimeVersion,
+            Architecture = sharedResult.Architecture
+        };
     }
 
     /// <summary>
@@ -1711,113 +1491,6 @@ public static class DumpAnalyzer
     /// </summary>
     private static string? FindDotnetSymbolTool()
     {
-        // Check PATH first
-        var pathDirs = Environment.GetEnvironmentVariable("PATH")?.Split(Path.PathSeparator) ?? [];
-        foreach (var dir in pathDirs)
-        {
-            var toolPath = Path.Combine(dir, "dotnet-symbol");
-            if (File.Exists(toolPath))
-            {
-                return toolPath;
-            }
-        }
-
-        // Check common tool locations
-        var toolLocations = new[]
-        {
-            "/tools/dotnet-symbol",  // Docker container location
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".dotnet", "tools", "dotnet-symbol"),
-            "/usr/local/bin/dotnet-symbol",
-            "/usr/bin/dotnet-symbol"
-        };
-
-        foreach (var location in toolLocations)
-        {
-            if (File.Exists(location))
-            {
-                return location;
-            }
-        }
-
-        return null;
-    }
-
-    /// <summary>
-    /// Detects the processor architecture of a dump file using the file command.
-    /// </summary>
-    /// <param name="dumpFilePath">Path to the dump file.</param>
-    /// <param name="logger">Optional logger for diagnostics.</param>
-    /// <returns>The architecture (e.g., "arm64", "x64") or null if detection failed.</returns>
-    private static async Task<string?> DetectArchitectureAsync(string dumpFilePath, ILogger? logger)
-    {
-        try
-        {
-            var startInfo = new System.Diagnostics.ProcessStartInfo
-            {
-                FileName = "file",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-            startInfo.ArgumentList.Add(dumpFilePath);
-
-            using var process = new System.Diagnostics.Process { StartInfo = startInfo };
-            var output = new System.Text.StringBuilder();
-
-            process.OutputDataReceived += (_, e) =>
-            {
-                if (e.Data != null)
-                {
-                    output.AppendLine(e.Data);
-                }
-            };
-
-            process.Start();
-            process.BeginOutputReadLine();
-
-            // Wait up to 10 seconds for the file command
-            var completed = await Task.Run(() => process.WaitForExit(10000));
-
-            if (!completed)
-            {
-                try
-                {
-                    process.Kill();
-                }
-                catch (Exception ex)
-                {
-                    logger?.LogDebug(ex, "Exception while killing timed-out file command process (may have already exited)");
-                }
-                finally
-                {
-                    process.Dispose();
-                }
-                logger?.LogWarning("file command timed out");
-                return null;
-            }
-
-            var outputStr = output.ToString();
-
-            // Parse architecture from file output
-            // Examples:
-            // "ELF 64-bit LSB core file, ARM aarch64, version 1 (GNU/Linux)"
-            // "ELF 64-bit LSB core file, x86-64, version 1 (GNU/Linux)"
-            // "PE32+ executable (console) x86-64" (Windows)
-            var normalizedArch = TryExtractArchitectureFromFileOutput(outputStr);
-            if (normalizedArch != null)
-            {
-                logger?.LogDebug("Detected architecture: {Architecture}", normalizedArch);
-                return normalizedArch;
-            }
-
-            logger?.LogDebug("Could not detect architecture from file output: {Output}", outputStr);
-            return null;
-        }
-        catch (Exception ex)
-        {
-            logger?.LogWarning(ex, "Failed to detect architecture using file command");
-            return null;
-        }
+        return DebuggerMcp.Symbols.DotnetSymbolRunner.FindToolPath();
     }
 }

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
+using DebuggerMcp.Symbols;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -30,6 +31,10 @@ public class SessionManagerPersistenceTests : IDisposable
 
         public int InitializeCalls { get; private set; }
 
+        public List<string> ConfiguredSymbolPaths { get; } = new();
+
+        public List<string> Operations { get; } = new();
+
         public Task InitializeAsync()
         {
             InitializeCalls++;
@@ -39,6 +44,7 @@ public class SessionManagerPersistenceTests : IDisposable
 
         public void OpenDumpFile(string dumpFilePath, string? executablePath = null)
         {
+            Operations.Add("open");
             OpenDumpCalls++;
             IsDumpOpen = true;
             CurrentDumpPath = dumpFilePath;
@@ -61,6 +67,8 @@ public class SessionManagerPersistenceTests : IDisposable
 
         public void ConfigureSymbolPath(string symbolPath)
         {
+            Operations.Add("configure");
+            ConfiguredSymbolPaths.Add(symbolPath);
         }
 
         public void Dispose()
@@ -118,51 +126,135 @@ public class SessionManagerPersistenceTests : IDisposable
     }
 
     [Fact]
-    public void GetSession_WhenDumpPathExists_ReopensDumpAndInvokesOnSessionRestored()
+    public void GetSession_WhenDumpPathExists_ReopensDumpAndConfiguresSymbolsBeforeOpen()
     {
         var sessionsPath = Path.Combine(_root, "sessions");
         Directory.CreateDirectory(sessionsPath);
 
-        var dumpPath = Path.Combine(_root, "dummy.dmp");
-        File.WriteAllText(dumpPath, "not-a-real-dump");
+        var userDumpDir = Path.Combine(_root, "user1");
+        Directory.CreateDirectory(userDumpDir);
 
+        var dumpPath = Path.Combine(userDumpDir, "dump1.dmp");
+        File.WriteAllText(dumpPath, "not-a-real-dump");
+        var dumpSymbolsDir = Path.Combine(userDumpDir, ".symbols_dump1");
+        Directory.CreateDirectory(dumpSymbolsDir);
+        File.WriteAllText(Path.Combine(dumpSymbolsDir, "a.pdb"), "x");
+
+        var symbolManager1 = new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root);
         var manager1 = new DebuggerSessionManager(
             dumpStoragePath: _root,
             loggerFactory: NullLoggerFactory.Instance,
             sessionStoragePath: sessionsPath,
-            debuggerFactory: _ => new TestDebuggerManager());
+            debuggerFactory: _ => new TestDebuggerManager(),
+            symbolManager: symbolManager1);
 
         var sessionId = manager1.CreateSession("user1");
         var session = manager1.GetSessionInfo(sessionId, "user1");
         session.CurrentDumpId = "dump1";
+        session.SymbolConfiguration = new PersistedSessionSymbolConfiguration
+        {
+            AdditionalLocalDirectories = new List<string> { Path.Combine(_root, "extra-symbols") }
+        };
 
         // Persist CurrentDumpPath via the manager's Save-on-access behavior.
         ((TestDebuggerManager)session.Manager).OpenDumpFile(dumpPath);
-        manager1.GetSession(sessionId, "user1");
+        manager1.PersistSession(sessionId);
 
-        var callbackInvoked = false;
-        string? callbackDumpId = null;
-        IDebuggerManager? callbackManager = null;
-
+        var symbolManager2 = new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root);
         var manager2 = new DebuggerSessionManager(
             dumpStoragePath: _root,
             loggerFactory: NullLoggerFactory.Instance,
             sessionStoragePath: sessionsPath,
-            debuggerFactory: _ => new TestDebuggerManager { });
-
-        manager2.OnSessionRestored = (sid, dumpId, mgr) =>
-        {
-            callbackInvoked = sid == sessionId;
-            callbackDumpId = dumpId;
-            callbackManager = mgr;
-        };
+            debuggerFactory: _ => new TestDebuggerManager { },
+            symbolManager: symbolManager2);
 
         var restoredManager = manager2.GetSession(sessionId, "user1");
+        var restoredDebugger = Assert.IsType<TestDebuggerManager>(restoredManager);
 
         Assert.NotNull(restoredManager);
-        Assert.True(callbackInvoked);
-        Assert.Equal("dump1", callbackDumpId);
-        Assert.NotNull(callbackManager);
+        Assert.Single(restoredDebugger.ConfiguredSymbolPaths);
+        Assert.Contains(dumpSymbolsDir, restoredDebugger.ConfiguredSymbolPaths[0]);
+        Assert.Contains(Path.Combine(_root, "extra-symbols"), restoredDebugger.ConfiguredSymbolPaths[0]);
+        Assert.Equal(new[] { "configure", "open" }, restoredDebugger.Operations);
+    }
+
+    [Fact]
+    public void GetSession_WhenOnlyPersistedSymbolConfigurationExists_RehydratesWithoutOpeningDump()
+    {
+        var sessionsPath = Path.Combine(_root, "sessions");
+        Directory.CreateDirectory(sessionsPath);
+
+        var symbolManager1 = new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root);
+        var manager1 = new DebuggerSessionManager(
+            dumpStoragePath: _root,
+            loggerFactory: NullLoggerFactory.Instance,
+            sessionStoragePath: sessionsPath,
+            debuggerFactory: _ => new TestDebuggerManager(),
+            symbolManager: symbolManager1);
+
+        var sessionId = manager1.CreateSession("user1");
+        var session = manager1.GetSessionInfo(sessionId, "user1");
+        session.SymbolConfiguration = new PersistedSessionSymbolConfiguration
+        {
+            AdditionalLocalDirectories = new List<string> { "/tmp/symbols" },
+            AdditionalRemoteUrls = new List<string> { "https://symbols.example.com" }
+        };
+        manager1.PersistSession(sessionId);
+
+        var symbolManager2 = new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root);
+        var manager2 = new DebuggerSessionManager(
+            dumpStoragePath: _root,
+            loggerFactory: NullLoggerFactory.Instance,
+            sessionStoragePath: sessionsPath,
+            debuggerFactory: _ => new TestDebuggerManager(),
+            symbolManager: symbolManager2);
+
+        var restoredSession = manager2.GetSessionInfo(sessionId, "user1");
+        var restoredConfiguration = symbolManager2.GetPersistedSessionSymbolConfiguration(sessionId);
+
+        Assert.Null(restoredSession.CurrentDumpId);
+        Assert.Contains("/tmp/symbols", restoredSession.SymbolConfiguration.AdditionalLocalDirectories);
+        Assert.Contains("/tmp/symbols", restoredConfiguration.AdditionalLocalDirectories);
+        Assert.Contains("https://symbols.example.com", restoredConfiguration.AdditionalRemoteUrls);
+    }
+
+    [Fact]
+    public void GetSession_WhenStorageRootPathChanges_ReResolvesDumpFromUserAndDumpId()
+    {
+        var sessionsPath = Path.Combine(_root, "sessions");
+        Directory.CreateDirectory(sessionsPath);
+        var userDumpDir = Path.Combine(_root, "user1");
+        Directory.CreateDirectory(userDumpDir);
+
+        var currentDumpPath = Path.Combine(userDumpDir, "dump1.dmp");
+        File.WriteAllText(currentDumpPath, "dump");
+
+        var staleDumpPath = Path.Combine(_root, "old-storage", "user1", "dump1.dmp");
+
+        var sessionId = Guid.NewGuid().ToString();
+        var metadata = new SessionMetadata
+        {
+            SessionId = sessionId,
+            UserId = "user1",
+            CreatedAt = DateTime.UtcNow.AddMinutes(-5),
+            LastAccessedAt = DateTime.UtcNow,
+            CurrentDumpId = "dump1",
+            CurrentDumpPath = staleDumpPath,
+            SymbolConfiguration = new PersistedSessionSymbolConfiguration()
+        };
+        File.WriteAllText(
+            Path.Combine(sessionsPath, $"{sessionId}.json"),
+            JsonSerializer.Serialize(metadata));
+
+        var manager = new DebuggerSessionManager(
+            dumpStoragePath: _root,
+            loggerFactory: NullLoggerFactory.Instance,
+            sessionStoragePath: sessionsPath,
+            debuggerFactory: _ => new TestDebuggerManager(),
+            symbolManager: new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root));
+
+        var restoredManager = Assert.IsType<TestDebuggerManager>(manager.GetSession(sessionId, "user1"));
+        Assert.Equal(currentDumpPath, restoredManager.CurrentDumpPath);
     }
 
     [Fact]

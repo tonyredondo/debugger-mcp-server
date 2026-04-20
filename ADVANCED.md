@@ -52,6 +52,19 @@ This mode runs both the MCP server (via HTTP/SSE) and the Upload API in the same
 
 ---
 
+## Parity Model
+
+The product goal is behavior parity, not command parity:
+
+- opening a dump on WinDbg or LLDB should follow the same high-level preparation flow
+- restoring a session with an open dump should reuse the same reopen model as a fresh open
+- symbols, dump metadata enrichment, executable-path handling, and source-resolution inputs should behave the same way when the underlying debugger supports them
+- explicit debugger-specific exceptions stay explicit; for example, `verify_core_modules` remains LLDB-only
+
+The internal commands can differ between debuggers. The user workflow should not.
+
+---
+
 ## Docker (Multi-Platform)
 
 The `docker-compose.yml` provides multiple server variants for cross-platform dump analysis:
@@ -251,6 +264,9 @@ export SOS_PLUGIN_PATH="/custom/path/to/libsosplugin.so"
 
 # Optional override path for dotnet-symbol tool
 export DOTNET_SYMBOL_TOOL_PATH="/custom/path/to/dotnet-symbol"
+
+# Bound individual WinDbg operations and trigger recovery attempts on timeout
+export WINDBG_COMMAND_TIMEOUT_SECONDS=30
 
 # Enable Swagger UI (default: enabled in development)
 export ENABLE_SWAGGER="true"

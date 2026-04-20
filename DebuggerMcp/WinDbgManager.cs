@@ -1,6 +1,11 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
 using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace DebuggerMcp;
 
@@ -15,28 +20,42 @@ namespace DebuggerMcp;
 /// This class is Windows-only as it uses COM interop with the DbgEng API.
 /// </remarks>
 [SupportedOSPlatform("windows")]
-public class WinDbgManager : IDebuggerManager
+public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
 {
+    /// <summary>
+    /// Active interrupt request flag for DbgEng.
+    /// </summary>
+    private const uint DebugInterruptActive = 0;
 
     /// <summary>
-    /// The main debugger client interface.
+    /// Logger for debugger lifecycle, symbol, and SOS diagnostics.
     /// </summary>
-    private IDebugClient? _client;
+    private readonly ILogger _logger;
 
     /// <summary>
-    /// The debugger control interface for executing commands.
+    /// Synchronizes dispatcher swaps and recovery transitions.
     /// </summary>
-    private IDebugControl? _control;
+    private readonly object _executionLock = new();
 
     /// <summary>
-    /// Callbacks for capturing debugger output.
+    /// Timeout applied to WinDbg operations executed through DbgEng.
     /// </summary>
-    private OutputCallbacks? _outputCallbacks;
+    private readonly TimeSpan _commandTimeout;
 
     /// <summary>
-    /// COM interface pointer for output callbacks (must be released on disposal).
+    /// Grace period after an interrupt request before the current engine is abandoned.
     /// </summary>
-    private IntPtr _outputCallbacksPtr;
+    private static readonly TimeSpan InterruptGracePeriod = TimeSpan.FromSeconds(5);
+
+    /// <summary>
+    /// Current dispatcher that owns the dedicated STA thread for DbgEng operations.
+    /// </summary>
+    private WinDbgStaDispatcher? _dispatcher;
+
+    /// <summary>
+    /// Current debugger context. A new context is created whenever recovery replaces the engine.
+    /// </summary>
+    private WinDbgEngineContext _context = new();
 
     /// <summary>
     /// Indicates whether this instance has been disposed.
@@ -54,17 +73,12 @@ public class WinDbgManager : IDebuggerManager
     private const uint DebugEndPassive = 0x00000001;
 
     /// <summary>
-    /// The path to the currently open dump file.
-    /// </summary>
-    private string? _currentDumpPath;
-
-    /// <summary>
     /// Gets a value indicating whether the debugger engine has been initialized.
     /// </summary>
     /// <value>
     /// <c>true</c> if both the client and control interfaces are available; otherwise, <c>false</c>.
     /// </value>
-    public bool IsInitialized => _client != null && _control != null;
+    public bool IsInitialized => GetCurrentContext().IsInitialized;
 
     /// <summary>
     /// Gets a value indicating whether a dump file is currently open.
@@ -72,7 +86,7 @@ public class WinDbgManager : IDebuggerManager
     /// <value>
     /// <c>true</c> if a dump file is open and ready for analysis; otherwise, <c>false</c>.
     /// </value>
-    public bool IsDumpOpen { get; private set; }
+    public bool IsDumpOpen => GetCurrentContext().IsDumpOpen;
 
     /// <summary>
     /// Gets the path to the currently open dump file.
@@ -80,7 +94,7 @@ public class WinDbgManager : IDebuggerManager
     /// <value>
     /// The full path to the dump file if one is open; otherwise, <c>null</c>.
     /// </value>
-    public string? CurrentDumpPath => _currentDumpPath;
+    public string? CurrentDumpPath => GetCurrentContext().CurrentDumpPath;
 
     /// <summary>
     /// Gets a value indicating whether the SOS extension is loaded.
@@ -88,7 +102,7 @@ public class WinDbgManager : IDebuggerManager
     /// <value>
     /// <c>true</c> if SOS is loaded and .NET commands are available; otherwise, <c>false</c>.
     /// </value>
-    public bool IsSosLoaded { get; private set; }
+    public bool IsSosLoaded => GetCurrentContext().IsSosLoaded;
 
     /// <summary>
     /// Gets a value indicating whether the currently open dump is a .NET dump.
@@ -96,7 +110,7 @@ public class WinDbgManager : IDebuggerManager
     /// <value>
     /// <c>true</c> if the dump contains .NET runtime modules (CoreCLR or CLR); otherwise, <c>false</c>.
     /// </value>
-    public bool IsDotNetDump { get; private set; }
+    public bool IsDotNetDump => GetCurrentContext().IsDotNetDump;
 
     /// <summary>
     /// Gets the type of debugger this manager controls.
@@ -113,10 +127,25 @@ public class WinDbgManager : IDebuggerManager
     /// The constructor does not initialize the debugger engine. Call <see cref="InitializeAsync"/>
     /// to set up the COM interfaces before using other methods.
     /// </remarks>
-    public WinDbgManager()
+    public WinDbgManager() : this(NullLogger<WinDbgManager>.Instance)
     {
-        // Initialization is deferred to the InitializeAsync() method
     }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="WinDbgManager"/> class with logging support.
+    /// </summary>
+    /// <param name="logger">Logger used for debugger diagnostics.</param>
+    public WinDbgManager(ILogger<WinDbgManager> logger)
+    {
+        _logger = logger ?? NullLogger<WinDbgManager>.Instance;
+        _commandTimeout = TimeSpan.FromSeconds(Configuration.EnvironmentConfig.GetWinDbgCommandTimeoutSeconds());
+    }
+
+    /// <summary>
+    /// Returns the current debugger context reference.
+    /// </summary>
+    /// <returns>The active debugger context.</returns>
+    private WinDbgEngineContext GetCurrentContext() => _context;
 
 
 
@@ -134,41 +163,16 @@ public class WinDbgManager : IDebuggerManager
     /// <returns>A task representing the asynchronous initialization operation.</returns>
     public virtual Task InitializeAsync()
     {
-        // Check if already initialized to avoid redundant initialization
-        if (IsInitialized)
-            return Task.CompletedTask;
-
-        try
-        {
-            // Create the debug client using the native DebugCreate function
-            var iid = DbgEng.IID_IDebugClient;
-            int hr = DbgEng.DebugCreate(ref iid, out object clientObj);
-
-            // Check if creation succeeded
-            if (hr != 0)
+        var context = GetCurrentContext();
+        return ExecuteOperationAsync(
+            "initialize WinDbg",
+            context,
+            () =>
             {
-                throw new COMException($"Failed to create IDebugClient. HRESULT: 0x{hr:X8}", hr);
-            }
-
-            // Cast to the IDebugClient interface
-            _client = (IDebugClient)clientObj;
-
-            // Query for IDebugControl interface from the client
-            // Both interfaces point to the same underlying COM object
-            _control = (IDebugControl)_client;
-
-            // Set up output callbacks to capture debugger output
-            _outputCallbacks = new OutputCallbacks();
-            _outputCallbacksPtr = Marshal.GetComInterfaceForObject(_outputCallbacks, typeof(IDebugOutputCallbacks));
-            _client.SetOutputCallbacks(_outputCallbacksPtr);
-
-            return Task.CompletedTask;
-        }
-        catch (Exception ex)
-        {
-            // Wrap any exceptions in InvalidOperationException for consistent error handling
-            throw new InvalidOperationException($"Failed to initialize WinDbg Manager: {ex.Message}", ex);
-        }
+                InitializeCore(context);
+                return true;
+            },
+            allowRecovery: false);
     }
 
     /// <summary>
@@ -191,16 +195,9 @@ public class WinDbgManager : IDebuggerManager
     /// </param>
     public virtual void OpenDumpFile(string dumpFilePath, string? executablePath = null)
     {
-        // Validate that the manager is initialized
         if (!IsInitialized)
         {
             throw new InvalidOperationException("WinDbg Manager is not initialized");
-        }
-
-        // Check if a dump is already open
-        if (IsDumpOpen)
-        {
-            throw new InvalidOperationException("A dump file is already open. Close it first.");
         }
 
         // Validate that the dump file exists
@@ -209,60 +206,15 @@ public class WinDbgManager : IDebuggerManager
             throw new FileNotFoundException($"Dump file not found: {dumpFilePath}");
         }
 
-        try
-        {
-            // Clear any previous output to avoid confusion
-            _outputCallbacks?.ClearOutput();
-
-            // Open the dump file using the IDebugClient interface
-            int hr = _client!.OpenDumpFile(dumpFilePath);
-
-            // Check if opening succeeded
-            if (hr != 0)
+        var context = GetCurrentContext();
+        ExecuteOperation(
+            "open dump",
+            context,
+            () =>
             {
-                throw new COMException($"Failed to open dump file. HRESULT: 0x{hr:X8}", hr);
-            }
-
-            // Mark the dump as open and store the path
-            IsDumpOpen = true;
-            _currentDumpPath = dumpFilePath;
-
-            // Wait for the debugger to process the dump
-            // This is essential for the dump to be ready for commands
-            hr = _control!.WaitForEvent(0, WaitForEventTimeoutMs);
-
-            // Check if the wait succeeded
-            if (hr != 0)
-            {
-                throw new COMException($"Failed to wait for event. HRESULT: 0x{hr:X8}", hr);
-            }
-
-            // Execute a simple command to verify the dump is ready
-            ExecuteCommand(".echo Dump file opened successfully");
-
-            // Detect if this is a .NET dump by checking loaded modules
-            IsDotNetDump = DetectDotNetDump();
-            if (IsDotNetDump)
-            {
-                try
-                {
-                    LoadSosExtension();
-                }
-                catch
-                {
-                    // SOS loading failed, but dump is still usable for native debugging
-                    // Note: WinDbgManager doesn't have a logger - silently continue
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            // If opening failed, mark the dump as not open and reset all state
-            IsDumpOpen = false;
-            IsDotNetDump = false;
-            _currentDumpPath = null;
-            throw new InvalidOperationException($"Failed to open dump file: {ex.Message}", ex);
-        }
+                OpenDumpFileCore(context, dumpFilePath, executablePath, isRecovery: false);
+                return true;
+            });
     }
 
     /// <summary>
@@ -277,33 +229,15 @@ public class WinDbgManager : IDebuggerManager
     /// </remarks>
     public virtual void CloseDump()
     {
-        // Validate that the manager is initialized
-        if (!IsInitialized)
-        {
-            throw new InvalidOperationException("WinDbg Manager is not initialized");
-        }
-
-        try
-        {
-            // Only attempt to close if a dump is actually open
-            if (IsDumpOpen)
+        var context = GetCurrentContext();
+        ExecuteOperation(
+            "close dump",
+            context,
+            () =>
             {
-                // End the session with DEBUG_END_PASSIVE flag
-                // This flag indicates a passive end without terminating processes
-                _client!.EndSession(DebugEndPassive);
-
-                // Mark the dump as closed and reset all dump-specific state
-                IsDumpOpen = false;
-                IsSosLoaded = false;
-                IsDotNetDump = false;
-                _currentDumpPath = null;
-            }
-        }
-        catch (Exception ex)
-        {
-            // Wrap any exceptions for consistent error handling
-            throw new InvalidOperationException($"Failed to close dump: {ex.Message}", ex);
-        }
+                CloseDumpCore(context);
+                return true;
+            });
     }
 
     /// <summary>
@@ -326,20 +260,11 @@ public class WinDbgManager : IDebuggerManager
             throw new ArgumentException("Command cannot be null or empty", nameof(command));
         }
 
-        // Validate that the manager is initialized
-        if (!IsInitialized)
-        {
-            throw new InvalidOperationException("WinDbg Manager is not initialized");
-        }
-
-        // Validate that a dump is open
-        if (!IsDumpOpen)
-        {
-            throw new InvalidOperationException("No dump file is currently open");
-        }
-
-        // Execute command directly - caching removed as ClrMD handles most heavy operations
-        return ExecuteCommandInternal(command);
+        var context = GetCurrentContext();
+        return ExecuteOperation(
+            $"execute WinDbg command '{SummarizeCommand(command)}'",
+            context,
+            () => ExecuteCommandCore(context, command));
     }
 
     /// <summary>
@@ -356,43 +281,7 @@ public class WinDbgManager : IDebuggerManager
     /// </remarks>
     private string ExecuteCommandInternal(string command)
     {
-        // Validate that the manager is initialized
-        if (!IsInitialized)
-        {
-            throw new InvalidOperationException("WinDbg Manager is not initialized");
-        }
-
-        try
-        {
-            // Clear previous output to avoid mixing results from different commands
-            _outputCallbacks?.ClearOutput();
-
-            // Execute the command using IDebugControl.Execute
-            // - DEBUG_OUTCTL_ALL_CLIENTS: Send output to all connected clients
-            // - command: The command string to execute
-            // - DEBUG_EXECUTE_DEFAULT: Use default execution flags
-            int hr = _control!.Execute(
-                DbgEngConstants.DEBUG_OUTCTL_ALL_CLIENTS,
-                command,
-                DbgEngConstants.DEBUG_EXECUTE_DEFAULT
-            );
-
-            // Check if execution succeeded
-            if (hr != 0)
-            {
-                throw new COMException($"Failed to execute command. HRESULT: 0x{hr:X8}", hr);
-            }
-
-            // Retrieve the captured output from the callbacks
-            var output = _outputCallbacks?.GetOutput() ?? string.Empty;
-
-            return output;
-        }
-        catch (Exception ex)
-        {
-            // Provide context about which command failed
-            throw new InvalidOperationException($"Failed to execute command '{command}': {ex.Message}", ex);
-        }
+        return ExecuteCommandCore(GetCurrentContext(), command);
     }
 
     /// <summary>
@@ -418,23 +307,15 @@ public class WinDbgManager : IDebuggerManager
             throw new ArgumentException("Symbol path cannot be null or empty.", nameof(symbolPath));
         }
 
-        // Validate that the manager is initialized
-        if (!IsInitialized)
-        {
-            throw new InvalidOperationException("WinDbg Manager is not initialized");
-        }
-
-        try
-        {
-            // Set the symbol path using .sympath command
-            // Note: Using internal method because .sympath can be executed before a dump is open
-            ExecuteCommandInternal($".sympath {symbolPath}");
-        }
-        catch (Exception ex)
-        {
-            // Wrap any exceptions for consistent error handling
-            throw new InvalidOperationException($"Failed to configure symbol path: {ex.Message}", ex);
-        }
+        var context = GetCurrentContext();
+        ExecuteOperation(
+            "configure symbol path",
+            context,
+            () =>
+            {
+                ConfigureSymbolPathCore(context, symbolPath);
+                return true;
+            });
     }
 
     /// <summary>
@@ -450,87 +331,1072 @@ public class WinDbgManager : IDebuggerManager
     /// </remarks>
     public virtual void LoadSosExtension()
     {
-        // Validate that the manager is initialized
-        if (!IsInitialized)
+        var context = GetCurrentContext();
+        ExecuteOperation(
+            "load SOS",
+            context,
+            () =>
+            {
+                LoadSosExtensionCore(context);
+                return true;
+            });
+    }
+
+    /// <summary>
+    /// Executes a WinDbg operation on the dedicated STA thread and returns its result.
+    /// </summary>
+    /// <typeparam name="T">The operation result type.</typeparam>
+    /// <param name="operationName">Friendly name used in logs and recovery messages.</param>
+    /// <param name="context">Debugger context that the operation is allowed to mutate.</param>
+    /// <param name="operation">Operation to execute.</param>
+    /// <param name="allowRecovery">Whether timeout and engine-failure recovery should be attempted.</param>
+    /// <returns>The operation result.</returns>
+    private T ExecuteOperation<T>(
+        string operationName,
+        WinDbgEngineContext context,
+        Func<T> operation,
+        bool allowRecovery = true)
+    {
+        try
         {
-            throw new InvalidOperationException("WinDbg Manager is not initialized");
+            return ExecuteOperationAsync(operationName, context, operation, allowRecovery).GetAwaiter().GetResult();
+        }
+        catch (Exception ex) when (ex is not InvalidOperationException && ex is not ArgumentException && ex is not FileNotFoundException)
+        {
+            throw new InvalidOperationException($"Failed to {operationName}: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Executes a WinDbg operation on the dedicated STA thread and returns its asynchronous task.
+    /// </summary>
+    /// <typeparam name="T">The operation result type.</typeparam>
+    /// <param name="operationName">Friendly name used in logs and recovery messages.</param>
+    /// <param name="context">Debugger context that the operation is allowed to mutate.</param>
+    /// <param name="operation">Operation to execute.</param>
+    /// <param name="allowRecovery">Whether timeout and engine-failure recovery should be attempted.</param>
+    /// <returns>The asynchronous operation task.</returns>
+    private async Task<T> ExecuteOperationAsync<T>(
+        string operationName,
+        WinDbgEngineContext context,
+        Func<T> operation,
+        bool allowRecovery = true)
+    {
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(WinDbgManager));
         }
 
-        // Validate that a dump is open
-        if (!IsDumpOpen)
+        var dispatcher = GetOrCreateDispatcher();
+        var task = dispatcher.InvokeAsync(operation);
+
+        if (await Task.WhenAny(task, Task.Delay(_commandTimeout)).ConfigureAwait(false) == task)
         {
-            throw new InvalidOperationException("No dump file is currently open");
+            try
+            {
+                return await task.ConfigureAwait(false);
+            }
+            catch (Exception ex) when (allowRecovery && ShouldAttemptRecovery(ex))
+            {
+                if (await TryRecoverEngineAsync(context, operationName, timeoutTriggered: false).ConfigureAwait(false))
+                {
+                    throw new InvalidOperationException(
+                        $"WinDbg failed while trying to {operationName}. The engine was recovered and the dump was reopened when possible. Please retry the operation.",
+                        ex);
+                }
+
+                throw new InvalidOperationException(
+                    $"WinDbg failed while trying to {operationName}, and recovery did not complete.",
+                    ex);
+            }
         }
 
-        // Idempotent: if SOS is already loaded, nothing to do
-        if (IsSosLoaded)
+        _logger.LogWarning(
+            "[WinDbg] Operation timed out after {Timeout}s: {Operation}",
+            _commandTimeout.TotalSeconds,
+            operationName);
+
+        TryInterruptContext(context, operationName);
+
+        if (await Task.WhenAny(task, Task.Delay(InterruptGracePeriod)).ConfigureAwait(false) == task)
+        {
+            return await task.ConfigureAwait(false);
+        }
+
+        if (allowRecovery && await TryRecoverEngineAsync(context, operationName, timeoutTriggered: true).ConfigureAwait(false))
+        {
+            throw new InvalidOperationException(
+                $"WinDbg timed out while trying to {operationName}. The engine was recovered and the dump was reopened when possible. Please retry the operation.");
+        }
+
+        throw new InvalidOperationException(
+            $"WinDbg timed out while trying to {operationName}. Recovery did not complete, so the debugger session may need to be reopened.");
+    }
+
+    /// <summary>
+    /// Gets the active STA dispatcher, creating it when the manager first needs DbgEng.
+    /// </summary>
+    /// <returns>The active dispatcher.</returns>
+    private WinDbgStaDispatcher GetOrCreateDispatcher()
+    {
+        lock (_executionLock)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            _dispatcher ??= new WinDbgStaDispatcher("WinDbgManager");
+            return _dispatcher;
+        }
+    }
+
+    /// <summary>
+    /// Interrupts the current debugger execution path after a timeout.
+    /// </summary>
+    /// <param name="context">Debugger context that timed out.</param>
+    /// <param name="operationName">The operation being interrupted.</param>
+    private void TryInterruptContext(WinDbgEngineContext context, string operationName)
+    {
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                if (context.Control == null)
+                {
+                    return;
+                }
+
+                context.Control.SetInterruptTimeout((uint)Math.Ceiling(InterruptGracePeriod.TotalSeconds));
+                context.Control.SetInterrupt(DebugInterruptActive);
+                _logger.LogWarning("[WinDbg] Interrupt requested for timed-out operation: {Operation}", operationName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[WinDbg] Failed to interrupt timed-out operation: {Operation}", operationName);
+            }
+        });
+    }
+
+    /// <summary>
+    /// Determines whether a failed operation looks like a debugger-engine failure worth recovering.
+    /// </summary>
+    /// <param name="exception">The exception that escaped the STA operation.</param>
+    /// <returns><c>true</c> when recovery should be attempted; otherwise <c>false</c>.</returns>
+    private static bool ShouldAttemptRecovery(Exception exception)
+    {
+        for (Exception? current = exception; current != null; current = current.InnerException)
+        {
+            if (current is COMException or InvalidComObjectException or ObjectDisposedException)
+            {
+                return true;
+            }
+
+            if (current.Message.Contains("HRESULT", StringComparison.OrdinalIgnoreCase) ||
+                current.Message.Contains("RPC_E", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Attempts to replace the current DbgEng context and reopen the active dump after a failure.
+    /// </summary>
+    /// <param name="failedContext">The context that experienced the failure.</param>
+    /// <param name="operationName">The operation that failed.</param>
+    /// <param name="timeoutTriggered">Whether the failure was a timeout.</param>
+    /// <returns><c>true</c> if recovery completed; otherwise <c>false</c>.</returns>
+    private async Task<bool> TryRecoverEngineAsync(WinDbgEngineContext failedContext, string operationName, bool timeoutTriggered)
+    {
+        lock (_executionLock)
+        {
+            if (!ReferenceEquals(_context, failedContext))
+            {
+                return true;
+            }
+        }
+
+        var snapshot = failedContext.CreateRecoverySnapshot();
+        _logger.LogWarning(
+            "[WinDbg] Attempting recovery after {Operation}. Timeout={TimeoutTriggered}, DumpOpen={WasDumpOpen}",
+            operationName,
+            timeoutTriggered,
+            snapshot.WasDumpOpen);
+
+        var replacementContext = new WinDbgEngineContext();
+        WinDbgStaDispatcher? replacementDispatcher = null;
+        WinDbgStaDispatcher? abandonedDispatcher = null;
+
+        lock (_executionLock)
+        {
+            if (!ReferenceEquals(_context, failedContext))
+            {
+                return true;
+            }
+
+            replacementDispatcher = new WinDbgStaDispatcher("WinDbgManager-Recovery");
+            abandonedDispatcher = _dispatcher;
+            _dispatcher = replacementDispatcher;
+            _context = replacementContext;
+        }
+
+        try
+        {
+            await replacementDispatcher.InvokeAsync(() =>
+            {
+                InitializeCore(replacementContext);
+
+                if (!string.IsNullOrWhiteSpace(snapshot.LastSymbolPath))
+                {
+                    ConfigureSymbolPathCore(replacementContext, snapshot.LastSymbolPath);
+                }
+                else
+                {
+                    replacementContext.SymbolCacheDirectory = snapshot.SymbolCacheDirectory;
+                }
+
+                if (snapshot.WasDumpOpen &&
+                    !string.IsNullOrWhiteSpace(snapshot.DumpPath) &&
+                    File.Exists(snapshot.DumpPath))
+                {
+                    OpenDumpFileCore(replacementContext, snapshot.DumpPath, snapshot.ExecutablePath, isRecovery: true);
+                }
+                else
+                {
+                    replacementContext.DetectedRuntimeVersion = snapshot.DetectedRuntimeVersion;
+                }
+
+                return true;
+            }).ConfigureAwait(false);
+
+            _logger.LogInformation(
+                "[WinDbg] Recovery completed after {Operation}. DumpReopened={DumpReopened}",
+                operationName,
+                replacementContext.IsDumpOpen);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[WinDbg] Recovery failed after {Operation}", operationName);
+            return false;
+        }
+        finally
+        {
+            abandonedDispatcher?.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// Initializes DbgEng for the supplied debugger context.
+    /// </summary>
+    /// <param name="context">The context to initialize.</param>
+    private void InitializeCore(WinDbgEngineContext context)
+    {
+        if (context.IsInitialized)
         {
             return;
         }
 
         try
         {
-            // Try to load SOS extension for CoreCLR (.NET Core/.NET 5+)
-            // .loadby automatically finds the correct SOS.dll matching the runtime
-            var result = ExecuteCommand(".loadby sos coreclr");
+            _logger.LogInformation("[WinDbg] Initializing DbgEng");
 
-            // Check if CoreCLR loading failed
+            var iid = DbgEng.IID_IDebugClient;
+            var hr = DbgEng.DebugCreate(ref iid, out object clientObject);
+            if (hr != 0)
+            {
+                throw new COMException($"Failed to create IDebugClient. HRESULT: 0x{hr:X8}", hr);
+            }
+
+            context.Client = (IDebugClient)clientObject;
+            context.Control = (IDebugControl)context.Client;
+            context.OutputCallbacks = new OutputCallbacks();
+            context.OutputCallbacksPtr = Marshal.GetComInterfaceForObject(context.OutputCallbacks, typeof(IDebugOutputCallbacks));
+            context.Client.SetOutputCallbacks(context.OutputCallbacksPtr);
+
+            _logger.LogInformation("[WinDbg] DbgEng initialized successfully");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[WinDbg] Failed to initialize DbgEng");
+            ReleaseContextResources(context);
+            throw new InvalidOperationException($"Failed to initialize WinDbg Manager: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Opens a dump file inside the supplied debugger context.
+    /// </summary>
+    /// <param name="context">The context that will own the dump.</param>
+    /// <param name="dumpFilePath">The dump file path to open.</param>
+    /// <param name="executablePath">Optional standalone executable path.</param>
+    /// <param name="isRecovery">Whether the open is happening during recovery.</param>
+    private void OpenDumpFileCore(WinDbgEngineContext context, string dumpFilePath, string? executablePath, bool isRecovery)
+    {
+        if (!context.IsInitialized)
+        {
+            throw new InvalidOperationException("WinDbg Manager is not initialized");
+        }
+
+        if (context.IsDumpOpen)
+        {
+            throw new InvalidOperationException("A dump file is already open. Close it first.");
+        }
+
+        try
+        {
+            context.CurrentExecutablePath = executablePath;
+            context.OutputCallbacks?.ClearOutput();
+
+            TryApplyExecutableSearchPath(context, executablePath);
+
+            var hr = context.Client!.OpenDumpFile(dumpFilePath);
+            if (hr != 0)
+            {
+                throw new COMException($"Failed to open dump file. HRESULT: 0x{hr:X8}", hr);
+            }
+
+            context.IsDumpOpen = true;
+            context.CurrentDumpPath = dumpFilePath;
+
+            hr = context.Control!.WaitForEvent(0, WaitForEventTimeoutMs);
+            if (hr != 0)
+            {
+                throw new COMException($"Failed to wait for event. HRESULT: 0x{hr:X8}", hr);
+            }
+
+            ExecuteCommandCore(context, ".echo Dump file opened successfully", requiresOpenDump: false);
+
+            context.IsDotNetDump = DetectDotNetDumpCore(context);
+            var detectedArchitecture = DetectArchitecture(context);
+            context.DetectedRuntimeVersion = context.IsDotNetDump ? DetectRuntimeVersion(context) : null;
+
+            _logger.LogInformation(
+                "[WinDbg] Dump opened: {DumpPath}, DotNet={IsDotNetDump}, Architecture={Architecture}, Runtime={RuntimeVersion}, Recovery={IsRecovery}",
+                dumpFilePath,
+                context.IsDotNetDump,
+                detectedArchitecture ?? "(unknown)",
+                context.DetectedRuntimeVersion ?? "(unknown)",
+                isRecovery);
+
+            if (context.IsDotNetDump)
+            {
+                try
+                {
+                    LoadSosExtensionCore(context);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "[WinDbg] Automatic SOS loading failed");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            context.IsDumpOpen = false;
+            context.IsDotNetDump = false;
+            context.IsSosLoaded = false;
+            context.CurrentDumpPath = null;
+            context.CurrentExecutablePath = null;
+            context.DetectedRuntimeVersion = null;
+            throw new InvalidOperationException($"Failed to open dump file: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Closes the open dump for the supplied context.
+    /// </summary>
+    /// <param name="context">The context whose dump should be closed.</param>
+    private void CloseDumpCore(WinDbgEngineContext context)
+    {
+        if (!context.IsInitialized)
+        {
+            throw new InvalidOperationException("WinDbg Manager is not initialized");
+        }
+
+        try
+        {
+            if (!context.IsDumpOpen)
+            {
+                return;
+            }
+
+            context.Client!.EndSession(DebugEndPassive);
+            context.IsDumpOpen = false;
+            context.IsSosLoaded = false;
+            context.IsDotNetDump = false;
+            context.CurrentDumpPath = null;
+            context.CurrentExecutablePath = null;
+            context.DetectedRuntimeVersion = null;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to close dump: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Executes a debugger command inside the supplied context.
+    /// </summary>
+    /// <param name="context">The context that owns the command execution.</param>
+    /// <param name="command">The command to execute.</param>
+    /// <param name="requiresOpenDump">Whether the command requires an open dump.</param>
+    /// <returns>The captured command output.</returns>
+    private string ExecuteCommandCore(WinDbgEngineContext context, string command, bool requiresOpenDump = true)
+    {
+        if (!context.IsInitialized)
+        {
+            throw new InvalidOperationException("WinDbg Manager is not initialized");
+        }
+
+        if (requiresOpenDump && !context.IsDumpOpen)
+        {
+            throw new InvalidOperationException("No dump file is currently open");
+        }
+
+        try
+        {
+            context.OutputCallbacks?.ClearOutput();
+
+            var hr = context.Control!.Execute(
+                DbgEngConstants.DEBUG_OUTCTL_ALL_CLIENTS,
+                command,
+                DbgEngConstants.DEBUG_EXECUTE_DEFAULT);
+            if (hr != 0)
+            {
+                throw new COMException($"Failed to execute command. HRESULT: 0x{hr:X8}", hr);
+            }
+
+            return context.OutputCallbacks?.GetOutput() ?? string.Empty;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to execute command '{command}': {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Applies the symbol path to the supplied debugger context.
+    /// </summary>
+    /// <param name="context">The context that should receive the symbol path.</param>
+    /// <param name="symbolPath">The symbol path to apply.</param>
+    private void ConfigureSymbolPathCore(WinDbgEngineContext context, string symbolPath)
+    {
+        if (!context.IsInitialized)
+        {
+            throw new InvalidOperationException("WinDbg Manager is not initialized");
+        }
+
+        try
+        {
+            ExecuteCommandCore(context, $".sympath {symbolPath}", requiresOpenDump: false);
+            context.LastSymbolPath = symbolPath;
+            context.SymbolCacheDirectory = TryExtractSymbolCacheDirectory(symbolPath);
+            _logger.LogInformation("[WinDbg] Applied symbol path: {SymbolPath}", symbolPath);
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException($"Failed to configure symbol path: {ex.Message}", ex);
+        }
+    }
+
+    /// <summary>
+    /// Loads and validates SOS for the supplied debugger context.
+    /// </summary>
+    /// <param name="context">The context that should load SOS.</param>
+    private void LoadSosExtensionCore(WinDbgEngineContext context)
+    {
+        if (!context.IsInitialized)
+        {
+            throw new InvalidOperationException("WinDbg Manager is not initialized");
+        }
+
+        if (!context.IsDumpOpen)
+        {
+            throw new InvalidOperationException("No dump file is currently open");
+        }
+
+        if (context.IsSosLoaded)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = ExecuteCommandCore(context, ".loadby sos coreclr");
             var coreclrFailed = result.Contains("Unable to find module", StringComparison.OrdinalIgnoreCase) ||
-                               result.Contains("error", StringComparison.OrdinalIgnoreCase);
+                                result.Contains("error", StringComparison.OrdinalIgnoreCase);
 
             if (coreclrFailed)
             {
-                // Fall back to CLR for .NET Framework dumps
-                var clrResult = ExecuteCommand(".loadby sos clr");
-
-                // Check if CLR loading also failed
+                var clrResult = ExecuteCommandCore(context, ".loadby sos clr");
                 var clrFailed = clrResult.Contains("Unable to find module", StringComparison.OrdinalIgnoreCase) ||
-                               clrResult.Contains("error", StringComparison.OrdinalIgnoreCase);
+                                clrResult.Contains("error", StringComparison.OrdinalIgnoreCase);
 
-                if (clrFailed)
+                if (clrFailed && !TryLoadSosFromKnownLocations(context))
                 {
                     throw new InvalidOperationException(
                         $"Failed to load SOS extension. CoreCLR result: {result.Trim()}. CLR result: {clrResult.Trim()}");
                 }
             }
 
-            // Verify SOS is actually loaded by running a simple command
-            // In WinDbg, SOS commands use !prefix (e.g., !help, !threads) - not !sos prefix
-            var verifyResult = ExecuteCommand("!help");
+            var verifyResult = ExecuteCommandCore(context, "!eeversion");
             if (verifyResult.Contains("No export", StringComparison.OrdinalIgnoreCase) ||
                 verifyResult.Contains("not found", StringComparison.OrdinalIgnoreCase) ||
-                verifyResult.Contains("Unrecognized command", StringComparison.OrdinalIgnoreCase))
+                verifyResult.Contains("Unrecognized command", StringComparison.OrdinalIgnoreCase) ||
+                verifyResult.Contains("Unable to load", StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException(
                     $"SOS extension loaded but commands are not available. Verify result: {verifyResult.Trim()}");
             }
 
-            // Mark SOS as loaded only after verification
-            IsSosLoaded = true;
+            context.IsSosLoaded = true;
+            _logger.LogInformation("[WinDbg] SOS loaded successfully");
         }
         catch (InvalidOperationException)
         {
-            // Re-throw our own exceptions
             throw;
         }
         catch (Exception ex)
         {
-            // Wrap other exceptions for consistent error handling
             throw new InvalidOperationException($"Failed to load SOS extension: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Summarizes a debugger command for logging and timeout messages.
+    /// </summary>
+    /// <param name="command">The command to summarize.</param>
+    /// <returns>A shortened single-line summary.</returns>
+    private static string SummarizeCommand(string command)
+    {
+        var normalized = command.ReplaceLineEndings(" ").Trim();
+        return normalized.Length <= 120 ? normalized : normalized[..117] + "...";
+    }
+
+    /// <summary>
+    /// Returns normalized platform information for the current dump.
+    /// </summary>
+    /// <returns>The normalized platform information, or <c>null</c> when no dump is open.</returns>
+    public Analysis.PlatformInfo? GetPlatformInfo()
+    {
+        var context = GetCurrentContext();
+        if (!context.IsDumpOpen)
+        {
+            return null;
+        }
+
+        return ExecuteOperation(
+            "read WinDbg platform information",
+            context,
+            () =>
+            {
+                var architecture = DetectArchitecture(context) ?? string.Empty;
+                return new Analysis.PlatformInfo
+                {
+                    Os = "Windows",
+                    Architecture = architecture,
+                    RuntimeVersion = context.DetectedRuntimeVersion,
+                    PointerSize = architecture is "x64" or "arm64" ? 64 : architecture is "x86" or "arm" ? 32 : null
+                };
+            });
+    }
+
+    /// <summary>
+    /// Captures top-frame registers for the specified OS thread identifiers.
+    /// </summary>
+    /// <param name="threadIds">OS thread identifiers to inspect.</param>
+    /// <returns>Captured register sets keyed by OS thread identifier.</returns>
+    public Dictionary<uint, Analysis.ClrRegisterSet> GetTopFrameRegisters(IEnumerable<uint> threadIds)
+    {
+        var context = GetCurrentContext();
+        if (!context.IsInitialized || !context.IsDumpOpen)
+        {
+            return new Dictionary<uint, Analysis.ClrRegisterSet>();
+        }
+
+        return ExecuteOperation(
+            "read WinDbg top-frame registers",
+            context,
+            () =>
+            {
+                var result = new Dictionary<uint, Analysis.ClrRegisterSet>();
+                var threadMap = BuildThreadIdToDebuggerThreadIndexMap(context);
+                foreach (var threadId in threadIds)
+                {
+                    if (!threadMap.TryGetValue(threadId, out var debuggerThreadIndex))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        ExecuteCommandCore(context, $"~{debuggerThreadIndex}s");
+                        var registers = ParseWinDbgRegisters(ExecuteCommandCore(context, "r"));
+                        if (registers != null)
+                        {
+                            result[threadId] = registers;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogDebug(ex, "[WinDbg] Failed to read top-frame registers for thread {ThreadId}", threadId);
+                    }
+                }
+
+                return result;
+            });
+    }
+
+    /// <summary>
+    /// Captures per-frame registers for a specific OS thread using <c>kv</c> and <c>.frame</c>.
+    /// </summary>
+    /// <param name="threadId">The OS thread identifier to inspect.</param>
+    /// <returns>Per-frame register payloads for the thread.</returns>
+    public IReadOnlyList<DebuggerFrameRegisters> GetPerFrameRegisters(uint threadId)
+    {
+        var context = GetCurrentContext();
+        if (!context.IsInitialized || !context.IsDumpOpen)
+        {
+            return Array.Empty<DebuggerFrameRegisters>();
+        }
+
+        return ExecuteOperation(
+            $"read WinDbg frame registers for thread {threadId}",
+            context,
+            () =>
+            {
+                var result = new List<DebuggerFrameRegisters>();
+                var threadMap = BuildThreadIdToDebuggerThreadIndexMap(context);
+                if (!threadMap.TryGetValue(threadId, out var debuggerThreadIndex))
+                {
+                    return result;
+                }
+
+                try
+                {
+                    ExecuteCommandCore(context, $"~{debuggerThreadIndex}s");
+                    var stackOutput = ExecuteCommandCore(context, "kv 200");
+                    var frames = ParseWinDbgFrameStackPointers(stackOutput);
+
+                    foreach (var (frameIndex, stackPointer) in frames)
+                    {
+                        try
+                        {
+                            ExecuteCommandCore(context, $".frame {frameIndex}");
+                            var registers = ParseWinDbgRegisterValues(ExecuteCommandCore(context, "r"));
+                            if (registers.Count == 0)
+                            {
+                                continue;
+                            }
+
+                            result.Add(new DebuggerFrameRegisters
+                            {
+                                ThreadId = threadId,
+                                StackPointer = stackPointer,
+                                Registers = registers
+                            });
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogDebug(ex, "[WinDbg] Failed to read registers for thread {ThreadId} frame {FrameIndex}", threadId, frameIndex);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "[WinDbg] Failed to read per-frame registers for thread {ThreadId}", threadId);
+                }
+
+                return (IReadOnlyList<DebuggerFrameRegisters>)result;
+            });
+    }
+
+    /// <summary>
+    /// Applies the executable directory to WinDbg's executable search path when available.
+    /// </summary>
+    /// <param name="executablePath">The standalone executable path supplied by metadata.</param>
+    private void TryApplyExecutableSearchPath(WinDbgEngineContext context, string? executablePath)
+    {
+        if (string.IsNullOrWhiteSpace(executablePath) || !File.Exists(executablePath))
+        {
+            return;
+        }
+
+        var executableDirectory = Path.GetDirectoryName(executablePath);
+        if (string.IsNullOrWhiteSpace(executableDirectory))
+        {
+            return;
+        }
+
+        try
+        {
+            ExecuteCommandCore(context, $".exepath+ \"{executableDirectory}\"", requiresOpenDump: false);
+            _logger.LogInformation("[WinDbg] Added executable search path {ExecutableDirectory}", executableDirectory);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[WinDbg] Failed to apply executable search path {ExecutableDirectory}", executableDirectory);
+        }
+    }
+
+    /// <summary>
+    /// Tries to load SOS from explicitly resolved locations when <c>.loadby</c> is insufficient.
+    /// </summary>
+    /// <returns><c>true</c> when SOS loaded successfully from a resolved path; otherwise <c>false</c>.</returns>
+    private bool TryLoadSosFromKnownLocations(WinDbgEngineContext context)
+    {
+        foreach (var candidatePath in EnumerateSosCandidates(context))
+        {
+            try
+            {
+                var loadResult = ExecuteCommandCore(context, $".load \"{candidatePath}\"");
+                if (!loadResult.Contains("error", StringComparison.OrdinalIgnoreCase) &&
+                    !loadResult.Contains("Unable to", StringComparison.OrdinalIgnoreCase))
+                {
+                    _logger.LogInformation("[WinDbg] Loaded SOS from {SosPath}", candidatePath);
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[WinDbg] Failed to load SOS from {SosPath}", candidatePath);
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Enumerates candidate SOS locations in product-defined search order.
+    /// </summary>
+    /// <returns>Existing SOS paths that should be tried as explicit loads.</returns>
+    private IEnumerable<string> EnumerateSosCandidates(WinDbgEngineContext context)
+    {
+        static IEnumerable<string> ExistingFiles(IEnumerable<string> paths)
+            => paths.Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path));
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        void YieldDirectoryCandidates(List<string> target, string? directory)
+        {
+            if (string.IsNullOrWhiteSpace(directory) || !Directory.Exists(directory))
+            {
+                return;
+            }
+
+            foreach (var candidate in Directory.GetFiles(directory, "sos.dll", SearchOption.TopDirectoryOnly))
+            {
+                if (seen.Add(candidate))
+                {
+                    target.Add(candidate);
+                }
+            }
+        }
+
+        var candidates = new List<string>();
+
+        var configuredPath = Environment.GetEnvironmentVariable(Configuration.EnvironmentConfig.SosPluginPath);
+        if (!string.IsNullOrWhiteSpace(configuredPath))
+        {
+            foreach (var candidate in ExistingFiles([configuredPath]))
+            {
+                if (seen.Add(candidate))
+                {
+                    candidates.Add(candidate);
+                }
+            }
+
+            YieldDirectoryCandidates(candidates, configuredPath);
+        }
+
+        YieldDirectoryCandidates(candidates, context.SymbolCacheDirectory);
+
+        var userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        YieldDirectoryCandidates(candidates, Path.Combine(userProfile, ".dotnet", "sos"));
+
+        var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
+        AddRuntimeCandidates(candidates, Path.Combine(programFiles, "dotnet", "shared", "Microsoft.NETCore.App"), context);
+
+        var windowsDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
+        AddRuntimeCandidates(candidates, Path.Combine(windowsDirectory, "Microsoft.NET", "Framework64"), context);
+        AddRuntimeCandidates(candidates, Path.Combine(windowsDirectory, "Microsoft.NET", "Framework"), context);
+
+        return candidates;
+    }
+
+    /// <summary>
+    /// Adds SOS candidates from runtime directories, preferring the detected runtime version when known.
+    /// </summary>
+    /// <param name="candidates">The list receiving candidate paths.</param>
+    /// <param name="baseDirectory">The runtime base directory to inspect.</param>
+    private void AddRuntimeCandidates(List<string> candidates, string baseDirectory, WinDbgEngineContext context)
+    {
+        if (!Directory.Exists(baseDirectory))
+        {
+            return;
+        }
+
+        var runtimeDirectories = Directory.GetDirectories(baseDirectory)
+            .OrderByDescending(directory =>
+                string.Equals(Path.GetFileName(directory), context.DetectedRuntimeVersion, StringComparison.OrdinalIgnoreCase))
+            .ThenByDescending(directory => directory, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var runtimeDirectory in runtimeDirectories)
+        {
+            var sosPath = Path.Combine(runtimeDirectory, "sos.dll");
+            if (File.Exists(sosPath))
+            {
+                candidates.Add(sosPath);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Detects the normalized architecture of the current target.
+    /// </summary>
+    /// <returns>The normalized architecture string, or <c>null</c> when it cannot be determined.</returns>
+    private string? DetectArchitecture(WinDbgEngineContext context)
+    {
+        if (!context.IsInitialized)
+        {
+            return null;
+        }
+
+        try
+        {
+            if (context.Control!.GetExecutingProcessorType(out var processorType) == 0)
+            {
+                return processorType switch
+                {
+                    0x8664 => "x64",
+                    0x014c => "x86",
+                    0xAA64 => "arm64",
+                    0x01c0 or 0x01c4 => "arm",
+                    _ => null
+                };
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "[WinDbg] Failed to detect architecture from DbgEng");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Detects the .NET runtime version for the current dump using module metadata.
+    /// </summary>
+    /// <returns>The runtime version when it can be extracted; otherwise <c>null</c>.</returns>
+    private string? DetectRuntimeVersion(WinDbgEngineContext context)
+    {
+        if (!context.IsDumpOpen)
+        {
+            return null;
+        }
+
+        var versionPatterns = new[]
+        {
+            @"Microsoft\.NETCore\.App[\\/](\d+\.\d+\.\d+)[\\/]",
+            @"File version:\s*(\d+\.\d+\.\d+(?:\.\d+)?)",
+            @"Image version:\s*(\d+\.\d+\.\d+(?:\.\d+)?)"
+        };
+
+        foreach (var command in new[] { "lmv m coreclr", "lmv m clr" })
+        {
+            try
+            {
+                var output = ExecuteCommandCore(context, command);
+                foreach (var pattern in versionPatterns)
+                {
+                    var match = Regex.Match(output, pattern, RegexOptions.IgnoreCase);
+                    if (match.Success)
+                    {
+                        return match.Groups[1].Value;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogDebug(ex, "[WinDbg] Failed to detect runtime version using {Command}", command);
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Extracts the local symbol cache directory from a WinDbg symbol path string.
+    /// </summary>
+    /// <param name="symbolPath">The symbol path to inspect.</param>
+    /// <returns>The local cache directory when present; otherwise <c>null</c>.</returns>
+    private static string? TryExtractSymbolCacheDirectory(string symbolPath)
+    {
+        foreach (var segment in symbolPath.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!segment.StartsWith("srv*", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            var parts = segment.Split('*', StringSplitOptions.None);
+            if (parts.Length >= 3 && !string.IsNullOrWhiteSpace(parts[1]))
+            {
+                return parts[1];
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Builds a mapping from OS thread ID to WinDbg debugger thread index using <c>~</c> output.
+    /// </summary>
+    /// <returns>The thread mapping extracted from the current dump context.</returns>
+    internal Dictionary<uint, int> BuildThreadIdToDebuggerThreadIndexMap()
+        => BuildThreadIdToDebuggerThreadIndexMap(GetCurrentContext());
+
+    /// <summary>
+    /// Builds a mapping from OS thread ID to WinDbg debugger thread index using <c>~</c> output.
+    /// </summary>
+    /// <param name="context">The context whose thread list should be parsed.</param>
+    /// <returns>The thread mapping extracted from the current dump context.</returns>
+    private Dictionary<uint, int> BuildThreadIdToDebuggerThreadIndexMap(WinDbgEngineContext context)
+    {
+        var result = new Dictionary<uint, int>();
+        if (!context.IsDumpOpen)
+        {
+            return result;
+        }
+
+        var threadsOutput = ExecuteCommandCore(context, "~");
+        var lines = threadsOutput.Split('\n');
+        foreach (var line in lines)
+        {
+            var match = Regex.Match(
+                line,
+                @"^\s*[.#]?\s*(\d+)\s+Id:\s*[0-9a-fA-F]+\.([0-9a-fA-F]+)",
+                RegexOptions.IgnoreCase);
+            if (!match.Success)
+            {
+                continue;
+            }
+
+            if (int.TryParse(match.Groups[1].Value, out var debuggerThreadIndex) &&
+                uint.TryParse(match.Groups[2].Value, System.Globalization.NumberStyles.HexNumber, null, out var osThreadId))
+            {
+                result[osThreadId] = debuggerThreadIndex;
+            }
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Parses WinDbg stack output to extract frame indices and child stack pointers.
+    /// </summary>
+    /// <param name="stackOutput">The raw <c>kv</c> output.</param>
+    /// <returns>Frame indices paired with their child stack pointers.</returns>
+    internal static List<(int FrameIndex, ulong StackPointer)> ParseWinDbgFrameStackPointers(string stackOutput)
+    {
+        var result = new List<(int FrameIndex, ulong StackPointer)>();
+        var lines = stackOutput.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+        foreach (var line in lines)
+        {
+            var match = Regex.Match(
+                line,
+                @"^\s*([0-9a-fA-F]+)\s+([0-9a-fA-F`]+)\s+[0-9a-fA-F`]+",
+                RegexOptions.IgnoreCase);
+            if (!match.Success ||
+                !int.TryParse(match.Groups[1].Value, System.Globalization.NumberStyles.HexNumber, null, out var frameIndex) ||
+                !ulong.TryParse(match.Groups[2].Value.Replace("`", string.Empty), System.Globalization.NumberStyles.HexNumber, null, out var stackPointer))
+            {
+                continue;
+            }
+
+            result.Add((frameIndex, stackPointer));
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Parses WinDbg register output into a structured register set.
+    /// </summary>
+    /// <param name="output">The raw register output.</param>
+    /// <returns>The parsed register set, or <c>null</c> when no useful registers were present.</returns>
+    internal static Analysis.ClrRegisterSet? ParseWinDbgRegisters(string output)
+    {
+        var values = ParseWinDbgRegisterValues(output);
+        if (values.Count == 0)
+        {
+            return null;
+        }
+
+        var registers = new Analysis.ClrRegisterSet
+        {
+            GeneralPurpose = new Dictionary<string, ulong>()
+        };
+
+        foreach (var (name, valueString) in values)
+        {
+            if (!ulong.TryParse(valueString.AsSpan(2), System.Globalization.NumberStyles.HexNumber, null, out var value))
+            {
+                continue;
+            }
+
+            switch (name)
+            {
+                case "rbp":
+                    registers.FramePointer = value;
+                    break;
+                case "rsp":
+                    registers.StackPointer = value;
+                    break;
+                case "rip":
+                    registers.ProgramCounter = value;
+                    break;
+                case "rflags":
+                case "efl":
+                    registers.StatusRegister = (uint)value;
+                    break;
+                default:
+                    registers.GeneralPurpose[name] = value;
+                    break;
+            }
+        }
+
+        return registers;
+    }
+
+    /// <summary>
+    /// Parses WinDbg register output into normalized lower-case name/value pairs.
+    /// </summary>
+    /// <param name="output">The raw register output.</param>
+    /// <returns>The normalized register map.</returns>
+    internal static Dictionary<string, string> ParseWinDbgRegisterValues(string output)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (Match match in Regex.Matches(output, @"\b([a-z][a-z0-9]*)=([0-9a-fA-F`]+)", RegexOptions.IgnoreCase))
+        {
+            var name = match.Groups[1].Value.ToLowerInvariant();
+            var value = match.Groups[2].Value.Replace("`", string.Empty);
+            result[name] = value.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? value : $"0x{value}";
+        }
+
+        return result;
     }
 
     /// <summary>
     /// Detects if the currently open dump is a .NET dump by checking loaded modules.
     /// </summary>
     /// <returns>True if .NET runtime modules are found; otherwise, false.</returns>
-    private bool DetectDotNetDump()
+    private bool DetectDotNetDumpCore(WinDbgEngineContext context)
     {
         try
         {
-            // Get list of loaded modules
-            var moduleList = ExecuteCommand("lm");
-
+            var moduleList = ExecuteCommandCore(context, "lm");
             return IsDotNetModuleList(moduleList);
         }
         catch
@@ -539,6 +1405,12 @@ public class WinDbgManager : IDebuggerManager
             return false;
         }
     }
+
+    /// <summary>
+    /// Detects whether the active debugger context currently points at a managed dump.
+    /// </summary>
+    /// <returns><c>true</c> when .NET runtime modules are present; otherwise <c>false</c>.</returns>
+    private bool DetectDotNetDump() => DetectDotNetDumpCore(GetCurrentContext());
 
     /// <summary>
     /// Determines whether a WinDbg <c>lm</c> module list indicates a .NET dump.
@@ -610,50 +1482,62 @@ public class WinDbgManager : IDebuggerManager
     /// </remarks>
     public void Dispose()
     {
-        // Avoid redundant disposal
         if (_disposed)
+        {
             return;
+        }
+
+        WinDbgStaDispatcher? dispatcher;
+        WinDbgEngineContext context;
+
+        lock (_executionLock)
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            dispatcher = _dispatcher;
+            context = _context;
+            _dispatcher = null;
+            _context = new WinDbgEngineContext();
+        }
 
         try
         {
-            // Close any open dump before disposing
-            if (IsDumpOpen)
+            if (dispatcher != null)
             {
-                CloseDump();
-            }
+                try
+                {
+                    var cleanupTask = dispatcher.InvokeAsync(() =>
+                    {
+                        if (context.IsDumpOpen)
+                        {
+                            CloseDumpCore(context);
+                        }
 
-            // Release the COM interface for the client
-            if (_client != null)
-            {
-                Marshal.ReleaseComObject(_client);
-                _client = null;
-            }
+                        ReleaseContextResources(context);
+                        return true;
+                    });
 
-            // Release the COM interface for the control
-            if (_control != null)
-            {
-                Marshal.ReleaseComObject(_control);
-                _control = null;
-            }
+                    cleanupTask.Wait(TimeSpan.FromSeconds(5));
+                }
+                catch
+                {
+                    // Best-effort only. We still dispose the dispatcher below.
+                }
 
-            // Release the COM interface pointer for output callbacks
-            if (_outputCallbacksPtr != IntPtr.Zero)
-            {
-                Marshal.Release(_outputCallbacksPtr);
-                _outputCallbacksPtr = IntPtr.Zero;
+                dispatcher.Dispose();
             }
-
-            // Clear the output callbacks reference
-            _outputCallbacks = null;
         }
         catch
         {
-            // Silently ignore disposal errors - don't throw from Dispose
+            // Never throw from Dispose.
         }
         finally
         {
-            // Mark as disposed regardless of success
-            _disposed = true;
+            ReleaseContextResources(context);
         }
     }
 
@@ -670,6 +1554,315 @@ public class WinDbgManager : IDebuggerManager
     {
         Dispose();
         return ValueTask.CompletedTask;
+    }
+
+    /// <summary>
+    /// Releases the COM resources held by a debugger context.
+    /// </summary>
+    /// <param name="context">The context whose resources should be released.</param>
+    private static void ReleaseContextResources(WinDbgEngineContext context)
+    {
+        try
+        {
+            if (context.Client != null)
+            {
+                Marshal.ReleaseComObject(context.Client);
+                context.Client = null;
+            }
+        }
+        catch
+        {
+            // Best-effort release only.
+        }
+
+        try
+        {
+            if (context.Control != null)
+            {
+                Marshal.ReleaseComObject(context.Control);
+                context.Control = null;
+            }
+        }
+        catch
+        {
+            // Best-effort release only.
+        }
+
+        try
+        {
+            if (context.OutputCallbacksPtr != IntPtr.Zero)
+            {
+                Marshal.Release(context.OutputCallbacksPtr);
+                context.OutputCallbacksPtr = IntPtr.Zero;
+            }
+        }
+        catch
+        {
+            // Best-effort release only.
+        }
+
+        context.OutputCallbacks = null;
+        context.IsDumpOpen = false;
+        context.IsSosLoaded = false;
+        context.IsDotNetDump = false;
+    }
+
+    /// <summary>
+    /// Holds the mutable DbgEng state for one debugger generation.
+    /// </summary>
+    private sealed class WinDbgEngineContext
+    {
+        /// <summary>
+        /// Gets or sets the main debugger client COM object.
+        /// </summary>
+        public IDebugClient? Client { get; set; }
+
+        /// <summary>
+        /// Gets or sets the debugger control COM object.
+        /// </summary>
+        public IDebugControl? Control { get; set; }
+
+        /// <summary>
+        /// Gets or sets the output-callback receiver bound to the current debugger generation.
+        /// </summary>
+        public OutputCallbacks? OutputCallbacks { get; set; }
+
+        /// <summary>
+        /// Gets or sets the COM interface pointer for the output callbacks.
+        /// </summary>
+        public IntPtr OutputCallbacksPtr { get; set; }
+
+        /// <summary>
+        /// Gets or sets the currently open dump path.
+        /// </summary>
+        public string? CurrentDumpPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the standalone executable path associated with the current dump.
+        /// </summary>
+        public string? CurrentExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the last symbol path applied to the debugger.
+        /// </summary>
+        public string? LastSymbolPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the local symbol cache directory extracted from the symbol path.
+        /// </summary>
+        public string? SymbolCacheDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the detected runtime version for the current dump.
+        /// </summary>
+        public string? DetectedRuntimeVersion { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether a dump is currently open.
+        /// </summary>
+        public bool IsDumpOpen { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether SOS has been loaded successfully.
+        /// </summary>
+        public bool IsSosLoaded { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether the current dump is managed.
+        /// </summary>
+        public bool IsDotNetDump { get; set; }
+
+        /// <summary>
+        /// Gets a value indicating whether the debugger context has initialized COM objects.
+        /// </summary>
+        public bool IsInitialized => Client != null && Control != null;
+
+        /// <summary>
+        /// Captures the fields that must survive a recovery cycle.
+        /// </summary>
+        /// <returns>The recovery snapshot for this debugger generation.</returns>
+        public WinDbgRecoverySnapshot CreateRecoverySnapshot()
+        {
+            return new WinDbgRecoverySnapshot
+            {
+                DumpPath = CurrentDumpPath,
+                ExecutablePath = CurrentExecutablePath,
+                LastSymbolPath = LastSymbolPath,
+                SymbolCacheDirectory = SymbolCacheDirectory,
+                DetectedRuntimeVersion = DetectedRuntimeVersion,
+                WasDumpOpen = IsDumpOpen
+            };
+        }
+    }
+
+    /// <summary>
+    /// Captures the subset of debugger state that recovery must preserve across engine replacement.
+    /// </summary>
+    private sealed class WinDbgRecoverySnapshot
+    {
+        /// <summary>
+        /// Gets or sets the dump path that was open when failure happened.
+        /// </summary>
+        public string? DumpPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the standalone executable path associated with the dump.
+        /// </summary>
+        public string? ExecutablePath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the most recent symbol path applied to the debugger.
+        /// </summary>
+        public string? LastSymbolPath { get; set; }
+
+        /// <summary>
+        /// Gets or sets the symbol-cache directory extracted from that symbol path.
+        /// </summary>
+        public string? SymbolCacheDirectory { get; set; }
+
+        /// <summary>
+        /// Gets or sets the most recently detected runtime version.
+        /// </summary>
+        public string? DetectedRuntimeVersion { get; set; }
+
+        /// <summary>
+        /// Gets or sets a value indicating whether a dump was open when failure happened.
+        /// </summary>
+        public bool WasDumpOpen { get; set; }
+    }
+
+    /// <summary>
+    /// Executes queued debugger work on a dedicated STA thread.
+    /// </summary>
+    private sealed class WinDbgStaDispatcher : IDisposable
+    {
+        /// <summary>
+        /// Queue of work items waiting for execution on the dispatcher thread.
+        /// </summary>
+        private readonly BlockingCollection<Action> _workItems = new();
+
+        /// <summary>
+        /// Signaled once the STA thread has started and recorded its managed thread ID.
+        /// </summary>
+        private readonly ManualResetEventSlim _started = new();
+
+        /// <summary>
+        /// Dedicated STA thread that executes all queued work.
+        /// </summary>
+        private readonly Thread _thread;
+
+        /// <summary>
+        /// Managed thread ID of the dispatcher thread after startup.
+        /// </summary>
+        private int _threadId;
+
+        /// <summary>
+        /// Indicates whether the dispatcher has been disposed.
+        /// </summary>
+        private bool _disposed;
+
+        /// <summary>
+        /// Initializes a new instance of the <see cref="WinDbgStaDispatcher"/> class.
+        /// </summary>
+        /// <param name="name">Friendly thread name for diagnostics.</param>
+        public WinDbgStaDispatcher(string name)
+        {
+            _thread = new Thread(Run)
+            {
+                IsBackground = true,
+                Name = name
+            };
+            _thread.SetApartmentState(ApartmentState.STA);
+            _thread.Start();
+            _started.Wait();
+        }
+
+        /// <summary>
+        /// Queues work for execution on the dispatcher thread.
+        /// </summary>
+        /// <typeparam name="T">The result type produced by the work item.</typeparam>
+        /// <param name="action">The work item to execute.</param>
+        /// <returns>A task that completes when the work item finishes.</returns>
+        public Task<T> InvokeAsync<T>(Func<T> action)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            ArgumentNullException.ThrowIfNull(action);
+
+            if (Thread.CurrentThread.ManagedThreadId == _threadId)
+            {
+                try
+                {
+                    return Task.FromResult(action());
+                }
+                catch (Exception ex)
+                {
+                    return Task.FromException<T>(ex);
+                }
+            }
+
+            var completion = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+            _workItems.Add(() =>
+            {
+                try
+                {
+                    completion.SetResult(action());
+                }
+                catch (Exception ex)
+                {
+                    completion.SetException(ex);
+                }
+            });
+
+            return completion.Task;
+        }
+
+        /// <summary>
+        /// Releases the dispatcher queue and stops accepting new work.
+        /// </summary>
+        public void Dispose()
+        {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+
+            try
+            {
+                _workItems.CompleteAdding();
+            }
+            catch
+            {
+                // Best-effort only.
+            }
+
+            try
+            {
+                _thread.Join(1000);
+            }
+            catch
+            {
+                // Best-effort only.
+            }
+
+            _started.Dispose();
+            _workItems.Dispose();
+        }
+
+        /// <summary>
+        /// Runs the dispatcher loop on the dedicated STA thread.
+        /// </summary>
+        private void Run()
+        {
+            _threadId = Thread.CurrentThread.ManagedThreadId;
+            _started.Set();
+
+            foreach (var workItem in _workItems.GetConsumingEnumerable())
+            {
+                workItem();
+            }
+        }
     }
 
 }

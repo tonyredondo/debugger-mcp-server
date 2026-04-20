@@ -16,7 +16,6 @@ public sealed class FileLoggerProvider : ILoggerProvider
     private readonly int _processId;
     private readonly ConcurrentDictionary<string, FileLogger> _loggers = new();
     private readonly object _lock = new();
-    private StreamWriter? _writer;
     private string _currentFilePath = string.Empty;
     private DateTime _currentDate;
 
@@ -47,8 +46,10 @@ public sealed class FileLoggerProvider : ILoggerProvider
             var now = DateTimeOffset.UtcNow;
             EnsureWriterForDate(now.DateTime);
 
-            if (_writer == null)
+            if (string.IsNullOrWhiteSpace(_currentFilePath))
                 return;
+
+            using var writer = OpenAppendWriter();
 
             var levelString = logLevel switch
             {
@@ -66,21 +67,21 @@ public sealed class FileLoggerProvider : ILoggerProvider
             var timestamp = now.ToString("yyyy-MM-ddTHH:mm:ss.fff") + "Z";
             var shortCategory = GetShortCategoryName(categoryName);
 
-            _writer.WriteLine($"[{timestamp}] [{levelString}] [{shortCategory}] {message}");
+            writer.WriteLine($"[{timestamp}] [{levelString}] [{shortCategory}] {message}");
 
             if (exception != null)
             {
-                _writer.WriteLine($"  Exception: {exception.GetType().Name}: {exception.Message}");
+                writer.WriteLine($"  Exception: {exception.GetType().Name}: {exception.Message}");
                 if (exception.StackTrace != null)
                 {
                     foreach (var line in exception.StackTrace.Split('\n'))
                     {
-                        _writer.WriteLine($"    {line.TrimEnd()}");
+                        writer.WriteLine($"    {line.TrimEnd()}");
                     }
                 }
             }
 
-            _writer.Flush();
+            writer.Flush();
         }
     }
 
@@ -95,52 +96,50 @@ public sealed class FileLoggerProvider : ILoggerProvider
     {
         var dateOnly = date.Date;
 
-        if (_currentDate == dateOnly && _writer != null)
-            // Writer already set for today
+        if (_currentDate == dateOnly && !string.IsNullOrWhiteSpace(_currentFilePath))
+            // File path already set for today.
             return;
-
-        // Close existing writer and null it before creating new one
-        // This prevents ObjectDisposedException if new writer creation fails
-        _writer?.Dispose();
-        _writer = null;
 
         try
         {
-            // Create new file for today with PID
+            // Point at the daily log file. The provider opens a short-lived append writer per
+            // write so callers can read the file with normal APIs while logging continues.
             _currentDate = dateOnly;
             var fileName = $"{_filePrefix}-{dateOnly:yyyy-MM-dd}-{_processId}.log";
             _currentFilePath = Path.Combine(_logDirectory, fileName);
 
-            // Open file in append mode
-            _writer = new StreamWriter(
-                new FileStream(_currentFilePath, FileMode.Append, FileAccess.Write, FileShare.Read),
-                Encoding.UTF8)
+            if (!File.Exists(_currentFilePath))
             {
-                AutoFlush = false
-            };
-
-            // Write header for new log file with ISO 8601 timestamp
-            _writer.WriteLine($"=== Log started at {DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ss.fff}Z (PID: {_processId}) ===");
-            _writer.Flush();
+                using var writer = OpenAppendWriter();
+                writer.WriteLine($"=== Log started at {DateTimeOffset.UtcNow:yyyy-MM-ddTHH:mm:ss.fff}Z (PID: {_processId}) ===");
+                writer.Flush();
+            }
         }
         catch
         {
-            // If file creation fails, ensure writer is null so we don't attempt writes
-            _writer?.Dispose();
-            _writer = null;
+            // If file creation fails, clear the current path so future writes are skipped safely.
+            _currentFilePath = string.Empty;
             // Silently fail - logging should not crash the application
         }
+    }
+
+    /// <summary>
+    /// Opens a short-lived append writer that allows regular readers to inspect the file between writes.
+    /// </summary>
+    /// <returns>The append writer for the current log file.</returns>
+    private StreamWriter OpenAppendWriter()
+    {
+        return new StreamWriter(
+            new FileStream(_currentFilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite),
+            Encoding.UTF8)
+        {
+            AutoFlush = false
+        };
     }
 
     public void Dispose()
     {
         _loggers.Clear();
-
-        lock (_lock)
-        {
-            _writer?.Dispose();
-            _writer = null;
-        }
     }
 }
 

@@ -4,6 +4,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System.Threading.RateLimiting;
 using DebuggerMcp.Configuration;
+using DebuggerMcp.Dumps;
+using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 
 namespace DebuggerMcp;
@@ -37,16 +39,31 @@ public static class ServiceCollectionExtensions
         // Capture server start time at application startup, not at first request.
         services.AddSingleton(new ServerRuntimeInfo(DateTime.UtcNow));
 
+        // Register symbol manager first so session restore can rehydrate symbol state.
+        services.AddSingleton(_ => new SymbolManager(dumpStorageBasePath: dumpStoragePath));
+        services.AddSingleton(sp =>
+            new SourceResolutionStateRefresher(
+                sp.GetRequiredService<SymbolManager>(),
+                sp.GetRequiredService<ILogger<SourceResolutionStateRefresher>>()));
+        services.AddSingleton(sp =>
+            new DumpOpenCoordinator(
+                sp.GetRequiredService<SymbolManager>(),
+                sp.GetRequiredService<SourceResolutionStateRefresher>(),
+                sp.GetRequiredService<ILogger<DumpOpenCoordinator>>()));
+
         // Register session manager with the dump storage path and logger factory
         // Use a factory method to inject the ILoggerFactory from the service provider
         services.AddSingleton(sp =>
         {
             var loggerFactory = sp.GetRequiredService<ILoggerFactory>();
-            return new DebuggerSessionManager(dumpStoragePath, loggerFactory);
+            var symbolManager = sp.GetRequiredService<SymbolManager>();
+            var dumpOpenCoordinator = sp.GetRequiredService<DumpOpenCoordinator>();
+            return new DebuggerSessionManager(
+                dumpStoragePath,
+                loggerFactory,
+                symbolManager: symbolManager,
+                dumpOpenCoordinator: dumpOpenCoordinator);
         });
-
-        // Register symbol manager (depends on environment config)
-        services.AddSingleton<SymbolManager>();
 
         // Register watch store with the dump storage path for persistence
         services.AddSingleton(new WatchStore(dumpStoragePath));

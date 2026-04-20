@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using DebuggerMcp.Dumps;
+using DebuggerMcp.SourceLink;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging;
 
@@ -21,9 +23,16 @@ public class SymbolTools(
     DebuggerSessionManager sessionManager,
     SymbolManager symbolManager,
     WatchStore watchStore,
-    ILogger<SymbolTools> logger)
+    ILogger<SymbolTools> logger,
+    SourceResolutionStateRefresher? sourceResolutionStateRefresher = null)
     : DebuggerToolsBase(sessionManager, symbolManager, watchStore, logger)
 {
+    /// <summary>
+    /// Refreshes source-resolution state after live symbol changes on an already open dump.
+    /// </summary>
+    private SourceResolutionStateRefresher SourceResolutionStateRefresher { get; } = sourceResolutionStateRefresher ??
+        new SourceResolutionStateRefresher(symbolManager, logger);
+
     /// <summary>
     /// Configures additional symbol paths for a debugging session.
     /// </summary>
@@ -46,6 +55,7 @@ public class SymbolTools(
     /// </list>
     /// <para>Multiple paths should be separated by commas.</para>
     /// <para>Call this BEFORE opening a dump if you want the additional paths configured from the start.</para>
+    /// <para>LLDB only supports additional local directories through this tool. User-provided remote symbol URLs are rejected explicitly instead of being silently ignored.</para>
     /// </remarks>
     public string ConfigureAdditionalSymbols(
         [Description("Session ID from CreateSession")] string sessionId,
@@ -69,8 +79,31 @@ public class SymbolTools(
         var manager = GetSessionManager(sessionId, sanitizedUserId);
         var session = GetSessionInfo(sessionId, sanitizedUserId);
 
-        // Configure additional symbol paths (this will merge with existing paths)
-        SymbolManager.ConfigureSessionSymbolPaths(sessionId, dumpId: null, additionalPaths: additionalPaths, includeMicrosoftSymbols: true);
+        if (string.Equals(manager.DebuggerType, "LLDB", StringComparison.OrdinalIgnoreCase))
+        {
+            var parsedInputs = SymbolManager.ParseConfiguredPathList(additionalPaths);
+            var unsupportedRemoteInputs = parsedInputs
+                .Where(SymbolManager.IsRemoteSymbolPath)
+                .ToList();
+
+            if (unsupportedRemoteInputs.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    "LLDB does not support user-added remote symbol URLs in this workflow. " +
+                    "Use local symbol directories or prefetch symbols into the dump-specific cache first.");
+            }
+        }
+
+        // Configure additional symbol paths while preserving any existing dump-derived paths for an open dump.
+        SymbolManager.ConfigureSessionSymbolPaths(
+            sessionId,
+            dumpId: session.CurrentDumpId,
+            additionalPaths: additionalPaths,
+            includeMicrosoftSymbols: true,
+            userId: sanitizedUserId,
+            dumpPath: manager.CurrentDumpPath);
+        session.SymbolConfiguration = SymbolManager.GetPersistedSessionSymbolConfiguration(sessionId);
+        SessionManager.PersistSession(sessionId);
 
         // Build the appropriate symbol path string for the debugger type
         // WinDbg uses semicolon-separated paths with SRV* syntax
@@ -90,7 +123,18 @@ public class SymbolTools(
         // cached report and Source Link resolver so future report/analysis calls reflect the new symbol state.
         if (manager.IsDumpOpen && !string.IsNullOrWhiteSpace(session.CurrentDumpId))
         {
-            session.ClearSourceLinkResolver();
+            if (!string.IsNullOrWhiteSpace(manager.CurrentDumpPath))
+            {
+                SourceResolutionStateRefresher.Refresh(
+                    session,
+                    sessionId,
+                    session.CurrentDumpId,
+                    manager.CurrentDumpPath);
+            }
+            else
+            {
+                session.ClearSourceLinkResolver();
+            }
             session.ClearCachedReport();
         }
 
@@ -311,7 +355,18 @@ public class SymbolTools(
 
         // Symbol availability can affect source resolution and managed stacks; invalidate cached report + resolver
         // so subsequent report_index/report_get uses updated symbol information.
-        session.ClearSourceLinkResolver();
+        if (!string.IsNullOrWhiteSpace(manager.CurrentDumpPath))
+        {
+            SourceResolutionStateRefresher.Refresh(
+                session,
+                sessionId,
+                session.CurrentDumpId,
+                manager.CurrentDumpPath);
+        }
+        else
+        {
+            session.ClearSourceLinkResolver();
+        }
         session.ClearCachedReport();
 
         // Clear command cache since symbols have changed - this ensures subsequent
@@ -342,24 +397,18 @@ public class SymbolTools(
                 // Dump never persisted; skip metadata update
                 return;
 
-            // Get the metadata file path (same name as dump but .json)
             var dumpFile = dumpFiles.First();
-            var metadataPath = Path.ChangeExtension(dumpFile, ".json");
-
-            if (!File.Exists(metadataPath))
+            var metadataPath = DumpMetadataStore.ResolveExistingMetadataPath(dumpFile);
+            if (metadataPath == null)
                 // No metadata means nothing to clear
                 return;
 
-            // Load, clear SymbolFiles, and save
-            var json = File.ReadAllText(metadataPath);
-            var metadata = System.Text.Json.JsonSerializer.Deserialize<Controllers.DumpMetadata>(json);
-
+            var metadata = DumpMetadataStore.TryLoadDumpMetadata(metadataPath, Logger);
             if (metadata != null && metadata.SymbolFiles != null && metadata.SymbolFiles.Count > 0)
             {
                 Logger.LogInformation("[ClearSymbolCache] Clearing {Count} entries from SymbolFiles in metadata", metadata.SymbolFiles.Count);
                 metadata.SymbolFiles = null;
-                var updatedJson = System.Text.Json.JsonSerializer.Serialize(metadata, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
-                File.WriteAllText(metadataPath, updatedJson);
+                DumpMetadataStore.TrySaveDumpMetadata(metadataPath, metadata, Logger);
             }
         }
         catch (Exception ex)

@@ -1,7 +1,9 @@
 using System.Collections.Concurrent;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Configuration;
+using DebuggerMcp.Dumps;
 using DebuggerMcp.Security;
+using DebuggerMcp.SourceLink;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -70,17 +72,14 @@ public class DebuggerSessionManager
 
     private readonly Func<ILoggerFactory, IDebuggerManager> _debuggerFactory;
 
+    private readonly SymbolManager _symbolManager;
+    private readonly DumpOpenCoordinator _dumpOpenCoordinator;
+
     /// <summary>
     /// Optional callback invoked when a session is closed.
     /// Used to clean up related resources like symbol paths.
     /// </summary>
     public Action<string>? OnSessionClosed { get; set; }
-
-    /// <summary>
-    /// Optional callback invoked when a session is restored from disk.
-    /// Parameters: (sessionId, dumpId, manager) - used to configure symbol paths.
-    /// </summary>
-    public Action<string, string?, IDebuggerManager>? OnSessionRestored { get; set; }
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DebuggerSessionManager"/> class.
@@ -102,16 +101,28 @@ public class DebuggerSessionManager
     /// Optional factory for creating debugger managers.
     /// This is primarily intended for unit tests to avoid spawning real debugger processes.
     /// </param>
+    /// <param name="symbolManager">
+    /// Optional shared symbol manager used to restore persisted session symbol intent and rebuild
+    /// effective symbol paths during session restore.
+    /// </param>
     public DebuggerSessionManager(
         string? dumpStoragePath = null,
         ILoggerFactory? loggerFactory = null,
         string? sessionStoragePath = null,
-        Func<ILoggerFactory, IDebuggerManager>? debuggerFactory = null)
+        Func<ILoggerFactory, IDebuggerManager>? debuggerFactory = null,
+        SymbolManager? symbolManager = null,
+        DumpOpenCoordinator? dumpOpenCoordinator = null)
     {
         _dumpStoragePath = dumpStoragePath ?? EnvironmentConfig.GetDumpStoragePath();
         _loggerFactory = loggerFactory ?? NullLoggerFactory.Instance;
         _logger = _loggerFactory.CreateLogger<DebuggerSessionManager>();
         _debuggerFactory = debuggerFactory ?? DebuggerFactory.CreateDebugger;
+        _symbolManager = symbolManager ?? new SymbolManager(dumpStorageBasePath: _dumpStoragePath);
+        _dumpOpenCoordinator = dumpOpenCoordinator ??
+            new DumpOpenCoordinator(
+                _symbolManager,
+                new SourceResolutionStateRefresher(_symbolManager, _logger),
+                _logger);
 
         // Determine session storage path:
         // 1. Use explicit sessionStoragePath if provided
@@ -430,7 +441,8 @@ public class DebuggerSessionManager
             Manager = _debuggerFactory(_loggerFactory),
             CreatedAt = metadata.CreatedAt,
             LastAccessedAt = DateTime.UtcNow,
-            CurrentDumpId = metadata.CurrentDumpId
+            CurrentDumpId = metadata.CurrentDumpId,
+            SymbolConfiguration = metadata.SymbolConfiguration?.Clone() ?? new DebuggerMcp.Symbols.PersistedSessionSymbolConfiguration()
         };
 
         // Add to in-memory dictionary
@@ -441,135 +453,90 @@ public class DebuggerSessionManager
             return _sessions.TryGetValue(sessionId, out var existing) ? existing : null;
         }
 
+        _symbolManager.RehydrateSessionSymbolConfiguration(sessionId, session.SymbolConfiguration);
+        session.SymbolConfiguration = _symbolManager.GetPersistedSessionSymbolConfiguration(sessionId);
+
+        var restoredDumpPath = ResolveDumpPathForRestore(metadata);
+
         // Try to reopen the dump file if one was open
-        if (!string.IsNullOrEmpty(metadata.CurrentDumpPath) && File.Exists(metadata.CurrentDumpPath))
+        if (!string.IsNullOrEmpty(metadata.CurrentDumpId) && !string.IsNullOrEmpty(restoredDumpPath))
         {
             try
             {
-                // Initialize the debugger first (required before opening dump)
-                // Use Task.Run to avoid potential deadlocks with sync-over-async in ASP.NET contexts
-                if (!session.Manager.IsInitialized)
+                Task.Run(() => _dumpOpenCoordinator.OpenDumpAsync(new DumpOpenCoordinatorRequest
                 {
-                    _logger.LogInformation("Initializing debugger for restored session {SessionId}", sessionId);
-                    Task.Run(() => session.Manager.InitializeAsync()).GetAwaiter().GetResult();
-                }
+                    SessionId = sessionId,
+                    UserId = metadata.UserId,
+                    DumpId = metadata.CurrentDumpId,
+                    Session = session,
+                    Manager = session.Manager,
+                    ResolvedDumpPath = restoredDumpPath,
+                    AllowAlreadyOpenSameDump = true,
+                    UpdateMetadataIfIncomplete = true
+                })).GetAwaiter().GetResult();
 
-                // Check if there's a custom executable for this dump (standalone apps)
-                string? executablePath = null;
-                var dumpDir = Path.GetDirectoryName(metadata.CurrentDumpPath);
-                if (dumpDir != null && !string.IsNullOrEmpty(metadata.CurrentDumpId))
-                {
-                    // Check both naming conventions for metadata
-                    var dumpMetadataPath = Path.Combine(dumpDir, $"{metadata.CurrentDumpId}.json");
-                    var altMetadataPath = Path.Combine(dumpDir, $".metadata_{metadata.CurrentDumpId}.json");
-                    var actualDumpMetadataPath = File.Exists(dumpMetadataPath) ? dumpMetadataPath :
-                                                 File.Exists(altMetadataPath) ? altMetadataPath : null;
-                    
-                    if (actualDumpMetadataPath != null)
-                    {
-                        try
-                        {
-                            var dumpMetadataJson = File.ReadAllText(actualDumpMetadataPath);
-                            var dumpMeta = System.Text.Json.JsonSerializer.Deserialize<Controllers.DumpMetadata>(dumpMetadataJson);
-                            if (dumpMeta?.ExecutablePath != null && File.Exists(dumpMeta.ExecutablePath))
-                            {
-                                executablePath = dumpMeta.ExecutablePath;
-                                _logger.LogInformation("[SessionManager] Found custom executable for standalone app: {ExecutablePath}", executablePath);
-                            }
-                        }
-                        catch (Exception ex)
-                        {
-                            _logger.LogDebug(ex, "[SessionManager] Failed to read dump metadata for executable path");
-                        }
-                    }
-                }
-
-                _logger.LogInformation("Reopening dump file: {DumpPath}", metadata.CurrentDumpPath);
-                session.Manager.OpenDumpFile(metadata.CurrentDumpPath, executablePath);
-                // Note: SOS is now auto-loaded by OpenDumpFile if .NET runtime is detected
-
-                // Open ClrMD for metadata enrichment (after debugger opens the dump)
-                try
-                {
-                    var clrMdAnalyzer = new ClrMdAnalyzer(_logger);
-                    if (clrMdAnalyzer.OpenDump(metadata.CurrentDumpPath))
-                    {
-                        session.ClrMdAnalyzer = clrMdAnalyzer;
-                        _logger.LogInformation("[SessionManager] ClrMD analyzer attached for metadata enrichment");
-
-	                        // Set up SequencePointResolver for source location resolution in ClrStack
-	                        try
-	                        {
-	                            var seqResolver = new SourceLink.SequencePointResolver(_logger);
-
-	                            var pdbPaths = SourceLink.PdbSearchPathBuilder.BuildExistingPaths(
-	                                metadata.CurrentDumpPath,
-	                                dumpId: metadata.CurrentDumpId,
-	                                runtime: clrMdAnalyzer.Runtime);
-
-	                            if (pdbPaths.Count > 0)
-	                            {
-	                                _logger.LogInformation(
-	                                    "[SessionManager] PDB search paths for ClrStack ({Count}): {Paths}",
-	                                    pdbPaths.Count,
-	                                    string.Join(" | ", pdbPaths));
-	                            }
-
-	                            foreach (var path in pdbPaths)
-	                            {
-	                                seqResolver.AddPdbSearchPath(path);
-	                            }
-	                            
-	                            clrMdAnalyzer.SetSequencePointResolver(seqResolver);
-	                            _logger.LogDebug("[SessionManager] SequencePointResolver configured for ClrStack");
-	                        }
-                        catch (Exception seqEx)
-                        {
-                            _logger.LogDebug(seqEx, "[SessionManager] SequencePointResolver setup failed, ClrStack will work without source locations");
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogDebug("[SessionManager] ClrMD could not open dump (non-.NET or architecture mismatch)");
-                        clrMdAnalyzer.Dispose();
-                    }
-                }
-                catch (Exception clrMdEx)
-                {
-                    // Don't fail session restore if ClrMD fails - it's optional enrichment
-                    _logger.LogDebug(clrMdEx, "[SessionManager] ClrMD initialization failed, continuing without metadata enrichment");
-                }
-
-                // Note: Symbol paths are NOT automatically reconfigured during session restore.
-                // The SymbolManager is not available in SessionManager. Users may need to manually
-                // reconfigure symbols if using custom symbol paths. Default symbol servers will still work.
                 _logger.LogInformation(
                     "Session {SessionId} restored with dump {DumpPath}",
-                    sessionId, metadata.CurrentDumpPath);
-                
-                // Invoke callback to configure symbol paths (if set)
-                try
-                {
-                    OnSessionRestored?.Invoke(sessionId, metadata.CurrentDumpId, session.Manager);
-                }
-                catch (Exception callbackEx)
-                {
-                    _logger.LogWarning(callbackEx, "[SessionManager] OnSessionRestored callback failed for session {SessionId}", sessionId);
-                }
+                    sessionId, restoredDumpPath);
             }
             catch (Exception ex)
             {
                 _logger.LogWarning(ex, "Failed to reopen dump file {DumpPath} for session {SessionId}",
-                    metadata.CurrentDumpPath, sessionId);
+                    restoredDumpPath, sessionId);
                 // Session is still valid, just without the dump
                 session.CurrentDumpId = null;
+                _symbolManager.ConfigureSessionSymbolPaths(sessionId, dumpId: null, includeMicrosoftSymbols: true);
             }
         }
+        else if (!string.IsNullOrEmpty(metadata.CurrentDumpId))
+        {
+            _logger.LogInformation(
+                "Session {SessionId} could not resolve persisted dump {DumpId} under the current storage configuration; restoring session without an open dump.",
+                sessionId,
+                metadata.CurrentDumpId);
+            session.CurrentDumpId = null;
+            _symbolManager.ConfigureSessionSymbolPaths(sessionId, dumpId: null, includeMicrosoftSymbols: true);
+        }
+        else
+        {
+            _symbolManager.ConfigureSessionSymbolPaths(sessionId, dumpId: null, includeMicrosoftSymbols: true);
+        }
+
+        session.SymbolConfiguration = _symbolManager.GetPersistedSessionSymbolConfiguration(sessionId);
 
         // Always persist the restored session to update LastAccessedAt and LastServerId
         _sessionStore.Save(session);
 
         return session;
+    }
+
+    /// <summary>
+    /// Resolves the dump path to use during session restore.
+    /// </summary>
+    /// <param name="metadata">The persisted session metadata.</param>
+    /// <returns>The resolved dump path, or <see langword="null"/> when the dump cannot be found.</returns>
+    /// <remarks>
+    /// Restore prefers the current storage-root location derived from user ID and dump ID. The
+    /// persisted absolute path is used only as a compatibility fallback for older sessions or when
+    /// the storage root has not moved.
+    /// </remarks>
+    private string? ResolveDumpPathForRestore(SessionMetadata metadata)
+    {
+        if (!string.IsNullOrWhiteSpace(metadata.CurrentDumpId) && !string.IsNullOrWhiteSpace(metadata.UserId))
+        {
+            var currentStoragePath = GetDumpPath(metadata.CurrentDumpId, metadata.UserId);
+            if (File.Exists(currentStoragePath))
+            {
+                return currentStoragePath;
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(metadata.CurrentDumpPath) && File.Exists(metadata.CurrentDumpPath))
+        {
+            return metadata.CurrentDumpPath;
+        }
+
+        return null;
     }
 
     /// <summary>

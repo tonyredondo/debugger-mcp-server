@@ -1,5 +1,6 @@
 using DebuggerMcp.Analysis;
 using DebuggerMcp.SourceLink;
+using DebuggerMcp.Symbols;
 
 namespace DebuggerMcp;
 
@@ -65,6 +66,16 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     /// Gets or sets the currently open dump ID, if any.
     /// </summary>
     public string? CurrentDumpId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the user-scoped symbol configuration that survives session persistence.
+    /// </summary>
+    /// <remarks>
+    /// This property stores user intent only, such as additional local directories or remote URLs.
+    /// Dump-derived symbol directories are recomputed from the current dump instead of being
+    /// persisted here.
+    /// </remarks>
+    public PersistedSessionSymbolConfiguration SymbolConfiguration { get; set; } = new();
 
     /// <summary>
     /// Gets or sets the ClrMD analyzer for assembly metadata enrichment.
@@ -310,6 +321,35 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
             SourceLinkResolver = factory();
             SourceLinkResolverDumpId = normalizedDumpId;
             return SourceLinkResolver;
+        }
+    }
+
+    /// <summary>
+    /// Replaces the cached <see cref="SourceLinkResolver"/> for the specified dump.
+    /// </summary>
+    /// <param name="dumpId">The dump identifier that the resolver should be bound to.</param>
+    /// <param name="resolver">The resolver instance to cache.</param>
+    /// <exception cref="ArgumentException">Thrown when <paramref name="dumpId"/> is null or empty.</exception>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="resolver"/> is null.</exception>
+    public void ReplaceSourceLinkResolver(string dumpId, SourceLinkResolver resolver)
+    {
+        if (string.IsNullOrWhiteSpace(dumpId))
+        {
+            throw new ArgumentException("dumpId cannot be null or empty", nameof(dumpId));
+        }
+
+        ArgumentNullException.ThrowIfNull(resolver);
+
+        var normalizedDumpId = Path.GetFileNameWithoutExtension(dumpId);
+        if (string.IsNullOrWhiteSpace(normalizedDumpId))
+        {
+            normalizedDumpId = dumpId;
+        }
+
+        lock (_sourceLinkResolverLock)
+        {
+            SourceLinkResolver = resolver;
+            SourceLinkResolverDumpId = normalizedDumpId;
         }
     }
 

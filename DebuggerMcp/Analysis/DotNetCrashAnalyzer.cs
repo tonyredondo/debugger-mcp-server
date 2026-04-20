@@ -143,9 +143,12 @@ public class DotNetCrashAnalyzer : CrashAnalyzer
 
             // Fetch registers ONLY for faulting thread, for ALL frames (native + managed)
             Dictionary<(uint ThreadId, ulong SP), Dictionary<string, string>>? perFrameRegisters = null;
-            if (_debuggerManager is LldbManager lldbManager && faultingThreadId.HasValue)
+            if (_debuggerManager is IDebuggerDiagnostics debuggerDiagnostics && faultingThreadId.HasValue)
             {
-                perFrameRegisters = FetchAllFrameRegistersForThread(lldbManager, faultingThreadId.Value);
+                perFrameRegisters = debuggerDiagnostics.GetPerFrameRegisters(faultingThreadId.Value)
+                    .ToDictionary(
+                        frame => (frame.ThreadId, frame.StackPointer),
+                        frame => new Dictionary<string, string>(frame.Registers, StringComparer.OrdinalIgnoreCase));
                 _logger?.LogDebug("[ClrStack] Fetched registers for faulting thread {ThreadId}: {Count} frames", 
                     faultingThreadId.Value, perFrameRegisters?.Count ?? 0);
             }

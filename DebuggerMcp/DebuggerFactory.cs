@@ -90,7 +90,8 @@ public static class DebuggerFactory
         if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
         {
             // Windows: Use WinDbg with DbgEng COM API because LLDB is not first-class here.
-            return new WinDbgManager();
+            var logger = loggerFactory.CreateLogger<WinDbgManager>();
+            return new WinDbgManager(logger);
         }
         else if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
         {

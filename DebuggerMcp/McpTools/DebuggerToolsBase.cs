@@ -164,29 +164,25 @@ public abstract class DebuggerToolsBase(
         return session.GetOrCreateSourceLinkResolver(dumpId, () =>
         {
             var resolver = new SourceLinkResolver(Logger);
-
             var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
             if (string.IsNullOrWhiteSpace(cleanDumpId))
             {
                 cleanDumpId = dumpId;
             }
 
-            // Prefer the per-user .symbols_{dumpId} directory (dotnet-symbol download location).
-            var perUserSymbolDir = Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{cleanDumpId}");
-            if (Directory.Exists(perUserSymbolDir))
-            {
-                resolver.AddSymbolSearchPath(perUserSymbolDir);
-            }
-            else
-            {
-                Logger.LogDebug("[SourceLink] Symbol directory not found: {SymbolDir}", perUserSymbolDir);
-            }
+            var dumpPath = session.Manager.CurrentDumpPath ??
+                Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $"{cleanDumpId}.dmp");
+            var executablePath = SourceResolutionStateRefresher.ResolveExecutablePathFromMetadata(dumpPath, cleanDumpId, Logger);
+            var searchPaths = SourceResolutionPathBuilder.BuildExistingPaths(
+                dumpPath,
+                cleanDumpId,
+                executablePath,
+                SymbolManager.GetEffectiveLocalSymbolDirectories(session.SessionId),
+                session.ClrMdAnalyzer?.Runtime);
 
-            // Root-level fallback when running outside per-user dump storage.
-            var rootSymbolDir = Path.Combine(SessionManager.GetDumpStoragePath(), $".symbols_{cleanDumpId}");
-            if (Directory.Exists(rootSymbolDir))
+            foreach (var path in searchPaths)
             {
-                resolver.AddSymbolSearchPath(rootSymbolDir);
+                resolver.AddSymbolSearchPath(path);
             }
 
             return resolver;

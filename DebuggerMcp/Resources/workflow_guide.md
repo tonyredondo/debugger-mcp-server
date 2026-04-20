@@ -103,7 +103,7 @@ curl -X POST http://localhost:5000/api/symbols/upload-batch \
   -F "dumpId=abc123-456def-789ghi"
 ```
 
-Symbols are automatically configured when you open the dump.
+Symbols are automatically configured when you open the dump. If you later add supported symbol inputs while the dump is still open, the server rebuilds source-resolution state so later stack/source lookups use the updated inputs without requiring a hidden second reopen path.
 
 #### Optional: Datadog Trace Symbols (MCP)
 
@@ -173,6 +173,9 @@ dump(
 - ✅ Microsoft Symbol Server configured
 - ✅ Dump-specific symbols configured (if uploaded in Step 2)
 - ✅ Symbol cache checked and downloaded if needed
+- ✅ Dump metadata repaired when runtime / architecture / executable details are still missing
+- ✅ Source-resolution state built from the current dump, executable, and effective symbol inputs
+- ✅ Restored sessions reopen the same dump through the same preparation flow when the session is brought back later
 
 ---
 

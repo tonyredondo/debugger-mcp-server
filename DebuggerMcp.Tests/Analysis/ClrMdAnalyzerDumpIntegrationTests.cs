@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Analysis.Synchronization;
 using DebuggerMcp.SourceLink;
+using DebuggerMcp.Tests.TestInfrastructure;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace DebuggerMcp.Tests.Analysis;
@@ -18,7 +19,7 @@ namespace DebuggerMcp.Tests.Analysis;
 [Collection("NonParallelEnvironment")]
 public class ClrMdAnalyzerDumpIntegrationTests
 {
-    [Fact]
+    [RequiresCreatedumpFact]
     public void ClrMdAnalyzer_WithRealDump_CanRunCoreAnalyses()
     {
         var repoRoot = FindRepoRoot();
@@ -297,7 +298,7 @@ public class ClrMdAnalyzerDumpIntegrationTests
         }
     }
 
-    [Fact]
+    [RequiresCreatedumpFact]
     public void GetCombinedHeapAnalysis_WithServerGcDump_UsesParallelPath()
     {
         var repoRoot = FindRepoRoot();
@@ -506,11 +507,16 @@ public class ClrMdAnalyzerDumpIntegrationTests
 
     private static void CreateDumpWithCreatedump(int processId, string dumpPath, string tempDir)
     {
+        if (OperatingSystem.IsWindows())
+        {
+            CreateDumpWithProcdump(processId, dumpPath);
+            return;
+        }
+
         // createdump is shipped with the .NET runtime, but on some installations it may not have execute permissions.
         // Copying it into a temp directory allows us to chmod +x safely without requiring elevation.
         var runtimeDir = RuntimeEnvironment.GetRuntimeDirectory();
-        var createdumpSource = Path.Combine(runtimeDir, "createdump");
-        Assert.True(File.Exists(createdumpSource), $"createdump not found at: {createdumpSource}");
+        var createdumpSource = ResolveCreatedumpPath(runtimeDir);
 
         var createdumpCopy = Path.Combine(tempDir, "createdump");
         File.Copy(createdumpSource, createdumpCopy, overwrite: true);
@@ -548,5 +554,62 @@ public class ClrMdAnalyzerDumpIntegrationTests
 
         Assert.True(createdump.ExitCode == 0, $"createdump failed (exit {createdump.ExitCode}).\nstdout:\n{stdout}\nstderr:\n{stderr}");
         Assert.True(File.Exists(dumpPath), $"Dump file was not created: {dumpPath}");
+    }
+
+    /// <summary>
+    /// Uses ProcDump to capture a full dump for the target process on Windows hosts.
+    /// </summary>
+    /// <param name="processId">The process identifier to dump.</param>
+    /// <param name="dumpPath">The dump path to create.</param>
+    private static void CreateDumpWithProcdump(int processId, string dumpPath)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = "procdump",
+            Arguments = $"-accepteula -ma {processId} \"{dumpPath}\"",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true,
+        };
+
+        using var procdump = Process.Start(startInfo);
+        Assert.NotNull(procdump);
+
+        var stdout = procdump!.StandardOutput.ReadToEnd();
+        var stderr = procdump.StandardError.ReadToEnd();
+
+        if (!procdump.WaitForExit(60000))
+        {
+            try { procdump.Kill(entireProcessTree: true); } catch { }
+            throw new TimeoutException("procdump did not exit within 60s.");
+        }
+
+        var dumpExists = File.Exists(dumpPath);
+        Assert.True(
+            dumpExists,
+            $"procdump did not create the dump file (exit {procdump.ExitCode}).\nstdout:\n{stdout}\nstderr:\n{stderr}");
+    }
+
+    /// <summary>
+    /// Resolves the createdump helper from the current runtime or skips the test when it is unavailable.
+    /// </summary>
+    /// <param name="runtimeDir">The runtime directory expected to contain createdump.</param>
+    /// <returns>The createdump path to copy and execute.</returns>
+    private static string ResolveCreatedumpPath(string runtimeDir)
+    {
+        var candidates = OperatingSystem.IsWindows()
+            ? new[] { Path.Combine(runtimeDir, "createdump.exe"), Path.Combine(runtimeDir, "createdump") }
+            : new[] { Path.Combine(runtimeDir, "createdump") };
+
+        foreach (var candidate in candidates)
+        {
+            if (File.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        throw new FileNotFoundException($"createdump is not available under runtime directory: {runtimeDir}");
     }
 }

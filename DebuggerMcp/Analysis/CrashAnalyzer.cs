@@ -479,7 +479,7 @@ public class CrashAnalyzer
                 }
 
                 // Check for thread name in quotes at end
-                var nameMatch = Regex.Match(line, @"""([^""]+)""$");
+                var nameMatch = Regex.Match(line, @"""([^""]+)""\s*$");
                 var threadName = nameMatch.Success ? nameMatch.Groups[1].Value : null;
 
                 var threadInfo = new ThreadInfo

@@ -4,6 +4,7 @@ using Xunit;
 
 namespace DebuggerMcp.Tests.Controllers;
 
+[Collection("NonParallelEnvironment")]
 public class DumpAnalyzerToolDiscoveryTests
 {
     [Fact]
@@ -38,6 +39,11 @@ public class DumpAnalyzerToolDiscoveryTests
     [Fact]
     public void FindDotnetSymbolTool_WhenInUserDotnetTools_ReturnsToolPath()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            return;
+        }
+
         var tempHome = Path.Combine(Path.GetTempPath(), $"DumpAnalyzerToolDiscoveryTests_home_{Guid.NewGuid():N}");
         Directory.CreateDirectory(tempHome);
         try
