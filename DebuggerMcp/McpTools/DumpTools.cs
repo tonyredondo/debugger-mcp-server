@@ -96,8 +96,10 @@ public class DumpTools(
             }
 
             // Build response with symbol information and timing
-            var hasSymbols = SymbolManager.HasSymbols(sanitizedDumpId);
-            var customSymbolCount = hasSymbols ? SymbolManager.ListDumpSymbols(sanitizedDumpId).Count : 0;
+            var hasSymbols = SymbolManager.HasSymbols(sanitizedDumpId, sanitizedUserId, manager.CurrentDumpPath);
+            var customSymbolCount = hasSymbols
+                ? SymbolManager.ListDumpSymbols(sanitizedDumpId, sanitizedUserId, manager.CurrentDumpPath).Count
+                : 0;
             var symbolInfo = hasSymbols
                 ? $"Symbols: Microsoft Symbol Server + {customSymbolCount} custom"
                 : "Symbols: Microsoft Symbol Server";

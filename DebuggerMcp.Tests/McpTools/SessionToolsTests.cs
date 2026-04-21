@@ -1,5 +1,7 @@
 using DebuggerMcp;
 using DebuggerMcp.McpTools;
+using DebuggerMcp.Symbols;
+using DebuggerMcp.Tests.TestDoubles;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Text.Json;
@@ -251,6 +253,59 @@ public class SessionToolsTests : IDisposable
 
         Assert.Contains("Session restored successfully", result);
         Assert.Contains(sessionId, result);
+    }
+
+    [Fact]
+    public void RestoreSession_WhenRestoredOnLldbWithPersistedRemoteSymbolUrls_IncludesWarning()
+    {
+        var tempPath = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempPath);
+
+        try
+        {
+            var sessionsPath = Path.Combine(tempPath, "sessions");
+            var symbolManager1 = new SymbolManager(symbolCacheBasePath: tempPath, dumpStorageBasePath: tempPath);
+            var sessionManager1 = new DebuggerSessionManager(
+                dumpStoragePath: tempPath,
+                sessionStoragePath: sessionsPath,
+                debuggerFactory: _ => new FakeDebuggerManager { DebuggerType = "WinDbg" },
+                symbolManager: symbolManager1);
+            var tools1 = new SessionTools(sessionManager1, symbolManager1, new WatchStore(tempPath), NullLogger<SessionTools>.Instance);
+
+            var userId = "test-user";
+            var createResult = tools1.CreateSession(userId);
+            var sessionId = ExtractSessionId(createResult);
+            var session = sessionManager1.GetSessionInfo(sessionId, userId);
+            session.SymbolConfiguration = new PersistedSessionSymbolConfiguration
+            {
+                AdditionalRemoteUrls = new List<string> { "https://symbols.example.com" }
+            };
+            sessionManager1.PersistSession(sessionId);
+
+            var symbolManager2 = new SymbolManager(symbolCacheBasePath: tempPath, dumpStorageBasePath: tempPath);
+            var sessionManager2 = new DebuggerSessionManager(
+                dumpStoragePath: tempPath,
+                sessionStoragePath: sessionsPath,
+                debuggerFactory: _ => new FakeDebuggerManager { DebuggerType = "LLDB" },
+                symbolManager: symbolManager2);
+            var tools2 = new SessionTools(sessionManager2, symbolManager2, new WatchStore(tempPath), NullLogger<SessionTools>.Instance);
+
+            var result = tools2.RestoreSession(sessionId, userId);
+
+            Assert.Contains("Warning:", result);
+            Assert.Contains("LLDB", result, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempPath, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup only.
+            }
+        }
     }
 
     // ============================================================

@@ -78,6 +78,30 @@ public class DebuggerSession : IDisposable, IAsyncDisposable
     public PersistedSessionSymbolConfiguration SymbolConfiguration { get; set; } = new();
 
     /// <summary>
+    /// Gets session-scoped runtime warnings that should be surfaced to the user but are not persisted.
+    /// </summary>
+    /// <remarks>
+    /// This list is used for runtime conditions such as restored configuration inputs that the
+    /// current debugger implementation cannot apply. The warnings describe the active session
+    /// state only and therefore are intentionally excluded from persisted session metadata.
+    /// </remarks>
+    public List<string> RuntimeWarnings { get; } = new();
+
+    /// <summary>
+    /// Replaces the current set of runtime warnings for the session.
+    /// </summary>
+    /// <param name="warnings">The warnings that should remain attached to the current runtime session.</param>
+    public void SetRuntimeWarnings(IEnumerable<string> warnings)
+    {
+        RuntimeWarnings.Clear();
+
+        foreach (var warning in warnings.Where(warning => !string.IsNullOrWhiteSpace(warning)))
+        {
+            RuntimeWarnings.Add(warning);
+        }
+    }
+
+    /// <summary>
     /// Gets or sets the ClrMD analyzer for assembly metadata enrichment.
     /// </summary>
     /// <remarks>

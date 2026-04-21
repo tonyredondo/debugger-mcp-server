@@ -455,6 +455,7 @@ public class DebuggerSessionManager
 
         _symbolManager.RehydrateSessionSymbolConfiguration(sessionId, session.SymbolConfiguration);
         session.SymbolConfiguration = _symbolManager.GetPersistedSessionSymbolConfiguration(sessionId);
+        session.SetRuntimeWarnings(BuildRestoreRuntimeWarnings(session));
 
         var restoredDumpPath = ResolveDumpPathForRestore(metadata);
 
@@ -508,6 +509,32 @@ public class DebuggerSessionManager
         _sessionStore.Save(session);
 
         return session;
+    }
+
+    /// <summary>
+    /// Builds the runtime warnings that should be attached to a freshly restored session.
+    /// </summary>
+    /// <param name="session">The restored session whose runtime state is being rebuilt.</param>
+    /// <returns>The warnings that should be surfaced for this restore operation.</returns>
+    private List<string> BuildRestoreRuntimeWarnings(DebuggerSession session)
+    {
+        var warnings = new List<string>();
+
+        if (string.Equals(session.Manager.DebuggerType, "LLDB", StringComparison.OrdinalIgnoreCase) &&
+            session.SymbolConfiguration.AdditionalRemoteUrls.Count > 0)
+        {
+            var warning =
+                $"This session includes {session.SymbolConfiguration.AdditionalRemoteUrls.Count} user-added remote symbol URL(s). " +
+                "LLDB preserves those URLs in session metadata but does not apply them in this workflow. " +
+                "Use local symbol directories or restore the session on WinDbg to use those URLs.";
+            warnings.Add(warning);
+            _logger.LogWarning(
+                "Session {SessionId} restored on LLDB with {Count} persisted remote symbol URL(s) that will remain inactive for this runtime session.",
+                session.SessionId,
+                session.SymbolConfiguration.AdditionalRemoteUrls.Count);
+        }
+
+        return warnings;
     }
 
     /// <summary>

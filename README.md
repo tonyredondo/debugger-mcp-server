@@ -180,6 +180,10 @@ Quick workflow:
 | `DELETE` | `/api/symbols/dump/{dumpId}` | Delete symbols for a dump |
 | `GET` | `/api/symbols/servers` | List available symbol servers |
 
+Notes:
+- Symbol APIs resolve one server-generated `dumpId` at a time. If conflicting copies of the same `dumpId` are present under multiple user directories, the server returns a conflict instead of guessing.
+- LLDB only applies additional local symbol directories in this workflow. If a restored session carries persisted remote symbol URLs, the session keeps that intent in metadata and surfaces a warning because LLDB will not apply those URLs.
+
 ### Server Information
 
 | Method | Endpoint | Description |

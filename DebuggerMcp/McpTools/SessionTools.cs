@@ -278,6 +278,11 @@ public class SessionTools(
                 result += "  CurrentDump: None (use dump(action=\"open\") to load a dump)\n";
             }
 
+            foreach (var warning in session.RuntimeWarnings)
+            {
+                result += $"  Warning: {warning}\n";
+            }
+
             return result;
         }
         catch (ArgumentException ex)

@@ -74,6 +74,96 @@ public class SymbolManagerTests
     }
 
     /// <summary>
+    /// Verifies that dump-scoped symbol lookup refuses to cross user boundaries when the same dump ID
+    /// appears under multiple user-owned symbol directories.
+    /// </summary>
+    [Fact]
+    public void ListDumpSymbols_WhenDumpIdIsAmbiguousAcrossUsers_ThrowsInvalidOperationException()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+
+        var userOneSymbols = Path.Combine(dumpRoot, "user-one", ".symbols_same-dump");
+        var userTwoSymbols = Path.Combine(dumpRoot, "user-two", ".symbols_same-dump");
+        Directory.CreateDirectory(userOneSymbols);
+        Directory.CreateDirectory(userTwoSymbols);
+        File.WriteAllText(Path.Combine(userOneSymbols, "first.pdb"), "one");
+        File.WriteAllText(Path.Combine(userTwoSymbols, "second.pdb"), "two");
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => manager.ListDumpSymbols("same-dump"));
+        Assert.Contains("ambiguous", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Verifies that deleting symbols refuses to touch multiple users when the dump ID is ambiguous.
+    /// </summary>
+    [Fact]
+    public void DeleteDumpSymbols_WhenDumpIdIsAmbiguousAcrossUsers_ThrowsAndLeavesDirectoriesIntact()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+
+        var userOneSymbols = Path.Combine(dumpRoot, "user-one", ".symbols_same-dump");
+        var userTwoSymbols = Path.Combine(dumpRoot, "user-two", ".symbols_same-dump");
+        Directory.CreateDirectory(userOneSymbols);
+        Directory.CreateDirectory(userTwoSymbols);
+        File.WriteAllText(Path.Combine(userOneSymbols, "first.pdb"), "one");
+        File.WriteAllText(Path.Combine(userTwoSymbols, "second.pdb"), "two");
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+
+        var ex = Assert.Throws<InvalidOperationException>(() => manager.DeleteDumpSymbols("same-dump"));
+        Assert.Contains("ambiguous", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(userOneSymbols));
+        Assert.True(Directory.Exists(userTwoSymbols));
+    }
+
+    /// <summary>
+    /// Verifies that passing a dump path from a sibling directory that merely shares the same prefix
+    /// as the managed dump root does not cause user-scoped symbol lookup to cross into the managed root.
+    /// </summary>
+    [Fact]
+    public void GetDumpSymbolDirectories_WhenDumpPathSharesRootPrefix_DoesNotTreatSiblingDirectoryAsManagedOwner()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        var siblingDumpRoot = Path.Combine(tempRoot, "dumps-archive");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+        Directory.CreateDirectory(siblingDumpRoot);
+
+        var dumpId = "same-dump";
+        var outsideDumpDir = Path.Combine(siblingDumpRoot, "user-one");
+        Directory.CreateDirectory(outsideDumpDir);
+        var outsideDumpPath = Path.Combine(outsideDumpDir, $"{dumpId}.dmp");
+        File.WriteAllText(outsideDumpPath, "dump");
+
+        var outsideSymbols = Path.Combine(outsideDumpDir, $".symbols_{dumpId}");
+        Directory.CreateDirectory(outsideSymbols);
+        File.WriteAllText(Path.Combine(outsideSymbols, "outside.pdb"), "outside");
+
+        var managedSymbols = Path.Combine(dumpRoot, "user-one", $".symbols_{dumpId}");
+        Directory.CreateDirectory(managedSymbols);
+        File.WriteAllText(Path.Combine(managedSymbols, "managed.pdb"), "managed");
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+
+        var directories = manager.GetDumpSymbolDirectories(dumpId, dumpPath: outsideDumpPath);
+
+        Assert.Contains(outsideSymbols, directories, StringComparer.OrdinalIgnoreCase);
+        Assert.DoesNotContain(managedSymbols, directories, StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
     /// Verifies that ConfigureSessionSymbolPaths works with dumpId.
     /// </summary>
     [Fact]
@@ -330,6 +420,62 @@ public class SymbolManagerTests
         Assert.True(File.Exists(Path.Combine(symbolsDir, "good", "sym.pdb")));
         Assert.True(File.Exists(Path.Combine(symbolsDir, "bundle.dSYM", "Contents", "Resources", "DWARF", "MyApp")));
         Assert.False(File.Exists(Path.Combine(dumpRoot, "evil.pdb")));
+    }
+
+    /// <summary>
+    /// Verifies that storing a symbol file fails clearly when the same dump ID is present under more
+    /// than one user-owned dump directory.
+    /// </summary>
+    [Fact]
+    public async Task StoreSymbolFileAsync_WhenDumpIdExistsForMultipleUsers_ThrowsInvalidOperationException()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+
+        Directory.CreateDirectory(Path.Combine(dumpRoot, "user-one"));
+        Directory.CreateDirectory(Path.Combine(dumpRoot, "user-two"));
+        File.WriteAllText(Path.Combine(dumpRoot, "user-one", "same-dump.dmp"), "one");
+        File.WriteAllText(Path.Combine(dumpRoot, "user-two", "same-dump.dmp"), "two");
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+
+        await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
+        var ex = await Assert.ThrowsAsync<InvalidOperationException>(() => manager.StoreSymbolFileAsync("same-dump", "test.pdb", stream));
+        Assert.Contains("ambiguous", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>
+    /// Verifies that listing symbols aggregates dump-scoped and root-level fallback directories for
+    /// one resolved dump instead of arbitrarily choosing only one of them.
+    /// </summary>
+    [Fact]
+    public void ListDumpSymbols_WhenScopedAndRootFallbackSymbolsExist_ReturnsSymbolsFromBothScopes()
+    {
+        var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
+        var cacheRoot = Path.Combine(tempRoot, "cache");
+        var dumpRoot = Path.Combine(tempRoot, "dumps");
+        Directory.CreateDirectory(cacheRoot);
+        Directory.CreateDirectory(dumpRoot);
+
+        var userDir = Path.Combine(dumpRoot, "user-one");
+        Directory.CreateDirectory(userDir);
+        File.WriteAllText(Path.Combine(userDir, "same-dump.dmp"), "dump");
+
+        var scopedSymbols = Path.Combine(userDir, ".symbols_same-dump");
+        var rootFallbackSymbols = Path.Combine(dumpRoot, ".symbols_same-dump");
+        Directory.CreateDirectory(scopedSymbols);
+        Directory.CreateDirectory(rootFallbackSymbols);
+        File.WriteAllText(Path.Combine(scopedSymbols, "first.pdb"), "one");
+        File.WriteAllText(Path.Combine(rootFallbackSymbols, "second.pdb"), "two");
+
+        var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
+
+        var symbols = manager.ListDumpSymbols("same-dump");
+        Assert.Contains("first.pdb", symbols);
+        Assert.Contains("second.pdb", symbols);
     }
 
     private static void AddZipEntry(System.IO.Compression.ZipArchive zip, string path, string content)

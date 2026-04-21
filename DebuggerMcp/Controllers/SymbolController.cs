@@ -103,7 +103,7 @@ public class SymbolController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            return CreateInvalidOperationResponse(ex);
         }
         catch (Exception ex)
         {
@@ -204,7 +204,7 @@ public class SymbolController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            return CreateInvalidOperationResponse(ex);
         }
         catch (Exception ex)
         {
@@ -337,7 +337,7 @@ public class SymbolController : ControllerBase
         }
         catch (InvalidOperationException ex)
         {
-            return BadRequest(new { error = ex.Message });
+            return CreateInvalidOperationResponse(ex);
         }
         catch (Exception ex)
         {
@@ -402,6 +402,10 @@ public class SymbolController : ControllerBase
                 Symbols = symbols
             });
         }
+        catch (InvalidOperationException ex)
+        {
+            return CreateInvalidOperationResponse(ex);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error listing symbols for dump {DumpId}", dumpId);
@@ -438,6 +442,10 @@ public class SymbolController : ControllerBase
                 DumpId = sanitizedDumpId,
                 HasSymbols = hasSymbols
             });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return CreateInvalidOperationResponse(ex);
         }
         catch (Exception ex)
         {
@@ -482,11 +490,30 @@ public class SymbolController : ControllerBase
                 Message = "Symbols deleted successfully"
             });
         }
+        catch (InvalidOperationException ex)
+        {
+            return CreateInvalidOperationResponse(ex);
+        }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error deleting symbols for dump {DumpId}", dumpId);
             return StatusCode(StatusCodes.Status500InternalServerError, new { error = "An internal error occurred while deleting symbol files." });
         }
+    }
+
+    /// <summary>
+    /// Converts symbol-management invalid operations into client-visible HTTP responses.
+    /// </summary>
+    /// <param name="exception">The invalid-operation exception raised by symbol handling.</param>
+    /// <returns>A conflict for ambiguous dump layouts, otherwise a bad request.</returns>
+    private IActionResult CreateInvalidOperationResponse(InvalidOperationException exception)
+    {
+        if (exception.Message.Contains("ambiguous", StringComparison.OrdinalIgnoreCase))
+        {
+            return Conflict(new { error = exception.Message });
+        }
+
+        return BadRequest(new { error = exception.Message });
     }
 
     /// <summary>

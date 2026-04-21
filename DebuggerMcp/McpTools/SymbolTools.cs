@@ -274,26 +274,27 @@ public class SymbolTools(
             throw new InvalidOperationException("No dump is currently open in this session");
         }
 
-        // Get the symbol directory for this dump
-        var symbolDir = SymbolManager.GetDumpSymbolDirectory(session.CurrentDumpId);
-        if (symbolDir == null || !Directory.Exists(symbolDir))
+        // Get the symbol directories for this dump scope.
+        var symbolDirectories = SymbolManager.GetDumpSymbolDirectories(session.CurrentDumpId, sanitizedUserId, manager.CurrentDumpPath);
+        if (symbolDirectories.Count == 0)
         {
             return "No symbol directory found for the current dump. Upload symbols first using 'symbols upload'.";
         }
 
-        Logger.LogInformation("[ReloadSymbols] Reloading symbols from {SymbolDir} for session {SessionId}", symbolDir, sessionId);
+        Logger.LogInformation("[ReloadSymbols] Reloading symbols from {DirectoryCount} directories for session {SessionId}", symbolDirectories.Count, sessionId);
 
         var loadedCount = 0;
         var addedPaths = 0;
         var messages = new List<string>();
+        var allDirectories = symbolDirectories
+            .SelectMany(SymbolManager.GetAllSubdirectories)
+            .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+            .ToList();
 
         if (manager.DebuggerType == "LLDB")
         {
-            // Get all subdirectories
-            var allDirs = SymbolManager.GetAllSubdirectories(symbolDir);
-
             // Add each directory to LLDB's search paths
-            foreach (var dir in allDirs)
+            foreach (var dir in allDirectories)
             {
                 var result = manager.ExecuteCommand($"settings append target.debug-file-search-paths \"{dir}\"");
                 if (!result.Contains("error", StringComparison.OrdinalIgnoreCase))
@@ -305,7 +306,10 @@ public class SymbolTools(
             Logger.LogInformation("[ReloadSymbols] Added {Count} directories to LLDB search paths", addedPaths);
 
             // Get symbol files that LLDB can load (.dbg, .debug only - not .pdb)
-            var symbolFiles = SymbolManager.GetSymbolFilesInDirectory(symbolDir, lldbOnly: true);
+            var symbolFiles = symbolDirectories
+                .SelectMany(directory => SymbolManager.GetSymbolFilesInDirectory(directory, lldbOnly: true))
+                .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal)
+                .ToList();
 
             foreach (var symbolFile in symbolFiles)
             {
@@ -329,12 +333,11 @@ public class SymbolTools(
         else if (manager.DebuggerType == "WinDbg")
         {
             // For WinDbg, update the symbol path and reload
-            var allDirs = SymbolManager.GetAllSubdirectories(symbolDir);
-            var symbolPath = string.Join(";", allDirs);
+            var symbolPath = string.Join(";", allDirectories);
 
             // Append to existing symbol path
             manager.ExecuteCommand($".sympath+ {symbolPath}");
-            addedPaths = allDirs.Count;
+            addedPaths = allDirectories.Count;
 
             // Force reload symbols
             var result = manager.ExecuteCommand(".reload /f");

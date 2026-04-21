@@ -21,7 +21,7 @@ public class SessionManagerPersistenceTests : IDisposable
 
         public string? CurrentDumpPath { get; private set; }
 
-        public string DebuggerType { get; } = "Fake";
+        public string DebuggerType { get; set; } = "Fake";
 
         public bool IsSosLoaded { get; private set; }
 
@@ -215,6 +215,44 @@ public class SessionManagerPersistenceTests : IDisposable
         Assert.Null(restoredSession.CurrentDumpId);
         Assert.Contains("/tmp/symbols", restoredSession.SymbolConfiguration.AdditionalLocalDirectories);
         Assert.Contains("/tmp/symbols", restoredConfiguration.AdditionalLocalDirectories);
+        Assert.Contains("https://symbols.example.com", restoredConfiguration.AdditionalRemoteUrls);
+    }
+
+    [Fact]
+    public void GetSession_WhenRestoredOnLldbWithPersistedRemoteSymbolUrls_AttachesRuntimeWarningWithoutDroppingConfiguration()
+    {
+        var sessionsPath = Path.Combine(_root, "sessions");
+        Directory.CreateDirectory(sessionsPath);
+
+        var symbolManager1 = new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root);
+        var manager1 = new DebuggerSessionManager(
+            dumpStoragePath: _root,
+            loggerFactory: NullLoggerFactory.Instance,
+            sessionStoragePath: sessionsPath,
+            debuggerFactory: _ => new TestDebuggerManager { DebuggerType = "WinDbg" },
+            symbolManager: symbolManager1);
+
+        var sessionId = manager1.CreateSession("user1");
+        var session = manager1.GetSessionInfo(sessionId, "user1");
+        session.SymbolConfiguration = new PersistedSessionSymbolConfiguration
+        {
+            AdditionalRemoteUrls = new List<string> { "https://symbols.example.com" }
+        };
+        manager1.PersistSession(sessionId);
+
+        var symbolManager2 = new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root);
+        var manager2 = new DebuggerSessionManager(
+            dumpStoragePath: _root,
+            loggerFactory: NullLoggerFactory.Instance,
+            sessionStoragePath: sessionsPath,
+            debuggerFactory: _ => new TestDebuggerManager { DebuggerType = "LLDB" },
+            symbolManager: symbolManager2);
+
+        var restoredSession = manager2.GetSessionInfo(sessionId, "user1");
+        var restoredConfiguration = symbolManager2.GetPersistedSessionSymbolConfiguration(sessionId);
+
+        Assert.Single(restoredSession.RuntimeWarnings);
+        Assert.Contains("LLDB", restoredSession.RuntimeWarnings[0], StringComparison.Ordinal);
         Assert.Contains("https://symbols.example.com", restoredConfiguration.AdditionalRemoteUrls);
     }
 

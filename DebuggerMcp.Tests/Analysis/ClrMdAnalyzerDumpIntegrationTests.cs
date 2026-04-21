@@ -198,7 +198,19 @@ public class ClrMdAnalyzerDumpIntegrationTests
                 if (anyArray == null && obj.Type?.IsArray == true)
                     anyArray = obj.Address;
                 if (byteArray == null && obj.Type?.Name == "System.Byte[]")
-                    byteArray = obj.Address;
+                {
+                    try
+                    {
+                        if (obj.AsArray().Length == 1024 * 64)
+                        {
+                            byteArray = obj.Address;
+                        }
+                    }
+                    catch
+                    {
+                        // Best-effort.
+                    }
+                }
                 if (complexStructArray == null && obj.Type?.Name?.Contains("SampleComplexStruct[]", StringComparison.Ordinal) == true)
                     complexStructArray = obj.Address;
                 if (boxedArray == null && obj.Type?.Name == "System.Object[]")

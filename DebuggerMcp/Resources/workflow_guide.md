@@ -105,6 +105,8 @@ curl -X POST http://localhost:5000/api/symbols/upload-batch \
 
 Symbols are automatically configured when you open the dump. If you later add supported symbol inputs while the dump is still open, the server rebuilds source-resolution state so later stack/source lookups use the updated inputs without requiring a hidden second reopen path.
 
+LLDB note: this workflow only applies additional local symbol directories. If a restored session contains previously persisted remote symbol URLs, the session keeps that intent in metadata and warns that LLDB will not apply those URLs in the current runtime session.
+
 #### Optional: Datadog Trace Symbols (MCP)
 
 If your dump includes Datadog tracer components (e.g., `Datadog.Trace.dll`), you can use the MCP tool `datadog_symbols` to download matching public symbols from Datadog’s build artifacts and (optionally) load them into the debugger:

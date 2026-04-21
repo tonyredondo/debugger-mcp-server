@@ -474,53 +474,43 @@ public class SymbolManager
     }
 
     /// <summary>
-    /// Gets the symbol directory path for a dump ID.
+    /// Gets the preferred symbol directory path for a dump ID.
     /// </summary>
     /// <param name="dumpId">The dump ID to look up.</param>
-    /// <returns>The directory path containing symbols for the dump, or null if not found.</returns>
+    /// <param name="userId">Optional user ID used to scope symbol lookup to a known owner.</param>
+    /// <param name="dumpPath">Optional resolved dump path used to scope symbol lookup to the current dump location.</param>
+    /// <returns>The preferred directory path containing symbols for the dump, or <see langword="null"/> if not found.</returns>
     /// <remarks>
-    /// Looks for symbols in the following locations (in order):
-    /// 1. {dumpStoragePath}/{userId}/.symbols_{dumpId}/ - Same location as dotnet-symbol downloads
-    /// 2. {dumpStoragePath}/.symbols_{dumpId}/ - Root-level fallback when user directory is unknown
+    /// When the caller does not provide <paramref name="userId"/> or <paramref name="dumpPath"/>,
+    /// this method resolves one dump owner deterministically. Ambiguous dump layouts are rejected
+    /// instead of silently reading another user's symbol directory.
     /// </remarks>
-    public string? GetDumpSymbolDirectory(string dumpId)
+    public string? GetDumpSymbolDirectory(string dumpId, string? userId = null, string? dumpPath = null)
+    {
+        return GetDumpSymbolDirectories(dumpId, userId, dumpPath).FirstOrDefault();
+    }
+
+    /// <summary>
+    /// Gets all symbol directories that belong to one resolved dump scope.
+    /// </summary>
+    /// <param name="dumpId">The dump ID to look up.</param>
+    /// <param name="userId">Optional user ID used to scope symbol lookup to a known owner.</param>
+    /// <param name="dumpPath">Optional resolved dump path used to scope symbol lookup to the current dump location.</param>
+    /// <returns>
+    /// All symbol directories that participate in the resolved scope, ordered from dump-local
+    /// directories to compatibility fallbacks.
+    /// </returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the dump ID is ambiguous across multiple user-owned dump layouts.
+    /// </exception>
+    public List<string> GetDumpSymbolDirectories(string dumpId, string? userId = null, string? dumpPath = null)
     {
         if (string.IsNullOrWhiteSpace(dumpId))
         {
-            return null;
+            return new List<string>();
         }
 
-        // Remove any file extension from dumpId (in case it was passed with .dmp)
-        var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
-        if (string.IsNullOrWhiteSpace(cleanDumpId))
-        {
-            cleanDumpId = dumpId;
-        }
-
-        // 1. Check in user subdirectories: {dumpStoragePath}/{userId}/.symbols_{dumpId}/
-        // Dumps are always stored per-user, so symbols are next to the dump file
-        if (Directory.Exists(_dumpStorageBasePath))
-        {
-            foreach (var userDir in Directory.GetDirectories(_dumpStorageBasePath))
-            {
-                var symbolDirInUserDir = Path.Combine(userDir, $".symbols_{cleanDumpId}");
-                if (Directory.Exists(symbolDirInUserDir) && HasSymbolFiles(symbolDirInUserDir))
-                {
-                    // Prefer per-user symbols co-located with the dump for isolation.
-                    return symbolDirInUserDir;
-                }
-            }
-        }
-
-        // 2. Root-level symbols when user directory is unknown
-        var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
-        if (Directory.Exists(rootSymbolDir) && HasSymbolFiles(rootSymbolDir))
-        {
-            // Fallback when the dump owner directory cannot be resolved.
-            return rootSymbolDir;
-        }
-
-        return null;
+        return ResolveExistingDumpSymbolDirectories(NormalizeDumpId(dumpId), userId, dumpPath);
     }
 
     /// <summary>
@@ -540,9 +530,9 @@ public class SymbolManager
     /// </summary>
     /// <param name="dumpId">The dump ID to check.</param>
     /// <returns>True if the dump has symbol files, false otherwise.</returns>
-    public bool HasSymbols(string dumpId)
+    public bool HasSymbols(string dumpId, string? userId = null, string? dumpPath = null)
     {
-        return GetDumpSymbolDirectory(dumpId) != null;
+        return GetDumpSymbolDirectories(dumpId, userId, dumpPath).Count > 0;
     }
 
     /// <summary>
@@ -551,18 +541,20 @@ public class SymbolManager
     /// </summary>
     /// <param name="dumpId">The dump ID to list symbols for.</param>
     /// <returns>List of symbol file relative paths.</returns>
-    public List<string> ListDumpSymbols(string dumpId)
+    public List<string> ListDumpSymbols(string dumpId, string? userId = null, string? dumpPath = null)
     {
-        var symbolDir = GetDumpSymbolDirectory(dumpId);
-        if (symbolDir == null)
+        var symbolDirectories = GetDumpSymbolDirectories(dumpId, userId, dumpPath);
+        if (symbolDirectories.Count == 0)
         {
             return new List<string>();
         }
 
-        // Get all files recursively and return relative paths
-        return Directory.GetFiles(symbolDir, "*", SearchOption.AllDirectories)
-            .Select(f => Path.GetRelativePath(symbolDir, f))
-            .OrderBy(f => f)
+        return symbolDirectories
+            .SelectMany(symbolDirectory =>
+                Directory.GetFiles(symbolDirectory, "*", SearchOption.AllDirectories)
+                    .Select(file => Path.GetRelativePath(symbolDirectory, file)))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(file => file, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
@@ -570,25 +562,20 @@ public class SymbolManager
     /// Deletes all symbol files for a specific dump.
     /// </summary>
     /// <param name="dumpId">The dump ID to delete symbols for.</param>
-    public void DeleteDumpSymbols(string dumpId)
+    public void DeleteDumpSymbols(string dumpId, string? userId = null, string? dumpPath = null)
     {
         if (string.IsNullOrWhiteSpace(dumpId))
         {
             return;
         }
 
-        var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
-        if (string.IsNullOrWhiteSpace(cleanDumpId))
-        {
-            cleanDumpId = dumpId;
-        }
+        var cleanDumpId = NormalizeDumpId(dumpId);
 
-        // Find and delete all symbol directories for this dump
-        foreach (var dir in GetAllDumpSymbolDirectories(cleanDumpId))
+        foreach (var dir in ResolveExistingDumpSymbolDirectories(cleanDumpId, userId, dumpPath))
         {
             if (Directory.Exists(dir))
             {
-                // Remove all symbol folders for this dump to avoid stale symbol usage.
+                // Remove all symbol folders for this one resolved dump scope to avoid stale symbol usage.
                 Directory.Delete(dir, true);
             }
         }
@@ -698,12 +685,8 @@ public class SymbolManager
             return directories;
         }
 
-        // Remove any file extension from dumpId
-        var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
-        if (string.IsNullOrWhiteSpace(cleanDumpId))
-        {
-            cleanDumpId = dumpId;
-        }
+        var cleanDumpId = NormalizeDumpId(dumpId);
+        var pathComparer = GetPathComparer();
 
         if (!string.IsNullOrWhiteSpace(dumpPath))
         {
@@ -723,29 +706,17 @@ public class SymbolManager
         {
             var scopedSymbolDir = Path.Combine(_dumpStorageBasePath, userId, $".symbols_{cleanDumpId}");
             if (Directory.Exists(scopedSymbolDir) && HasSymbolFiles(scopedSymbolDir) &&
-                !directories.Any(path => string.Equals(path, scopedSymbolDir, StringComparison.OrdinalIgnoreCase)))
+                !directories.Contains(scopedSymbolDir, pathComparer))
             {
                 // Second preference when we know the owner but not the resolved dump path.
                 directories.Add(scopedSymbolDir);
-            }
-        }
-        else if (string.IsNullOrWhiteSpace(dumpPath) && Directory.Exists(_dumpStorageBasePath))
-        {
-            // Compatibility fallback for older callers that do not know the owning user or dump path.
-            foreach (var userDir in Directory.GetDirectories(_dumpStorageBasePath))
-            {
-                var symbolDirInUserDir = Path.Combine(userDir, $".symbols_{cleanDumpId}");
-                if (Directory.Exists(symbolDirInUserDir) && HasSymbolFiles(symbolDirInUserDir))
-                {
-                    directories.Add(symbolDirInUserDir);
-                }
             }
         }
 
         // Root-level symbols remain as a compatibility fallback for older upload paths.
         var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
         if (Directory.Exists(rootSymbolDir) && HasSymbolFiles(rootSymbolDir) &&
-            !directories.Any(path => string.Equals(path, rootSymbolDir, StringComparison.OrdinalIgnoreCase)))
+            !directories.Contains(rootSymbolDir, pathComparer))
         {
             directories.Add(rootSymbolDir);
         }
@@ -1012,12 +983,7 @@ public class SymbolManager
     {
         return _dumpSymbolDirectories.GetOrAdd(dumpId, id =>
         {
-            // Remove any file extension from dumpId
-            var cleanDumpId = Path.GetFileNameWithoutExtension(id);
-            if (string.IsNullOrWhiteSpace(cleanDumpId))
-            {
-                cleanDumpId = id;
-            }
+            var cleanDumpId = NormalizeDumpId(id);
 
             // Try to find the dump file and create symbols directory next to it
             var dumpFilePath = FindDumpFile(cleanDumpId);
@@ -1053,20 +1019,191 @@ public class SymbolManager
     private string? FindDumpFile(string dumpId)
     {
         if (!Directory.Exists(_dumpStorageBasePath))
-            return null;
-
-        // Search for {dumpId}.dmp in user subdirectories
-        // Dumps are always stored per-user: {dumpStoragePath}/{userId}/{dumpId}.dmp
-        var dumpFileName = $"{dumpId}.dmp";
-
-        foreach (var userDir in Directory.GetDirectories(_dumpStorageBasePath))
         {
-            var userPath = Path.Combine(userDir, dumpFileName);
-            if (File.Exists(userPath))
-                return userPath;
+            return null;
         }
 
-        return null;
+        var matches = Directory.GetDirectories(_dumpStorageBasePath)
+            .Select(userDir => Path.Combine(userDir, $"{dumpId}.dmp"))
+            .Where(File.Exists)
+            .Distinct(GetPathComparer())
+            .ToList();
+
+        return matches.Count switch
+        {
+            0 => null,
+            1 => matches[0],
+            _ => throw new InvalidOperationException(
+                $"Dump ID '{dumpId}' is ambiguous across multiple user directories. Resolve the duplicate dump layout before managing symbols.")
+        };
+    }
+
+    /// <summary>
+    /// Resolves all existing symbol directories for one dump scope without crossing user boundaries.
+    /// </summary>
+    /// <param name="cleanDumpId">The normalized dump identifier.</param>
+    /// <param name="userId">Optional user ID used to scope symbol lookup to a known owner.</param>
+    /// <param name="dumpPath">Optional resolved dump path used to scope symbol lookup to the current dump location.</param>
+    /// <returns>Ordered symbol directories for the resolved scope.</returns>
+    private List<string> ResolveExistingDumpSymbolDirectories(string cleanDumpId, string? userId = null, string? dumpPath = null)
+    {
+        var directories = new List<string>();
+        var pathComparer = GetPathComparer();
+        string? resolvedUserId = userId;
+        string? resolvedDumpPath = dumpPath;
+
+        if (string.IsNullOrWhiteSpace(resolvedDumpPath) && string.IsNullOrWhiteSpace(resolvedUserId))
+        {
+            resolvedDumpPath = FindDumpFile(cleanDumpId);
+            resolvedUserId = TryGetManagedDumpOwner(resolvedDumpPath);
+        }
+        else if (string.IsNullOrWhiteSpace(resolvedUserId))
+        {
+            resolvedUserId = TryGetManagedDumpOwner(resolvedDumpPath);
+        }
+
+        if (!string.IsNullOrWhiteSpace(resolvedDumpPath))
+        {
+            var dumpDirectory = Path.GetDirectoryName(resolvedDumpPath);
+            if (!string.IsNullOrWhiteSpace(dumpDirectory))
+            {
+                var siblingSymbolDir = Path.Combine(dumpDirectory, $".symbols_{cleanDumpId}");
+                if (Directory.Exists(siblingSymbolDir) && HasSymbolFiles(siblingSymbolDir))
+                {
+                    directories.Add(siblingSymbolDir);
+                }
+            }
+        }
+        else if (string.IsNullOrWhiteSpace(resolvedUserId))
+        {
+            var userScopedMatches = FindUserScopedSymbolDirectories(cleanDumpId);
+            if (userScopedMatches.Count > 1)
+            {
+                throw new InvalidOperationException(
+                    $"Dump ID '{cleanDumpId}' is ambiguous across multiple user symbol directories. Resolve the duplicate dump layout before managing symbols.");
+            }
+
+            if (userScopedMatches.Count == 1)
+            {
+                directories.Add(userScopedMatches[0]);
+                resolvedUserId = TryGetManagedDumpOwnerFromSymbolDirectory(userScopedMatches[0]);
+            }
+        }
+
+        foreach (var directory in GetAllDumpSymbolDirectories(cleanDumpId, resolvedUserId, resolvedDumpPath))
+        {
+            if (!directories.Contains(directory, pathComparer))
+            {
+                directories.Add(directory);
+            }
+        }
+
+        return directories;
+    }
+
+    /// <summary>
+    /// Finds existing user-scoped symbol directories for one dump ID.
+    /// </summary>
+    /// <param name="cleanDumpId">The normalized dump identifier.</param>
+    /// <returns>All user-scoped directories that currently contain symbol files for this dump.</returns>
+    private List<string> FindUserScopedSymbolDirectories(string cleanDumpId)
+    {
+        if (!Directory.Exists(_dumpStorageBasePath))
+        {
+            return new List<string>();
+        }
+
+        return Directory.GetDirectories(_dumpStorageBasePath)
+            .Select(userDir => Path.Combine(userDir, $".symbols_{cleanDumpId}"))
+            .Where(directory => Directory.Exists(directory) && HasSymbolFiles(directory))
+            .Distinct(GetPathComparer())
+            .ToList();
+    }
+
+    /// <summary>
+    /// Normalizes dump IDs so symbol paths always use the extensionless logical identifier.
+    /// </summary>
+    /// <param name="dumpId">The dump ID to normalize.</param>
+    /// <returns>The extensionless logical dump identifier.</returns>
+    private static string NormalizeDumpId(string dumpId)
+    {
+        var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
+        return string.IsNullOrWhiteSpace(cleanDumpId) ? dumpId : cleanDumpId;
+    }
+
+    /// <summary>
+    /// Tries to recover the owning user ID from a managed dump path.
+    /// </summary>
+    /// <param name="dumpPath">The resolved dump path.</param>
+    /// <returns>The owning user ID when the dump path is under the managed storage root; otherwise <see langword="null"/>.</returns>
+    private string? TryGetManagedDumpOwner(string? dumpPath)
+    {
+        return TryGetManagedStorageOwner(dumpPath);
+    }
+
+    /// <summary>
+    /// Tries to recover the owning user ID from a managed symbol directory path.
+    /// </summary>
+    /// <param name="symbolDirectory">The resolved symbol directory path.</param>
+    /// <returns>The owning user ID when the directory is under the managed storage root; otherwise <see langword="null"/>.</returns>
+    private string? TryGetManagedDumpOwnerFromSymbolDirectory(string symbolDirectory)
+    {
+        return TryGetManagedStorageOwner(symbolDirectory);
+    }
+
+    /// <summary>
+    /// Tries to recover the owning user ID from a path under the managed dump storage root.
+    /// Only paths with a leading user directory segment are treated as user-owned.
+    /// </summary>
+    /// <param name="candidatePath">The file or directory path to inspect.</param>
+    /// <returns>The owning user ID when the path is under the managed storage root; otherwise <see langword="null"/>.</returns>
+    private string? TryGetManagedStorageOwner(string? candidatePath)
+    {
+        if (string.IsNullOrWhiteSpace(candidatePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var fullStoragePath = Path.GetFullPath(_dumpStorageBasePath);
+            var fullCandidatePath = Path.GetFullPath(candidatePath);
+            var relativePath = Path.GetRelativePath(fullStoragePath, fullCandidatePath);
+            if (string.IsNullOrWhiteSpace(relativePath) ||
+                string.Equals(relativePath, ".", StringComparison.Ordinal) ||
+                relativePath.StartsWith("..", StringComparison.Ordinal) ||
+                Path.IsPathRooted(relativePath))
+            {
+                return null;
+            }
+
+            var pathSegments = relativePath.Split(
+                [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
+                StringSplitOptions.RemoveEmptyEntries);
+            return pathSegments.Length >= 2 ? pathSegments[0] : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Returns the comparer used for filesystem paths on the current platform.
+    /// </summary>
+    /// <returns>The path comparer for the current platform.</returns>
+    private static StringComparer GetPathComparer()
+    {
+        return OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal;
+    }
+
+    /// <summary>
+    /// Returns the string comparison used for filesystem paths on the current platform.
+    /// </summary>
+    /// <returns>The path comparison for the current platform.</returns>
+    private static StringComparison GetPathComparison()
+    {
+        return OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
     }
 
     /// <summary>
