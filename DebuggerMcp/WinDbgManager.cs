@@ -4,6 +4,7 @@ using System.Runtime.Versioning;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using DebuggerMcp.ObjectInspection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -392,23 +393,7 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
 
         if (await Task.WhenAny(task, Task.Delay(_commandTimeout)).ConfigureAwait(false) == task)
         {
-            try
-            {
-                return await task.ConfigureAwait(false);
-            }
-            catch (Exception ex) when (allowRecovery && ShouldAttemptRecovery(ex))
-            {
-                if (await TryRecoverEngineAsync(context, operationName, timeoutTriggered: false).ConfigureAwait(false))
-                {
-                    throw new InvalidOperationException(
-                        $"WinDbg failed while trying to {operationName}. The engine was recovered and the dump was reopened when possible. Please retry the operation.",
-                        ex);
-                }
-
-                throw new InvalidOperationException(
-                    $"WinDbg failed while trying to {operationName}, and recovery did not complete.",
-                    ex);
-            }
+            return await AwaitOperationResultAsync(task, context, operationName, allowRecovery, timeoutTriggered: false).ConfigureAwait(false);
         }
 
         _logger.LogWarning(
@@ -420,7 +405,7 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
 
         if (await Task.WhenAny(task, Task.Delay(InterruptGracePeriod)).ConfigureAwait(false) == task)
         {
-            return await task.ConfigureAwait(false);
+            return await AwaitOperationResultAsync(task, context, operationName, allowRecovery, timeoutTriggered: true).ConfigureAwait(false);
         }
 
         if (allowRecovery && await TryRecoverEngineAsync(context, operationName, timeoutTriggered: true).ConfigureAwait(false))
@@ -431,6 +416,44 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
 
         throw new InvalidOperationException(
             $"WinDbg timed out while trying to {operationName}. Recovery did not complete, so the debugger session may need to be reopened.");
+    }
+
+    /// <summary>
+    /// Awaits a dispatched DbgEng operation and applies the standard recoverable-engine handling.
+    /// </summary>
+    /// <typeparam name="T">The operation result type.</typeparam>
+    /// <param name="task">The in-flight debugger task to await.</param>
+    /// <param name="context">Debugger context that produced the task.</param>
+    /// <param name="operationName">Friendly operation name for diagnostics.</param>
+    /// <param name="allowRecovery">Whether recoverable failures should trigger engine recovery.</param>
+    /// <param name="timeoutTriggered">Whether the operation had already timed out before completion.</param>
+    /// <returns>The completed task result.</returns>
+    private async Task<T> AwaitOperationResultAsync<T>(
+        Task<T> task,
+        WinDbgEngineContext context,
+        string operationName,
+        bool allowRecovery,
+        bool timeoutTriggered)
+    {
+        try
+        {
+            return await task.ConfigureAwait(false);
+        }
+        catch (Exception ex) when (allowRecovery && ShouldAttemptRecovery(ex))
+        {
+            if (await TryRecoverEngineAsync(context, operationName, timeoutTriggered).ConfigureAwait(false))
+            {
+                var timeoutPrefix = timeoutTriggered ? "after timing out " : string.Empty;
+                throw new InvalidOperationException(
+                    $"WinDbg failed {timeoutPrefix}while trying to {operationName}. The engine was recovered and the dump was reopened when possible. Please retry the operation.",
+                    ex);
+            }
+
+            var timeoutSuffix = timeoutTriggered ? " after timing out" : string.Empty;
+            throw new InvalidOperationException(
+                $"WinDbg failed while trying to {operationName}{timeoutSuffix}, and recovery did not complete.",
+                ex);
+        }
     }
 
     /// <summary>
@@ -644,6 +667,7 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
 
         try
         {
+            ClearObjectInspectionCacheForDumpTransition("opening a dump");
             context.CurrentExecutablePath = executablePath;
             context.OutputCallbacks?.ClearOutput();
 
@@ -720,6 +744,7 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
                 return;
             }
 
+            ClearObjectInspectionCacheForDumpTransition("closing a dump");
             context.Client!.EndSession(DebugEndPassive);
             context.IsDumpOpen = false;
             context.IsSosLoaded = false;
@@ -732,6 +757,24 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
         {
             throw new InvalidOperationException($"Failed to close dump: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Clears cached object-inspection results when WinDbg moves between dump contexts.
+    /// </summary>
+    /// <param name="reason">Human-readable reason for the dump-state transition.</param>
+    private void ClearObjectInspectionCacheForDumpTransition(string reason)
+    {
+        ClearObjectInspectionCache();
+        _logger.LogDebug("[WinDbg] Cleared ObjectInspector cache while {Reason}", reason);
+    }
+
+    /// <summary>
+    /// Clears the shared object-inspection cache after a WinDbg dump transition.
+    /// </summary>
+    private static void ClearObjectInspectionCache()
+    {
+        ObjectInspector.ClearCache();
     }
 
     /// <summary>
@@ -1605,6 +1648,13 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
         context.IsDumpOpen = false;
         context.IsSosLoaded = false;
         context.IsDotNetDump = false;
+        if (!string.IsNullOrWhiteSpace(context.CurrentDumpPath))
+        {
+            ClearObjectInspectionCache();
+        }
+        context.CurrentDumpPath = null;
+        context.CurrentExecutablePath = null;
+        context.DetectedRuntimeVersion = null;
     }
 
     /// <summary>

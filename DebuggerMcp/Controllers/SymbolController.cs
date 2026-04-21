@@ -36,11 +36,12 @@ public class SymbolController : ControllerBase
     /// </summary>
     /// <param name="file">Symbol file to upload (for example: .pdb, .so, .dylib, .debug, .dbg, .dwarf, .sym).</param>
     /// <param name="dumpId">Dump ID to associate the symbol with.</param>
+    /// <param name="userId">User ID that owns the dump.</param>
     /// <returns>Upload result.</returns>
     [HttpPost("upload")]
     [ProducesResponseType(typeof(SymbolUploadResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> UploadSymbol(IFormFile file, [FromForm] string dumpId)
+    public async Task<IActionResult> UploadSymbol(IFormFile file, [FromForm] string dumpId, [FromForm] string userId)
     {
         try
         {
@@ -50,17 +51,9 @@ public class SymbolController : ControllerBase
                 return BadRequest(new { error = "No file provided" });
             }
 
-            // Sanitize dumpId to prevent path traversal
-            string sanitizedDumpId;
-            try
-            {
-                sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
-            }
-            catch (ArgumentException ex)
-            {
-                // Provide specific validation error from sanitizer.
-                return BadRequest(new { error = ex.Message });
-            }
+            var sanitizedScope = SanitizeDumpScope(userId, dumpId);
+            var sanitizedUserId = sanitizedScope.SanitizedUserId;
+            var sanitizedDumpId = sanitizedScope.SanitizedDumpId;
 
             // Validate symbol file content
             using var stream = file.OpenReadStream();
@@ -87,7 +80,7 @@ public class SymbolController : ControllerBase
 
             // Reset stream and store
             stream.Position = 0;
-            _ = await _symbolManager.StoreSymbolFileAsync(sanitizedDumpId, file.FileName, stream);
+            _ = await _symbolManager.StoreSymbolFileAsync(sanitizedDumpId, file.FileName, stream, sanitizedUserId);
 
             return Ok(new SymbolUploadResponse
             {
@@ -119,6 +112,7 @@ public class SymbolController : ControllerBase
     /// </summary>
     /// <param name="file">The ZIP file containing symbols.</param>
     /// <param name="dumpId">Dump ID to associate the symbols with.</param>
+    /// <param name="userId">User ID that owns the dump.</param>
     /// <returns>Extraction result with file counts and directory paths.</returns>
     /// <remarks>
     /// <para>Use this endpoint to upload a ZIP archive containing multiple symbol files organized in directories.</para>
@@ -130,7 +124,7 @@ public class SymbolController : ControllerBase
     [HttpPost("upload-zip")]
     [ProducesResponseType(typeof(SymbolZipUploadResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> UploadSymbolZip(IFormFile file, [FromForm] string dumpId)
+    public async Task<IActionResult> UploadSymbolZip(IFormFile file, [FromForm] string dumpId, [FromForm] string userId)
     {
         try
         {
@@ -148,17 +142,9 @@ public class SymbolController : ControllerBase
                 return BadRequest(new { error = "File must be a ZIP archive (.zip extension)" });
             }
 
-            // Sanitize dumpId to prevent path traversal
-            string sanitizedDumpId;
-            try
-            {
-                sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
-            }
-            catch (ArgumentException ex)
-            {
-                // Sanitize failure is a client error; surface message.
-                return BadRequest(new { error = ex.Message });
-            }
+            var sanitizedScope = SanitizeDumpScope(userId, dumpId);
+            var sanitizedUserId = sanitizedScope.SanitizedUserId;
+            var sanitizedDumpId = sanitizedScope.SanitizedDumpId;
 
             // Check if it's actually a valid ZIP file by reading the header
             using var stream = file.OpenReadStream();
@@ -180,7 +166,7 @@ public class SymbolController : ControllerBase
                 sanitizedDumpId, file.Length);
 
             // Extract ZIP
-            var result = await _symbolManager.StoreSymbolZipAsync(sanitizedDumpId, stream);
+            var result = await _symbolManager.StoreSymbolZipAsync(sanitizedDumpId, stream, sanitizedUserId);
 
             _logger.LogInformation("[SymbolController] Extracted {FileCount} files into {DirCount} directories for dump {DumpId}",
                 result.ExtractedFilesCount, result.SymbolDirectories.Count, sanitizedDumpId);
@@ -218,11 +204,12 @@ public class SymbolController : ControllerBase
     /// </summary>
     /// <param name="files">List of symbol files to upload.</param>
     /// <param name="dumpId">Dump ID to associate the symbols with.</param>
+    /// <param name="userId">User ID that owns the dump.</param>
     /// <returns>Upload result.</returns>
     [HttpPost("upload-batch")]
     [ProducesResponseType(typeof(SymbolBatchUploadResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> UploadSymbolsBatch(List<IFormFile> files, [FromForm] string dumpId)
+    public async Task<IActionResult> UploadSymbolsBatch(List<IFormFile> files, [FromForm] string dumpId, [FromForm] string userId)
     {
         try
         {
@@ -232,17 +219,9 @@ public class SymbolController : ControllerBase
                 return BadRequest(new { error = "No files provided" });
             }
 
-            // Sanitize dumpId to prevent path traversal
-            string sanitizedDumpId;
-            try
-            {
-                sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
-            }
-            catch (ArgumentException ex)
-            {
-                // Surface sanitization issues as client errors.
-                return BadRequest(new { error = ex.Message });
-            }
+            var sanitizedScope = SanitizeDumpScope(userId, dumpId);
+            var sanitizedUserId = sanitizedScope.SanitizedUserId;
+            var sanitizedDumpId = sanitizedScope.SanitizedDumpId;
 
             var fileDict = new Dictionary<string, Stream>();
             var uploadedFiles = new List<SymbolFileInfo>();
@@ -285,7 +264,7 @@ public class SymbolController : ControllerBase
                 }
 
                 // Store all valid files
-                await _symbolManager.StoreSymbolFilesAsync(sanitizedDumpId, fileDict);
+                await _symbolManager.StoreSymbolFilesAsync(sanitizedDumpId, fileDict, sanitizedUserId);
 
                 // Build response (without exposing file paths)
                 foreach (var kvp in fileDict)
@@ -368,27 +347,20 @@ public class SymbolController : ControllerBase
     /// <summary>
     /// Lists all symbol files for a specific dump.
     /// </summary>
+    /// <param name="userId">User ID that owns the dump.</param>
     /// <param name="dumpId">Dump ID to list symbols for.</param>
     /// <returns>List of symbol file names.</returns>
-    [HttpGet("dump/{dumpId}")]
+    [HttpGet("user/{userId}/dump/{dumpId}")]
     [ProducesResponseType(typeof(SymbolListResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public IActionResult ListDumpSymbols(string dumpId)
+    public IActionResult ListDumpSymbols(string userId, string dumpId)
     {
         try
         {
-            // Sanitize dumpId to prevent path traversal
-            string sanitizedDumpId;
-            try
-            {
-                sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
-            }
-            catch (ArgumentException ex)
-            {
-                return BadRequest(new { error = ex.Message });
-            }
-
-            var symbols = _symbolManager.ListDumpSymbols(sanitizedDumpId);
+            var sanitizedScope = SanitizeDumpScope(userId, dumpId);
+            var sanitizedUserId = sanitizedScope.SanitizedUserId;
+            var sanitizedDumpId = sanitizedScope.SanitizedDumpId;
+            var symbols = _symbolManager.ListDumpSymbols(sanitizedDumpId, sanitizedUserId);
 
             if (symbols.Count == 0)
             {
@@ -401,6 +373,10 @@ public class SymbolController : ControllerBase
                 SymbolCount = symbols.Count,
                 Symbols = symbols
             });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -416,32 +392,29 @@ public class SymbolController : ControllerBase
     /// <summary>
     /// Checks if a dump has associated symbol files.
     /// </summary>
+    /// <param name="userId">User ID that owns the dump.</param>
     /// <param name="dumpId">Dump ID to check.</param>
     /// <returns>Boolean indicating if symbols exist.</returns>
-    [HttpGet("dump/{dumpId}/exists")]
+    [HttpGet("user/{userId}/dump/{dumpId}/exists")]
     [ProducesResponseType(typeof(SymbolExistsResponse), StatusCodes.Status200OK)]
-    public IActionResult CheckDumpSymbols(string dumpId)
+    public IActionResult CheckDumpSymbols(string userId, string dumpId)
     {
         try
         {
-            // Sanitize dumpId to prevent path traversal
-            string sanitizedDumpId;
-            try
-            {
-                sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
-            }
-            catch (ArgumentException ex)
-            {
-                return BadRequest(new { error = ex.Message });
-            }
-
-            var hasSymbols = _symbolManager.HasSymbols(sanitizedDumpId);
+            var sanitizedScope = SanitizeDumpScope(userId, dumpId);
+            var sanitizedUserId = sanitizedScope.SanitizedUserId;
+            var sanitizedDumpId = sanitizedScope.SanitizedDumpId;
+            var hasSymbols = _symbolManager.HasSymbols(sanitizedDumpId, sanitizedUserId);
 
             return Ok(new SymbolExistsResponse
             {
                 DumpId = sanitizedDumpId,
                 HasSymbols = hasSymbols
             });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -457,38 +430,35 @@ public class SymbolController : ControllerBase
     /// <summary>
     /// Deletes all symbol files for a specific dump.
     /// </summary>
+    /// <param name="userId">User ID that owns the dump.</param>
     /// <param name="dumpId">Dump ID to delete symbols for.</param>
     /// <returns>Deletion result.</returns>
-    [HttpDelete("dump/{dumpId}")]
+    [HttpDelete("user/{userId}/dump/{dumpId}")]
     [ProducesResponseType(typeof(SymbolDeleteResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public IActionResult DeleteDumpSymbols(string dumpId)
+    public IActionResult DeleteDumpSymbols(string userId, string dumpId)
     {
         try
         {
-            // Sanitize dumpId to prevent path traversal
-            string sanitizedDumpId;
-            try
-            {
-                sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
-            }
-            catch (ArgumentException ex)
-            {
-                return BadRequest(new { error = ex.Message });
-            }
-
-            if (!_symbolManager.HasSymbols(sanitizedDumpId))
+            var sanitizedScope = SanitizeDumpScope(userId, dumpId);
+            var sanitizedUserId = sanitizedScope.SanitizedUserId;
+            var sanitizedDumpId = sanitizedScope.SanitizedDumpId;
+            if (!_symbolManager.HasSymbols(sanitizedDumpId, sanitizedUserId))
             {
                 return NotFound(new { error = $"No symbols found for dump {sanitizedDumpId}" });
             }
 
-            _symbolManager.DeleteDumpSymbols(sanitizedDumpId);
+            _symbolManager.DeleteDumpSymbols(sanitizedDumpId, sanitizedUserId);
 
             return Ok(new SymbolDeleteResponse
             {
                 DumpId = sanitizedDumpId,
                 Message = "Symbols deleted successfully"
             });
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { error = ex.Message });
         }
         catch (InvalidOperationException ex)
         {
@@ -514,6 +484,19 @@ public class SymbolController : ControllerBase
         }
 
         return BadRequest(new { error = exception.Message });
+    }
+
+    /// <summary>
+    /// Sanitizes the user/dump pair used by user-scoped symbol endpoints.
+    /// </summary>
+    /// <param name="userId">The user identifier supplied by the caller.</param>
+    /// <param name="dumpId">The dump identifier supplied by the caller.</param>
+    /// <returns>The sanitized dump scope.</returns>
+    private static (string SanitizedUserId, string SanitizedDumpId) SanitizeDumpScope(string userId, string dumpId)
+    {
+        var sanitizedUserId = PathSanitizer.SanitizeIdentifier(userId, nameof(userId));
+        var sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
+        return (sanitizedUserId, sanitizedDumpId);
     }
 
     /// <summary>

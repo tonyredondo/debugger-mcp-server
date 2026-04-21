@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using DebuggerMcp.Configuration;
 using DebuggerMcp.Controllers;
+using DebuggerMcp.Security;
 using DebuggerMcp.Symbols;
 
 namespace DebuggerMcp;
@@ -61,11 +62,6 @@ public class SymbolManager
 
 
     /// <summary>
-    /// Thread-safe dictionary mapping dumpId to symbol directory path.
-    /// </summary>
-    private readonly ConcurrentDictionary<string, string> _dumpSymbolDirectories = new();
-
-    /// <summary>
     /// Thread-safe dictionary mapping sessionId to effective runtime symbol configuration.
     /// </summary>
     private readonly ConcurrentDictionary<string, EffectiveSessionSymbolConfiguration> _sessionSymbolConfigurations = new();
@@ -115,10 +111,20 @@ public class SymbolManager
     /// <param name="dumpId">Dump ID to associate the symbol file with.</param>
     /// <param name="fileName">Original file name of the symbol file.</param>
     /// <param name="fileStream">Stream containing the symbol file data.</param>
+    /// <param name="userId">Optional dump owner used to scope symbol storage to one user-owned dump.</param>
+    /// <param name="dumpPath">Optional resolved dump path used when the caller already knows the dump location.</param>
     /// <returns>The file path where the symbol was stored.</returns>
     /// <exception cref="ArgumentException">Thrown when parameters are invalid.</exception>
-    /// <exception cref="InvalidOperationException">Thrown when file size exceeds limit.</exception>
-    public async Task<string> StoreSymbolFileAsync(string dumpId, string fileName, Stream fileStream)
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when file size exceeds the limit or when the dump cannot be resolved to an existing
+    /// dump scope.
+    /// </exception>
+    public async Task<string> StoreSymbolFileAsync(
+        string dumpId,
+        string fileName,
+        Stream fileStream,
+        string? userId = null,
+        string? dumpPath = null)
     {
         // Validate parameters
         if (string.IsNullOrWhiteSpace(dumpId))
@@ -146,8 +152,8 @@ public class SymbolManager
             throw new InvalidOperationException($"Symbol file size ({fileStream.Length} bytes) exceeds maximum allowed size ({MaxSymbolFileSize} bytes).");
         }
 
-        // Create dump-specific symbol directory
-        var dumpSymbolDir = GetOrCreateDumpSymbolDirectory(dumpId);
+        // Create dump-specific symbol directory next to the resolved dump.
+        var dumpSymbolDir = GetOrCreateDumpSymbolDirectory(dumpId, userId, dumpPath);
 
         // Store file by file name only (path components stripped to prevent traversal).
         var storagePath = Path.Combine(dumpSymbolDir, fileName);
@@ -166,8 +172,14 @@ public class SymbolManager
     /// </summary>
     /// <param name="dumpId">Dump ID to associate the symbol files with.</param>
     /// <param name="files">Dictionary of fileName -> fileStream pairs.</param>
+    /// <param name="userId">Optional dump owner used to scope symbol storage to one user-owned dump.</param>
+    /// <param name="dumpPath">Optional resolved dump path used when the caller already knows the dump location.</param>
     /// <returns>List of file paths where symbols were stored.</returns>
-    public async Task<List<string>> StoreSymbolFilesAsync(string dumpId, Dictionary<string, Stream> files)
+    public async Task<List<string>> StoreSymbolFilesAsync(
+        string dumpId,
+        Dictionary<string, Stream> files,
+        string? userId = null,
+        string? dumpPath = null)
     {
         if (string.IsNullOrWhiteSpace(dumpId))
         {
@@ -183,7 +195,7 @@ public class SymbolManager
 
         foreach (var (fileName, fileStream) in files)
         {
-            var path = await StoreSymbolFileAsync(dumpId, fileName, fileStream);
+            var path = await StoreSymbolFileAsync(dumpId, fileName, fileStream, userId, dumpPath);
             storedPaths.Add(path);
         }
 
@@ -241,8 +253,14 @@ public class SymbolManager
     /// </summary>
     /// <param name="dumpId">Dump ID to associate the symbols with.</param>
     /// <param name="zipStream">Stream containing the ZIP file data.</param>
+    /// <param name="userId">Optional dump owner used to scope symbol extraction to one user-owned dump.</param>
+    /// <param name="dumpPath">Optional resolved dump path used when the caller already knows the dump location.</param>
     /// <returns>Result containing extracted files count and directory paths.</returns>
-    public async Task<SymbolZipExtractionResult> StoreSymbolZipAsync(string dumpId, Stream zipStream)
+    public async Task<SymbolZipExtractionResult> StoreSymbolZipAsync(
+        string dumpId,
+        Stream zipStream,
+        string? userId = null,
+        string? dumpPath = null)
     {
         if (string.IsNullOrWhiteSpace(dumpId))
         {
@@ -254,8 +272,8 @@ public class SymbolManager
             throw new ArgumentException("ZIP stream must be readable.", nameof(zipStream));
         }
 
-        // Create dump-specific symbol directory
-        var dumpSymbolDir = GetOrCreateDumpSymbolDirectory(dumpId);
+        // Create dump-specific symbol directory next to the resolved dump.
+        var dumpSymbolDir = GetOrCreateDumpSymbolDirectory(dumpId, userId, dumpPath);
         var extractedFiles = new List<string>();
         var extractedDirs = new HashSet<string>();
 
@@ -579,9 +597,6 @@ public class SymbolManager
                 Directory.Delete(dir, true);
             }
         }
-
-        _dumpSymbolDirectories.TryRemove(dumpId, out _);
-        _dumpSymbolDirectories.TryRemove(cleanDumpId, out _);
     }
 
     /// <summary>
@@ -713,12 +728,16 @@ public class SymbolManager
             }
         }
 
-        // Root-level symbols remain as a compatibility fallback for older upload paths.
-        var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
-        if (Directory.Exists(rootSymbolDir) && HasSymbolFiles(rootSymbolDir) &&
-            !directories.Contains(rootSymbolDir, pathComparer))
+        if (string.IsNullOrWhiteSpace(userId) && string.IsNullOrWhiteSpace(dumpPath))
         {
-            directories.Add(rootSymbolDir);
+            // Only unscoped internal callers can inspect legacy root-level symbol folders.
+            // User-scoped API routes must stay inside one resolved dump scope.
+            var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
+            if (Directory.Exists(rootSymbolDir) && HasSymbolFiles(rootSymbolDir) &&
+                !directories.Contains(rootSymbolDir, pathComparer))
+            {
+                directories.Add(rootSymbolDir);
+            }
         }
 
         return directories;
@@ -978,37 +997,68 @@ public class SymbolManager
     /// Gets or creates the symbol directory for a dump.
     /// </summary>
     /// <param name="dumpId">Dump ID to get directory for.</param>
+    /// <param name="userId">Optional dump owner used to scope symbol storage to one user-owned dump.</param>
+    /// <param name="dumpPath">Optional resolved dump path used when the caller already knows the dump location.</param>
     /// <returns>Path to the dump's symbol directory.</returns>
-    private string GetOrCreateDumpSymbolDirectory(string dumpId)
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when the dump cannot be resolved to an existing dump file. Symbol uploads must stay
+    /// attached to a real dump and must not create orphan root-level symbol directories.
+    /// </exception>
+    private string GetOrCreateDumpSymbolDirectory(string dumpId, string? userId = null, string? dumpPath = null)
     {
-        return _dumpSymbolDirectories.GetOrAdd(dumpId, id =>
+        var cleanDumpId = NormalizeDumpId(dumpId);
+        var dumpFilePath = ResolveDumpFilePath(cleanDumpId, userId, dumpPath);
+        if (string.IsNullOrWhiteSpace(dumpFilePath))
         {
-            var cleanDumpId = NormalizeDumpId(id);
+            throw new InvalidOperationException(
+                $"Dump '{cleanDumpId}' was not found. Upload the dump before uploading symbols.");
+        }
 
-            // Try to find the dump file and create symbols directory next to it
-            var dumpFilePath = FindDumpFile(cleanDumpId);
-            if (dumpFilePath != null)
-            {
-                var dumpDir = Path.GetDirectoryName(dumpFilePath);
-                if (dumpDir != null)
-                {
-                    var symbolDir = Path.Combine(dumpDir, $".symbols_{cleanDumpId}");
-                    if (!Directory.Exists(symbolDir))
-                    {
-                        Directory.CreateDirectory(symbolDir);
-                    }
-                    return symbolDir;
-                }
-            }
+        var dumpDir = Path.GetDirectoryName(dumpFilePath);
+        if (string.IsNullOrWhiteSpace(dumpDir))
+        {
+            throw new InvalidOperationException(
+                $"Dump '{cleanDumpId}' resolved to an invalid storage location.");
+        }
 
-            // Fallback to root-level symbols directory when user path is unknown
-            var rootSymbolDir = Path.Combine(_dumpStorageBasePath, $".symbols_{cleanDumpId}");
-            if (!Directory.Exists(rootSymbolDir))
+        var symbolDir = Path.Combine(dumpDir, $".symbols_{cleanDumpId}");
+        Directory.CreateDirectory(symbolDir);
+        return symbolDir;
+    }
+
+    /// <summary>
+    /// Resolves the dump file path for one dump scope without creating compatibility-only storage.
+    /// </summary>
+    /// <param name="cleanDumpId">The normalized dump identifier.</param>
+    /// <param name="userId">Optional dump owner used to scope the lookup.</param>
+    /// <param name="dumpPath">Optional resolved dump path used when the caller already knows the dump location.</param>
+    /// <returns>The resolved dump path, or <see langword="null"/> when the dump does not exist.</returns>
+    private string? ResolveDumpFilePath(string cleanDumpId, string? userId = null, string? dumpPath = null)
+    {
+        if (!string.IsNullOrWhiteSpace(dumpPath) &&
+            File.Exists(dumpPath) &&
+            string.Equals(
+                NormalizeDumpId(Path.GetFileNameWithoutExtension(dumpPath)),
+                cleanDumpId,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            var managedOwner = TryGetManagedDumpOwner(dumpPath);
+            if (string.IsNullOrWhiteSpace(userId) ||
+                string.IsNullOrWhiteSpace(managedOwner) ||
+                string.Equals(managedOwner, userId, StringComparison.Ordinal))
             {
-                Directory.CreateDirectory(rootSymbolDir);
+                return dumpPath;
             }
-            return rootSymbolDir;
-        });
+        }
+
+        if (!string.IsNullOrWhiteSpace(userId))
+        {
+            var sanitizedUserId = PathSanitizer.SanitizeIdentifier(userId, nameof(userId));
+            var scopedDumpPath = Path.Combine(_dumpStorageBasePath, sanitizedUserId, $"{cleanDumpId}.dmp");
+            return File.Exists(scopedDumpPath) ? scopedDumpPath : null;
+        }
+
+        return FindDumpFile(cleanDumpId);
     }
 
     /// <summary>

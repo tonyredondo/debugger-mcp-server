@@ -296,6 +296,81 @@ public class SessionManagerPersistenceTests : IDisposable
     }
 
     [Fact]
+    public void GetSession_WhenCanonicalDumpPathMissing_FallsBackToPersistedCurrentDumpPath()
+    {
+        var sessionsPath = Path.Combine(_root, "sessions");
+        Directory.CreateDirectory(sessionsPath);
+
+        var persistedDumpDir = Path.Combine(_root, "legacy-storage", "user1");
+        Directory.CreateDirectory(persistedDumpDir);
+        var persistedDumpPath = Path.Combine(persistedDumpDir, "dump1.dmp");
+        File.WriteAllText(persistedDumpPath, "legacy-dump");
+
+        var sessionId = Guid.NewGuid().ToString();
+        var metadata = new SessionMetadata
+        {
+            SessionId = sessionId,
+            UserId = "user1",
+            CreatedAt = DateTime.UtcNow.AddMinutes(-5),
+            LastAccessedAt = DateTime.UtcNow,
+            CurrentDumpId = "dump1",
+            CurrentDumpPath = persistedDumpPath,
+            SymbolConfiguration = new PersistedSessionSymbolConfiguration()
+        };
+
+        File.WriteAllText(
+            Path.Combine(sessionsPath, $"{sessionId}.json"),
+            JsonSerializer.Serialize(metadata));
+
+        var manager = new DebuggerSessionManager(
+            dumpStoragePath: _root,
+            loggerFactory: NullLoggerFactory.Instance,
+            sessionStoragePath: sessionsPath,
+            debuggerFactory: _ => new TestDebuggerManager(),
+            symbolManager: new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root));
+
+        var restoredManager = Assert.IsType<TestDebuggerManager>(manager.GetSession(sessionId, "user1"));
+        Assert.Equal(persistedDumpPath, restoredManager.CurrentDumpPath);
+    }
+
+    [Fact]
+    public void GetSession_WhenNoPersistedDumpLocationExists_RestoresWithoutOpenDump()
+    {
+        var sessionsPath = Path.Combine(_root, "sessions");
+        Directory.CreateDirectory(sessionsPath);
+
+        var sessionId = Guid.NewGuid().ToString();
+        var metadata = new SessionMetadata
+        {
+            SessionId = sessionId,
+            UserId = "user1",
+            CreatedAt = DateTime.UtcNow.AddMinutes(-5),
+            LastAccessedAt = DateTime.UtcNow,
+            CurrentDumpId = "dump1",
+            CurrentDumpPath = Path.Combine(_root, "legacy-storage", "user1", "dump1.dmp"),
+            SymbolConfiguration = new PersistedSessionSymbolConfiguration()
+        };
+
+        File.WriteAllText(
+            Path.Combine(sessionsPath, $"{sessionId}.json"),
+            JsonSerializer.Serialize(metadata));
+
+        var manager = new DebuggerSessionManager(
+            dumpStoragePath: _root,
+            loggerFactory: NullLoggerFactory.Instance,
+            sessionStoragePath: sessionsPath,
+            debuggerFactory: _ => new TestDebuggerManager(),
+            symbolManager: new SymbolManager(symbolCacheBasePath: _root, dumpStorageBasePath: _root));
+
+        var restoredSession = manager.GetSessionInfo(sessionId, "user1");
+        var restoredDebugger = Assert.IsType<TestDebuggerManager>(restoredSession.Manager);
+
+        Assert.Null(restoredSession.CurrentDumpId);
+        Assert.Equal(0, restoredDebugger.OpenDumpCalls);
+        Assert.Null(restoredDebugger.CurrentDumpPath);
+    }
+
+    [Fact]
     public void GetSessionUserId_WhenInMemorySessionExpired_CleansUpAndThrows()
     {
         var original = Environment.GetEnvironmentVariable("SESSION_INACTIVITY_THRESHOLD_MINUTES");

@@ -175,9 +175,9 @@ Quick workflow:
 | `POST` | `/api/symbols/upload` | Upload a single symbol file |
 | `POST` | `/api/symbols/upload-batch` | Upload multiple symbol files |
 | `POST` | `/api/symbols/upload-zip` | Upload a ZIP archive of symbols |
-| `GET` | `/api/symbols/dump/{dumpId}` | List symbols for a dump |
-| `GET` | `/api/symbols/dump/{dumpId}/exists` | Check if dump has symbols |
-| `DELETE` | `/api/symbols/dump/{dumpId}` | Delete symbols for a dump |
+| `GET` | `/api/symbols/user/{userId}/dump/{dumpId}` | List symbols for a dump |
+| `GET` | `/api/symbols/user/{userId}/dump/{dumpId}/exists` | Check if dump has symbols |
+| `DELETE` | `/api/symbols/user/{userId}/dump/{dumpId}` | Delete symbols for a dump |
 | `GET` | `/api/symbols/servers` | List available symbol servers |
 
 Notes:

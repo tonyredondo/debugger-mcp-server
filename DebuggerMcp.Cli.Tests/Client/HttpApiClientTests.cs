@@ -217,7 +217,7 @@ public class HttpApiClientTests
 
         // Act & Assert
         await Assert.ThrowsAsync<FileNotFoundException>(
-            () => client.UploadSymbolAsync(nonExistentPath, "dump-123"));
+            () => client.UploadSymbolAsync(nonExistentPath, "user-123", "dump-123"));
     }
 
     [Fact]
@@ -231,7 +231,7 @@ public class HttpApiClientTests
         {
             // Act & Assert
             await Assert.ThrowsAsync<InvalidOperationException>(
-                () => client.UploadSymbolAsync(tempFile, "dump-123"));
+                () => client.UploadSymbolAsync(tempFile, "user-123", "dump-123"));
         }
         finally
         {
@@ -313,7 +313,7 @@ public class HttpApiClientTests
 
         // Act & Assert
         await Assert.ThrowsAsync<InvalidOperationException>(
-            () => client.ListSymbolsAsync("dump-123"));
+            () => client.ListSymbolsAsync("user-123", "dump-123"));
     }
 
     [Fact]

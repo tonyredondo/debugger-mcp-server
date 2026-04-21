@@ -331,14 +331,17 @@ public class SymbolManagerTests
         var dumpRoot = Path.Combine(tempRoot, "dumps");
         Directory.CreateDirectory(cacheRoot);
         Directory.CreateDirectory(dumpRoot);
+        var userDir = Path.Combine(dumpRoot, "user-one");
+        Directory.CreateDirectory(userDir);
+        File.WriteAllText(Path.Combine(userDir, "dump-1.dmp"), "dump");
 
         var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
         var dumpId = "dump-1";
 
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
-        var stored = await manager.StoreSymbolFileAsync(dumpId, "../evil.pdb", stream);
+        var stored = await manager.StoreSymbolFileAsync(dumpId, "../evil.pdb", stream, userId: "user-one");
 
-        var symbolsDir = Path.Combine(dumpRoot, ".symbols_dump-1");
+        var symbolsDir = Path.Combine(userDir, ".symbols_dump-1");
         var expectedPath = Path.Combine(symbolsDir, "evil.pdb");
 
         Assert.Equal(Path.GetFullPath(expectedPath), Path.GetFullPath(stored));
@@ -353,14 +356,17 @@ public class SymbolManagerTests
         var dumpRoot = Path.Combine(tempRoot, "dumps");
         Directory.CreateDirectory(cacheRoot);
         Directory.CreateDirectory(dumpRoot);
+        var userDir = Path.Combine(dumpRoot, "user-one");
+        Directory.CreateDirectory(userDir);
+        File.WriteAllText(Path.Combine(userDir, "dump-2.dmp"), "dump");
 
         var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
         var dumpId = "dump-2";
 
         await using var stream = new MemoryStream(Encoding.UTF8.GetBytes("hello"));
-        var stored = await manager.StoreSymbolFileAsync(dumpId, @"C:\temp\sym.pdb", stream);
+        var stored = await manager.StoreSymbolFileAsync(dumpId, @"C:\temp\sym.pdb", stream, userId: "user-one");
 
-        var symbolsDir = Path.Combine(dumpRoot, ".symbols_dump-2");
+        var symbolsDir = Path.Combine(userDir, ".symbols_dump-2");
         var expectedPath = Path.Combine(symbolsDir, "sym.pdb");
 
         Assert.Equal(Path.GetFullPath(expectedPath), Path.GetFullPath(stored));
@@ -394,6 +400,9 @@ public class SymbolManagerTests
         var dumpRoot = Path.Combine(tempRoot, "dumps");
         Directory.CreateDirectory(cacheRoot);
         Directory.CreateDirectory(dumpRoot);
+        var userDir = Path.Combine(dumpRoot, "user-one");
+        Directory.CreateDirectory(userDir);
+        File.WriteAllText(Path.Combine(userDir, "dump-zip-1.dmp"), "dump");
 
         var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
 
@@ -408,7 +417,7 @@ public class SymbolManagerTests
         }
         zipStream.Position = 0;
 
-        var result = await manager.StoreSymbolZipAsync("dump-zip-1", zipStream);
+        var result = await manager.StoreSymbolZipAsync("dump-zip-1", zipStream, userId: "user-one");
 
         Assert.Equal("dump-zip-1", result.DumpId);
         Assert.Contains("good/sym.pdb", result.ExtractedFiles);
@@ -416,7 +425,7 @@ public class SymbolManagerTests
         Assert.DoesNotContain(result.ExtractedFiles, p => p.Contains("evil", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(result.ExtractedFiles, p => p.EndsWith("notes.txt", StringComparison.OrdinalIgnoreCase));
 
-        var symbolsDir = Path.Combine(dumpRoot, ".symbols_dump-zip-1");
+        var symbolsDir = Path.Combine(userDir, ".symbols_dump-zip-1");
         Assert.True(File.Exists(Path.Combine(symbolsDir, "good", "sym.pdb")));
         Assert.True(File.Exists(Path.Combine(symbolsDir, "bundle.dSYM", "Contents", "Resources", "DWARF", "MyApp")));
         Assert.False(File.Exists(Path.Combine(dumpRoot, "evil.pdb")));
@@ -448,11 +457,11 @@ public class SymbolManagerTests
     }
 
     /// <summary>
-    /// Verifies that listing symbols aggregates dump-scoped and root-level fallback directories for
-    /// one resolved dump instead of arbitrarily choosing only one of them.
+    /// Verifies that user-scoped symbol lookup stays inside the owning dump scope and ignores
+    /// legacy root-level symbol folders.
     /// </summary>
     [Fact]
-    public void ListDumpSymbols_WhenScopedAndRootFallbackSymbolsExist_ReturnsSymbolsFromBothScopes()
+    public void ListDumpSymbols_WhenUserScopedAndLegacyRootSymbolsExist_ReturnsScopedSymbolsOnly()
     {
         var tempRoot = Path.Combine(Path.GetTempPath(), "DebuggerMcp.Tests", Guid.NewGuid().ToString("N"));
         var cacheRoot = Path.Combine(tempRoot, "cache");
@@ -473,9 +482,9 @@ public class SymbolManagerTests
 
         var manager = new SymbolManager(symbolCacheBasePath: cacheRoot, dumpStorageBasePath: dumpRoot);
 
-        var symbols = manager.ListDumpSymbols("same-dump");
+        var symbols = manager.ListDumpSymbols("same-dump", userId: "user-one");
         Assert.Contains("first.pdb", symbols);
-        Assert.Contains("second.pdb", symbols);
+        Assert.DoesNotContain("second.pdb", symbols);
     }
 
     private static void AddZipEntry(System.IO.Compression.ZipArchive zip, string path, string content)

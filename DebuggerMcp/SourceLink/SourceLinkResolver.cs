@@ -34,6 +34,7 @@ public class SourceLinkResolver
 {
     private readonly ILogger? _logger;
     private readonly ConcurrentDictionary<string, ModuleSourceLinkCache> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, SourceLinkInfo?> _pdbSourceLinkCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _warnedModules = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _warnedModulesLock = new();
     private readonly List<string> _symbolSearchPaths = new();
@@ -111,6 +112,25 @@ public class SourceLinkResolver
     {
         _logger = logger;
         _logger?.LogInformation("[SourceLink] SourceLinkResolver initialized");
+    }
+
+    /// <summary>
+    /// Resolves a source location when the caller does not know which module produced the frame.
+    /// </summary>
+    /// <param name="sourceFile">Source file path from the stack frame.</param>
+    /// <param name="lineNumber">Line number in the source file.</param>
+    /// <param name="columnNumber">Optional column number for more precise location.</param>
+    /// <returns>
+    /// A <see cref="SourceLocation"/> containing the resolved URL and provider information,
+    /// or error details if no configured PDB can map the source file.
+    /// </returns>
+    /// <remarks>
+    /// This overload scans the configured symbol search paths and tries every portable PDB that
+    /// exposes Source Link metadata until one of them matches the requested source file.
+    /// </remarks>
+    public SourceLocation Resolve(string sourceFile, int lineNumber, int? columnNumber = null)
+    {
+        return ResolveAcrossConfiguredPdbs(sourceFile, lineNumber, columnNumber);
     }
 
     /// <summary>
@@ -196,6 +216,11 @@ public class SourceLinkResolver
 
         try
         {
+            if (string.IsNullOrWhiteSpace(modulePath))
+            {
+                return ResolveAcrossConfiguredPdbs(sourceFile, lineNumber, columnNumber);
+            }
+
             var moduleName = GetModuleIdentifier(modulePath);
             _logger?.LogDebug("[SourceLink] Module name extracted: {ModuleName}", moduleName);
 
@@ -339,6 +364,118 @@ public class SourceLinkResolver
     public void ClearCache()
     {
         _cache.Clear();
+        _pdbSourceLinkCache.Clear();
+    }
+
+    /// <summary>
+    /// Resolves a source location by scanning every configured PDB until a Source Link match is found.
+    /// </summary>
+    /// <param name="sourceFile">Source file path to resolve.</param>
+    /// <param name="lineNumber">Line number to include in the final URL.</param>
+    /// <param name="columnNumber">Optional column number for more precise location.</param>
+    /// <returns>The resolved source location, or an unresolved result with diagnostics.</returns>
+    private SourceLocation ResolveAcrossConfiguredPdbs(string sourceFile, int lineNumber, int? columnNumber)
+    {
+        _logger?.LogInformation(
+            "[SourceLink] Resolve without module: SourceFile={SourceFile}, Line={Line}, SearchPaths={Count}",
+            sourceFile,
+            lineNumber,
+            _symbolSearchPaths.Count);
+
+        var result = new SourceLocation
+        {
+            SourceFile = sourceFile,
+            LineNumber = lineNumber,
+            ColumnNumber = columnNumber
+        };
+
+        try
+        {
+            foreach (var pdbPath in EnumerateCandidatePdbFiles())
+            {
+                var sourceLink = GetSourceLinkForPdbPath(pdbPath);
+                if (sourceLink?.Documents == null || sourceLink.Documents.Count == 0)
+                {
+                    continue;
+                }
+
+                var rawUrl = ResolveRawUrl(sourceLink, sourceFile);
+                if (string.IsNullOrWhiteSpace(rawUrl))
+                {
+                    continue;
+                }
+
+                result.RawUrl = rawUrl;
+                result.Provider = DetectProvider(rawUrl);
+                result.Url = ConvertToBrowsableUrl(rawUrl, lineNumber, result.Provider);
+                result.Resolved = true;
+                result.Error = null;
+
+                _logger?.LogInformation(
+                    "[SourceLink] ✓ Resolved without module using PDB {PdbPath}: {SourceFile}:{Line} -> {Url}",
+                    pdbPath,
+                    sourceFile,
+                    lineNumber,
+                    result.Url);
+
+                return result;
+            }
+
+            result.Error = _symbolSearchPaths.Count == 0
+                ? "No symbol search paths are configured for Source Link resolution"
+                : "No Source Link mapping matched the source file in any configured PDB";
+        }
+        catch (Exception ex)
+        {
+            result.Error = $"Error resolving source link: {ex.Message}";
+            _logger?.LogError(ex, "[SourceLink] Error resolving source link for source file {SourceFile} without module context", sourceFile);
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Enumerates the candidate PDB files from the configured symbol search paths.
+    /// </summary>
+    /// <returns>Ordered, de-duplicated full paths to candidate PDB files.</returns>
+    private IEnumerable<string> EnumerateCandidatePdbFiles()
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var searchPath in _symbolSearchPaths)
+        {
+            string[] pdbFiles;
+            try
+            {
+                pdbFiles = Directory.GetFiles(searchPath, "*.pdb", SearchOption.AllDirectories);
+            }
+            catch (Exception ex)
+            {
+                _logger?.LogWarning(ex, "[SourceLink] Error enumerating PDBs in {SearchPath}", searchPath);
+                continue;
+            }
+
+            foreach (var pdbPath in pdbFiles)
+            {
+                if (seen.Add(pdbPath))
+                {
+                    yield return pdbPath;
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Reads and caches Source Link metadata for a specific PDB path.
+    /// </summary>
+    /// <param name="pdbPath">The PDB file to inspect.</param>
+    /// <returns>The extracted Source Link information, or <c>null</c> when the PDB has none.</returns>
+    private SourceLinkInfo? GetSourceLinkForPdbPath(string pdbPath)
+    {
+        return _pdbSourceLinkCache.GetOrAdd(
+            pdbPath,
+            static (path, resolver) => resolver.ExtractSourceLinkFromPdb(path),
+            this);
     }
 
     /// <summary>

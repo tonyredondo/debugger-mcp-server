@@ -136,12 +136,14 @@ public interface IHttpApiClient : IDisposable
     /// Uploads a symbol file with progress reporting.
     /// </summary>
     /// <param name="filePath">Path to the symbol file.</param>
+    /// <param name="userId">The user ID that owns the dump.</param>
     /// <param name="dumpId">The dump ID to associate with.</param>
     /// <param name="progress">Progress reporter (reports bytes sent).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The upload response.</returns>
     Task<SymbolUploadResponse> UploadSymbolAsync(
         string filePath,
+        string userId,
         string dumpId,
         IProgress<long>? progress = null,
         CancellationToken cancellationToken = default);
@@ -151,12 +153,14 @@ public interface IHttpApiClient : IDisposable
     /// The server extracts the ZIP preserving directory structure.
     /// </summary>
     /// <param name="zipFilePath">Path to the ZIP file.</param>
+    /// <param name="userId">The user ID that owns the dump.</param>
     /// <param name="dumpId">The dump ID to associate with.</param>
     /// <param name="progress">Progress reporter (reports bytes sent).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>The ZIP upload response.</returns>
     Task<SymbolZipUploadResponse> UploadSymbolZipAsync(
         string zipFilePath,
+        string userId,
         string dumpId,
         IProgress<long>? progress = null,
         CancellationToken cancellationToken = default);
@@ -164,22 +168,25 @@ public interface IHttpApiClient : IDisposable
     /// <summary>
     /// Lists symbols for a dump.
     /// </summary>
+    /// <param name="userId">The user ID that owns the dump.</param>
     /// <param name="dumpId">The dump ID.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Symbol list response.</returns>
-    Task<SymbolListResponse> ListSymbolsAsync(string dumpId, CancellationToken cancellationToken = default);
+    Task<SymbolListResponse> ListSymbolsAsync(string userId, string dumpId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Uploads multiple symbol files with progress reporting.
     /// Supports wildcard patterns (e.g., *.pdb, **/*.pdb).
     /// </summary>
     /// <param name="filePatterns">File paths or glob patterns (e.g., "./bin/*.pdb").</param>
+    /// <param name="userId">The user ID that owns the dump.</param>
     /// <param name="dumpId">The dump ID to associate with.</param>
     /// <param name="progressCallback">Callback for overall progress (file index, total files, current file name).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>List of upload responses.</returns>
     Task<SymbolBatchUploadResponse> UploadSymbolsBatchAsync(
         IEnumerable<string> filePatterns,
+        string userId,
         string dumpId,
         Action<int, int, string>? progressCallback = null,
         CancellationToken cancellationToken = default);

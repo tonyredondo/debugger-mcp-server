@@ -322,6 +322,45 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
     }
 
     [Fact]
+    public async Task DeleteDump_WithUserScopedSymbols_RemovesSymbolsBeforeDeletingDump()
+    {
+        // Arrange - upload a dump and attach one symbol file under the same user scope
+        var dumpContent = CreateValidWindowsDumpHeader();
+        var uploadContent = new MultipartFormDataContent();
+        uploadContent.Add(new StringContent("deletewithsymbols"), "userId");
+        var dumpFileContent = new ByteArrayContent(dumpContent);
+        dumpFileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        uploadContent.Add(dumpFileContent, "file", "test.dmp");
+
+        var uploadResponse = await _client.PostAsync("/api/dumps/upload", uploadContent);
+        var uploadBody = await uploadResponse.Content.ReadAsStringAsync();
+        var uploadResult = JsonSerializer.Deserialize<JsonElement>(uploadBody);
+        var dumpId = uploadResult.GetProperty("dumpId").GetString();
+        Assert.False(string.IsNullOrWhiteSpace(dumpId));
+
+        var symbolUploadContent = new MultipartFormDataContent();
+        symbolUploadContent.Add(new StringContent("deletewithsymbols"), "userId");
+        symbolUploadContent.Add(new StringContent(dumpId!), "dumpId");
+        var symbolContent = new ByteArrayContent(CreateValidPortablePdbHeader());
+        symbolContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        symbolUploadContent.Add(symbolContent, "file", "attached.pdb");
+
+        var symbolUploadResponse = await _client.PostAsync("/api/symbols/upload", symbolUploadContent);
+        Assert.Equal(HttpStatusCode.OK, symbolUploadResponse.StatusCode);
+
+        var symbolDirectory = Path.Combine(_factory.TempDirectory, "deletewithsymbols", $".symbols_{dumpId}");
+        Assert.True(Directory.Exists(symbolDirectory));
+
+        // Act
+        var response = await _client.DeleteAsync($"/api/dumps/deletewithsymbols/{dumpId}");
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(Directory.Exists(symbolDirectory));
+        Assert.False(File.Exists(Path.Combine(_factory.TempDirectory, "deletewithsymbols", $"{dumpId}.dmp")));
+    }
+
+    [Fact]
     public async Task DeleteDump_InvalidDumpId_ReturnsBadRequest()
     {
         // Act
@@ -386,6 +425,19 @@ public class DumpControllerTests : IClassFixture<TestWebApplicationFactory>, IDi
         header[2] = 0x4D; // M
         header[3] = 0x50; // P
         // Rest is zeros (valid minidump structure)
+        return header;
+    }
+
+    /// <summary>
+    /// Creates a valid Portable PDB header (BSJB signature).
+    /// </summary>
+    private static byte[] CreateValidPortablePdbHeader()
+    {
+        var header = new byte[64];
+        header[0] = 0x42; // B
+        header[1] = 0x53; // S
+        header[2] = 0x4A; // J
+        header[3] = 0x42; // B
         return header;
     }
 

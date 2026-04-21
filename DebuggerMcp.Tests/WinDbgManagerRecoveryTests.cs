@@ -70,6 +70,30 @@ public class WinDbgManagerRecoveryTests
     }
 
     /// <summary>
+    /// Verifies that the timeout-grace completion path still wraps recoverable engine failures.
+    /// </summary>
+    [Fact]
+    public async Task AwaitOperationResultAsync_WhenGraceWindowTaskThrowsRecoverableException_AttemptsRecoveryHandling()
+    {
+        using var manager = new WinDbgManager();
+        var method = typeof(WinDbgManager).GetMethod("AwaitOperationResultAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.NotNull(method);
+
+        var staleContext = CreateEngineContext();
+        var task = (Task<int>)method!
+            .MakeGenericMethod(typeof(int))
+            .Invoke(
+                manager,
+                [Task.FromException<int>(new COMException("dbgeng failed")), staleContext, "inspect dump", true, true])!;
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(async () => await task);
+
+        Assert.Contains("after timing out", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("recovered", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.IsType<COMException>(exception.InnerException);
+    }
+
+    /// <summary>
     /// Creates a WinDbg STA dispatcher instance through reflection.
     /// </summary>
     /// <param name="name">Thread name for the dispatcher.</param>
@@ -80,6 +104,20 @@ public class WinDbgManagerRecoveryTests
         Assert.NotNull(dispatcherType);
 
         return (IDisposable)Activator.CreateInstance(dispatcherType!, [name])!;
+    }
+
+    /// <summary>
+    /// Creates a detached WinDbg engine context that forces recovery down the fast stale-context path.
+    /// </summary>
+    /// <returns>The reflected private engine-context instance.</returns>
+    private static object CreateEngineContext()
+    {
+        var contextType = typeof(WinDbgManager).GetNestedType("WinDbgEngineContext", BindingFlags.NonPublic);
+        Assert.NotNull(contextType);
+
+        var context = Activator.CreateInstance(contextType!);
+        Assert.NotNull(context);
+        return context!;
     }
 
     /// <summary>

@@ -468,8 +468,9 @@ public class DumpController : ControllerBase
                 return NotFound(new { error = $"Dump '{sanitizedDumpId}' not found for user '{sanitizedUserId}'" });
             }
 
-            // Delete the dump file
-            System.IO.File.Delete(filePath);
+            // Delete associated symbol files before deleting the dump so symbol cleanup failures
+            // never leave the primary dump already removed.
+            _symbolManager.DeleteDumpSymbols(sanitizedDumpId, sanitizedUserId, filePath);
 
             // Delete metadata file if it exists (check both naming conventions)
             var metadataPath = DumpMetadataStore.GetPreferredMetadataPath(userDir, sanitizedDumpId);
@@ -490,8 +491,8 @@ public class DumpController : ControllerBase
                 Directory.Delete(binaryDir, recursive: true);
             }
 
-            // Delete associated symbol files to prevent orphaned files
-            _symbolManager.DeleteDumpSymbols(sanitizedDumpId);
+            // Delete the dump file after associated cleanup succeeds.
+            System.IO.File.Delete(filePath);
 
             // Clean up watch store cache and locks for this dump
             _watchStore.CleanupDumpResources(sanitizedUserId, sanitizedDumpId);

@@ -7,8 +7,8 @@ using System.Linq;
 namespace DebuggerMcp.Tests.Controllers;
 
 /// <summary>
-/// Integration tests for SymbolController.
-/// Uses TestWebApplicationFactory to test HTTP endpoints with a real HTTP pipeline.
+/// Integration tests for <see cref="DebuggerMcp.Controllers.SymbolController"/>.
+/// These tests exercise the HTTP pipeline with user-scoped dump ownership.
 /// </summary>
 public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, IDisposable
 {
@@ -26,39 +26,32 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
         _client.Dispose();
     }
 
-    // ========== Upload Endpoint Tests ==========
-
     [Fact]
     public async Task UploadSymbol_NoFile_ReturnsBadRequest()
     {
-        // Arrange
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("test-dump-id"), "dumpId");
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent("user-one"), "userId" },
+            { new StringContent("some-dump-id"), "dumpId" }
+        };
 
-        // Act
         var response = await _client.PostAsync("/api/symbols/upload", content);
 
-        // Assert - ASP.NET model binding returns BadRequest when file is missing
-        // The exact error format may vary (RFC 9110 ProblemDetails vs custom error)
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
     public async Task UploadSymbol_InvalidDumpId_ReturnsBadRequest()
     {
-        // Arrange
-        var pdbContent = CreateValidPortablePdbHeader();
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent("user-one"), "userId" },
+            { new StringContent("../../../etc/passwd"), "dumpId" }
+        };
+        content.Add(CreateFileContent(CreateValidPortablePdbHeader()), "file", "test.pdb");
 
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("../../../etc/passwd"), "dumpId"); // Path traversal attempt
-        var fileContent = new ByteArrayContent(pdbContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", "test.pdb");
-
-        // Act
         var response = await _client.PostAsync("/api/symbols/upload", content);
 
-        // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("path traversal", body, StringComparison.OrdinalIgnoreCase);
@@ -67,221 +60,161 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     [Fact]
     public async Task UploadSymbol_InvalidFormat_ReturnsBadRequest()
     {
-        // Arrange - Create an invalid file (not a valid symbol)
-        var invalidContent = Encoding.UTF8.GetBytes("This is not a valid symbol file");
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent("user-one"), "userId" },
+            { new StringContent("some-dump-id"), "dumpId" }
+        };
+        content.Add(CreateFileContent(Encoding.UTF8.GetBytes("This is not a valid symbol file")), "file", "test.pdb");
 
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("test-dump-id"), "dumpId");
-        var fileContent = new ByteArrayContent(invalidContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", "test.pdb");
-
-        // Act
         var response = await _client.PostAsync("/api/symbols/upload", content);
 
-        // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("Invalid symbol file format", body);
+        Assert.Contains("Invalid symbol file format", body, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task UploadSymbol_FileTooSmall_ReturnsBadRequest()
     {
-        // Arrange - Create a file that's too small
-        var smallContent = new byte[2]; // Too small to be valid
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent("user-one"), "userId" },
+            { new StringContent("some-dump-id"), "dumpId" }
+        };
+        content.Add(CreateFileContent(new byte[2]), "file", "test.pdb");
 
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("test-dump-id"), "dumpId");
-        var fileContent = new ByteArrayContent(smallContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", "test.pdb");
-
-        // Act
         var response = await _client.PostAsync("/api/symbols/upload", content);
 
-        // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("too small", body, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
-    public async Task UploadSymbol_ValidPortablePdb_ReturnsOk()
+    public async Task UploadSymbol_WhenDumpDoesNotExist_ReturnsBadRequest()
     {
-        // Arrange
-        var pdbContent = CreateValidPortablePdbHeader();
+        var response = await UploadSymbolAsync(
+            "missing-user",
+            "missing-dump",
+            CreateValidPortablePdbHeader(),
+            "MyApp.pdb");
 
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("valid-dump-id"), "dumpId");
-        var fileContent = new ByteArrayContent(pdbContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", "MyApp.pdb");
-
-        // Act
-        var response = await _client.PostAsync("/api/symbols/upload", content);
-
-        // Assert
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
+        Assert.Contains("Upload the dump before uploading symbols", body, StringComparison.OrdinalIgnoreCase);
+    }
 
-        Assert.True(result.TryGetProperty("dumpId", out var dumpId));
-        Assert.Equal("valid-dump-id", dumpId.GetString());
-        Assert.True(result.TryGetProperty("fileName", out var fileName));
-        Assert.Equal("MyApp.pdb", fileName.GetString());
-        Assert.True(result.TryGetProperty("format", out var format));
-        Assert.Contains("Portable PDB", format.GetString());
+    [Fact]
+    public async Task UploadSymbol_ValidPortablePdb_ReturnsOkAndStoresInUserScopedDirectory()
+    {
+        const string userId = "portable-user";
+        var dumpId = await UploadDumpAsync(userId);
+
+        var response = await UploadSymbolAsync(userId, dumpId, CreateValidPortablePdbHeader(), "MyApp.pdb");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await ReadJsonAsync(response);
+        Assert.Equal(dumpId, result.GetProperty("dumpId").GetString());
+        Assert.Equal("MyApp.pdb", result.GetProperty("fileName").GetString());
+        Assert.Contains("Portable PDB", result.GetProperty("format").GetString(), StringComparison.Ordinal);
+
+        var scopedSymbolPath = Path.Combine(_factory.TempDirectory, userId, $".symbols_{dumpId}", "MyApp.pdb");
+        var rootLevelSymbolDirectory = Path.Combine(_factory.TempDirectory, $".symbols_{dumpId}");
+        Assert.True(File.Exists(scopedSymbolPath));
+        Assert.False(Directory.Exists(rootLevelSymbolDirectory));
     }
 
     [Fact]
     public async Task UploadSymbol_FileNameContainsPathSegments_ReturnsSanitizedBasename()
     {
-        // Arrange
-        var pdbContent = CreateValidPortablePdbHeader();
+        const string userId = "sanitize-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("sanitize-name-dump-id"), "dumpId");
-        var fileContent = new ByteArrayContent(pdbContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", @"C:\temp\sym.pdb");
+        var response = await UploadSymbolAsync(userId, dumpId, CreateValidPortablePdbHeader(), @"C:\temp\sym.pdb");
 
-        // Act
-        var response = await _client.PostAsync("/api/symbols/upload", content);
-
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("fileName", out var fileName));
-        Assert.Equal("sym.pdb", fileName.GetString());
+        var result = await ReadJsonAsync(response);
+        Assert.Equal("sym.pdb", result.GetProperty("fileName").GetString());
     }
 
     [Fact]
     public async Task UploadSymbol_ValidWindowsPdb_ReturnsOk()
     {
-        // Arrange
-        var pdbContent = CreateValidWindowsPdbHeader();
+        const string userId = "windows-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("windows-dump-id"), "dumpId");
-        var fileContent = new ByteArrayContent(pdbContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", "Native.pdb");
+        var response = await UploadSymbolAsync(userId, dumpId, CreateValidWindowsPdbHeader(), "Native.pdb");
 
-        // Act
-        var response = await _client.PostAsync("/api/symbols/upload", content);
-
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("format", out var format));
-        Assert.Contains("Windows PDB", format.GetString());
+        var result = await ReadJsonAsync(response);
+        Assert.Contains("Windows PDB", result.GetProperty("format").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task UploadSymbol_ValidElfSymbol_ReturnsOk()
     {
-        // Arrange
-        var elfContent = CreateValidElfHeader();
+        const string userId = "linux-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("linux-dump-id"), "dumpId");
-        var fileContent = new ByteArrayContent(elfContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", "libmyapp.so");
+        var response = await UploadSymbolAsync(userId, dumpId, CreateValidElfHeader(), "libmyapp.so");
 
-        // Act
-        var response = await _client.PostAsync("/api/symbols/upload", content);
-
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("format", out var format));
-        Assert.Contains("ELF", format.GetString());
+        var result = await ReadJsonAsync(response);
+        Assert.Contains("ELF", result.GetProperty("format").GetString(), StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task UploadSymbol_ValidMachOSymbol_ReturnsOk()
     {
-        // Arrange
-        var machoContent = CreateValidMachOHeader();
+        const string userId = "macos-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("macos-dump-id"), "dumpId");
-        var fileContent = new ByteArrayContent(machoContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", "MyApp.dylib");
+        var response = await UploadSymbolAsync(userId, dumpId, CreateValidMachOHeader(), "MyApp.dylib");
 
-        // Act
-        var response = await _client.PostAsync("/api/symbols/upload", content);
-
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("format", out var format));
-        Assert.Contains("Mach-O", format.GetString());
+        var result = await ReadJsonAsync(response);
+        Assert.Contains("Mach-O", result.GetProperty("format").GetString(), StringComparison.Ordinal);
     }
-
-    // ========== Batch Upload Endpoint Tests ==========
 
     [Fact]
     public async Task UploadSymbolBatch_NoFiles_ReturnsBadRequest()
     {
-        // Arrange
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("test-dump-id"), "dumpId");
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent("user-one"), "userId" },
+            { new StringContent("some-dump-id"), "dumpId" }
+        };
 
-        // Act
         var response = await _client.PostAsync("/api/symbols/upload-batch", content);
 
-        // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         var body = await response.Content.ReadAsStringAsync();
-        Assert.Contains("No files provided", body);
+        Assert.Contains("No files provided", body, StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task UploadSymbolBatch_MultipleValidFiles_ReturnsOk()
     {
-        // Arrange
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("batch-dump-id"), "dumpId");
+        const string userId = "batch-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        // Add first PDB
-        var pdb1Content = CreateValidPortablePdbHeader();
-        var file1Content = new ByteArrayContent(pdb1Content);
-        file1Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(file1Content, "files", "App1.pdb");
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent(userId), "userId" },
+            { new StringContent(dumpId), "dumpId" }
+        };
+        content.Add(CreateFileContent(CreateValidPortablePdbHeader()), "files", "App1.pdb");
+        content.Add(CreateFileContent(CreateValidPortablePdbHeader()), "files", "App2.pdb");
 
-        // Add second PDB
-        var pdb2Content = CreateValidPortablePdbHeader();
-        var file2Content = new ByteArrayContent(pdb2Content);
-        file2Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(file2Content, "files", "App2.pdb");
-
-        // Act
         var response = await _client.PostAsync("/api/symbols/upload-batch", content);
 
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("filesUploaded", out var filesUploaded));
-        Assert.Equal(2, filesUploaded.GetInt32());
-
-        Assert.True(result.TryGetProperty("files", out var files));
-        var fileNames = files.EnumerateArray()
-            .Select(f => f.GetProperty("fileName").GetString())
-            .Where(n => !string.IsNullOrWhiteSpace(n))
+        var result = await ReadJsonAsync(response);
+        Assert.Equal(2, result.GetProperty("filesUploaded").GetInt32());
+        var fileNames = result.GetProperty("files").EnumerateArray()
+            .Select(file => file.GetProperty("fileName").GetString())
+            .Where(name => !string.IsNullOrWhiteSpace(name))
             .ToList();
         Assert.Contains("App1.pdb", fileNames);
         Assert.Contains("App2.pdb", fileNames);
@@ -290,32 +223,24 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     [Fact]
     public async Task UploadSymbolBatch_FileNamesContainPathSegments_ReturnsSanitizedBasenames()
     {
-        // Arrange
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("batch-sanitize-dump-id"), "dumpId");
+        const string userId = "batch-sanitize-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        var pdb1Content = CreateValidPortablePdbHeader();
-        var file1Content = new ByteArrayContent(pdb1Content);
-        file1Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(file1Content, "files", "../App1.pdb");
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent(userId), "userId" },
+            { new StringContent(dumpId), "dumpId" }
+        };
+        content.Add(CreateFileContent(CreateValidPortablePdbHeader()), "files", "../App1.pdb");
+        content.Add(CreateFileContent(CreateValidPortablePdbHeader()), "files", @"C:\x\App2.pdb");
 
-        var pdb2Content = CreateValidPortablePdbHeader();
-        var file2Content = new ByteArrayContent(pdb2Content);
-        file2Content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(file2Content, "files", @"C:\x\App2.pdb");
-
-        // Act
         var response = await _client.PostAsync("/api/symbols/upload-batch", content);
 
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("files", out var files));
-        var fileNames = files.EnumerateArray()
-            .Select(f => f.GetProperty("fileName").GetString())
-            .Where(n => !string.IsNullOrWhiteSpace(n))
+        var result = await ReadJsonAsync(response);
+        var fileNames = result.GetProperty("files").EnumerateArray()
+            .Select(file => file.GetProperty("fileName").GetString())
+            .Where(name => !string.IsNullOrWhiteSpace(name))
             .ToList();
         Assert.Contains("App1.pdb", fileNames);
         Assert.Contains("App2.pdb", fileNames);
@@ -324,195 +249,210 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     [Fact]
     public async Task UploadSymbolBatch_InvalidDumpId_ReturnsBadRequest()
     {
-        // Arrange
-        var content = new MultipartFormDataContent();
-        content.Add(new StringContent("../../../etc"), "dumpId");
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent("user-one"), "userId" },
+            { new StringContent("../../../etc"), "dumpId" }
+        };
+        content.Add(CreateFileContent(CreateValidPortablePdbHeader()), "files", "App1.pdb");
 
-        var pdbContent = CreateValidPortablePdbHeader();
-        var fileContent = new ByteArrayContent(pdbContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "files", "App1.pdb");
-
-        // Act
         var response = await _client.PostAsync("/api/symbols/upload-batch", content);
 
-        // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
-    // ========== List Symbols Endpoint Tests ==========
-    // Note: Route is /api/symbols/dump/{dumpId}
-
     [Fact]
-    public async Task ListSymbols_NoSymbols_Returns404()
+    public async Task ListSymbols_NoSymbolsForUserScopedDump_Returns404()
     {
-        // Act - the endpoint returns 404 when no symbols exist
-        var response = await _client.GetAsync("/api/symbols/dump/nonexistent-dump-id");
+        const string userId = "list-empty-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        // Assert
+        var response = await _client.GetAsync(GetDumpSymbolsRoute(userId, dumpId));
+
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
     public async Task ListSymbols_InvalidDumpId_ReturnsBadRequest()
     {
-        // Act
-        var response = await _client.GetAsync("/api/symbols/dump/..%2F..%2Fetc");
+        var response = await _client.GetAsync("/api/symbols/user/test-user/dump/..%2F..%2Fetc");
 
-        // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     [Fact]
     public async Task ListSymbols_WithUploadedSymbols_ReturnsList()
     {
-        // Arrange - Upload a symbol first with unique ID
-        var uniqueDumpId = $"list-symbols-{Guid.NewGuid():N}";
-        var pdbContent = CreateValidPortablePdbHeader();
-        var uploadContent = new MultipartFormDataContent();
-        uploadContent.Add(new StringContent(uniqueDumpId), "dumpId");
-        var fileContent = new ByteArrayContent(pdbContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        uploadContent.Add(fileContent, "file", "Test.pdb");
+        const string userId = "list-user";
+        var dumpId = await UploadDumpAsync(userId);
+        await UploadSymbolAsync(userId, dumpId, CreateValidPortablePdbHeader(), "Test.pdb");
 
-        await _client.PostAsync("/api/symbols/upload", uploadContent);
+        var response = await _client.GetAsync(GetDumpSymbolsRoute(userId, dumpId));
 
-        // Act
-        var response = await _client.GetAsync($"/api/symbols/dump/{uniqueDumpId}");
-
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("symbols", out var symbols));
-        Assert.True(symbols.GetArrayLength() >= 1);
+        var result = await ReadJsonAsync(response);
+        Assert.Contains("Test.pdb", result.GetProperty("symbols").EnumerateArray().Select(v => v.GetString()));
     }
 
-    // ========== Symbol Exists Endpoint Tests ==========
-    // Note: Route is /api/symbols/dump/{dumpId}/exists (checks if ANY symbols exist)
+    [Fact]
+    public async Task ListSymbols_WrongUserScope_DoesNotLeakSymbols()
+    {
+        const string ownerUserId = "owner-user";
+        const string otherUserId = "other-user";
+        var dumpId = await UploadDumpAsync(ownerUserId);
+        await UploadSymbolAsync(ownerUserId, dumpId, CreateValidPortablePdbHeader(), "OwnerOnly.pdb");
+
+        var response = await _client.GetAsync(GetDumpSymbolsRoute(otherUserId, dumpId));
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
 
     [Fact]
     public async Task CheckSymbolExists_NoneExist_ReturnsFalse()
     {
-        // Act
-        var response = await _client.GetAsync("/api/symbols/dump/some-dump-no-symbols/exists");
+        const string userId = "exists-empty-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        // Assert
+        var response = await _client.GetAsync(GetDumpSymbolsExistsRoute(userId, dumpId));
+
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("hasSymbols", out var hasSymbols));
-        Assert.False(hasSymbols.GetBoolean());
+        var result = await ReadJsonAsync(response);
+        Assert.False(result.GetProperty("hasSymbols").GetBoolean());
     }
 
     [Fact]
     public async Task CheckSymbolExists_SymbolsExist_ReturnsTrue()
     {
-        // Arrange - Upload a symbol first with unique ID
-        var uniqueDumpId = $"exists-check-{Guid.NewGuid():N}";
-        var pdbContent = CreateValidPortablePdbHeader();
-        var uploadContent = new MultipartFormDataContent();
-        uploadContent.Add(new StringContent(uniqueDumpId), "dumpId");
-        var fileContent = new ByteArrayContent(pdbContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        uploadContent.Add(fileContent, "file", "ExistingFile.pdb");
+        const string userId = "exists-user";
+        var dumpId = await UploadDumpAsync(userId);
+        await UploadSymbolAsync(userId, dumpId, CreateValidPortablePdbHeader(), "ExistingFile.pdb");
 
-        var uploadResponse = await _client.PostAsync("/api/symbols/upload", uploadContent);
-        Assert.Equal(HttpStatusCode.OK, uploadResponse.StatusCode);
+        var response = await _client.GetAsync(GetDumpSymbolsExistsRoute(userId, dumpId));
 
-        // Act
-        var response = await _client.GetAsync($"/api/symbols/dump/{uniqueDumpId}/exists");
-
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("hasSymbols", out var hasSymbols));
-        Assert.True(hasSymbols.GetBoolean());
+        var result = await ReadJsonAsync(response);
+        Assert.True(result.GetProperty("hasSymbols").GetBoolean());
     }
 
     [Fact]
     public async Task CheckSymbolExists_InvalidDumpId_ReturnsBadRequest()
     {
-        // Act
-        var response = await _client.GetAsync("/api/symbols/dump/..%2Fetc/exists");
+        var response = await _client.GetAsync("/api/symbols/user/test-user/dump/..%2Fetc/exists");
 
-        // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
-
-    // ========== Delete Symbol Endpoint Tests ==========
-    // Note: Route is /api/symbols/dump/{dumpId} (deletes ALL symbols for dump)
 
     [Fact]
     public async Task DeleteSymbols_NoSymbols_Returns404()
     {
-        // Act
-        var response = await _client.DeleteAsync("/api/symbols/dump/some-dump-no-symbols");
+        const string userId = "delete-empty-user";
+        var dumpId = await UploadDumpAsync(userId);
 
-        // Assert
+        var response = await _client.DeleteAsync(GetDumpSymbolsRoute(userId, dumpId));
+
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     [Fact]
     public async Task DeleteSymbols_SymbolsExist_ReturnsOk()
     {
-        // Arrange - Upload a symbol first with unique ID
-        var uniqueDumpId = $"delete-symbol-{Guid.NewGuid():N}";
-        var pdbContent = CreateValidPortablePdbHeader();
-        var uploadContent = new MultipartFormDataContent();
-        uploadContent.Add(new StringContent(uniqueDumpId), "dumpId");
-        var fileContent = new ByteArrayContent(pdbContent);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
-        uploadContent.Add(fileContent, "file", "ToDelete.pdb");
+        const string userId = "delete-user";
+        var dumpId = await UploadDumpAsync(userId);
+        await UploadSymbolAsync(userId, dumpId, CreateValidPortablePdbHeader(), "ToDelete.pdb");
 
-        var uploadResponse = await _client.PostAsync("/api/symbols/upload", uploadContent);
-        Assert.Equal(HttpStatusCode.OK, uploadResponse.StatusCode);
+        var response = await _client.DeleteAsync(GetDumpSymbolsRoute(userId, dumpId));
 
-        // Act
-        var response = await _client.DeleteAsync($"/api/symbols/dump/{uniqueDumpId}");
-
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-
-        // Verify it's actually deleted
-        var existsResponse = await _client.GetAsync($"/api/symbols/dump/{uniqueDumpId}/exists");
-        var body = await existsResponse.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
+        var existsResponse = await _client.GetAsync(GetDumpSymbolsExistsRoute(userId, dumpId));
+        var result = await ReadJsonAsync(existsResponse);
         Assert.False(result.GetProperty("hasSymbols").GetBoolean());
     }
 
     [Fact]
     public async Task DeleteSymbols_InvalidDumpId_ReturnsBadRequest()
     {
-        // Act
-        var response = await _client.DeleteAsync("/api/symbols/dump/..%2Fetc");
+        var response = await _client.DeleteAsync("/api/symbols/user/test-user/dump/..%2Fetc");
 
-        // Assert
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
-
-    // ========== Symbol Servers Endpoint Tests ==========
 
     [Fact]
     public async Task GetSymbolServers_ReturnsServerList()
     {
-        // Act
         var response = await _client.GetAsync("/api/symbols/servers");
 
-        // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var body = await response.Content.ReadAsStringAsync();
-        var result = JsonSerializer.Deserialize<JsonElement>(body);
-
-        Assert.True(result.TryGetProperty("servers", out var servers));
-        Assert.True(servers.GetArrayLength() > 0);
+        var result = await ReadJsonAsync(response);
+        Assert.True(result.GetProperty("servers").GetArrayLength() > 0);
     }
 
-    // ========== Helper Methods ==========
+    /// <summary>
+    /// Uploads a real dump through the API so symbol tests use the same persisted dump ownership
+    /// shape as production code.
+    /// </summary>
+    private async Task<string> UploadDumpAsync(string userId)
+    {
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent(userId), "userId" }
+        };
+        content.Add(CreateFileContent(CreateValidWindowsDumpHeader()), "file", "test.dmp");
+
+        var response = await _client.PostAsync("/api/dumps/upload", content);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        var result = await ReadJsonAsync(response);
+        return result.GetProperty("dumpId").GetString()!;
+    }
+
+    /// <summary>
+    /// Uploads a single symbol file using the user-scoped symbol endpoint.
+    /// </summary>
+    private async Task<HttpResponseMessage> UploadSymbolAsync(string userId, string dumpId, byte[] contentBytes, string fileName)
+    {
+        var content = new MultipartFormDataContent
+        {
+            { new StringContent(userId), "userId" },
+            { new StringContent(dumpId), "dumpId" }
+        };
+        content.Add(CreateFileContent(contentBytes), "file", fileName);
+        return await _client.PostAsync("/api/symbols/upload", content);
+    }
+
+    /// <summary>
+    /// Creates a file content object with the binary media type used by these upload endpoints.
+    /// </summary>
+    private static ByteArrayContent CreateFileContent(byte[] bytes)
+    {
+        var fileContent = new ByteArrayContent(bytes);
+        fileContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+        return fileContent;
+    }
+
+    /// <summary>
+    /// Reads a JSON response body as a <see cref="JsonElement"/>.
+    /// </summary>
+    private static async Task<JsonElement> ReadJsonAsync(HttpResponseMessage response)
+    {
+        var body = await response.Content.ReadAsStringAsync();
+        return JsonSerializer.Deserialize<JsonElement>(body);
+    }
+
+    /// <summary>
+    /// Builds the user-scoped route for listing or deleting dump symbols.
+    /// </summary>
+    private static string GetDumpSymbolsRoute(string userId, string dumpId)
+    {
+        return $"/api/symbols/user/{Uri.EscapeDataString(userId)}/dump/{Uri.EscapeDataString(dumpId)}";
+    }
+
+    /// <summary>
+    /// Builds the user-scoped route for checking whether a dump has symbols.
+    /// </summary>
+    private static string GetDumpSymbolsExistsRoute(string userId, string dumpId)
+    {
+        return $"{GetDumpSymbolsRoute(userId, dumpId)}/exists";
+    }
 
     /// <summary>
     /// Creates a valid Portable PDB header (BSJB signature).
@@ -529,17 +469,16 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
 
     /// <summary>
     /// Creates a valid Windows PDB header (MSF 7.0 signature).
-    /// The signature is: "Microsoft C/C++ MSF 7.00\r\n\x1ADS" (29 bytes).
     /// </summary>
     private static byte[] CreateValidWindowsPdbHeader()
     {
-        // Exact MSF 7.0 signature bytes
         var header = new byte[64];
-        byte[] signature = {
-            0x4D, 0x69, 0x63, 0x72, 0x6F, 0x73, 0x6F, 0x66, // "Microsof"
-            0x74, 0x20, 0x43, 0x2F, 0x43, 0x2B, 0x2B, 0x20, // "t C/C++ "
-            0x4D, 0x53, 0x46, 0x20, 0x37, 0x2E, 0x30, 0x30, // "MSF 7.00"
-            0x0D, 0x0A, 0x1A, 0x44, 0x53                    // "\r\n\x1ADS"
+        byte[] signature =
+        {
+            0x4D, 0x69, 0x63, 0x72, 0x6F, 0x73, 0x6F, 0x66,
+            0x74, 0x20, 0x43, 0x2F, 0x43, 0x2B, 0x2B, 0x20,
+            0x4D, 0x53, 0x46, 0x20, 0x37, 0x2E, 0x30, 0x30,
+            0x0D, 0x0A, 0x1A, 0x44, 0x53
         };
         Array.Copy(signature, header, signature.Length);
         return header;
@@ -551,12 +490,12 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     private static byte[] CreateValidElfHeader()
     {
         var header = new byte[64];
-        header[0] = 0x7F; // DEL
-        header[1] = 0x45; // E
-        header[2] = 0x4C; // L
-        header[3] = 0x46; // F
-        header[4] = 0x02; // 64-bit
-        header[5] = 0x01; // Little endian
+        header[0] = 0x7F;
+        header[1] = 0x45;
+        header[2] = 0x4C;
+        header[3] = 0x46;
+        header[4] = 0x02;
+        header[5] = 0x01;
         return header;
     }
 
@@ -566,11 +505,23 @@ public class SymbolControllerTests : IClassFixture<TestWebApplicationFactory>, I
     private static byte[] CreateValidMachOHeader()
     {
         var header = new byte[64];
-        // 64-bit Mach-O magic (little endian)
         header[0] = 0xCF;
         header[1] = 0xFA;
         header[2] = 0xED;
         header[3] = 0xFE;
+        return header;
+    }
+
+    /// <summary>
+    /// Creates a valid Windows minidump header.
+    /// </summary>
+    private static byte[] CreateValidWindowsDumpHeader()
+    {
+        var header = new byte[64];
+        header[0] = 0x4D;
+        header[1] = 0x44;
+        header[2] = 0x4D;
+        header[3] = 0x50;
         return header;
     }
 }

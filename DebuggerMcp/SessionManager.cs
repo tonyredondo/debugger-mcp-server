@@ -551,8 +551,8 @@ public class DebuggerSessionManager
     {
         if (!string.IsNullOrWhiteSpace(metadata.CurrentDumpId) && !string.IsNullOrWhiteSpace(metadata.UserId))
         {
-            var currentStoragePath = GetDumpPath(metadata.CurrentDumpId, metadata.UserId);
-            if (File.Exists(currentStoragePath))
+            var currentStoragePath = TryGetCanonicalDumpPathForRestore(metadata.CurrentDumpId, metadata.UserId);
+            if (!string.IsNullOrWhiteSpace(currentStoragePath))
             {
                 return currentStoragePath;
             }
@@ -564,6 +564,29 @@ public class DebuggerSessionManager
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Resolves the canonical dump path for restore without throwing when the current storage-root
+    /// location is missing. Restore must be able to fall back to persisted absolute paths and then
+    /// to a no-dump restore.
+    /// </summary>
+    /// <param name="dumpId">The persisted dump identifier.</param>
+    /// <param name="userId">The persisted owning user identifier.</param>
+    /// <returns>The canonical storage-root path when it exists; otherwise <see langword="null"/>.</returns>
+    private string? TryGetCanonicalDumpPathForRestore(string dumpId, string userId)
+    {
+        try
+        {
+            var sanitizedUserId = PathSanitizer.SanitizeIdentifier(userId, nameof(userId));
+            var sanitizedDumpId = PathSanitizer.SanitizeIdentifier(dumpId, nameof(dumpId));
+            var canonicalPath = Path.Combine(_dumpStoragePath, sanitizedUserId, $"{sanitizedDumpId}.dmp");
+            return File.Exists(canonicalPath) ? canonicalPath : null;
+        }
+        catch (ArgumentException)
+        {
+            return null;
+        }
     }
 
     /// <summary>

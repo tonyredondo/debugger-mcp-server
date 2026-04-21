@@ -523,6 +523,7 @@ public class HttpApiClient : IHttpApiClient
     /// <inheritdoc/>
     public async Task<SymbolUploadResponse> UploadSymbolAsync(
         string filePath,
+        string userId,
         string dumpId,
         IProgress<long>? progress = null,
         CancellationToken cancellationToken = default)
@@ -551,6 +552,7 @@ public class HttpApiClient : IHttpApiClient
                 streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
 
                 content.Add(streamContent, "file", fileName);
+                content.Add(new StringContent(userId), "userId");
                 content.Add(new StringContent(dumpId), "dumpId");
 
                 var response = await _httpClient!.PostAsync("api/symbols/upload", content, ct);
@@ -565,6 +567,7 @@ public class HttpApiClient : IHttpApiClient
     /// <inheritdoc/>
     public async Task<SymbolZipUploadResponse> UploadSymbolZipAsync(
         string zipFilePath,
+        string userId,
         string dumpId,
         IProgress<long>? progress = null,
         CancellationToken cancellationToken = default)
@@ -593,6 +596,7 @@ public class HttpApiClient : IHttpApiClient
                 streamContent.Headers.ContentType = new MediaTypeHeaderValue("application/zip");
 
                 content.Add(streamContent, "file", fileName);
+                content.Add(new StringContent(userId), "userId");
                 content.Add(new StringContent(dumpId), "dumpId");
 
                 var response = await _httpClient!.PostAsync("api/symbols/upload-zip", content, ct);
@@ -605,16 +609,17 @@ public class HttpApiClient : IHttpApiClient
     }
 
     /// <inheritdoc/>
-    public async Task<SymbolListResponse> ListSymbolsAsync(string dumpId, CancellationToken cancellationToken = default)
+    public async Task<SymbolListResponse> ListSymbolsAsync(string userId, string dumpId, CancellationToken cancellationToken = default)
     {
         return await GetAsync<SymbolListResponse>(
-            $"api/symbols/dump/{Uri.EscapeDataString(dumpId)}",
+            $"api/symbols/user/{Uri.EscapeDataString(userId)}/dump/{Uri.EscapeDataString(dumpId)}",
             cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<SymbolBatchUploadResponse> UploadSymbolsBatchAsync(
         IEnumerable<string> filePatterns,
+        string userId,
         string dumpId,
         Action<int, int, string>? progressCallback = null,
         CancellationToken cancellationToken = default)
@@ -648,7 +653,7 @@ public class HttpApiClient : IHttpApiClient
 
             try
             {
-                var response = await UploadSymbolAsync(file, dumpId, null, cancellationToken);
+                var response = await UploadSymbolAsync(file, userId, dumpId, null, cancellationToken);
                 results.Add(new SymbolUploadResult
                 {
                     FileName = response.FileName,

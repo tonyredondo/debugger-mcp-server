@@ -165,8 +165,8 @@ public class SymbolTools(
                $"   Description: Symbol server for NuGet packages\n" +
                $"   Usage: Use ConfigureAdditionalSymbols to add this\n\n" +
                $"Custom Symbols:\n" +
-               $"   Upload via HTTP API: POST /api/symbols/upload (with dumpId)\n" +
-               $"   Batch upload: POST /api/symbols/upload-batch (with dumpId)\n" +
+               $"   Upload via HTTP API: POST /api/symbols/upload (with userId and dumpId)\n" +
+               $"   Batch upload: POST /api/symbols/upload-batch (with userId and dumpId)\n" +
                $"   These are automatically configured when you open a dump";
     }
 

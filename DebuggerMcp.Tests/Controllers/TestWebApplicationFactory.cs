@@ -68,8 +68,11 @@ public class TestWebApplicationFactory : IDisposable
                     // Capture server start time at test server startup
                     services.AddSingleton(new ServerRuntimeInfo(DateTime.UtcNow));
 
-                    // Add symbol manager
-                    services.AddSingleton<SymbolManager>();
+                    // Add symbol manager scoped to the same temporary dump root as the session manager
+                    // so symbol uploads resolve the real test-owned dumps instead of a global default path.
+                    services.AddSingleton(new SymbolManager(
+                        symbolCacheBasePath: Path.Combine(_tempDir, "symbol-cache"),
+                        dumpStorageBasePath: _tempDir));
 
                     // Add watch store
                     services.AddSingleton(new WatchStore(_tempDir));

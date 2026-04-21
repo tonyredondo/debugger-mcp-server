@@ -1,5 +1,7 @@
 using DebuggerMcp;
 using DebuggerMcp.McpTools;
+using DebuggerMcp.Tests.SourceLink;
+using DebuggerMcp.Tests.TestDoubles;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
@@ -109,6 +111,55 @@ public class SourceLinkToolsTests : IDisposable
         var result = _tools.ResolveSourceLink(sessionId, userId, "/path/to/file.cs", lineNumber: 42);
 
         Assert.Contains("Could not resolve Source Link", result);
+    }
+
+    [Fact]
+    public void ResolveSourceLink_WithMatchingPortablePdbInDumpDirectory_ReturnsResolvedUrl()
+    {
+        var scenarioRoot = Path.Combine(_tempPath, "resolved-sourcelink");
+        Directory.CreateDirectory(scenarioRoot);
+
+        var symbolManager = new SymbolManager(scenarioRoot);
+        var watchStore = new WatchStore(scenarioRoot);
+        var fakeDebuggerManager = new FakeDebuggerManager
+        {
+            IsDumpOpen = true
+        };
+
+        var sessionManager = new DebuggerSessionManager(
+            dumpStoragePath: scenarioRoot,
+            debuggerFactory: _ => fakeDebuggerManager,
+            symbolManager: symbolManager);
+
+        var tools = new SourceLinkTools(
+            sessionManager,
+            symbolManager,
+            watchStore,
+            NullLogger<SourceLinkTools>.Instance);
+
+        var userId = "test-user";
+        var sessionId = sessionManager.CreateSession(userId);
+        var session = sessionManager.GetSessionInfo(sessionId, userId);
+
+        var dumpDirectory = Path.Combine(scenarioRoot, userId);
+        Directory.CreateDirectory(dumpDirectory);
+
+        var dumpId = "testdump";
+        var dumpPath = Path.Combine(dumpDirectory, $"{dumpId}.dmp");
+        File.WriteAllText(dumpPath, "placeholder dump");
+        SourceLinkTestAssemblyBuilder.CompileAssemblyWithSourceLink(dumpDirectory, assemblyName: "ToolSourceLinkAssembly");
+
+        fakeDebuggerManager.CurrentDumpPath = dumpPath;
+        session.CurrentDumpId = dumpId;
+
+        var result = tools.ResolveSourceLink(
+            sessionId,
+            userId,
+            SourceLinkTestAssemblyBuilder.DefaultSourceFilePath,
+            lineNumber: 42);
+
+        Assert.Contains("Source Link URL:", result);
+        Assert.Contains("https://github.com/user/repo/blob/abc123/src/TestClass.cs#L42", result);
     }
 
     // ============================================================

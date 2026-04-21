@@ -45,9 +45,23 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
     private string _outputBuffer = string.Empty;
 
     /// <summary>
-    /// Lock object for thread-safe output buffer access.
+    /// Lock object for thread-safe command output state access.
     /// </summary>
     private readonly object _outputLock = new();
+
+    /// <summary>
+    /// Serializes all command execution against one LLDB session.
+    /// A single session reuses one process, one stdin stream, and one shared output pipeline,
+    /// so overlapping commands would corrupt each other's completion and output bookkeeping.
+    /// </summary>
+    private readonly SemaphoreSlim _commandExecutionSemaphore = new(1, 1);
+
+    /// <summary>
+    /// Tracks the process instance whose output currently belongs to the active command.
+    /// Any output from older processes is discarded so timed-out or crashed commands cannot
+    /// leak lines into the next command after recovery starts a new LLDB process.
+    /// </summary>
+    private Process? _activeCommandProcess;
 
     /// <summary>
     /// Indicates whether this instance has been disposed.
@@ -59,6 +73,13 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
     /// ManualResetEventSlim is more efficient for short wait times.
     /// </summary>
     private readonly ManualResetEventSlim _outputCompleteEvent = new(false);
+
+    /// <summary>
+    /// Signals whether LLDB recovery has completed and the session is safe for new commands.
+    /// Normal callers wait on this event before entering the shared command pipeline, while
+    /// recovery-internal commands bypass the wait so recovery can rebuild the LLDB process.
+    /// </summary>
+    private readonly ManualResetEventSlim _recoveryCompleteEvent = new(true);
 
     /// <summary>
     /// Sentinel command sent after each real command to detect completion.
@@ -115,6 +136,13 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
     /// Flag indicating crash recovery mode (used for logging purposes).
     /// </summary>
     private bool _skipModuleLoadingOnRecovery;
+
+    /// <summary>
+    /// Allows recovery-owned command execution to bypass the external recovery wait gate.
+    /// Recovery reinitializes LLDB by issuing new commands, so those commands must be able to
+    /// enter the pipeline while the public recovery fence is still blocking normal callers.
+    /// </summary>
+    private readonly AsyncLocal<bool> _bypassRecoveryWait = new();
 
     /// <summary>
     /// Gets a value indicating whether the debugger engine has been initialized.
@@ -189,6 +217,13 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
         // Initialization is deferred to the InitializeAsync() method
         // Note: Command caching removed - ClrMD handles most heavy operations now
     }
+
+    /// <summary>
+    /// Gets the timeout applied to one LLDB command execution.
+    /// Tests override this to exercise timeout recovery quickly without changing the
+    /// production default, which remains controlled by <see cref="CommandTimeoutSeconds"/>.
+    /// </summary>
+    protected virtual TimeSpan CommandTimeout => TimeSpan.FromSeconds(CommandTimeoutSeconds);
 
 
 
@@ -629,6 +664,8 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
             throw new ArgumentException("Command cannot be null or empty", nameof(command));
         }
 
+        WaitForRecoveryIfNeeded();
+
         // Validate that the manager is initialized
         if (!IsInitialized)
         {
@@ -672,6 +709,14 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
     }
 
     /// <summary>
+    /// Captures the minimum state needed to rebuild the LLDB session after a command failure.
+    /// </summary>
+    /// <param name="DumpPath">The dump that was open before recovery started, if any.</param>
+    /// <param name="ExecutablePath">The executable associated with the open dump, if any.</param>
+    /// <param name="WasDumpOpen">Whether a dump was open when recovery started.</param>
+    private readonly record struct RecoveryState(string? DumpPath, string? ExecutablePath, bool WasDumpOpen);
+
+    /// <summary>
     /// Internal method that executes an LLDB command without requiring a dump to be open.
     /// </summary>
     /// <param name="command">The command to execute.</param>
@@ -683,6 +728,8 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
     /// This method uses sentinel-based completion detection for instant response times.
     /// A sentinel command is sent after the real command, and when LLDB returns an error
     /// for the invalid sentinel, we know the real command has completed.
+    /// Commands are serialized per session because one LLDB process owns a single stdin/stdout
+    /// pipeline, and timeouts force recovery so a half-finished command cannot poison the next one.
     /// </remarks>
     private string ExecuteCommandInternal(string command)
     {
@@ -699,79 +746,206 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
             throw new InvalidOperationException("LLDB is not initialized");
         }
 
+        EnterCommandExecutionGate();
+
+        string output = string.Empty;
+        bool requiresRecovery = false;
+        RecoveryState? preparedRecovery = null;
+        string? recoveryFailureMessage = null;
+        string? recoveryFailureFallbackMessage = null;
+        Exception? wrappedFailure = null;
+
         try
         {
-            // Reset state
-            lock (_outputLock)
+            var process = _lldbProcess;
+            if (process == null || process.HasExited)
             {
-                _outputBuffer = string.Empty;
+                throw new InvalidOperationException("LLDB is not initialized");
             }
-            _outputCompleteEvent.Reset();
+
+            BeginCommandOutputCapture(process);
 
             // Send command + sentinel
-            _lldbProcess!.StandardInput.WriteLine(command);
-            _lldbProcess.StandardInput.WriteLine(SentinelCommand);
-            _lldbProcess.StandardInput.Flush();
+            process.StandardInput.WriteLine(command);
+            process.StandardInput.WriteLine(SentinelCommand);
+            process.StandardInput.Flush();
 
             // Wait for sentinel - event is ONLY signaled when sentinel error is received
-            var completed = _outputCompleteEvent.Wait(TimeSpan.FromSeconds(CommandTimeoutSeconds));
+            var completed = _outputCompleteEvent.Wait(CommandTimeout);
 
             sw.Stop();
+            output = ExtractOutput();
+            LogCommandOutput(command, output, sw.ElapsedMilliseconds);
 
             if (!completed)
             {
-                _logger.LogWarning("[LLDB] Command timed out after {Timeout}s: {Command}",
-                    CommandTimeoutSeconds, command);
-            }
+                _logger.LogWarning("[LLDB] Command timed out after {TimeoutMs}ms: {Command}",
+                    CommandTimeout.TotalMilliseconds, command);
 
-            var output = ExtractOutput();
-            LogCommandOutput(command, output, sw.ElapsedMilliseconds);
-            
-            // Check for LLDB crash indicators and attempt recovery
-            if (DetectLldbCrash(output))
+                preparedRecovery = BeginCrashRecovery();
+                requiresRecovery = true;
+                recoveryFailureMessage =
+                    $"LLDB timed out while executing a command. LLDB has been automatically recovered " +
+                    $"and the dump reopened if it was previously open. Please retry your operation. " +
+                    $"The command that timed out was: {(command.Length > 100 ? command[..97] + "..." : command)}.";
+                recoveryFailureFallbackMessage =
+                    "LLDB timed out while executing a command and recovery failed. " +
+                    "Please close and reopen the dump manually.";
+            }
+            else if (DetectLldbCrash(output))
             {
                 _logger.LogError("[LLDB] Detected LLDB crash during command: {Command}", command);
-                
-                // Attempt auto-recovery (restore LLDB but don't retry the command)
-                if (TryRecoverFromCrash())
-                {
-                    _logger.LogInformation("[LLDB] Successfully recovered from crash - LLDB restored and dump reopened");
-                    // Return error message instead of retrying (the crashing command might crash again)
-                    throw new InvalidOperationException(
-                        $"LLDB crashed while executing command. LLDB has been automatically recovered and the dump reopened. " +
-                        $"The command that caused the crash was: {(command.Length > 100 ? command[..97] + "..." : command)}. " +
-                        $"Please retry your operation.");
-                }
-                else
-                {
-                    _logger.LogError("[LLDB] Failed to recover from crash");
-                    throw new InvalidOperationException(
-                        $"LLDB crashed while executing command and recovery failed. " +
-                        $"Please close and reopen the dump manually.");
-                }
+
+                preparedRecovery = BeginCrashRecovery();
+                requiresRecovery = true;
+                recoveryFailureMessage =
+                    $"LLDB crashed while executing command. LLDB has been automatically recovered and the dump reopened. " +
+                    $"The command that caused the crash was: {(command.Length > 100 ? command[..97] + "..." : command)}. " +
+                    $"Please retry your operation.";
+                recoveryFailureFallbackMessage =
+                    "LLDB crashed while executing command and recovery failed. " +
+                    "Please close and reopen the dump manually.";
             }
-            
-            return output;
         }
         catch (Exception ex) when (ex is not InvalidOperationException && ex is not ArgumentException)
         {
+            sw.Stop();
             _logger.LogError(ex, "[LLDB] Command failed: {Command}", command);
-            
+
             // Check if LLDB process has exited (crashed)
             if (_lldbProcess?.HasExited == true)
             {
                 _logger.LogWarning("[LLDB] Process has exited unexpectedly, attempting recovery...");
-                if (TryRecoverFromCrash())
-                {
-                    _logger.LogInformation("[LLDB] Recovered from crash - LLDB restored and dump reopened");
-                    throw new InvalidOperationException(
-                        $"LLDB crashed unexpectedly. LLDB has been automatically recovered and the dump reopened. " +
-                        $"Please retry your operation. Original error: {ex.Message}");
-                }
+
+                preparedRecovery = BeginCrashRecovery();
+                requiresRecovery = true;
+                recoveryFailureMessage =
+                    $"LLDB crashed unexpectedly. LLDB has been automatically recovered and the dump reopened. " +
+                    $"Please retry your operation. Original error: {ex.Message}";
+                recoveryFailureFallbackMessage =
+                    "LLDB crashed unexpectedly and recovery failed. " +
+                    "Please close and reopen the dump manually.";
             }
-            
-            throw new InvalidOperationException($"Failed to execute command: {ex.Message}", ex);
+            else
+            {
+                wrappedFailure = ex;
+            }
         }
+        finally
+        {
+            ResetActiveCommandState();
+            _commandExecutionSemaphore.Release();
+        }
+
+        if (wrappedFailure != null)
+        {
+            throw new InvalidOperationException($"Failed to execute command: {wrappedFailure.Message}", wrappedFailure);
+        }
+
+        if (requiresRecovery)
+        {
+            if (TryRecoverFromCrash(preparedRecovery))
+            {
+                _logger.LogInformation("[LLDB] Successfully recovered from command failure");
+                throw new InvalidOperationException(recoveryFailureMessage!);
+            }
+
+            _logger.LogError("[LLDB] Failed to recover after command failure");
+            throw new InvalidOperationException(recoveryFailureFallbackMessage!);
+        }
+
+        return output;
+    }
+
+    /// <summary>
+    /// Waits until LLDB recovery is complete and enters the serialized command pipeline.
+    /// </summary>
+    /// <remarks>
+    /// Recovery starts after a timed-out or crashed command has already torn down the old process.
+    /// Normal callers must wait for recovery to finish before they can send more commands, but the
+    /// recovery flow itself bypasses that wait so it can rebuild LLDB using the same pipeline.
+    /// </remarks>
+    private void EnterCommandExecutionGate()
+    {
+        while (true)
+        {
+            WaitForRecoveryIfNeeded();
+
+            _commandExecutionSemaphore.Wait();
+
+            if (_bypassRecoveryWait.Value || _recoveryCompleteEvent.IsSet)
+            {
+                return;
+            }
+
+            _commandExecutionSemaphore.Release();
+        }
+    }
+
+    /// <summary>
+    /// Blocks normal callers while LLDB recovery is rebuilding the shared process state.
+    /// </summary>
+    private void WaitForRecoveryIfNeeded()
+    {
+        if (!_bypassRecoveryWait.Value)
+        {
+            _recoveryCompleteEvent.Wait();
+        }
+    }
+
+    /// <summary>
+    /// Resets the shared output state and marks which process owns the next command's output.
+    /// </summary>
+    /// <param name="process">The LLDB process that should be allowed to append output.</param>
+    private void BeginCommandOutputCapture(Process process)
+    {
+        lock (_outputLock)
+        {
+            _activeCommandProcess = process;
+            _outputBuffer = string.Empty;
+        }
+
+        _outputCompleteEvent.Reset();
+    }
+
+    /// <summary>
+    /// Clears the active command bookkeeping so late lines from a previous process are ignored.
+    /// </summary>
+    private void ResetActiveCommandState()
+    {
+        lock (_outputLock)
+        {
+            _activeCommandProcess = null;
+            _outputBuffer = string.Empty;
+        }
+
+        _outputCompleteEvent.Reset();
+    }
+
+    /// <summary>
+    /// Starts LLDB recovery by blocking new callers, snapshotting reopen state, and tearing down
+    /// the poisoned process before another command can enter the shared pipeline.
+    /// </summary>
+    /// <returns>
+    /// The snapshot needed to rebuild the session, or <c>null</c> if another recovery is already running.
+    /// </returns>
+    private RecoveryState? BeginCrashRecovery()
+    {
+        lock (_recoveryLock)
+        {
+            if (_isRecovering)
+            {
+                _logger.LogDebug("[LLDB] Recovery already in progress, waiting for it to finish");
+                return null;
+            }
+
+            _isRecovering = true;
+            _recoveryCompleteEvent.Reset();
+        }
+
+        var recoveryState = new RecoveryState(_currentDumpPath, _currentExecutablePath, IsDumpOpen);
+        CleanupProcess();
+        return recoveryState;
     }
 
     /// <summary>
@@ -913,44 +1087,42 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
     /// Attempts to recover from an LLDB crash by reinitializing and reopening the dump.
     /// During recovery, module loading is skipped to avoid cascading issues.
     /// </summary>
+    /// <param name="preparedRecoveryState">
+    /// Optional recovery state captured before the caller released the serialized command gate.
+    /// When provided, recovery reuses that snapshot instead of trying to tear down the process again.
+    /// </param>
     /// <returns>True if recovery was successful, false otherwise.</returns>
-    private bool TryRecoverFromCrash()
+    private bool TryRecoverFromCrash(RecoveryState? preparedRecoveryState = null)
     {
-        lock (_recoveryLock)
+        var recoveryState = preparedRecoveryState ?? BeginCrashRecovery();
+        if (!recoveryState.HasValue)
         {
-            if (_isRecovering)
-            {
-                _logger.LogDebug("[LLDB] Recovery already in progress, skipping");
-                return false;
-            }
-
-            _isRecovering = true;
+            _recoveryCompleteEvent.Wait();
+            return IsInitialized;
         }
 
         try
         {
             _logger.LogWarning("[LLDB] Attempting crash recovery...");
 
-            // Save state before cleanup
-            var dumpPath = _currentDumpPath;
-            var executablePath = _currentExecutablePath;
-            var wasOpen = IsDumpOpen;
-
-            // Cleanup the crashed process
-            CleanupProcess();
-
             // Reinitialize LLDB and reload all modules
             _logger.LogInformation("[LLDB] Reinitializing LLDB after crash...");
             _skipModuleLoadingOnRecovery = true; // Flag for logging purposes
+            var previousBypassRecoveryWait = _bypassRecoveryWait.Value;
+            _bypassRecoveryWait.Value = true;
             try
             {
-                Task.Run(() => InitializeAsync()).GetAwaiter().GetResult();
+                InitializeAsync().GetAwaiter().GetResult();
 
                 // Reopen dump if one was open (all modules will be loaded from verifycore)
-                if (wasOpen && !string.IsNullOrEmpty(dumpPath) && File.Exists(dumpPath))
+                if (recoveryState.Value.WasDumpOpen &&
+                    !string.IsNullOrEmpty(recoveryState.Value.DumpPath) &&
+                    File.Exists(recoveryState.Value.DumpPath))
                 {
-                    _logger.LogInformation("[LLDB] Reopening dump after crash recovery: {DumpPath}", dumpPath);
-                    OpenDumpFile(dumpPath, executablePath);
+                    _logger.LogInformation(
+                        "[LLDB] Reopening dump after crash recovery: {DumpPath}",
+                        recoveryState.Value.DumpPath);
+                    OpenDumpFile(recoveryState.Value.DumpPath, recoveryState.Value.ExecutablePath);
                     _logger.LogInformation("[LLDB] Crash recovery complete - dump reopened successfully");
                 }
                 else
@@ -960,6 +1132,7 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
             }
             finally
             {
+                _bypassRecoveryWait.Value = previousBypassRecoveryWait;
                 _skipModuleLoadingOnRecovery = false;
             }
 
@@ -976,6 +1149,8 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
             {
                 _isRecovering = false;
             }
+
+            _recoveryCompleteEvent.Set();
         }
     }
 
@@ -986,6 +1161,8 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
     {
         try
         {
+            ResetActiveCommandState();
+
             if (_lldbProcess != null)
             {
                 try
@@ -2842,15 +3019,21 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
 
         // Check for prompt + sentinel command on stdout
         // This is the definitive signal that the command is done
-        var sentinelFound = e.Data.Contains(SentinelCommand);
-        if (!sentinelFound)
+        var sentinelFound = false;
+        lock (_outputLock)
         {
-            lock (_outputLock)
+            if (!ReferenceEquals(sender, _activeCommandProcess))
+            {
+                return;
+            }
+
+            sentinelFound = e.Data.Contains(SentinelCommand, StringComparison.Ordinal);
+            if (!sentinelFound)
             {
                 _outputBuffer = $"{_outputBuffer}{e.Data}{Environment.NewLine}";
-                if (_outputBuffer.Contains(SentinelCommand))
+                if (_outputBuffer.Contains(SentinelCommand, StringComparison.Ordinal))
                 {
-                    _outputBuffer = _outputBuffer.Replace(SentinelCommand, string.Empty);
+                    _outputBuffer = _outputBuffer.Replace(SentinelCommand, string.Empty, StringComparison.Ordinal);
                     sentinelFound = true;
                 }
             }
@@ -2874,7 +3057,7 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
 
         // Discard the sentinel error - it's just noise from our sentinel command
         // The real completion signal comes from stdout (prompt + sentinel)
-        if (e.Data.Contains(SentinelError))
+        if (e.Data.Contains(SentinelError, StringComparison.Ordinal))
         {
             return;
         }
@@ -2882,10 +3065,15 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
         // Append real errors to the buffer (they may be part of command output)
         lock (_outputLock)
         {
-            _outputBuffer = $"{_outputBuffer}{e.Data}{Environment.NewLine}";
-            if (_outputBuffer.Contains(SentinelError))
+            if (!ReferenceEquals(sender, _activeCommandProcess))
             {
-                _outputBuffer = _outputBuffer.Replace(SentinelError, string.Empty);
+                return;
+            }
+
+            _outputBuffer = $"{_outputBuffer}{e.Data}{Environment.NewLine}";
+            if (_outputBuffer.Contains(SentinelError, StringComparison.Ordinal))
+            {
+                _outputBuffer = _outputBuffer.Replace(SentinelError, string.Empty, StringComparison.Ordinal);
             }
         }
     }
@@ -2945,8 +3133,10 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
             }
         }
 
-        // Dispose the event
+        ResetActiveCommandState();
         _outputCompleteEvent.Dispose();
+        _recoveryCompleteEvent.Dispose();
+        _commandExecutionSemaphore.Dispose();
 
         // Mark as disposed
         _disposed = true;
@@ -3416,8 +3606,10 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
             }
         }
 
-        // Dispose the event
+        ResetActiveCommandState();
         _outputCompleteEvent.Dispose();
+        _recoveryCompleteEvent.Dispose();
+        _commandExecutionSemaphore.Dispose();
 
         // Mark as disposed
         _disposed = true;

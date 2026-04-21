@@ -78,9 +78,9 @@ public class SourceLinkTools(
         // Get a cached Source Link resolver configured for the current dump (PDBs may live under .symbols_{dumpId}).
         var resolver = GetOrCreateSourceLinkResolver(session, sanitizedUserId) ?? new SourceLinkResolver(Logger);
 
-        // Try to resolve the source file using the Resolve method
-        // The Resolve method returns a SourceLocation object
-        var location = resolver.Resolve(string.Empty, sourceFile, lineNumber ?? 0);
+        // Resolve without a module hint. The resolver will search the dump's configured PDB
+        // locations until it finds a Source Link mapping that matches the requested source file.
+        var location = resolver.Resolve(sourceFile, lineNumber ?? 0);
 
         // Return result with helpful message based on whether resolution succeeded
         if (location.Resolved && !string.IsNullOrEmpty(location.Url))

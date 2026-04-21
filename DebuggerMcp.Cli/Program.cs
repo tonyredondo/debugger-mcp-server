@@ -3096,7 +3096,7 @@ public class Program
             var result = await progressRenderer.WithUploadProgressAsync(
                 fileName,
                 fileSize,
-                progress => httpClient.UploadSymbolAsync(filePath, dumpId, progress));
+                progress => httpClient.UploadSymbolAsync(filePath, state.Settings.UserId, dumpId, progress));
 
             output.Success("Symbol uploaded successfully!");
             output.KeyValue("File Name", result.FileName);
@@ -3146,7 +3146,7 @@ public class Program
             var result = await progressRenderer.WithUploadProgressAsync(
                 fileName,
                 fileSize,
-                progress => httpClient.UploadSymbolZipAsync(zipPath, dumpId, progress));
+                progress => httpClient.UploadSymbolZipAsync(zipPath, state.Settings.UserId, dumpId, progress));
 
             output.Success("Symbol ZIP uploaded and extracted!");
             output.KeyValue("Extracted Files", result.ExtractedFilesCount.ToString());
@@ -3214,6 +3214,7 @@ public class Program
 
                     var result = await httpClient.UploadSymbolsBatchAsync(
                         filePatterns,
+                        state.Settings.UserId,
                         dumpId,
                         (current, total, fileName) =>
                         {
@@ -3317,7 +3318,7 @@ public class Program
         {
             var result = await output.WithSpinnerAsync(
                 "Fetching symbols...",
-                () => httpClient.ListSymbolsAsync(resolvedDumpId));
+                () => httpClient.ListSymbolsAsync(state.Settings.UserId, resolvedDumpId));
 
             if (result.Symbols.Count == 0)
             {
