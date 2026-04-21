@@ -1,6 +1,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -621,6 +622,9 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
             // Delete the current target to close the dump
             ExecuteCommandInternal("target delete");
 
+            // Drop object-inspection results for the dump that is about to close before the path is cleared.
+            ObjectInspection.ObjectInspector.ClearCache(this);
+
             // Mark the dump as closed and reset all dump-specific state
             IsDumpOpen = false;
             IsSosLoaded = false;
@@ -1193,14 +1197,14 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
         IsDumpOpen = false;
         IsSosLoaded = false;
         IsDotNetDump = false;
-        // Note: Command caching removed - only clear ObjectInspector cache
-        ObjectInspection.ObjectInspector.ClearCache();
+        // Note: Command caching removed - only clear the cache entries that belonged to this dump.
+        ObjectInspection.ObjectInspector.ClearCache(this);
     }
 
     /// <summary>
     /// Configures the symbol path for the debugger.
     /// </summary>
-    /// <param name="symbolPath">The symbol path string (space-separated directories for LLDB).</param>
+    /// <param name="symbolPath">The symbol path string (whitespace-separated directories for LLDB).</param>
     /// <exception cref="InvalidOperationException">
     /// Thrown when the manager is not initialized.
     /// </exception>
@@ -1208,9 +1212,10 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
     /// Thrown when the symbol path is null, empty, or whitespace.
     /// </exception>
     /// <remarks>
-    /// LLDB uses space-separated directory paths for symbol search.
+    /// LLDB accepts whitespace-separated directory paths for symbol search.
+    /// Paths that contain spaces must be quoted.
     /// Remote symbol servers are not directly supported in LLDB.
-    /// Example: "/path/to/symbols /another/path"
+    /// Example: "\"/path/with spaces\" /another/path"
     /// This method can be called before opening a dump file, which is the recommended practice
     /// to ensure symbols are available when the dump is loaded.
     /// </remarks>
@@ -1230,13 +1235,13 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
 
         try
         {
-            // Split space-separated paths and add each one
-            var paths = symbolPath.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+            // Parse one logical path at a time so quoted directories survive intact.
+            var paths = ParseSymbolPathEntries(symbolPath);
             foreach (var path in paths)
             {
                 // Use settings set target.debug-file-search-paths to add symbol search paths
                 // Note: Using internal method because this can be executed before a dump is open
-                ExecuteCommandInternal($"settings append target.debug-file-search-paths {path}");
+                ExecuteCommandInternal($"settings append target.debug-file-search-paths {QuoteLldbCommandArgument(path)}");
             }
         }
         catch (Exception ex)
@@ -1244,6 +1249,82 @@ public class LldbManager : IDebuggerManager, IDebuggerDiagnostics
             // Wrap any exceptions for consistent error handling
             throw new InvalidOperationException($"Failed to configure symbol path: {ex.Message}", ex);
         }
+    }
+
+    /// <summary>
+    /// Splits an LLDB symbol-path string into logical directory entries, honoring quoted paths.
+    /// </summary>
+    /// <param name="symbolPath">Symbol path string supplied to <see cref="ConfigureSymbolPath(string)"/>.</param>
+    /// <returns>The parsed directory entries in command order.</returns>
+    internal static IReadOnlyList<string> ParseSymbolPathEntries(string symbolPath)
+    {
+        var entries = new List<string>();
+        if (string.IsNullOrWhiteSpace(symbolPath))
+        {
+            return entries;
+        }
+
+        var current = new StringBuilder();
+        var inQuotes = false;
+
+        for (var index = 0; index < symbolPath.Length; index++)
+        {
+            var character = symbolPath[index];
+
+            if (character == '"')
+            {
+                inQuotes = !inQuotes;
+                continue;
+            }
+
+            if (character == '\\' &&
+                inQuotes &&
+                index + 1 < symbolPath.Length &&
+                (symbolPath[index + 1] == '"' || symbolPath[index + 1] == '\\'))
+            {
+                current.Append(symbolPath[index + 1]);
+                index++;
+                continue;
+            }
+
+            if (!inQuotes && char.IsWhiteSpace(character))
+            {
+                FlushParsedSymbolPathEntry(current, entries);
+                continue;
+            }
+
+            current.Append(character);
+        }
+
+        FlushParsedSymbolPathEntry(current, entries);
+        return entries;
+    }
+
+    /// <summary>
+    /// Flushes the in-progress LLDB symbol-path token into the parsed entry list.
+    /// </summary>
+    /// <param name="current">Current token buffer.</param>
+    /// <param name="entries">Parsed entries collected so far.</param>
+    private static void FlushParsedSymbolPathEntry(StringBuilder current, List<string> entries)
+    {
+        if (current.Length == 0)
+        {
+            return;
+        }
+
+        entries.Add(current.ToString());
+        current.Clear();
+    }
+
+    /// <summary>
+    /// Quotes one LLDB command argument so local paths with spaces survive the command parser.
+    /// </summary>
+    /// <param name="path">Path to quote for LLDB.</param>
+    /// <returns>A quoted LLDB command argument.</returns>
+    private static string QuoteLldbCommandArgument(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        return $"\"{path.Replace("\\", "\\\\").Replace("\"", "\\\"", StringComparison.Ordinal)}\"";
     }
 
     /// <summary>

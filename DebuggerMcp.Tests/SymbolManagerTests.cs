@@ -281,6 +281,26 @@ public class SymbolManagerTests
     }
 
     /// <summary>
+    /// Verifies that BuildLldbSymbolPath quotes directories that contain spaces.
+    /// </summary>
+    [Fact]
+    public void BuildLldbSymbolPath_WhenDirectoryContainsSpaces_QuotesThatEntry()
+    {
+        var manager = new SymbolManager(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
+        var sessionId = "test-session";
+        manager.ConfigureSessionSymbolPaths(
+            sessionId,
+            dumpId: null,
+            additionalPaths: "/path/with spaces,/path/withoutspaces",
+            includeMicrosoftSymbols: false);
+
+        var symbolPath = manager.BuildLldbSymbolPath(sessionId);
+
+        Assert.Contains("\"/path/with spaces\"", symbolPath, StringComparison.Ordinal);
+        Assert.Contains("/path/withoutspaces", symbolPath, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Verifies that ClearSessionSymbolPaths clears paths.
     /// </summary>
     [Fact]

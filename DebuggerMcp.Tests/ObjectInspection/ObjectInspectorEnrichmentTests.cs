@@ -13,8 +13,6 @@ public class ObjectInspectorEnrichmentTests
     [Fact]
     public async Task InspectAsync_Delegate_AddsDelegateInfoAndEnrichment()
     {
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager
         {
             CommandHandler = command =>
@@ -60,6 +58,7 @@ Name:        MyNamespace.MyType
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -82,8 +81,6 @@ Name:        MyNamespace.MyType
     [Fact]
     public async Task InspectAsync_Exception_AddsExceptionInfo()
     {
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager
         {
             CommandHandler = command =>
@@ -118,6 +115,7 @@ StackTrace (generated):
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -134,8 +132,6 @@ StackTrace (generated):
     [Fact]
     public async Task InspectAsync_SystemRuntimeType_SetsTypeInfoAndSkipsFields()
     {
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager
         {
             CommandHandler = command =>
@@ -177,6 +173,7 @@ Number of IFaces in IFaceMap: 3
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -195,8 +192,6 @@ Number of IFaces in IFaceMap: 3
     [Fact]
     public async Task InspectAsync_Task_AddsTaskInfoFromFields()
     {
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager
         {
             CommandHandler = command =>
@@ -224,6 +219,7 @@ Fields:
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 

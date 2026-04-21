@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Runtime.CompilerServices;
 using DebuggerMcp.Analysis;
 using DebuggerMcp.Serialization;
 using DebuggerMcp.ObjectInspection.Models;
@@ -19,13 +20,13 @@ public partial class ObjectInspector
     private readonly Dictionary<string, string?> _typeNameCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, string?> _enumNameCache = new(StringComparer.OrdinalIgnoreCase);
 
-    // Static cache for full inspection results (shared across all ObjectInspector instances)
-    // This dramatically speeds up repeated inspections of the same objects during analysis/reports
+    // Static cache for full inspection results. Entries are scoped per debugger dump so repeated
+    // inspections of the same object stay fast without leaking results across dumps or sessions.
     private static readonly Dictionary<string, InspectedObject> s_inspectionCache = new(StringComparer.OrdinalIgnoreCase);
     private static readonly object s_cacheLock = new();
 
     /// <summary>
-    /// Gets the current number of cached inspection results.
+    /// Gets the current number of cached inspection results across all dumps.
     /// </summary>
     public static int CacheCount
     {
@@ -35,6 +36,23 @@ public partial class ObjectInspector
             {
                 return s_inspectionCache.Count;
             }
+        }
+    }
+
+    /// <summary>
+    /// Gets the number of cached inspection results associated with one debugger dump scope.
+    /// </summary>
+    /// <param name="manager">Debugger manager whose current dump scope should be inspected.</param>
+    /// <returns>The number of cached entries for the supplied debugger scope.</returns>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="manager"/> is null.</exception>
+    public static int GetCacheCount(IDebuggerManager manager)
+    {
+        ArgumentNullException.ThrowIfNull(manager);
+
+        var scopePrefix = GetCacheScopePrefix(manager);
+        lock (s_cacheLock)
+        {
+            return s_inspectionCache.Keys.Count(key => key.StartsWith(scopePrefix, StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -152,14 +170,52 @@ public partial class ObjectInspector
     }
 
     /// <summary>
-    /// Clears the static inspection cache.
-    /// Call this when closing a dump or starting a new analysis session.
+    /// Clears every cached inspection result across every dump scope.
     /// </summary>
+    /// <remarks>
+    /// This is a process-wide reset and should be reserved for exceptional cleanup. Normal dump
+    /// transitions should prefer <see cref="ClearCache(IDebuggerManager)"/> so other sessions keep
+    /// their own scoped cache entries.
+    /// </remarks>
     public static void ClearCache()
     {
         lock (s_cacheLock)
         {
             s_inspectionCache.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Clears cached inspection results for the supplied debugger dump scope only.
+    /// </summary>
+    /// <param name="manager">Debugger manager whose cache scope should be cleared.</param>
+    /// <exception cref="ArgumentNullException">Thrown when <paramref name="manager"/> is null.</exception>
+    public static void ClearCache(IDebuggerManager manager)
+    {
+        ArgumentNullException.ThrowIfNull(manager);
+
+        ClearCache(manager.DebuggerType, manager.CurrentDumpPath, manager);
+    }
+
+    /// <summary>
+    /// Clears cached inspection results for one explicit debugger scope.
+    /// </summary>
+    /// <param name="debuggerType">Debugger type that owns the cache scope.</param>
+    /// <param name="dumpPath">Current dump path when one is known.</param>
+    /// <param name="managerIdentity">Optional manager identity used when no dump path is available.</param>
+    internal static void ClearCache(string debuggerType, string? dumpPath, object? managerIdentity = null)
+    {
+        var scopePrefix = GetCacheScopePrefix(debuggerType, dumpPath, managerIdentity);
+        lock (s_cacheLock)
+        {
+            var keysToRemove = s_inspectionCache.Keys
+                .Where(key => key.StartsWith(scopePrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+
+            foreach (var key in keysToRemove)
+            {
+                s_inspectionCache.Remove(key);
+            }
         }
     }
 
@@ -185,8 +241,8 @@ public partial class ObjectInspector
     {
         var normalizedAddress = PrimitiveResolver.NormalizeAddress(address);
 
-        // Create cache key including parameters that affect output
-        var cacheKey = $"{normalizedAddress}|{methodTable ?? ""}|{maxDepth}|{maxArrayElements}|{maxStringLength}";
+        // Create a cache key that includes both the inspection parameters and the debugger dump scope.
+        var cacheKey = CreateScopedCacheKey(manager, normalizedAddress, methodTable, maxDepth, maxArrayElements, maxStringLength);
 
         // Check static cache first for full inspection results
         lock (s_cacheLock)
@@ -222,8 +278,8 @@ public partial class ObjectInspector
             lock (s_cacheLock)
             {
                 s_inspectionCache[cacheKey] = result;
-                _logger.LogDebug("[ObjectInspector] Cached result for {Address} (total cached: {Count})",
-                    normalizedAddress, s_inspectionCache.Count);
+                _logger.LogDebug("[ObjectInspector] Cached result for {Address} (scoped cached: {Count})",
+                    normalizedAddress, GetCacheCount(manager));
             }
         }
 
@@ -250,6 +306,76 @@ public partial class ObjectInspector
         }
 
         return JsonSerializer.Serialize(result, JsonSerializationDefaults.IndentedIgnoreNull);
+    }
+
+    /// <summary>
+    /// Creates the fully-qualified cache key for one inspection request.
+    /// </summary>
+    /// <param name="manager">Debugger manager that owns the current dump scope.</param>
+    /// <param name="normalizedAddress">Normalized object address.</param>
+    /// <param name="methodTable">Optional method table.</param>
+    /// <param name="maxDepth">Maximum recursion depth.</param>
+    /// <param name="maxArrayElements">Maximum array elements.</param>
+    /// <param name="maxStringLength">Maximum string length.</param>
+    /// <returns>A cache key scoped to the current dump and inspection limits.</returns>
+    private static string CreateScopedCacheKey(
+        IDebuggerManager manager,
+        string normalizedAddress,
+        string? methodTable,
+        int maxDepth,
+        int maxArrayElements,
+        int maxStringLength)
+    {
+        return $"{GetCacheScopePrefix(manager)}{normalizedAddress}|{methodTable ?? string.Empty}|{maxDepth}|{maxArrayElements}|{maxStringLength}";
+    }
+
+    /// <summary>
+    /// Builds the stable prefix used to isolate cache entries for one debugger dump scope.
+    /// </summary>
+    /// <param name="manager">Debugger manager that identifies the current dump scope.</param>
+    /// <returns>A stable cache-key prefix that distinguishes dump and session identity.</returns>
+    private static string GetCacheScopePrefix(IDebuggerManager manager)
+    {
+        ArgumentNullException.ThrowIfNull(manager);
+        return GetCacheScopePrefix(manager.DebuggerType, manager.CurrentDumpPath, manager);
+    }
+
+    /// <summary>
+    /// Builds the cache-key prefix for an explicit debugger scope.
+    /// </summary>
+    /// <param name="debuggerType">Debugger type that owns the current dump scope.</param>
+    /// <param name="dumpPath">Dump path when one is known.</param>
+    /// <param name="managerIdentity">Optional manager identity used before a dump path exists.</param>
+    /// <returns>A stable cache-key prefix that distinguishes dump and session identity.</returns>
+    private static string GetCacheScopePrefix(string debuggerType, string? dumpPath, object? managerIdentity)
+    {
+        var normalizedDebuggerType = string.IsNullOrWhiteSpace(debuggerType)
+            ? "unknown"
+            : debuggerType.Trim();
+
+        if (!string.IsNullOrWhiteSpace(dumpPath))
+        {
+            return $"dump|{normalizedDebuggerType}|{NormalizeCacheScopePath(dumpPath)}|";
+        }
+
+        return $"manager|{normalizedDebuggerType}|{RuntimeHelpers.GetHashCode(managerIdentity ?? normalizedDebuggerType)}|";
+    }
+
+    /// <summary>
+    /// Normalizes a dump path before it participates in cache scoping.
+    /// </summary>
+    /// <param name="path">Dump path to normalize.</param>
+    /// <returns>A normalized string suitable for cache-key composition.</returns>
+    private static string NormalizeCacheScopePath(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path.Trim());
+        }
+        catch
+        {
+            return path.Trim();
+        }
     }
 
     private async Task<InspectedObject?> InspectRecursiveAsync(

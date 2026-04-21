@@ -667,7 +667,7 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
 
         try
         {
-            ClearObjectInspectionCacheForDumpTransition("opening a dump");
+            ClearObjectInspectionCacheForDumpTransition(context, "opening a dump", dumpFilePath);
             context.CurrentExecutablePath = executablePath;
             context.OutputCallbacks?.ClearOutput();
 
@@ -744,7 +744,7 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
                 return;
             }
 
-            ClearObjectInspectionCacheForDumpTransition("closing a dump");
+            ClearObjectInspectionCacheForDumpTransition(context, "closing a dump");
             context.Client!.EndSession(DebugEndPassive);
             context.IsDumpOpen = false;
             context.IsSosLoaded = false;
@@ -762,19 +762,23 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
     /// <summary>
     /// Clears cached object-inspection results when WinDbg moves between dump contexts.
     /// </summary>
+    /// <param name="context">Context whose dump cache should be invalidated.</param>
     /// <param name="reason">Human-readable reason for the dump-state transition.</param>
-    private void ClearObjectInspectionCacheForDumpTransition(string reason)
+    /// <param name="dumpPathOverride">Optional dump path that should define the cache scope instead of the current context path.</param>
+    private void ClearObjectInspectionCacheForDumpTransition(WinDbgEngineContext context, string reason, string? dumpPathOverride = null)
     {
-        ClearObjectInspectionCache();
+        ClearObjectInspectionCache(context, dumpPathOverride);
         _logger.LogDebug("[WinDbg] Cleared ObjectInspector cache while {Reason}", reason);
     }
 
     /// <summary>
-    /// Clears the shared object-inspection cache after a WinDbg dump transition.
+    /// Clears object-inspection cache entries that belong to the supplied WinDbg dump context.
     /// </summary>
-    private static void ClearObjectInspectionCache()
+    /// <param name="context">Context whose dump-scoped cache entries should be removed.</param>
+    /// <param name="dumpPathOverride">Optional dump path that should define the cache scope instead of the current context path.</param>
+    private static void ClearObjectInspectionCache(WinDbgEngineContext context, string? dumpPathOverride = null)
     {
-        ObjectInspector.ClearCache();
+        ObjectInspector.ClearCache("WinDbg", dumpPathOverride ?? context.CurrentDumpPath, context);
     }
 
     /// <summary>
@@ -1650,7 +1654,7 @@ public class WinDbgManager : IDebuggerManager, IDebuggerDiagnostics
         context.IsDotNetDump = false;
         if (!string.IsNullOrWhiteSpace(context.CurrentDumpPath))
         {
-            ClearObjectInspectionCache();
+            ClearObjectInspectionCache(context);
         }
         context.CurrentDumpPath = null;
         context.CurrentExecutablePath = null;

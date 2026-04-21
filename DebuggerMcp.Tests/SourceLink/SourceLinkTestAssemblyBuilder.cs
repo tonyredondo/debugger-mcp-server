@@ -23,11 +23,13 @@ internal static class SourceLinkTestAssemblyBuilder
     /// <param name="outputDirectory">Directory that should receive the generated DLL and PDB.</param>
     /// <param name="assemblyName">Logical assembly name to emit.</param>
     /// <param name="sourceFilePath">Source file path that Source Link should map.</param>
+    /// <param name="sourceLinkUrlTemplate">Raw Source Link URL template to embed in the PDB.</param>
     /// <returns>The generated module path and PDB path.</returns>
     internal static (string DllPath, string PdbPath) CompileAssemblyWithSourceLink(
         string outputDirectory,
         string assemblyName = "SourceLinkTestAssembly",
-        string sourceFilePath = DefaultSourceFilePath)
+        string sourceFilePath = DefaultSourceFilePath,
+        string sourceLinkUrlTemplate = "https://raw.githubusercontent.com/user/repo/abc123/src/*")
     {
         Directory.CreateDirectory(outputDirectory);
 
@@ -61,7 +63,7 @@ public static class TestClass
         var sourceLinkJson = $$"""
 {
   "documents": {
-    "/src/*": "https://raw.githubusercontent.com/user/repo/abc123/src/*"
+    "/src/*": "{{sourceLinkUrlTemplate}}"
   }
 }
 """;

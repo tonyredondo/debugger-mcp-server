@@ -1,7 +1,8 @@
 using System.Reflection;
 using System.Runtime.ExceptionServices;
 using DebuggerMcp.ObjectInspection;
-using DebuggerMcp.ObjectInspection.Models;
+using DebuggerMcp.Tests.TestDoubles;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 
 #pragma warning disable CA1416 // Platform compatibility - WinDbgManager is Windows-only
@@ -19,14 +20,14 @@ public sealed class WinDbgManagerStateTransitionTests
     [Fact]
     public void OpenDumpFileCore_WhenOpeningDump_ClearsObjectInspectorCache()
     {
-        var cacheKey = AddSyntheticObjectInspectionCacheEntry();
+        const string dumpPath = @"C:\dumps\sample.dmp";
+        var cacheProbe = AddSyntheticObjectInspectionCacheEntry(dumpPath);
 
         using var manager = new WinDbgManager();
         var clientMock = new Mock<IDebugClient>(MockBehavior.Strict);
         var controlMock = new Mock<IDebugControl>(MockBehavior.Strict);
         var context = CreateInitializedContext(clientMock.Object, controlMock.Object);
 
-        const string dumpPath = @"C:\dumps\sample.dmp";
         uint processorType = 0x8664;
 
         clientMock
@@ -47,7 +48,7 @@ public sealed class WinDbgManagerStateTransitionTests
 
         InvokePrivateInstanceMethod(manager, "OpenDumpFileCore", context, dumpPath, null, false);
 
-        Assert.False(HasCachedInspection(cacheKey));
+        Assert.Equal(0, ObjectInspector.GetCacheCount(cacheProbe));
         Assert.True(GetContextProperty<bool>(context, "IsDumpOpen"));
         Assert.Equal(dumpPath, GetContextProperty<string?>(context, "CurrentDumpPath"));
 
@@ -61,7 +62,8 @@ public sealed class WinDbgManagerStateTransitionTests
     [Fact]
     public void CloseDumpCore_WhenClosingDump_ClearsObjectInspectorCache()
     {
-        var cacheKey = AddSyntheticObjectInspectionCacheEntry();
+        const string dumpPath = @"C:\dumps\sample.dmp";
+        var cacheProbe = AddSyntheticObjectInspectionCacheEntry(dumpPath);
 
         using var manager = new WinDbgManager();
         var clientMock = new Mock<IDebugClient>(MockBehavior.Strict);
@@ -69,7 +71,7 @@ public sealed class WinDbgManagerStateTransitionTests
         var context = CreateInitializedContext(clientMock.Object, controlMock.Object);
 
         SetContextProperty(context, "IsDumpOpen", true);
-        SetContextProperty(context, "CurrentDumpPath", @"C:\dumps\sample.dmp");
+        SetContextProperty(context, "CurrentDumpPath", dumpPath);
         SetContextProperty(context, "CurrentExecutablePath", @"C:\apps\sample.exe");
         SetContextProperty(context, "DetectedRuntimeVersion", "10.0.6");
 
@@ -79,7 +81,7 @@ public sealed class WinDbgManagerStateTransitionTests
 
         InvokePrivateInstanceMethod(manager, "CloseDumpCore", context);
 
-        Assert.False(HasCachedInspection(cacheKey));
+        Assert.Equal(0, ObjectInspector.GetCacheCount(cacheProbe));
         Assert.False(GetContextProperty<bool>(context, "IsDumpOpen"));
         Assert.Null(GetContextProperty<string?>(context, "CurrentDumpPath"));
         Assert.Null(GetContextProperty<string?>(context, "CurrentExecutablePath"));
@@ -90,25 +92,41 @@ public sealed class WinDbgManagerStateTransitionTests
     }
 
     /// <summary>
-    /// Inserts a unique synthetic entry into the global object-inspection cache.
+    /// Inserts a synthetic entry into the object-inspection cache for one WinDbg dump scope.
     /// </summary>
-    /// <returns>The unique cache key that was inserted.</returns>
-    private static string AddSyntheticObjectInspectionCacheEntry()
+    /// <param name="dumpPath">Dump path that should own the cached inspection entry.</param>
+    /// <returns>A probe manager that can query the same dump-scoped cache.</returns>
+    private static FakeDebuggerManager AddSyntheticObjectInspectionCacheEntry(string dumpPath)
     {
-        ObjectInspector.ClearCache();
-        var address = $"0x{Guid.NewGuid():N}"[..18];
-        var cacheKey = $"{PrimitiveResolver.NormalizeAddress(address)}||{ObjectInspector.DefaultMaxDepth}|{ObjectInspector.DefaultMaxArrayElements}|{ObjectInspector.DefaultMaxStringLength}";
-        lock (GetInspectionCacheLock())
+        var probeManager = new FakeDebuggerManager
         {
-            var cache = GetInspectionCache();
-            cache[cacheKey] = new InspectedObject
+            DebuggerType = "WinDbg",
+            CurrentDumpPath = dumpPath,
+            CommandHandler = command =>
             {
-                Type = "Synthetic"
-            };
-        }
+                if (command.StartsWith("dumpobj", StringComparison.OrdinalIgnoreCase))
+                {
+                    return """
+Name:        Synthetic
+MethodTable: 00007ff9abcd1234
+EEClass:     00007ff9abcd5678
+Size:        48(0x30) bytes
+Fields:
+None
+""";
+                }
 
-        Assert.True(HasCachedInspection(cacheKey));
-        return cacheKey;
+                return string.Empty;
+            }
+        };
+        ObjectInspector.ClearCache(probeManager);
+
+        var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
+        var result = inspector.InspectAsync(probeManager, "0x1234").GetAwaiter().GetResult();
+
+        Assert.NotNull(result);
+        Assert.True(ObjectInspector.GetCacheCount(probeManager) > 0);
+        return probeManager;
     }
 
     /// <summary>
@@ -178,40 +196,5 @@ public sealed class WinDbgManagerStateTransitionTests
             ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
             throw;
         }
-    }
-
-    /// <summary>
-    /// Reads the static object-inspection cache through reflection.
-    /// </summary>
-    /// <returns>The reflected cache dictionary.</returns>
-    private static Dictionary<string, InspectedObject> GetInspectionCache()
-    {
-        var cacheField = typeof(ObjectInspector).GetField("s_inspectionCache", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(cacheField);
-        return (Dictionary<string, InspectedObject>)cacheField!.GetValue(null)!;
-    }
-
-    /// <summary>
-    /// Determines whether the reflected object-inspection cache still contains a specific entry.
-    /// </summary>
-    /// <param name="cacheKey">Unique cache key to look for.</param>
-    /// <returns><c>true</c> when the key is still cached; otherwise <c>false</c>.</returns>
-    private static bool HasCachedInspection(string cacheKey)
-    {
-        lock (GetInspectionCacheLock())
-        {
-            return GetInspectionCache().ContainsKey(cacheKey);
-        }
-    }
-
-    /// <summary>
-    /// Reads the private cache lock used by <see cref="ObjectInspector"/>.
-    /// </summary>
-    /// <returns>The shared cache lock object.</returns>
-    private static object GetInspectionCacheLock()
-    {
-        var lockField = typeof(ObjectInspector).GetField("s_cacheLock", BindingFlags.NonPublic | BindingFlags.Static);
-        Assert.NotNull(lockField);
-        return lockField!.GetValue(null)!;
     }
 }

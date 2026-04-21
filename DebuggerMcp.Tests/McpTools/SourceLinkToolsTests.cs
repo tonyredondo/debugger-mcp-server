@@ -4,6 +4,7 @@ using DebuggerMcp.Tests.SourceLink;
 using DebuggerMcp.Tests.TestDoubles;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging.Abstractions;
+using System.Text.Json;
 using Xunit;
 
 namespace DebuggerMcp.Tests.McpTools;
@@ -238,6 +239,81 @@ public class SourceLinkToolsTests : IDisposable
 
         Assert.Contains("HasSymbolPath", result);
         Assert.Contains("false", result);
+    }
+
+    [Fact]
+    public void GetSourceLinkInfo_WithConfiguredDumpAndExtraLocalDirectory_ReportsEffectiveResolverPaths()
+    {
+        var scenarioRoot = Path.Combine(_tempPath, "sourcelink-info");
+        Directory.CreateDirectory(scenarioRoot);
+
+        var symbolManager = new SymbolManager(scenarioRoot);
+        var watchStore = new WatchStore(scenarioRoot);
+        var fakeDebuggerManager = new FakeDebuggerManager
+        {
+            IsDumpOpen = true
+        };
+
+        var sessionManager = new DebuggerSessionManager(
+            dumpStoragePath: scenarioRoot,
+            debuggerFactory: _ => fakeDebuggerManager,
+            symbolManager: symbolManager);
+
+        var tools = new SourceLinkTools(
+            sessionManager,
+            symbolManager,
+            watchStore,
+            NullLogger<SourceLinkTools>.Instance);
+
+        var userId = "test-user";
+        var sessionId = sessionManager.CreateSession(userId);
+        var session = sessionManager.GetSessionInfo(sessionId, userId);
+
+        var dumpDirectory = Path.Combine(scenarioRoot, userId);
+        Directory.CreateDirectory(dumpDirectory);
+
+        var dumpId = "testdump";
+        var dumpPath = Path.Combine(dumpDirectory, $"{dumpId}.dmp");
+        File.WriteAllText(dumpPath, "placeholder dump");
+
+        var dumpSymbolsDirectory = Path.Combine(dumpDirectory, $".symbols_{dumpId}");
+        Directory.CreateDirectory(dumpSymbolsDirectory);
+        File.WriteAllText(Path.Combine(dumpSymbolsDirectory, "test.pdb"), "pdb");
+
+        var extraSymbolsDirectory = Path.Combine(scenarioRoot, "extra symbols");
+        Directory.CreateDirectory(extraSymbolsDirectory);
+
+        fakeDebuggerManager.CurrentDumpPath = dumpPath;
+        session.CurrentDumpId = dumpId;
+        symbolManager.ConfigureSessionSymbolPaths(
+            sessionId,
+            dumpId,
+            additionalPaths: extraSymbolsDirectory,
+            includeMicrosoftSymbols: false,
+            userId: userId,
+            dumpPath: dumpPath);
+
+        var result = tools.GetSourceLinkInfo(sessionId, userId);
+        using var document = JsonDocument.Parse(result);
+
+        var searchPaths = document.RootElement.GetProperty("SymbolSearchPaths")
+            .EnumerateArray()
+            .Select(element => element.GetString())
+            .Where(path => path != null)
+            .Cast<string>()
+            .ToList();
+        var effectiveLocalDirectories = document.RootElement.GetProperty("EffectiveLocalSymbolDirectories")
+            .EnumerateArray()
+            .Select(element => element.GetString())
+            .Where(path => path != null)
+            .Cast<string>()
+            .ToList();
+
+        Assert.Contains(dumpDirectory, searchPaths, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(dumpSymbolsDirectory, searchPaths, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(extraSymbolsDirectory, searchPaths, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(dumpSymbolsDirectory, effectiveLocalDirectories, StringComparer.OrdinalIgnoreCase);
+        Assert.Contains(extraSymbolsDirectory, effectiveLocalDirectories, StringComparer.OrdinalIgnoreCase);
     }
 }
 

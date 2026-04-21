@@ -14,8 +14,6 @@ public class ObjectInspectorSpecialTypesTests
     [Fact]
     public async Task InspectAsync_Guid_SetsFormattedValue()
     {
-        ObjectInspector.ClearCache();
-
         var expected = new Guid(0x00112233, 0x4455, 0x6677, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff).ToString();
 
         var manager = new FakeDebuggerManager
@@ -48,6 +46,7 @@ Fields:
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -61,8 +60,6 @@ Fields:
     [Fact]
     public async Task InspectAsync_TimeSpan_SetsFormattedValue()
     {
-        ObjectInspector.ClearCache();
-
         var expected = new TimeSpan(0, 1, 2, 3, 456).ToString(@"h\:mm\:ss\.fff");
         var ticks = new TimeSpan(0, 1, 2, 3, 456).Ticks;
 
@@ -86,6 +83,7 @@ Fields:
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -99,8 +97,6 @@ Fields:
     [Fact]
     public async Task InspectAsync_DateOnly_SetsFormattedValue()
     {
-        ObjectInspector.ClearCache();
-
         var expectedDate = new DateOnly(2024, 1, 2);
         var dayNumber = expectedDate.DayNumber;
 
@@ -124,6 +120,7 @@ Fields:
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -137,8 +134,6 @@ Fields:
     [Fact]
     public async Task InspectAsync_TimeOnly_SetsFormattedValue()
     {
-        ObjectInspector.ClearCache();
-
         var expectedTime = new TimeOnly(13, 45, 12, 123);
         var ticks = expectedTime.Ticks;
 
@@ -162,6 +157,7 @@ Fields:
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -175,8 +171,6 @@ Fields:
     [Fact]
     public async Task InspectAsync_DateTimeOffset_SetsFormattedValueWithOffset()
     {
-        ObjectInspector.ClearCache();
-
         var dt = new DateTime(2024, 1, 2, 3, 4, 5, DateTimeKind.Utc);
         var dateData = (ulong)dt.Ticks | ((ulong)DateTimeKind.Utc << 62);
         var expected = $"{dt.ToString("O")} (+01:30)";
@@ -234,6 +228,7 @@ Fields:
                 return string.Empty;
             }
         };
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 

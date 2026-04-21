@@ -140,6 +140,44 @@ public abstract class DebuggerToolsBase(
     }
 
     /// <summary>
+    /// Builds the local directories that currently participate in Source Link resolution for a session.
+    /// </summary>
+    /// <param name="session">The session whose current dump context should be inspected.</param>
+    /// <param name="sanitizedUserId">The already-sanitized user ID.</param>
+    /// <returns>Ordered, de-duplicated local directories that the resolver would search.</returns>
+    protected IReadOnlyList<string> BuildSourceResolutionSearchPaths(DebuggerSession session, string sanitizedUserId)
+    {
+        if (session == null)
+        {
+            throw new ArgumentNullException(nameof(session));
+        }
+
+        var effectiveLocalDirectories = SymbolManager.GetEffectiveLocalSymbolDirectories(session.SessionId);
+        if (string.IsNullOrWhiteSpace(session.CurrentDumpId))
+        {
+            return effectiveLocalDirectories;
+        }
+
+        var dumpId = session.CurrentDumpId;
+        var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
+        if (string.IsNullOrWhiteSpace(cleanDumpId))
+        {
+            cleanDumpId = dumpId;
+        }
+
+        var dumpPath = session.Manager.CurrentDumpPath ??
+            Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $"{cleanDumpId}.dmp");
+        var executablePath = SourceResolutionStateRefresher.ResolveExecutablePathFromMetadata(dumpPath, cleanDumpId, Logger);
+
+        return SourceResolutionPathBuilder.BuildExistingPaths(
+            dumpPath,
+            cleanDumpId,
+            executablePath,
+            effectiveLocalDirectories,
+            session.ClrMdAnalyzer?.Runtime);
+    }
+
+    /// <summary>
     /// Gets a cached Source Link resolver configured for the session's current dump.
     /// </summary>
     /// <param name="session">The session containing the currently opened dump.</param>
@@ -164,23 +202,7 @@ public abstract class DebuggerToolsBase(
         return session.GetOrCreateSourceLinkResolver(dumpId, () =>
         {
             var resolver = new SourceLinkResolver(Logger);
-            var cleanDumpId = Path.GetFileNameWithoutExtension(dumpId);
-            if (string.IsNullOrWhiteSpace(cleanDumpId))
-            {
-                cleanDumpId = dumpId;
-            }
-
-            var dumpPath = session.Manager.CurrentDumpPath ??
-                Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $"{cleanDumpId}.dmp");
-            var executablePath = SourceResolutionStateRefresher.ResolveExecutablePathFromMetadata(dumpPath, cleanDumpId, Logger);
-            var searchPaths = SourceResolutionPathBuilder.BuildExistingPaths(
-                dumpPath,
-                cleanDumpId,
-                executablePath,
-                SymbolManager.GetEffectiveLocalSymbolDirectories(session.SessionId),
-                session.ClrMdAnalyzer?.Runtime);
-
-            foreach (var path in searchPaths)
+            foreach (var path in BuildSourceResolutionSearchPaths(session, sanitizedUserId))
             {
                 resolver.AddSymbolSearchPath(path);
             }

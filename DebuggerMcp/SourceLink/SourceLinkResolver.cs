@@ -33,6 +33,7 @@ namespace DebuggerMcp.SourceLink;
 public class SourceLinkResolver
 {
     private readonly ILogger? _logger;
+    // Cache entries are keyed by the concrete module identity when one is known, not just by file name.
     private readonly ConcurrentDictionary<string, ModuleSourceLinkCache> _cache = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, SourceLinkInfo?> _pdbSourceLinkCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _warnedModules = new(StringComparer.OrdinalIgnoreCase);
@@ -102,6 +103,82 @@ public class SourceLinkResolver
         var ext = Path.GetExtension(trimmed);
         return !string.IsNullOrWhiteSpace(ext) &&
                KnownBinaryExtensions.Any(e => string.Equals(e, ext, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// Creates the cache key used for one module lookup.
+    /// </summary>
+    /// <param name="modulePath">Module identifier or path supplied by the caller.</param>
+    /// <param name="expectedPdbGuid">Optional PDB GUID extracted from the module itself.</param>
+    /// <returns>A cache key that preserves full-path identity whenever it is available.</returns>
+    private static string CreateModuleCacheKey(string modulePath, Guid? expectedPdbGuid)
+    {
+        if (LooksLikeFilePath(modulePath))
+        {
+            var normalizedPath = NormalizeModulePath(modulePath);
+            return expectedPdbGuid is { } guid && guid != Guid.Empty
+                ? $"{normalizedPath}|{guid:D}"
+                : normalizedPath;
+        }
+
+        return GetModuleIdentifier(modulePath);
+    }
+
+    /// <summary>
+    /// Normalizes a module path before it participates in cache keys.
+    /// </summary>
+    /// <param name="modulePath">Module path to normalize.</param>
+    /// <returns>A normalized absolute path when possible; otherwise the trimmed original string.</returns>
+    private static string NormalizeModulePath(string modulePath)
+    {
+        var trimmed = modulePath.Trim();
+        try
+        {
+            return Path.GetFullPath(trimmed);
+        }
+        catch
+        {
+            return trimmed;
+        }
+    }
+
+    /// <summary>
+    /// Reads the expected PDB GUID from a module's CodeView debug directory when available.
+    /// </summary>
+    /// <param name="modulePath">Path to the managed module file.</param>
+    /// <returns>The expected PDB GUID, or <c>null</c> when it cannot be determined.</returns>
+    private Guid? TryReadModulePdbGuid(string modulePath)
+    {
+        if (!LooksLikeFilePath(modulePath))
+        {
+            return null;
+        }
+
+        var normalizedPath = NormalizeModulePath(modulePath);
+        if (!File.Exists(normalizedPath))
+        {
+            return null;
+        }
+
+        try
+        {
+            using var stream = File.OpenRead(normalizedPath);
+            using var peReader = new PEReader(stream);
+
+            foreach (var entry in peReader.ReadDebugDirectory())
+            {
+                if (entry.Type == DebugDirectoryEntryType.CodeView)
+                {
+                    return peReader.ReadCodeViewDebugDirectoryData(entry).Guid;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogDebug(ex, "[SourceLink] Failed to read CodeView PDB GUID from module {ModulePath}", normalizedPath);
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -321,9 +398,11 @@ public class SourceLinkResolver
     public SourceLinkInfo? GetSourceLinkForModule(string modulePath)
     {
         var moduleName = GetModuleIdentifier(modulePath);
-        _logger?.LogDebug("[SourceLink] GetSourceLinkForModule: {ModuleName} (path: {ModulePath})", moduleName, modulePath);
+        var expectedPdbGuid = TryReadModulePdbGuid(modulePath);
+        var cacheKey = CreateModuleCacheKey(modulePath, expectedPdbGuid);
+        _logger?.LogDebug("[SourceLink] GetSourceLinkForModule: {ModuleName} (path: {ModulePath}, cache key: {CacheKey})", moduleName, modulePath, cacheKey);
 
-        if (_cache.TryGetValue(moduleName, out var cached))
+        if (_cache.TryGetValue(cacheKey, out var cached))
         {
             _logger?.LogDebug("[SourceLink] Cache hit for {ModuleName}: HasSourceLink={HasSourceLink}, PdbPath={PdbPath}",
                 moduleName, cached.HasSourceLink, cached.PdbPath ?? "null");
@@ -332,7 +411,7 @@ public class SourceLinkResolver
 
         _logger?.LogDebug("[SourceLink] Cache miss for {ModuleName}, searching for PDB...", moduleName);
 
-        var pdbPath = FindPdbFile(modulePath);
+        var pdbPath = FindPdbFile(modulePath, expectedPdbGuid);
 
         if (pdbPath == null)
         {
@@ -353,7 +432,7 @@ public class SourceLinkResolver
             SourceLink = sourceLink
         };
 
-        _cache[moduleName] = cacheEntry;
+        _cache[cacheKey] = cacheEntry;
         _logger?.LogDebug("[SourceLink] Cached result for {ModuleName}: HasSourceLink={HasSourceLink}", moduleName, sourceLink != null);
         return sourceLink;
     }
@@ -481,7 +560,7 @@ public class SourceLinkResolver
     /// <summary>
     /// Finds the PDB file for a given module.
     /// </summary>
-    private string? FindPdbFile(string modulePath)
+    private string? FindPdbFile(string modulePath, Guid? expectedPdbGuid)
     {
         var moduleName = GetModuleIdentifier(modulePath);
         if (string.IsNullOrWhiteSpace(moduleName))
@@ -496,13 +575,25 @@ public class SourceLinkResolver
         // Strategy 1: PDB next to module (only when modulePath is a real file path/name)
         if (LooksLikeFilePath(modulePath))
         {
-            var pdbPath = Path.ChangeExtension(modulePath, ".pdb");
+            var normalizedModulePath = NormalizeModulePath(modulePath);
+            var pdbPath = Path.ChangeExtension(normalizedModulePath, ".pdb");
             _logger?.LogDebug("[SourceLink] Strategy 1 - Check next to module: {Path}", pdbPath);
-            if (File.Exists(pdbPath))
+            if (File.Exists(pdbPath) && IsMatchingPortablePdb(pdbPath, expectedPdbGuid))
             {
                 _logger?.LogInformation("[SourceLink] ✓ Found PDB next to module: {Path}", pdbPath);
                 return pdbPath;
             }
+
+            var lowerCasePdbPath = pdbPath.ToLowerInvariant();
+            if (!string.IsNullOrWhiteSpace(lowerCasePdbPath) &&
+                !string.Equals(lowerCasePdbPath, pdbPath, StringComparison.Ordinal) &&
+                File.Exists(lowerCasePdbPath) &&
+                IsMatchingPortablePdb(lowerCasePdbPath, expectedPdbGuid))
+            {
+                _logger?.LogInformation("[SourceLink] ✓ Found lowercase PDB next to module: {Path}", lowerCasePdbPath);
+                return lowerCasePdbPath;
+            }
+
             _logger?.LogDebug("[SourceLink] Strategy 1 - Not found");
         }
 
@@ -523,11 +614,18 @@ public class SourceLinkResolver
                 foreach (var pdbFile in allPdbFiles)
                 {
                     var fileName = Path.GetFileName(pdbFile);
-                    if (string.Equals(fileName, pdbName, StringComparison.OrdinalIgnoreCase))
+                    if (!string.Equals(fileName, pdbName, StringComparison.OrdinalIgnoreCase))
                     {
-                        _logger?.LogInformation("[SourceLink] ✓ Found PDB (case-insensitive): {Path}", pdbFile);
-                        return pdbFile;
+                        continue;
                     }
+
+                    if (!IsMatchingPortablePdb(pdbFile, expectedPdbGuid))
+                    {
+                        continue;
+                    }
+
+                    _logger?.LogInformation("[SourceLink] ✓ Found PDB (case-insensitive): {Path}", pdbFile);
+                    return pdbFile;
                 }
                 _logger?.LogDebug("[SourceLink]   Not found in {SearchPath} (searched {Count} PDB files)", searchPath, allPdbFiles.Length);
             }
@@ -539,6 +637,59 @@ public class SourceLinkResolver
 
         _logger?.LogWarning("[SourceLink] ✗ PDB not found for module: {Module} (searched {Count} paths)", modulePath, _symbolSearchPaths.Count);
         return null;
+    }
+
+    /// <summary>
+    /// Determines whether a candidate PDB matches the expected module PDB GUID.
+    /// </summary>
+    /// <param name="pdbPath">Portable PDB path to inspect.</param>
+    /// <param name="expectedPdbGuid">Expected GUID from the module's CodeView record.</param>
+    /// <returns><c>true</c> when the candidate matches or no GUID is available; otherwise <c>false</c>.</returns>
+    private static bool IsMatchingPortablePdb(string pdbPath, Guid? expectedPdbGuid)
+    {
+        if (expectedPdbGuid == null || expectedPdbGuid == Guid.Empty)
+        {
+            return true;
+        }
+
+        return TryReadPortablePdbSignature(pdbPath, out var pdbGuid) && pdbGuid == expectedPdbGuid.Value;
+    }
+
+    /// <summary>
+    /// Reads the GUID portion of a Portable PDB signature.
+    /// </summary>
+    /// <param name="pdbPath">Portable PDB to inspect.</param>
+    /// <param name="pdbGuid">GUID extracted from the PDB header.</param>
+    /// <returns><c>true</c> when the signature could be read successfully; otherwise <c>false</c>.</returns>
+    private static bool TryReadPortablePdbSignature(string pdbPath, out Guid pdbGuid)
+    {
+        pdbGuid = Guid.Empty;
+
+        try
+        {
+            using var stream = File.OpenRead(pdbPath);
+            using var provider = MetadataReaderProvider.FromPortablePdbStream(stream);
+            var reader = provider.GetMetadataReader();
+
+            var id = reader.DebugMetadataHeader?.Id;
+            if (id == null || id.Value.IsEmpty)
+            {
+                return false;
+            }
+
+            var idBytes = id.Value.ToArray();
+            if (idBytes.Length < 16)
+            {
+                return false;
+            }
+
+            pdbGuid = new Guid(idBytes.AsSpan(0, 16));
+            return pdbGuid != Guid.Empty;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

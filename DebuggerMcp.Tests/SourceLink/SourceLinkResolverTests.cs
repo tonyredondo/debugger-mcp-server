@@ -1,6 +1,7 @@
 using Xunit;
 using DebuggerMcp.SourceLink;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using System.Collections.Concurrent;
 using System.Reflection;
 
@@ -746,17 +747,65 @@ public class SourceLinkResolverTests
     }
 
     [Fact]
-    public void GetSourceLinkForModule_CachesPerModuleName()
+    public void Resolve_WhenDifferentConcreteModulesShareTheSameFileName_SelectsTheMatchingPdb()
     {
-        // Arrange
-        var resolver = new SourceLinkResolver();
+        var tempDir = Path.Combine(Path.GetTempPath(), $"sourcelink-module-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(tempDir);
 
-        // Act - Same module name from different paths
-        var result1 = resolver.GetSourceLinkForModule("/path1/MyApp.dll");
-        var result2 = resolver.GetSourceLinkForModule("/path2/MyApp.dll");
+        try
+        {
+            var buildADir = Path.Combine(tempDir, "build-a");
+            var buildBDir = Path.Combine(tempDir, "build-b");
+            var moduleADir = Path.Combine(tempDir, "module-a");
+            var moduleBDir = Path.Combine(tempDir, "module-b");
+            var symbolsADir = Path.Combine(tempDir, "symbols-a");
+            var symbolsBDir = Path.Combine(tempDir, "symbols-b");
 
-        // Assert - Should use same cache entry (module name is the key)
-        Assert.Equal(result1, result2);
+            Directory.CreateDirectory(moduleADir);
+            Directory.CreateDirectory(moduleBDir);
+            Directory.CreateDirectory(symbolsADir);
+            Directory.CreateDirectory(symbolsBDir);
+
+            var (builtDllA, builtPdbA) = SourceLinkTestAssemblyBuilder.CompileAssemblyWithSourceLink(
+                buildADir,
+                assemblyName: "DuplicateModule",
+                sourceLinkUrlTemplate: "https://raw.githubusercontent.com/user/repo/commit-a/src/*");
+            var (builtDllB, builtPdbB) = SourceLinkTestAssemblyBuilder.CompileAssemblyWithSourceLink(
+                buildBDir,
+                assemblyName: "DuplicateModule",
+                sourceLinkUrlTemplate: "https://raw.githubusercontent.com/user/repo/commit-b/src/*");
+
+            var moduleAPath = Path.Combine(moduleADir, "DuplicateModule.dll");
+            var moduleBPath = Path.Combine(moduleBDir, "DuplicateModule.dll");
+            File.Copy(builtDllA, moduleAPath, overwrite: true);
+            File.Copy(builtDllB, moduleBPath, overwrite: true);
+            File.Copy(builtPdbA, Path.Combine(symbolsADir, "DuplicateModule.pdb"), overwrite: true);
+            File.Copy(builtPdbB, Path.Combine(symbolsBDir, "DuplicateModule.pdb"), overwrite: true);
+
+            // Intentionally add B first so naive filename-only lookup would choose the wrong PDB.
+            var resolver = new SourceLinkResolver(NullLogger.Instance);
+            resolver.AddSymbolSearchPath(symbolsBDir);
+            resolver.AddSymbolSearchPath(symbolsADir);
+
+            var locationA = resolver.Resolve(moduleAPath, SourceLinkTestAssemblyBuilder.DefaultSourceFilePath, 42);
+            var locationB = resolver.Resolve(moduleBPath, SourceLinkTestAssemblyBuilder.DefaultSourceFilePath, 42);
+
+            Assert.True(locationA.Resolved);
+            Assert.True(locationB.Resolved);
+            Assert.Contains("commit-a", locationA.Url, StringComparison.Ordinal);
+            Assert.Contains("commit-b", locationB.Url, StringComparison.Ordinal);
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+                // Best-effort cleanup for temporary compiler output.
+            }
+        }
     }
 
     [Fact]

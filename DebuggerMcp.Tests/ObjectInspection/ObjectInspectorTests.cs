@@ -104,8 +104,6 @@ Array:       Rank 1, Number of elements 3, Type System.Int32
     public async Task InspectAsync_CachesResults_ForSameInputs()
     {
         // Arrange
-        ObjectInspector.ClearCache();
-
         var dumpCalls = 0;
         var manager = new FakeDebuggerManager(command =>
         {
@@ -125,6 +123,7 @@ None
 
             return string.Empty;
         });
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -136,7 +135,60 @@ None
         Assert.NotNull(a);
         Assert.NotNull(b);
         Assert.Equal(1, dumpCalls);
-        Assert.True(ObjectInspector.CacheCount >= 1);
+        Assert.True(ObjectInspector.GetCacheCount(manager) >= 1);
+    }
+
+    [Fact]
+    public async Task InspectAsync_SameAddressAcrossDifferentDumpScopes_DoesNotReuseCachedResult()
+    {
+        var dumpACalls = 0;
+        var currentDumpPath = "/tmp/dump-a.dmp";
+        var manager = new FakeDebuggerManager(command =>
+        {
+            if (!command.StartsWith("dumpobj", StringComparison.OrdinalIgnoreCase))
+            {
+                return string.Empty;
+            }
+
+            if (string.Equals(currentDumpPath, "/tmp/dump-a.dmp", StringComparison.Ordinal))
+            {
+                dumpACalls++;
+                return """
+Name:        MyApp.DumpA
+MethodTable: 00007ff9abcd1234
+EEClass:     00007ff9abcd5678
+Size:        48(0x30) bytes
+Fields:
+None
+""";
+            }
+
+            return """
+Name:        MyApp.DumpB
+MethodTable: 00007ff9abcd9999
+EEClass:     00007ff9abcdAAAA
+Size:        48(0x30) bytes
+Fields:
+None
+""";
+        })
+        {
+            CurrentDumpPath = currentDumpPath
+        };
+        ObjectInspector.ClearCache(manager);
+
+        var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
+
+        var first = await inspector.InspectAsync(manager, "0x1234");
+        currentDumpPath = "/tmp/dump-b.dmp";
+        manager.CurrentDumpPath = currentDumpPath;
+        var second = await inspector.InspectAsync(manager, "0x1234");
+
+        Assert.NotNull(first);
+        Assert.NotNull(second);
+        Assert.Equal("MyApp.DumpA", first!.Type);
+        Assert.Equal("MyApp.DumpB", second!.Type);
+        Assert.Equal(1, dumpACalls);
     }
 
     [Fact]
@@ -214,9 +266,8 @@ Fields:
     public async Task InspectToJsonAsync_NullAddress_ReturnsErrorJson()
     {
         // Arrange
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager(_ => throw new InvalidOperationException("No commands should be executed"));
+        ObjectInspector.ClearCache(manager);
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
         // Act
@@ -231,8 +282,6 @@ Fields:
     public async Task InspectAsync_TruncatedTypeName_UsesDumpmtAndCachesPerInspection()
     {
         // Arrange
-        ObjectInspector.ClearCache();
-
         var dumpmtCalls = 0;
         var manager = new FakeDebuggerManager(command =>
         {
@@ -260,6 +309,7 @@ Name:        MyApp.VeryLongTypeName`1[[System.String, System.Private.CoreLib]]
 
             return string.Empty;
         });
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -279,8 +329,6 @@ Name:        MyApp.VeryLongTypeName`1[[System.String, System.Private.CoreLib]]
     public async Task InspectAsync_StringField_UsesDumpobjAndTruncates()
     {
         // Arrange
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager(command =>
         {
             if (command.StartsWith("dumpobj", StringComparison.OrdinalIgnoreCase) &&
@@ -313,6 +361,7 @@ Fields:
 
             return string.Empty;
         });
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -333,8 +382,6 @@ Fields:
     public async Task InspectAsync_NativePointerField_ReturnsRawValue()
     {
         // Arrange
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager(command =>
         {
             if (command.StartsWith("dumpobj", StringComparison.OrdinalIgnoreCase))
@@ -352,6 +399,7 @@ Fields:
 
             return string.Empty;
         });
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -369,8 +417,6 @@ Fields:
     public async Task InspectAsync_EmbeddedValueType_UsesDumpvcWhenDumpobjFails()
     {
         // Arrange
-        ObjectInspector.ClearCache();
-
         var dumpvcCalls = 0;
         var manager = new FakeDebuggerManager(command =>
         {
@@ -409,6 +455,7 @@ Fields:
 
             return string.Empty;
         });
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -433,8 +480,6 @@ Fields:
     public async Task InspectAsync_StaticEnumValue_UsesDumpmtMdToResolveName()
     {
         // Arrange
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager(command =>
         {
             if (command.Equals("dumpmt -md 00007ff9abcd5555", StringComparison.OrdinalIgnoreCase))
@@ -461,6 +506,7 @@ Fields:
 
             return string.Empty;
         });
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -479,8 +525,6 @@ Fields:
     public async Task InspectAsync_LargeArray_SkipsElementInspectionAndReturnsSummary()
     {
         // Arrange
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager(command =>
         {
             if (command.StartsWith("dumpobj", StringComparison.OrdinalIgnoreCase))
@@ -499,6 +543,7 @@ None
 
             return string.Empty;
         });
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -516,8 +561,6 @@ None
     [Fact]
     public async Task InspectAsync_ListCollection_MarksAsCollectionAndExtractsInlineableElements()
     {
-        ObjectInspector.ClearCache();
-
         var manager = new FakeDebuggerManager(command =>
         {
             if (command.StartsWith("dumpobj", StringComparison.OrdinalIgnoreCase))
@@ -546,6 +589,7 @@ Number of elements 3
 
             return string.Empty;
         });
+        ObjectInspector.ClearCache(manager);
 
         var inspector = new ObjectInspector(NullLogger<ObjectInspector>.Instance);
 
@@ -605,8 +649,8 @@ Number of elements 3
     {
         public bool IsInitialized => true;
         public bool IsDumpOpen => true;
-        public string? CurrentDumpPath => null;
-        public string DebuggerType => "Fake";
+        public string? CurrentDumpPath { get; set; }
+        public string DebuggerType { get; set; } = "Fake";
         public bool IsSosLoaded => true;
         public bool IsDotNetDump => true;
 

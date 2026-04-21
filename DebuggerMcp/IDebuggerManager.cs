@@ -185,7 +185,7 @@ public interface IDebuggerManager : IDisposable, IAsyncDisposable
     /// <para>Platform-specific formats:</para>
     /// <list type="bullet">
     /// <item><description>WinDbg: srv*cache*server;path (e.g., "srv*c:\\symbols*https://msdl.microsoft.com/download/symbols")</description></item>
-    /// <item><description>LLDB: space-separated directories (e.g., "/path/to/symbols /another/path")</description></item>
+    /// <item><description>LLDB: whitespace-separated local directories, quoting any directory that contains spaces (e.g., "\"/path/with spaces\" /another/path")</description></item>
     /// </list>
     /// </remarks>
     /// <exception cref="InvalidOperationException">

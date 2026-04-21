@@ -827,8 +827,53 @@ public class LldbManagerFakeToolIntegrationTests
             manager.ConfigureSymbolPath("/tmp/symbols-a /tmp/symbols-b");
 
             var log = File.ReadAllText(logFile);
-            Assert.Contains("settings append target.debug-file-search-paths /tmp/symbols-a", log, StringComparison.Ordinal);
-            Assert.Contains("settings append target.debug-file-search-paths /tmp/symbols-b", log, StringComparison.Ordinal);
+            Assert.Contains("settings append target.debug-file-search-paths \"/tmp/symbols-a\"", log, StringComparison.Ordinal);
+            Assert.Contains("settings append target.debug-file-search-paths \"/tmp/symbols-b\"", log, StringComparison.Ordinal);
+
+            manager.Dispose();
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("PATH", originalPath);
+            Environment.SetEnvironmentVariable("FAKE_LLDB_LOG_FILE", originalLogFile);
+
+            SafeDeleteDirectory(tempDir);
+        }
+    }
+
+    [Fact]
+    public async Task ConfigureSymbolPath_WhenPathContainsSpaces_PreservesTheFullDirectory()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return;
+        }
+
+        var originalPath = Environment.GetEnvironmentVariable("PATH");
+        var originalLogFile = Environment.GetEnvironmentVariable("FAKE_LLDB_LOG_FILE");
+
+        var tempDir = CreateTempDirectory();
+        var fakeToolsDir = Path.Combine(tempDir, "tools");
+        Directory.CreateDirectory(fakeToolsDir);
+
+        var logFile = Path.Combine(tempDir, "lldb.log");
+
+        try
+        {
+            WriteExecutableFile(Path.Combine(fakeToolsDir, "lldb"), BuildFakeLldbScript(includeCoreClr: false));
+
+            Environment.SetEnvironmentVariable("PATH", $"{fakeToolsDir}:{originalPath}");
+            Environment.SetEnvironmentVariable("FAKE_LLDB_LOG_FILE", logFile);
+
+            var manager = new LldbManager(NullLogger<LldbManager>.Instance);
+            await manager.InitializeAsync();
+
+            manager.ConfigureSymbolPath("\"/tmp/symbols with spaces\" /tmp/symbols-b");
+
+            var log = File.ReadAllText(logFile);
+            Assert.Contains("settings append target.debug-file-search-paths \"/tmp/symbols with spaces\"", log, StringComparison.Ordinal);
+            Assert.Contains("settings append target.debug-file-search-paths \"/tmp/symbols-b\"", log, StringComparison.Ordinal);
+            Assert.DoesNotContain("settings append target.debug-file-search-paths with", log, StringComparison.Ordinal);
 
             manager.Dispose();
         }

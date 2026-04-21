@@ -125,14 +125,9 @@ public class SourceLinkTools(
         // Get the session to validate ownership
         var session = GetSessionInfo(sessionId, sanitizedUserId);
 
-        // Build info about symbol paths
-        // Symbol path is .symbols_{dumpId} folder where dotnet-symbol downloads PDBs
-        var cleanDumpId = !string.IsNullOrEmpty(session.CurrentDumpId)
-            ? Path.GetFileNameWithoutExtension(session.CurrentDumpId)
-            : null;
-        var symbolPath = !string.IsNullOrEmpty(cleanDumpId)
-            ? Path.Combine(SessionManager.GetDumpStoragePath(), sanitizedUserId, $".symbols_{cleanDumpId}")
-            : null;
+        // Report the same effective search paths the live Source Link resolver would use.
+        var searchPaths = BuildSourceResolutionSearchPaths(session, sanitizedUserId);
+        var effectiveLocalDirectories = SymbolManager.GetEffectiveLocalSymbolDirectories(session.SessionId);
 
         var info = new
         {
@@ -143,10 +138,9 @@ public class SourceLinkTools(
                 "Azure DevOps (dev.azure.com)",
                 "Bitbucket (bitbucket.org)"
             },
-            SymbolSearchPaths = symbolPath != null && Directory.Exists(symbolPath)
-                ? new[] { symbolPath }
-                : Array.Empty<string>(),
-            HasSymbolPath = symbolPath != null && Directory.Exists(symbolPath),
+            SymbolSearchPaths = searchPaths,
+            HasSymbolPath = searchPaths.Count > 0,
+            EffectiveLocalSymbolDirectories = effectiveLocalDirectories,
             CurrentDumpId = session.CurrentDumpId,
             Tips = new[]
             {

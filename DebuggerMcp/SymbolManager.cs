@@ -826,7 +826,7 @@ public class SymbolManager
     /// Builds an LLDB-compatible symbol path string for a session.
     /// </summary>
     /// <param name="sessionId">Session ID to build path for.</param>
-    /// <returns>LLDB symbol path string (space-separated local directories).</returns>
+    /// <returns>LLDB symbol path string with quoted entries when required.</returns>
     /// <remarks>
     /// LLDB does not support remote symbol servers, so only local directories are included.
     /// </remarks>
@@ -840,7 +840,7 @@ public class SymbolManager
         // LLDB only supports local directories. Remote URLs are handled explicitly by callers.
         var localDirs = DistinctSymbolPaths(configuration.DumpSymbolDirectories
             .Concat(configuration.AdditionalLocalDirectories));
-        return string.Join(" ", localDirs);
+        return string.Join(" ", localDirs.Select(FormatLldbSymbolPathEntry));
     }
 
     /// <summary>
@@ -857,6 +857,19 @@ public class SymbolManager
 
         return DistinctSymbolPaths(configuration.DumpSymbolDirectories
             .Concat(configuration.AdditionalLocalDirectories));
+    }
+
+    /// <summary>
+    /// Formats one LLDB symbol-path entry, quoting it when the directory contains whitespace.
+    /// </summary>
+    /// <param name="path">Directory path to encode for LLDB.</param>
+    /// <returns>The encoded directory entry.</returns>
+    internal static string FormatLldbSymbolPathEntry(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+
+        var escaped = path.Replace("\\", "\\\\").Replace("\"", "\\\"", StringComparison.Ordinal);
+        return path.Any(char.IsWhiteSpace) ? $"\"{escaped}\"" : path;
     }
 
     /// <summary>
