@@ -199,7 +199,7 @@ public class ProgramPrivateMethodCoverageTests
             }
         };
 
-        InvokePrivateVoid("CheckDumpServerCompatibility", true, "arm64", state, output);
+        InvokePrivateVoid("CheckDumpServerCompatibility", null, true, "arm64", state, output);
 
         Assert.Contains("INCOMPATIBLE", console.Output);
         Assert.Contains("Alpine", console.Output);
@@ -325,6 +325,24 @@ public class ProgramPrivateMethodCoverageTests
         InvokePrivateVoid("RegisterMcpSamplingHandlers", output, state, mcpClient);
 
         Assert.True(mcpClient.UnregisterServerRequestHandler("sampling/createMessage"));
+    }
+
+    [Fact]
+    public async Task HandleExecAsync_WhenSessionHasNoDump_PrintsOpenDumpGuidance()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+        var state = new ShellState();
+        state.SetConnected("http://localhost:5000");
+        state.SetSession("session-123", "WinDbg");
+        state.Settings.UserId = "user";
+
+        var mcpClient = CreateConnectedMcpClient();
+
+        await InvokePrivateTask("HandleExecAsync", new object?[] { new[] { "help" }, output, state, mcpClient });
+
+        Assert.Contains("No dump is open", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("open <dumpId>", console.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -806,7 +824,7 @@ public class ProgramPrivateMethodCoverageTests
         var output = new ConsoleOutput(console);
         var state = new ShellState { ServerInfo = null };
 
-        InvokePrivateVoid("CheckDumpServerCompatibility", true, "arm64", state, output);
+        InvokePrivateVoid("CheckDumpServerCompatibility", null, true, "arm64", state, output);
 
         Assert.DoesNotContain("INCOMPATIBLE", console.Output, StringComparison.OrdinalIgnoreCase);
     }
@@ -826,7 +844,7 @@ public class ProgramPrivateMethodCoverageTests
             }
         };
 
-        InvokePrivateVoid("CheckDumpServerCompatibility", false, "arm64", state, output);
+        InvokePrivateVoid("CheckDumpServerCompatibility", null, false, "arm64", state, output);
 
         Assert.Contains("INCOMPATIBLE", console.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("glibc", console.Output, StringComparison.OrdinalIgnoreCase);
@@ -847,10 +865,34 @@ public class ProgramPrivateMethodCoverageTests
             }
         };
 
-        InvokePrivateVoid("CheckDumpServerCompatibility", false, "x64", state, output);
+        InvokePrivateVoid("CheckDumpServerCompatibility", null, false, "x64", state, output);
 
         Assert.Contains("INCOMPATIBLE", console.Output, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("x64", console.Output, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void CheckDumpServerCompatibility_WhenDumpFormatRequiresDifferentPlatform_WritesFormatWarning()
+    {
+        var console = new TestConsole();
+        var output = new ConsoleOutput(console);
+        var state = new ShellState
+        {
+            ServerInfo = new ServerInfo
+            {
+                Description = "windows-host",
+                OsName = "Windows",
+                DebuggerType = "WinDbg",
+                IsAlpine = false,
+                Architecture = "x64"
+            }
+        };
+
+        InvokePrivateVoid("CheckDumpServerCompatibility", "Linux ELF Core Dump", true, "x64", state, output);
+
+        Assert.Contains("Linux ELF Core Dump", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("WinDbg on Windows", console.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LLDB server running on Linux", console.Output, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -858,7 +900,7 @@ public class ProgramPrivateMethodCoverageTests
     {
         var state = new ShellState { ServerInfo = null };
 
-        var result = InvokePrivate<bool>("IsLikelyIncompatibleWithCurrentServer", (bool?)null, "arm64", state);
+        var result = InvokePrivate<bool>("IsLikelyIncompatibleWithCurrentServer", null, (bool?)null, "arm64", state);
 
         Assert.False(result);
     }
@@ -876,7 +918,7 @@ public class ProgramPrivateMethodCoverageTests
             }
         };
 
-        var result = InvokePrivate<bool>("IsLikelyIncompatibleWithCurrentServer", true, "arm64", state);
+        var result = InvokePrivate<bool>("IsLikelyIncompatibleWithCurrentServer", null, true, "arm64", state);
 
         Assert.True(result);
     }
@@ -939,7 +981,26 @@ public class ProgramPrivateMethodCoverageTests
             }
         };
 
-        var result = InvokePrivate<bool>("IsLikelyIncompatibleWithCurrentServer", (bool?)null, "arm64", state);
+        var result = InvokePrivate<bool>("IsLikelyIncompatibleWithCurrentServer", null, (bool?)null, "arm64", state);
+        Assert.True(result);
+    }
+
+    [Fact]
+    public void IsLikelyIncompatibleWithCurrentServer_WhenDumpFormatRequiresDifferentPlatform_ReturnsTrue()
+    {
+        var state = new ShellState
+        {
+            ServerInfo = new ServerInfo
+            {
+                Description = "srv",
+                OsName = "Windows",
+                DebuggerType = "WinDbg",
+                IsAlpine = false,
+                Architecture = "x64"
+            }
+        };
+
+        var result = InvokePrivate<bool>("IsLikelyIncompatibleWithCurrentServer", "Linux ELF Core Dump", (bool?)true, "x64", state);
         Assert.True(result);
     }
 
@@ -958,5 +1019,25 @@ public class ProgramPrivateMethodCoverageTests
         var method = typeof(DebuggerMcp.Cli.Program).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static);
         Assert.NotNull(method);
         method!.Invoke(null, args);
+    }
+
+    private static async Task InvokePrivateTask(string name, object?[] args)
+    {
+        var method = typeof(DebuggerMcp.Cli.Program).GetMethod(name, BindingFlags.NonPublic | BindingFlags.Static);
+        Assert.NotNull(method);
+
+        var result = method!.Invoke(null, args);
+        Assert.NotNull(result);
+        await (Task)result!;
+    }
+
+    private static McpClient CreateConnectedMcpClient()
+    {
+        var client = new McpClient();
+        typeof(McpClient).GetField("_httpClient", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(client, new HttpClient());
+        typeof(McpClient).GetField("_messageEndpoint", BindingFlags.NonPublic | BindingFlags.Instance)!
+            .SetValue(client, "/mcp/message");
+        return client;
     }
 }

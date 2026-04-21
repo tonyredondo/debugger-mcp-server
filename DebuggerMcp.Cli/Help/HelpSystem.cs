@@ -69,7 +69,7 @@ public static class HelpSystem
         ["debugging"] = [
             new("open", "<dumpId>", "Open a dump file in the debugger", ["open abc123"]),
             new("close", "", "Close the current dump", ["close"]),
-            new("exec", "<command>", "Execute a debugger command", ["exec !analyze -v", "exec k", "x !dumpheap -stat"]),
+            new("exec", "<command>", "Execute a debugger command in the open dump", ["exec !analyze -v", "exec k", "x !dumpheap -stat"]),
             new("cmd", "", "Enter multi-line command mode", ["cmd"]),
             new("showobj", "<address>", "Inspect .NET object as JSON", ["showobj f7158ec79b48", "so f7158ec79b48 --depth 3"])
         ],

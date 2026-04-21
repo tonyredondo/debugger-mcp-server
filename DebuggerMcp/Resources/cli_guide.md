@@ -73,7 +73,7 @@ symbols datadog config
 ### Debugging (`help debugging`)
 - `open <dumpId>` - Open dump
 - `close` - Close dump
-- `exec <cmd>` - Execute command
+- `exec <cmd>` - Execute command in the open dump
 - `cmd` - Multi-line debugger command mode
 - `showobj <address>` - Inspect .NET object as JSON (ClrMD)
 

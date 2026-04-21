@@ -75,9 +75,9 @@ public sealed class CompactToolsTests : IDisposable
         var userId = "test-user";
         var sessionId = ExtractSessionId(_tools.Session(action: "create", userId: userId));
 
-        // Exec should dispatch to DumpTools.ExecuteCommand.
+        // Exec should return actionable guidance until a dump is open.
         var exec = _tools.Exec(sessionId, userId, "lm");
-        Assert.Equal("module-list", exec);
+        Assert.Contains("No dump file is currently open", exec, StringComparison.OrdinalIgnoreCase);
 
         // Source link info should serialize even with no dump id.
         var sourceLinkInfo = _tools.SourceLink(action: "info", sessionId: sessionId, userId: userId);
@@ -104,6 +104,10 @@ public sealed class CompactToolsTests : IDisposable
         manager.OpenDumpFile(Path.Combine(_tempPath, "fake.dmp"));
         var session = _sessionManager.GetSessionInfo(sessionId, userId);
         session.CurrentDumpId = "fake";
+
+        // Once a dump is open, exec should dispatch to DumpTools.ExecuteCommand.
+        var execAfterOpen = _tools.Exec(sessionId, userId, "lm");
+        Assert.Equal("module-list", execAfterOpen);
 
         // Watches require a dump + dumpId.
         var add = await _tools.Watch(action: "add", sessionId: sessionId, userId: userId, expression: "lm");

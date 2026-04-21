@@ -7,6 +7,7 @@ namespace DebuggerMcp.Cli.Models;
 /// </summary>
 /// <remarks>
 /// This information is crucial for determining which dumps can be analyzed:
+/// - Dump OS families must match the debugger host family (Windows dumps on WinDbg/Windows, Linux dumps on LLDB/Linux, macOS dumps on LLDB/macOS)
 /// - Alpine Linux dumps can only be debugged on Alpine hosts (SOS/DAC limitation)
 /// - Architecture (x64/arm64) affects which dumps can be analyzed
 /// - Installed .NET runtimes determine which dump versions are supported

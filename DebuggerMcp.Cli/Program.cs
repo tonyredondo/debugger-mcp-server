@@ -1390,6 +1390,7 @@ public class Program
                     output.Header("EXEC Command");
                     output.WriteLine();
                     output.Markup("Execute a native debugger command.");
+                    output.Dim("Requires an open dump. Use 'open <dumpId>' first.");
                     output.WriteLine();
                     output.Markup("[bold]USAGE[/]");
                     output.Markup("  exec <command>");
@@ -2359,11 +2360,11 @@ public class Program
                 }
             }
 
-            var likelyIncompatible = IsLikelyIncompatibleWithCurrentServer(result.IsAlpineDump, result.Architecture, state);
+            var likelyIncompatible = IsLikelyIncompatibleWithCurrentServer(result.DumpFormat, result.IsAlpineDump, result.Architecture, state);
             if (!likelyIncompatible || !mcpClient.IsConnected)
             {
                 // Best-effort: show compatibility warnings inline when we can determine the server characteristics.
-                CheckDumpServerCompatibility(result.IsAlpineDump, result.Architecture, state, output);
+                CheckDumpServerCompatibility(result.DumpFormat, result.IsAlpineDump, result.Architecture, state, output);
             }
 
             output.KeyValue("Uploaded At", result.UploadedAt.ToString("yyyy-MM-dd HH:mm:ss"));
@@ -2380,7 +2381,7 @@ public class Program
                 if (switchResult == ServerSwitchResult.NoSwitchNeeded)
                 {
                     // Fall back to the simple compatibility warning when capabilities discovery fails.
-                    CheckDumpServerCompatibility(result.IsAlpineDump, result.Architecture, state, output);
+                    CheckDumpServerCompatibility(result.DumpFormat, result.IsAlpineDump, result.Architecture, state, output);
                 }
             }
         }
@@ -2740,12 +2741,12 @@ public class Program
                 }
                 
                 // Check for host mismatch with server
-                CheckDumpServerCompatibility(dump.IsAlpineDump, dump.Architecture, state, output);
+                CheckDumpServerCompatibility(dump.DumpFormat, dump.IsAlpineDump, dump.Architecture, state, output);
             }
             else if (!string.IsNullOrEmpty(dump.Architecture))
             {
                 // Even if we don't know Alpine status, check architecture
-                CheckDumpServerCompatibility(null, dump.Architecture, state, output);
+                CheckDumpServerCompatibility(dump.DumpFormat, null, dump.Architecture, state, output);
             }
 
             // Show standalone app binary info
@@ -5976,8 +5977,8 @@ public class Program
             return; // Error already shown
         }
 
-        // Check if dump matches current server (architecture and Alpine status)
-        // If mismatch, offer to switch servers inline
+        // Check if dump matches the current server's platform, architecture, and Linux runtime family.
+        // If it does not, offer to switch servers inline before opening.
         var switchResult = await CheckDumpServerMatchAndSwitchAsync(dumpId, output, state, httpClient, mcpClient);
         if (switchResult == ServerSwitchResult.Cancelled)
         {
@@ -6224,16 +6225,25 @@ public class Program
                 return ServerSwitchResult.NoSwitchNeeded; // Can't check, continue anyway
             }
 
-            // Extract dump characteristics
+            // Extract dump characteristics.
             var dumpArch = dumpInfo.Architecture;
-            var dumpIsAlpine = dumpInfo.IsAlpineDump ?? false;
+            var dumpFormat = dumpInfo.DumpFormat;
+            var dumpPlatform = GetDumpPlatformFamily(dumpFormat);
+            var serverPlatform = NormalizePlatformName(serverCaps.Platform) ?? InferPlatformFromDebugger(serverCaps.DebuggerType);
+            var alpineCompatibilityRelevant = string.IsNullOrWhiteSpace(dumpPlatform) ||
+                                             string.Equals(dumpPlatform, "linux", StringComparison.OrdinalIgnoreCase);
 
-            // Check for mismatches
-            var archMismatch = !string.IsNullOrEmpty(dumpArch) && 
-                !serverCaps.Architecture.Equals(dumpArch, StringComparison.OrdinalIgnoreCase);
-            var alpineMismatch = serverCaps.IsAlpine != dumpIsAlpine;
+            // Check for mismatches.
+            var archMismatch = !string.IsNullOrEmpty(dumpArch) &&
+                !string.Equals(NormalizeArchitecture(serverCaps.Architecture), NormalizeArchitecture(dumpArch), StringComparison.OrdinalIgnoreCase);
+            var alpineMismatch = alpineCompatibilityRelevant &&
+                dumpInfo.IsAlpineDump.HasValue &&
+                serverCaps.IsAlpine != dumpInfo.IsAlpineDump.Value;
+            var platformMismatch = !string.IsNullOrWhiteSpace(dumpPlatform) &&
+                !string.IsNullOrWhiteSpace(serverPlatform) &&
+                !string.Equals(dumpPlatform, serverPlatform, StringComparison.OrdinalIgnoreCase);
 
-            if (!archMismatch && !alpineMismatch)
+            if (!archMismatch && !alpineMismatch && !platformMismatch)
             {
                 return ServerSwitchResult.NoSwitchNeeded; // Match, continue
             }
@@ -6243,17 +6253,9 @@ public class Program
             output.Warning("⚠️  Server mismatch detected!");
             output.WriteLine();
 
-            // Show comparison (not using table to avoid centering)
-            var dumpDistroDisplay = dumpIsAlpine ? "[cyan]Alpine[/]" : "[cyan]Debian/glibc[/]";
-            var serverArchDisplay = archMismatch 
-                ? $"[red]{serverCaps.Architecture}[/]" 
-                : $"[green]{serverCaps.Architecture}[/]";
-            var serverDistroDisplay = alpineMismatch 
-                ? (serverCaps.IsAlpine ? "[red]Alpine[/]" : "[red]Debian/glibc[/]")
-                : (serverCaps.IsAlpine ? "[green]Alpine[/]" : "[green]Debian/glibc[/]");
-
-            output.Markup($"  [bold]Dump:[/]   {dumpArch ?? "unknown"}, {dumpDistroDisplay}");
-            output.Markup($"  [bold]Server:[/] {serverArchDisplay}, {serverDistroDisplay}");
+            // Show comparison (not using table to avoid centering).
+            output.Markup($"  [bold]Dump:[/]   [cyan]{Markup.Escape(DescribeDumpForCompatibility(dumpFormat, dumpArch, dumpInfo.IsAlpineDump))}[/]");
+            output.Markup($"  [bold]Server:[/] [cyan]{Markup.Escape(DescribeServerForCompatibility(serverCaps))}[/], [cyan]{Markup.Escape(serverCaps.Architecture)}[/]");
             output.WriteLine();
 
             // Discover all servers to find matches
@@ -6263,14 +6265,35 @@ public class Program
                 return true;
             });
 
-            var matchingServers = discovery.FindMatchingServers(dumpArch ?? serverCaps.Architecture, dumpIsAlpine);
+            var matchingServers = discovery.Servers
+                .Where(s => s.IsOnline && s.Capabilities != null)
+                .Where(s => string.IsNullOrWhiteSpace(dumpArch) ||
+                            string.Equals(
+                                NormalizeArchitecture(s.Capabilities!.Architecture),
+                                NormalizeArchitecture(dumpArch),
+                                StringComparison.OrdinalIgnoreCase))
+                .Where(s => string.IsNullOrWhiteSpace(dumpPlatform) ||
+                            string.Equals(
+                                NormalizePlatformName(s.Capabilities!.Platform),
+                                dumpPlatform,
+                                StringComparison.OrdinalIgnoreCase))
+                .Where(s => !alpineCompatibilityRelevant ||
+                            !dumpInfo.IsAlpineDump.HasValue ||
+                            s.Capabilities!.IsAlpine == dumpInfo.IsAlpineDump.Value)
+                .ToList();
 
             if (matchingServers.Count == 0)
             {
-                output.Warning("No matching servers configured.");
+                output.Warning($"No {DescribeRequiredServerTarget(dumpFormat, dumpArch, dumpInfo.IsAlpineDump)} server is configured.");
                 output.WriteLine();
+                if (platformMismatch)
+                {
+                    output.Error($"This dump requires a {DescribeRequiredServerForDump(dumpPlatform!)}.");
+                    return ServerSwitchResult.Cancelled;
+                }
+
                 output.Warning("The dump may not analyze correctly due to architecture/distribution mismatch.");
-                
+
                 if (output.Console.Confirm("Continue anyway?", false))
                 {
                     return ServerSwitchResult.ContinueWithMismatch;
@@ -6279,8 +6302,7 @@ public class Program
             }
 
             // Show matching servers and offer to switch
-            var dumpDistro = dumpIsAlpine ? "Alpine" : "Debian/glibc";
-            output.Markup($"This dump requires a [cyan]{dumpArch ?? "unknown"}[/], [cyan]{dumpDistro}[/] server.");
+            output.Markup($"This dump requires a [cyan]{Markup.Escape(DescribeRequiredServerTarget(dumpFormat, dumpArch, dumpInfo.IsAlpineDump))}[/] server.");
             output.WriteLine();
 
             // Build selection choices
@@ -6289,7 +6311,10 @@ public class Program
             {
                 choices.Add($"Switch to {server.Name} ({server.ShortUrl})");
             }
-            choices.Add("Continue with current server (may cause issues)");
+            if (!platformMismatch)
+            {
+                choices.Add("Continue with current server (may cause issues)");
+            }
             choices.Add("Cancel");
 
             var choice = output.Console.Prompt(
@@ -6801,6 +6826,12 @@ public class Program
         {
             output.Error("Command required. Usage: exec <debugger-command>");
             output.Dim("Examples: exec k, exec !analyze -v, exec !threads");
+            return;
+        }
+
+        if (string.IsNullOrEmpty(state.DumpId))
+        {
+            output.Error("No dump is open. Open a dump first with 'open <dumpId>'.");
             return;
         }
 
@@ -9211,11 +9242,12 @@ public class Program
     /// <summary>
     /// Checks if a dump is compatible with the connected server and shows a warning if not.
     /// </summary>
+    /// <param name="dumpFormat">The detected dump format, when known.</param>
     /// <param name="isAlpineDump">Whether the dump is from Alpine Linux (musl).</param>
     /// <param name="dumpArchitecture">The dump's processor architecture (e.g., "arm64", "x64").</param>
     /// <param name="state">The current shell state containing server info.</param>
     /// <param name="output">Console output for displaying warnings.</param>
-    private static void CheckDumpServerCompatibility(bool? isAlpineDump, string? dumpArchitecture, ShellState state, ConsoleOutput output)
+    private static void CheckDumpServerCompatibility(string? dumpFormat, bool? isAlpineDump, string? dumpArchitecture, ShellState state, ConsoleOutput output)
     {
         var serverInfo = state.ServerInfo;
         if (serverInfo == null)
@@ -9223,16 +9255,30 @@ public class Program
             return; // No server info available, can't check compatibility
         }
 
-        var hasIncompatibility = false;
+        var dumpPlatform = GetDumpPlatformFamily(dumpFormat);
+        var serverPlatform = NormalizePlatformName(serverInfo.OsName) ?? InferPlatformFromDebugger(serverInfo.DebuggerType);
+        if (!string.IsNullOrWhiteSpace(dumpPlatform) &&
+            !string.IsNullOrWhiteSpace(serverPlatform) &&
+            !string.Equals(dumpPlatform, serverPlatform, StringComparison.OrdinalIgnoreCase))
+        {
+            output.WriteLine();
+            output.Error($"⚠️  INCOMPATIBLE: This {DescribeDumpForCompatibility(dumpFormat, dumpArchitecture, isAlpineDump)} cannot be debugged on {DescribeServerForCompatibility(serverInfo)}!");
+            output.Dim($"   Connected server: {serverInfo.Description}");
+            output.Dim($"   Connect to a {DescribeRequiredServerForDump(dumpPlatform)} instead.");
+            return;
+        }
 
-        // Check Alpine/glibc compatibility
-        if (isAlpineDump.HasValue)
+        var hasIncompatibility = false;
+        var alpineCompatibilityRelevant = string.IsNullOrWhiteSpace(dumpPlatform) ||
+                                         string.Equals(dumpPlatform, "linux", StringComparison.OrdinalIgnoreCase);
+
+        // Check Alpine/glibc compatibility only for Linux dumps.
+        if (alpineCompatibilityRelevant && isAlpineDump.HasValue)
         {
             var isAlpineServer = serverInfo.IsAlpine;
 
             if (isAlpineDump.Value && !isAlpineServer)
             {
-                // Alpine dump on glibc server
                 output.WriteLine();
                 output.Error("⚠️  INCOMPATIBLE: This Alpine (musl) dump cannot be debugged on a glibc server!");
                 output.Dim($"   Connected server: {serverInfo.Description}");
@@ -9241,7 +9287,6 @@ public class Program
             }
             else if (!isAlpineDump.Value && isAlpineServer)
             {
-                // glibc dump on Alpine server
                 output.WriteLine();
                 output.Error("⚠️  INCOMPATIBLE: This glibc dump cannot be debugged on an Alpine server!");
                 output.Dim($"   Connected server: {serverInfo.Description}");
@@ -9250,16 +9295,19 @@ public class Program
             }
         }
 
-        // Check architecture compatibility
+        // Check architecture compatibility.
         if (!string.IsNullOrEmpty(dumpArchitecture) && !string.IsNullOrEmpty(serverInfo.Architecture))
         {
-            // Normalize architectures for comparison
             var normalizedDumpArch = NormalizeArchitecture(dumpArchitecture);
             var normalizedServerArch = NormalizeArchitecture(serverInfo.Architecture);
 
             if (!string.Equals(normalizedDumpArch, normalizedServerArch, StringComparison.OrdinalIgnoreCase))
             {
-                if (!hasIncompatibility) output.WriteLine();
+                if (!hasIncompatibility)
+                {
+                    output.WriteLine();
+                }
+
                 output.Error($"⚠️  INCOMPATIBLE: This {dumpArchitecture} dump cannot be debugged on an {serverInfo.Architecture} server!");
                 output.Dim($"   Connected server: {serverInfo.Description}");
                 output.Dim($"   Connect to an {dumpArchitecture} server to debug this dump.");
@@ -9267,12 +9315,29 @@ public class Program
         }
     }
 
-    private static bool IsLikelyIncompatibleWithCurrentServer(bool? isAlpineDump, string? dumpArchitecture, ShellState state)
+    /// <summary>
+    /// Determines whether a dump is likely incompatible with the currently connected server.
+    /// </summary>
+    /// <param name="dumpFormat">The detected dump format, when known.</param>
+    /// <param name="isAlpineDump">Whether the dump came from Alpine Linux.</param>
+    /// <param name="dumpArchitecture">The dump architecture.</param>
+    /// <param name="state">The current shell state.</param>
+    /// <returns><c>true</c> when the dump is likely incompatible; otherwise <c>false</c>.</returns>
+    private static bool IsLikelyIncompatibleWithCurrentServer(string? dumpFormat, bool? isAlpineDump, string? dumpArchitecture, ShellState state)
     {
         var serverInfo = state.ServerInfo;
         if (serverInfo == null)
         {
             return false;
+        }
+
+        var dumpPlatform = GetDumpPlatformFamily(dumpFormat);
+        var serverPlatform = NormalizePlatformName(serverInfo.OsName) ?? InferPlatformFromDebugger(serverInfo.DebuggerType);
+        if (!string.IsNullOrWhiteSpace(dumpPlatform) &&
+            !string.IsNullOrWhiteSpace(serverPlatform) &&
+            !string.Equals(dumpPlatform, serverPlatform, StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
         }
 
         if (!string.IsNullOrWhiteSpace(dumpArchitecture) && !string.IsNullOrWhiteSpace(serverInfo.Architecture))
@@ -9285,15 +9350,215 @@ public class Program
             }
         }
 
-        if (isAlpineDump.HasValue)
+        var alpineCompatibilityRelevant = string.IsNullOrWhiteSpace(dumpPlatform) ||
+                                         string.Equals(dumpPlatform, "linux", StringComparison.OrdinalIgnoreCase);
+        if (alpineCompatibilityRelevant && isAlpineDump.HasValue && serverInfo.IsAlpine != isAlpineDump.Value)
         {
-            if (serverInfo.IsAlpine != isAlpineDump.Value)
-            {
-                return true;
-            }
+            return true;
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Maps a stored dump-format label to the operating-system family that can debug it.
+    /// </summary>
+    /// <param name="dumpFormat">The stored dump-format label.</param>
+    /// <returns>The normalized platform family, or <c>null</c> when the format is unknown.</returns>
+    private static string? GetDumpPlatformFamily(string? dumpFormat)
+    {
+        if (string.IsNullOrWhiteSpace(dumpFormat))
+        {
+            return null;
+        }
+
+        if (dumpFormat.StartsWith("Windows", StringComparison.OrdinalIgnoreCase))
+        {
+            return "windows";
+        }
+
+        if (dumpFormat.StartsWith("Linux ELF", StringComparison.OrdinalIgnoreCase))
+        {
+            return "linux";
+        }
+
+        if (dumpFormat.StartsWith("macOS Mach-O", StringComparison.OrdinalIgnoreCase))
+        {
+            return "macos";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Normalizes platform and operating-system names into a stable comparison value.
+    /// </summary>
+    /// <param name="platformName">The raw platform or OS name.</param>
+    /// <returns>The normalized platform family, or <c>null</c> when unknown.</returns>
+    private static string? NormalizePlatformName(string? platformName)
+    {
+        if (string.IsNullOrWhiteSpace(platformName))
+        {
+            return null;
+        }
+
+        return platformName.Trim().ToLowerInvariant() switch
+        {
+            "windows" or "win32nt" => "windows",
+            "linux" => "linux",
+            "macos" or "osx" or "darwin" => "macos",
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Infers a platform family from the debugger type when the server did not report an OS name.
+    /// </summary>
+    /// <param name="debuggerType">The debugger type.</param>
+    /// <returns>The inferred platform family, or <c>null</c> when it cannot be inferred safely.</returns>
+    private static string? InferPlatformFromDebugger(string? debuggerType)
+    {
+        if (string.Equals(debuggerType, "WinDbg", StringComparison.OrdinalIgnoreCase))
+        {
+            return "windows";
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Builds a short user-facing description of the dump characteristics that matter for compatibility.
+    /// </summary>
+    /// <param name="dumpFormat">The detected dump format, when known.</param>
+    /// <param name="dumpArchitecture">The dump architecture, when known.</param>
+    /// <param name="isAlpineDump">Whether the dump is from Alpine Linux.</param>
+    /// <returns>A short dump description.</returns>
+    private static string DescribeDumpForCompatibility(string? dumpFormat, string? dumpArchitecture, bool? isAlpineDump)
+    {
+        var parts = new List<string>();
+        if (!string.IsNullOrWhiteSpace(dumpFormat))
+        {
+            parts.Add(dumpFormat);
+        }
+
+        if (!string.IsNullOrWhiteSpace(dumpArchitecture))
+        {
+            parts.Add(dumpArchitecture);
+        }
+
+        if (isAlpineDump.HasValue && string.Equals(GetDumpPlatformFamily(dumpFormat), "linux", StringComparison.OrdinalIgnoreCase))
+        {
+            parts.Add(isAlpineDump.Value ? "Alpine/musl" : "glibc");
+        }
+
+        return parts.Count > 0 ? string.Join(", ", parts) : "dump";
+    }
+
+    /// <summary>
+    /// Builds a short user-facing description of the current server.
+    /// </summary>
+    /// <param name="serverInfo">The current server info.</param>
+    /// <returns>A short server description.</returns>
+    private static string DescribeServerForCompatibility(ServerInfo serverInfo)
+    {
+        var platform = (NormalizePlatformName(serverInfo.OsName) ?? InferPlatformFromDebugger(serverInfo.DebuggerType)) switch
+        {
+            "windows" => "Windows",
+            "linux" => "Linux",
+            "macos" => "macOS",
+            _ => serverInfo.OsName
+        };
+
+        if (!string.IsNullOrWhiteSpace(serverInfo.DebuggerType) && !string.IsNullOrWhiteSpace(platform))
+        {
+            return $"{serverInfo.DebuggerType} on {platform}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(serverInfo.Description))
+        {
+            return serverInfo.Description;
+        }
+
+        return "the current server";
+    }
+
+    /// <summary>
+    /// Describes the server environment required for a dump family.
+    /// </summary>
+    /// <param name="dumpPlatform">The normalized dump platform family.</param>
+    /// <returns>A short server recommendation.</returns>
+    private static string DescribeRequiredServerForDump(string dumpPlatform)
+    {
+        return dumpPlatform switch
+        {
+            "windows" => "WinDbg server running on Windows",
+            "linux" => "LLDB server running on Linux",
+            "macos" => "LLDB server running on macOS",
+            _ => "compatible server"
+        };
+    }
+
+    /// <summary>
+    /// Builds a short user-facing description of the current server capabilities.
+    /// </summary>
+    /// <param name="serverCapabilities">The discovered server capabilities.</param>
+    /// <returns>A short server description.</returns>
+    private static string DescribeServerForCompatibility(ServerCapabilities serverCapabilities)
+    {
+        var platform = (NormalizePlatformName(serverCapabilities.Platform) ?? InferPlatformFromDebugger(serverCapabilities.DebuggerType)) switch
+        {
+            "windows" => "Windows",
+            "linux" => "Linux",
+            "macos" => "macOS",
+            _ => serverCapabilities.Platform
+        };
+
+        if (!string.IsNullOrWhiteSpace(serverCapabilities.DebuggerType) && !string.IsNullOrWhiteSpace(platform))
+        {
+            return $"{serverCapabilities.DebuggerType} on {platform}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(platform))
+        {
+            return platform;
+        }
+
+        return "the current server";
+    }
+
+    /// <summary>
+    /// Describes the kind of server a dump needs, including platform, architecture, and Linux C runtime when known.
+    /// </summary>
+    /// <param name="dumpFormat">The detected dump format.</param>
+    /// <param name="dumpArchitecture">The detected dump architecture.</param>
+    /// <param name="isAlpineDump">Whether the dump came from Alpine Linux.</param>
+    /// <returns>A short requirement summary.</returns>
+    private static string DescribeRequiredServerTarget(string? dumpFormat, string? dumpArchitecture, bool? isAlpineDump)
+    {
+        var parts = new List<string>();
+        var dumpPlatform = GetDumpPlatformFamily(dumpFormat);
+        if (!string.IsNullOrWhiteSpace(dumpPlatform))
+        {
+            parts.Add(dumpPlatform switch
+            {
+                "windows" => "Windows",
+                "linux" => "Linux",
+                "macos" => "macOS",
+                _ => dumpPlatform
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(dumpArchitecture))
+        {
+            parts.Add(dumpArchitecture);
+        }
+
+        if (isAlpineDump.HasValue && string.Equals(dumpPlatform, "linux", StringComparison.OrdinalIgnoreCase))
+        {
+            parts.Add(isAlpineDump.Value ? "Alpine" : "glibc");
+        }
+
+        return parts.Count > 0 ? string.Join(", ", parts) : "compatible";
     }
 
     /// <summary>

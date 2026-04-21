@@ -276,7 +276,7 @@ session close d0307dc3
 |---------|-------------|
 | `open <dumpId>` | Open a dump file in debugger |
 | `close` | Close current dump |
-| `exec <cmd>` | Execute debugger command |
+| `exec <cmd>` | Execute debugger command in the open dump |
 | `cmd` | Enter multi-line command mode (run debugger commands without typing `exec`) |
 | `showobj <address>` | Inspect .NET object as JSON (ClrMD) |
 

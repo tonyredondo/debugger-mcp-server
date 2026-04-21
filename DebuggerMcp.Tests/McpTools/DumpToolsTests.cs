@@ -1,4 +1,5 @@
 using DebuggerMcp;
+using DebuggerMcp.Dumps;
 using DebuggerMcp.McpTools;
 using DebuggerMcp.Watches;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -35,6 +36,34 @@ public class DumpToolsTests : IDisposable
         {
             try { Directory.Delete(_tempPath, true); } catch { }
         }
+    }
+
+    /// <summary>
+    /// Creates a representative dump file and metadata sidecar for dump-open tests.
+    /// </summary>
+    /// <param name="userId">The user that owns the dump.</param>
+    /// <param name="dumpId">The dump identifier.</param>
+    /// <param name="dumpFormat">The stored dump format label.</param>
+    private void CreateDumpWithMetadata(string userId, string dumpId, string dumpFormat)
+    {
+        var userDirectory = Path.Combine(_tempPath, userId);
+        Directory.CreateDirectory(userDirectory);
+
+        var dumpPath = Path.Combine(userDirectory, $"{dumpId}.dmp");
+        File.WriteAllText(dumpPath, "test");
+
+        var metadataPath = Path.Combine(userDirectory, $"{dumpId}.json");
+        var metadata = new DumpMetadata
+        {
+            DumpId = dumpId,
+            UserId = userId,
+            DumpFormat = dumpFormat,
+            UploadedAt = DateTime.UtcNow
+        };
+
+        File.WriteAllText(
+            metadataPath,
+            System.Text.Json.JsonSerializer.Serialize(metadata));
     }
 
     // ============================================================
@@ -99,6 +128,32 @@ public class DumpToolsTests : IDisposable
         // Act & Assert
         await Assert.ThrowsAsync<ArgumentException>(() =>
             _tools.OpenDump(sessionId, userId, "../etc/passwd"));
+    }
+
+    [Fact]
+    public async Task OpenDump_WhenDumpFormatRequiresDifferentPlatform_ReturnsActionableErrorBeforeDebuggerStarts()
+    {
+        // Arrange
+        var userId = "test-user";
+        var sessionId = _sessionManager.CreateSession(userId);
+        CreateDumpWithMetadata(userId, DumpId, "Linux ELF Core Dump");
+
+        var manager = (FakeSosDebuggerManager)_sessionManager.GetSession(sessionId, userId);
+        manager.DebuggerType = "WinDbg";
+        manager.IsInitialized = false;
+
+        // Act
+        var result = await _tools.OpenDump(sessionId, userId, DumpId);
+
+        // Assert
+        Assert.Contains("Linux ELF Core Dump", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("WinDbg on Windows", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LLDB server running on Linux", result, StringComparison.OrdinalIgnoreCase);
+        Assert.False(manager.InitializeCalled);
+        Assert.Equal(0, manager.OpenDumpFileCallCount);
+
+        var session = _sessionManager.GetSessionInfo(sessionId, userId);
+        Assert.Null(session.CurrentDumpId);
     }
 
     // ============================================================
@@ -200,6 +255,21 @@ public class DumpToolsTests : IDisposable
         Assert.Throws<UnauthorizedAccessException>(() => _tools.ExecuteCommand(sessionId, "wrong-user", "k"));
     }
 
+    [Fact]
+    public void ExecuteCommand_WhenNoDumpIsOpen_ReturnsActionableError()
+    {
+        // Arrange
+        var userId = "test-user";
+        var sessionId = _sessionManager.CreateSession(userId);
+
+        // Act
+        var result = _tools.ExecuteCommand(sessionId, userId, "help");
+
+        // Assert
+        Assert.Contains("No dump file is currently open", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Open a dump first", result, StringComparison.OrdinalIgnoreCase);
+    }
+
     // ============================================================
     // LoadSos Tests
     // ============================================================
@@ -264,19 +334,35 @@ public class DumpToolsTests : IDisposable
 
     private sealed class FakeSosDebuggerManager : IDebuggerManager
     {
-        public bool IsInitialized => true;
+        public bool IsInitialized { get; set; } = true;
         public bool IsDumpOpen { get; set; }
         public string? CurrentDumpPath { get; set; }
         public string DebuggerType { get; set; } = "LLDB";
         public bool IsSosLoaded { get; set; }
         public bool IsDotNetDump { get; set; }
+        public bool InitializeCalled { get; private set; }
+        public int OpenDumpFileCallCount { get; private set; }
 
-        public Task InitializeAsync() => Task.CompletedTask;
-        public void OpenDumpFile(string dumpFilePath, string? executablePath = null) => throw new NotSupportedException();
+        public Task InitializeAsync()
+        {
+            InitializeCalled = true;
+            IsInitialized = true;
+            return Task.CompletedTask;
+        }
+
+        public void OpenDumpFile(string dumpFilePath, string? executablePath = null)
+        {
+            OpenDumpFileCallCount++;
+            CurrentDumpPath = dumpFilePath;
+            IsDumpOpen = true;
+        }
+
         public void CloseDump() => IsDumpOpen = false;
         public string ExecuteCommand(string command) => throw new NotSupportedException();
         public void LoadSosExtension() => IsSosLoaded = true;
-        public void ConfigureSymbolPath(string symbolPath) => throw new NotSupportedException();
+        public void ConfigureSymbolPath(string symbolPath)
+        {
+        }
         public void Dispose()
         {
         }

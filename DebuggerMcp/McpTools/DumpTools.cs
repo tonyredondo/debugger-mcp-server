@@ -199,6 +199,10 @@ public class DumpTools(
     /// <param name="command">The debugger command to execute (WinDbg or LLDB syntax depending on platform).</param>
     /// <returns>The output from the debugger command.</returns>
     /// <remarks>
+    /// A dump must already be open in the target session before this tool can execute
+    /// debugger commands. Creating a session alone does not initialize the debugger
+    /// engine or load a dump.
+    ///
     /// Supported commands depend on the debugger:
     /// 
     /// WinDbg (Windows):
@@ -232,8 +236,21 @@ public class DumpTools(
             // Validate command is not empty
             ValidateCommand(command);
 
-            // Get the session with user ownership validation and execute the command
+            // Get the session with user ownership validation and execute the command.
+            // Return an actionable message here instead of leaking low-level debugger
+            // initialization errors when the session exists but no dump is open yet.
             var manager = GetSessionManager(sessionId, sanitizedUserId);
+
+            if (!manager.IsDumpOpen)
+            {
+                return "Error: No dump file is currently open in this session. Open a dump first before executing debugger commands.";
+            }
+
+            if (!manager.IsInitialized)
+            {
+                return $"Error: The {manager.DebuggerType} debugger for this session is not initialized. Close and reopen the dump, then try the command again.";
+            }
+
             var output = manager.ExecuteCommand(command);
 
             return output;
